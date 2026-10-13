@@ -99,21 +99,20 @@ describe('voiceQaOutputFixturePlayback', () => {
   it('stops reading a chunked response as soon as the fixture byte limit is exceeded', async () => {
     const oversizedChunk = new Uint8Array((4 * 1024 * 1024) + 1);
     const cancel = vi.fn(async () => {});
-    const releaseLock = vi.fn();
     const arrayBuffer = vi.fn(async () => {
       throw new Error('unbounded_array_buffer_read');
     });
-    const read = vi.fn()
-      .mockResolvedValueOnce({ done: false, value: oversizedChunk })
-      .mockResolvedValueOnce({ done: true, value: undefined });
-    const response = {
-      ok: true,
-      headers: new Headers({ 'content-type': 'audio/wav' }),
-      body: {
-        getReader: () => ({ read, cancel, releaseLock }),
-      },
-      arrayBuffer,
-    } as unknown as Response;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(oversizedChunk); },
+      cancel,
+    });
+    const response = new Response(body, { headers: { 'content-type': 'audio/wav' } });
+    if (!response.body) throw new Error('Expected streaming fixture response');
+    const reader = response.body.getReader();
+    const read = vi.spyOn(reader, 'read');
+    const releaseLock = vi.spyOn(reader, 'releaseLock');
+    vi.spyOn(response.body, 'getReader').mockReturnValue(reader);
+    vi.spyOn(response, 'arrayBuffer').mockImplementation(arrayBuffer);
     const playback = createVoiceQaOutputFixturePlayback({
       fetch: vi.fn(async () => response),
     });

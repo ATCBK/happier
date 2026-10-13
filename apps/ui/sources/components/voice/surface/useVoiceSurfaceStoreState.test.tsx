@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, createSessionMessagesFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storage';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
 
@@ -32,12 +32,12 @@ describe('useVoiceSurfaceStoreState', () => {
             transcriptMode: 'native_session',
             updatedAt: 10,
         });
-        storage.setState((state: any) => ({
+        storage.setState((state) => ({
             ...state,
             isDataReady: true,
             sessions: {
                 ...state.sessions,
-                'voice-conversation-1': {
+                'voice-conversation-1': createSessionFixture({
                     id: 'voice-conversation-1',
                     serverId: 'server-active',
                     metadata: {
@@ -45,21 +45,21 @@ describe('useVoiceSurfaceStoreState', () => {
                         host: 'localhost',
                     },
                     presence: 'online',
-                },
+                }),
             },
             sessionMessages: {
                 ...state.sessionMessages,
-                'voice-conversation-1': {
+                'voice-conversation-1': createSessionMessagesFixture({
                     messageIdsOldestFirst: ['m1'],
                     messagesById: {
                         m1: {
-                            id: 'm1',
+                            id: 'm1', localId: 'm1',
                             kind: 'agent-text',
                             text: 'Hidden conversation reply',
                             createdAt: 5,
                         },
                     },
-                },
+                }),
             },
         }));
 
@@ -95,25 +95,25 @@ describe('useVoiceSurfaceStoreState', () => {
 
     it('reads only the requested surface session from storage state', async () => {
         const storage = getStorage();
-        storage.setState((state: any) => ({
+        storage.setState((state) => ({
             ...state,
             isDataReady: true,
             sessions: {
                 ...state.sessions,
-                'surface-session-1': {
+                'surface-session-1': createSessionFixture({
                     id: 'surface-session-1',
                     metadata: {
-                        summaryText: 'Surface session',
+                        path: '/repo', host: 'test', summaryText: 'Surface session',
                     },
                     presence: 'online',
-                },
-                'other-session': {
+                }),
+                'other-session': createSessionFixture({
                     id: 'other-session',
                     metadata: {
-                        summaryText: 'Unrelated session',
+                        path: '/repo', host: 'test', summaryText: 'Unrelated session',
                     },
                     presence: 'online',
-                },
+                }),
             },
         }));
 
@@ -148,7 +148,7 @@ describe('useVoiceSurfaceStoreState', () => {
             transcriptMode: 'native_session',
             updatedAt: 500,
         });
-        storage.setState((state: any) => ({
+        storage.setState((state) => ({
             ...state,
             isDataReady: true,
             sessions: {},

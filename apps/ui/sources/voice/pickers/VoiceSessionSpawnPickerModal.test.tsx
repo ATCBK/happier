@@ -1,11 +1,14 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
-import type { MachineSelectorProps } from '@/components/sessions/new/components/MachineSelector';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineFixture, renderScreen as renderActualScreen, standardCleanup } from '@/dev/testkit';
 import type { PathSelectionListProps } from '@/components/sessions/new/components/PathSelectionList';
 import type { Machine } from '@/sync/domains/state/storageTypes';
-import { installVoicePickerCommonModuleMocks } from './voicePickerTestHelpers';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -14,7 +17,6 @@ type ChromeWithFooter = Readonly<{
     footer: React.ReactElement<React.PropsWithChildren>;
 }>;
 
-const pathSelectionListPropsRef: { current: PathSelectionListProps | null } = { current: null };
 let machinesState: Machine[] = [];
 let recentMachinePathsState: Array<{ machineId: string; path: string }> = [];
 
@@ -28,95 +30,74 @@ function createMachine(overrides: Partial<Machine> = {}): Machine {
         homeDir: '/Users/test',
         ...(metadataOverride ?? {}),
     };
-    return Object.assign({
-        id: 'machine-1',
-        seq: 1,
-        createdAt: 1,
-        updatedAt: 1,
-        active: true,
+    return createMachineFixture({
         activeAt: Date.now(),
+        ...machineOverrides,
         metadata,
-        metadataVersion: 1,
-        daemonState: null,
-        daemonStateVersion: 1,
-    }, machineOverrides, { metadata });
+    });
 }
 
 function findCreateButton(chrome: ChromeWithFooter): React.ReactElement<RoundButtonProps> | undefined {
     return React.Children.toArray(chrome.footer.props.children)
         .find((child): child is React.ReactElement<RoundButtonProps> => {
             if (!React.isValidElement<RoundButtonProps>(child)) return false;
-            return child.props.title === 'common.create';
+            return child.props.title === t('common.create');
         });
 }
 
-installVoicePickerCommonModuleMocks({
-    storage: async (importOriginal) => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            importOriginal,
-            useAllMachines: () => machinesState,
-            useAllSessionListRenderables: () => [],
-            useAuthoringMemoryField: (key: string) => key === 'recentMachinePaths' ? recentMachinePathsState : null,
-            useSetting: (key: string) => {
-                if (key === 'useMachinePickerSearch') return false;
-                if (key === 'usePathPickerSearch') return false;
-                return null;
-            },
-            useSettingMutable: (key: string) => {
-                if (key === 'favoriteMachines') return [[], vi.fn()];
-                if (key === 'favoriteDirectories') return [[], vi.fn()];
-                return [null, vi.fn()];
-            },
-        });
-    },
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('@legendapp/list/react-native', async original => {
+  const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+  return createCapturingLegendListMock({ original: await original(), renderItems: true }).module;
 });
 
-vi.mock('@expo/vector-icons', () => ({
-  Ionicons: 'Ionicons',
-}));
+const network = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { t } = await import('@/text');
+const { MachineSelector } = await import('@/components/sessions/new/components/MachineSelector');
+const { PathSelectionList } = await import('@/components/sessions/new/components/PathSelectionList');
+const initialStorage = storage.getState();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 
-vi.mock('@/components/ui/text/Text', () => ({
-  Text: 'Text',
-}));
+async function renderScreen(...args: Parameters<typeof renderActualScreen>) {
+  await act(async () => {
+    storage.getState().applyMachines(machinesState, true, { sourceServerId: connection.home.id });
+    storage.getState().applyAuthoringMemory({ recentMachinePaths: recentMachinePathsState });
+  });
+  return renderActualScreen(...args);
+}
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-  ItemList: ({ children }: React.PropsWithChildren) => React.createElement('ItemList', null, children),
-}));
-
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-  RoundButton: (props: RoundButtonProps) => React.createElement('RoundButton', props),
-}));
-
-vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
-  MachineSelector: (props: MachineSelectorProps) => React.createElement('MachineSelector', props),
-}));
-
-vi.mock('@/components/sessions/new/components/PathSelectionList', () => ({
-  PathSelectionList: (props: PathSelectionListProps) => {
-    pathSelectionListPropsRef.current = props;
-    return React.createElement('PathSelectionList', props);
-  },
-}));
-
-vi.mock('@/utils/sessions/recentMachines', () => ({
-  getRecentMachinesFromSessions: () => [],
-}));
-
-vi.mock('@/components/settings/pickers/resolvePreferredMachineId', () => ({
-  resolvePreferredMachineId: () => 'machine-1',
-}));
-
-vi.mock('@/utils/sessions/machineUtils', () => ({
-  isMachineOnline: () => true,
-}));
+function pathProps(screen: Awaited<ReturnType<typeof renderActualScreen>>): PathSelectionListProps {
+  return screen.findByType(PathSelectionList).props;
+}
 
 describe('VoiceSessionSpawnPickerModal', () => {
-  beforeEach(() => {
-    pathSelectionListPropsRef.current = null;
+  beforeEach(async () => {
+    network.resetRequests();
+    const home = await network.addHome('https://voice-picker.example.test', 'picker-account');
+    const request = async (url: RequestInfo | URL): Promise<Response | null> => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+      if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+      if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+      if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
+      return null;
+    };
+    network.setHttpResponder(request);
+    connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId: 'picker-account', credentialScope: 'restored-home', request });
+    storage.getState().applySettingsLocal({ useMachinePickerSearch: false, usePathPickerSearch: false, favoriteMachines: [], favoriteDirectories: [] });
     recentMachinePathsState = [];
     machinesState = [createMachine()];
   });
+  afterEach(async () => {
+    standardCleanup();
+    await connection?.dispose();
+    storage.setState(initialStorage, true);
+  });
+  afterAll(() => network.dispose());
 
     it('passes machine browse config to PathSelectionList after choosing a machine', async () => {
         const { VoiceSessionSpawnPickerModal } = await import('./VoiceSessionSpawnPickerModal');
@@ -128,12 +109,12 @@ describe('VoiceSessionSpawnPickerModal', () => {
             />,
         );
 
-        const machineSelector = screen.findByType('MachineSelector');
+        const machineSelector = screen.findByType(MachineSelector);
         await act(async () => {
             machineSelector.props.onSelect(machinesState[0]);
         });
 
-    expect(pathSelectionListPropsRef.current).toMatchObject({
+    expect(pathProps(screen)).toMatchObject({
       machineId: 'machine-1',
       serverId: null,
       machineHomeDir: '/Users/test',
@@ -149,26 +130,26 @@ describe('VoiceSessionSpawnPickerModal', () => {
             setChrome={(next) => { chrome = next; }}
         />);
 
-        expect(chrome).toEqual(expect.objectContaining({ subtitle: 'newSession.selectMachineTitle' }));
+        expect(chrome).toEqual(expect.objectContaining({ subtitle: t('newSession.selectMachineTitle') }));
         expect(chrome!.leading ?? null).toBeNull();
-        await act(async () => { screen.findByType('MachineSelector').props.onSelect(machinesState[0]); });
-        expect(chrome).toEqual(expect.objectContaining({ subtitle: 'newSession.selectWorkingDirectoryTitle' }));
+        await act(async () => { screen.findByType(MachineSelector).props.onSelect(machinesState[0]); });
+        expect(chrome).toEqual(expect.objectContaining({ subtitle: t('newSession.selectWorkingDirectoryTitle') }));
         // The step is named once, by the title band, not again inside the body.
-        expect(screen.getTextContent()).not.toContain('newSession.selectWorkingDirectoryTitle');
+        expect(screen.getTextContent()).not.toContain(t('newSession.selectWorkingDirectoryTitle'));
 
         const leading = await renderScreen(<>{chrome!.leading}</>);
         await act(async () => { await leading.pressByTestIdAsync('voice-session-spawn-back'); });
-        expect(screen.findByType('MachineSelector')).toBeTruthy();
+        expect(screen.findByType(MachineSelector)).toBeTruthy();
     });
 
     it('returns keyboard close requests from the directory picker to machine selection', async () => {
         const { VoiceSessionSpawnPickerModal } = await import('./VoiceSessionSpawnPickerModal');
         const screen = await renderScreen(<VoiceSessionSpawnPickerModal onClose={() => {}} onResolve={() => {}} />);
 
-        await act(async () => { screen.findByType('MachineSelector').props.onSelect(machinesState[0]); });
-        expect(screen.findByType('PathSelectionList')).toBeTruthy();
-        await act(async () => { pathSelectionListPropsRef.current?.onRequestClose(); });
-        expect(screen.findByType('MachineSelector')).toBeTruthy();
+        await act(async () => { screen.findByType(MachineSelector).props.onSelect(machinesState[0]); });
+        expect(screen.findByType(PathSelectionList)).toBeTruthy();
+        await act(async () => { pathProps(screen).onRequestClose(); });
+        expect(screen.findByType(MachineSelector)).toBeTruthy();
     });
 
     it('passes the selected machine platform to PathSelectionList after choosing a Windows machine', async () => {
@@ -191,12 +172,12 @@ describe('VoiceSessionSpawnPickerModal', () => {
             />,
         );
 
-        const machineSelector = screen.findByType('MachineSelector');
+        const machineSelector = screen.findByType(MachineSelector);
         await act(async () => {
             machineSelector.props.onSelect(machinesState[0]);
         });
 
-        expect(pathSelectionListPropsRef.current).toMatchObject({
+        expect(pathProps(screen)).toMatchObject({
             machineId: 'machine-win',
             machineHomeDir: 'C:\\Users\\Ada',
             machinePlatform: 'windows',
@@ -234,23 +215,23 @@ describe('VoiceSessionSpawnPickerModal', () => {
             />,
         );
 
-        const machineSelector = screen.findByType('MachineSelector');
+        const machineSelector = screen.findByType(MachineSelector);
         await act(async () => {
             machineSelector.props.onSelect(machinesState[0]);
         });
         await act(async () => {
-            pathSelectionListPropsRef.current?.onCommit('/Users/test/old-repo');
+            pathProps(screen).onCommit('/Users/test/old-repo');
         });
 
         // Back to machines lives in the title band's leading slot.
         const leading = await renderScreen(<>{chrome!.leading}</>);
         await act(async () => { await leading.pressByTestIdAsync('voice-session-spawn-back'); });
-        const nextMachineSelector = screen.findByType('MachineSelector');
+        const nextMachineSelector = screen.findByType(MachineSelector);
         await act(async () => {
             nextMachineSelector.props.onSelect(machinesState[1]);
         });
 
-        expect(pathSelectionListPropsRef.current).toMatchObject({
+        expect(pathProps(screen)).toMatchObject({
             machineId: 'machine-2',
             machineHomeDir: '/srv/test',
             initialValue: '/srv/test/new-repo',
@@ -271,12 +252,12 @@ describe('VoiceSessionSpawnPickerModal', () => {
             />,
         );
 
-        const machineSelector = screen.findByType('MachineSelector');
+        const machineSelector = screen.findByType(MachineSelector);
         await act(async () => {
             machineSelector.props.onSelect(machinesState[0]);
         });
 
-        const onChangeDraftPath = pathSelectionListPropsRef.current?.onChangeDraftPath;
+        const onChangeDraftPath = pathProps(screen).onChangeDraftPath;
         expect(typeof onChangeDraftPath).toBe('function');
         await act(async () => {
             onChangeDraftPath?.('/Users/test/typed-project');
@@ -311,12 +292,12 @@ describe('VoiceSessionSpawnPickerModal', () => {
             />,
         );
 
-        const machineSelector = screen.findByType('MachineSelector');
+        const machineSelector = screen.findByType(MachineSelector);
         await act(async () => {
             machineSelector.props.onSelect(machinesState[0]);
         });
 
-        const onCommit = pathSelectionListPropsRef.current?.onCommit;
+        const onCommit = pathProps(screen).onCommit;
         expect(typeof onCommit).toBe('function');
         await act(async () => {
             onCommit?.('/Users/test/project');
@@ -351,7 +332,7 @@ describe('VoiceSessionSpawnPickerModal', () => {
             />,
         );
 
-        const machineSelector = screen.findByType('MachineSelector');
+        const machineSelector = screen.findByType(MachineSelector);
         await act(async () => {
             machineSelector.props.onSelect(machinesState[0]);
         });

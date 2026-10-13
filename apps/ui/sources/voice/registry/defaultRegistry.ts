@@ -47,15 +47,21 @@ export function createDefaultVoiceProviderRegistry(input: Readonly<{
     }
     for (const registration of listExternalVoiceProviderRegistrations()) {
       if (enabledPluginIds !== null && !enabledPluginIds.has(registration.pluginId)) continue;
+      const bundled = base.get(registration.providerId);
+      // The static client bridge delegates its descriptor to the generated
+      // owner and has a client-host occurrence, not an installed daemon one.
+      const isBundledRuntime = registration.descriptor === null
+        && registration.adapter !== null
+        && bundled?.source.kind === 'bundled'
+        && bundled.pluginId === registration.pluginId;
       if (projectionAuthority !== null) {
         const occurrenceId = projectionAuthority.get(registration.providerId);
-        if (!occurrenceId || registration.occurrenceId !== occurrenceId) continue;
+        if (!occurrenceId || (!isBundledRuntime && registration.occurrenceId !== occurrenceId)) continue;
       }
       // Occurrence admission above decides availability. First-party descriptor
       // and presentation ownership stays with the plugin's generated declaration,
       // even when its installed activation supplies a generic descriptor. Other
       // plugins own their installed descriptors.
-      const bundled = base.get(registration.providerId);
       const descriptor = bundled?.source.kind === 'bundled' && bundled.pluginId === registration.pluginId
         ? bundled
         : registration.descriptor;

@@ -437,7 +437,7 @@ describe('resolveVoiceToolResultHumanSummary', () => {
         const explicitSummary = resolveVoiceToolResultHumanSummary({
             toolName: 'listSessions',
             toolInput: {},
-            toolResult: { summary: 'Done working on the payments session' },
+            toolResult: { ok: true, summary: 'Done working on the payments session' },
             shareFilePaths: true,
             shareSessionSummary: true,
         });
@@ -461,18 +461,4 @@ describe('resolveVoiceToolResultHumanSummary', () => {
         expect(summary).toBeNull();
     });
 
-    it('still surfaces an explicit result.summary when shareSessionSummary is enabled', () => {
-        const summary = resolveVoiceToolResultHumanSummary({
-            toolName: 'listSessions',
-            toolInput: {},
-            toolResult: {
-                ok: true,
-                summary: 'Done working on the payments session',
-            },
-            shareFilePaths: true,
-            shareSessionSummary: true,
-        });
-
-        expect(summary).toBe('Done working on the payments session');
-    });
 });

@@ -1,5 +1,6 @@
 import { storage } from '@/sync/domains/state/storage';
 import { readStoredSessionMessages } from "@happier-dev/session-core/messages";
+import { registerSessionRealtimeTranscriptConsumer } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 
 export type AssistantTextMessageBaseline = Readonly<{
   baselineIds: Set<string>;
@@ -80,6 +81,7 @@ export async function waitForNextAssistantTextMessageEntry(
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     let unsubscribe: null | (() => void) = null;
+    const releaseTranscriptConsumer = registerSessionRealtimeTranscriptConsumer(sessionId);
     const abortListener = signal
       ? () => {
           done(null);
@@ -95,6 +97,7 @@ export async function waitForNextAssistantTextMessageEntry(
         // Best-effort cleanup; ignore unsubscribe errors.
       }
       unsubscribe = null;
+      releaseTranscriptConsumer();
       if (signal && abortListener) {
         try {
           signal.removeEventListener('abort', abortListener);

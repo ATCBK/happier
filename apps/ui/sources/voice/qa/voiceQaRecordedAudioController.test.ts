@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { storage } from '@/sync/domains/state/storage';
-import type { Session } from '@/sync/domains/state/storageTypes';
+import { createSessionFixture } from '@/dev/testkit';
 import type { Metadata } from '@happier-dev/session-core/state';
 import { applySettings } from '@/sync/domains/settings/settings';
 
@@ -58,7 +58,7 @@ describe('voiceQaRecordedAudioController target selection', () => {
       machineId: 'previous-machine',
       name: 'Previous owner label',
     };
-    const existingLayout1Session = {
+    const existingLayout1Session = createSessionFixture({
       id: 'explicit-session',
       seq: 0,
       createdAt: 1,
@@ -74,7 +74,7 @@ describe('voiceQaRecordedAudioController target selection', () => {
       thinking: false,
       thinkingAt: 0,
       presence: 'online',
-    } satisfies Session;
+    });
     storage.getState().applySessions([existingLayout1Session]);
     const currentVoice = voiceSettingsParse(originalState.settings.voice);
     const currentConversation = readLocalConversationVoiceSettings(currentVoice);
@@ -92,7 +92,6 @@ describe('voiceQaRecordedAudioController target selection', () => {
     });
     storage.setState((state) => ({ ...state, settings: ambientOnlySettings }));
     const sessionBeforeTranscription = storage.getState().sessions['explicit-session'];
-    const ambientDaemonResolver = vi.fn(() => 'ambient-machine');
     const machineRpcWithServerScope = vi.fn(async (input: { method: string; payload: Record<string, unknown> }) => {
       if (input.method === 'daemon.voiceInference.stt.upload.init') {
         const recipient = createTransferRecipientKeyPair();
@@ -118,7 +117,7 @@ describe('voiceQaRecordedAudioController target selection', () => {
       if (input.method === 'daemon.voiceInference.stt.transcribe') {
         return {
           ok: true,
-          requestId: 'qa-request',
+          requestId: input.payload.requestId,
           text: 'explicit target transcript',
           language: 'en',
           modelPackId: 'explicit-pack',
@@ -128,16 +127,7 @@ describe('voiceQaRecordedAudioController target selection', () => {
     });
     const controller = createVoiceQaRecordedAudioController({
       daemonClientDeps: {
-        resolveVoiceHomeDaemonMachineId: ambientDaemonResolver,
         machineRpcWithServerScope: machineRpcWithServerScope as never,
-        isRuntimeFeatureEnabled: async () => true,
-        openLocalUploadSourceReader: async () => ({
-          sizeBytes: 4,
-          readBytes: async () => new Uint8Array([1, 2, 3, 4]),
-          close: async () => {},
-        }),
-        createRequestId: () => 'qa-request',
-        resolveDiagnosticsCaptureContext: () => undefined,
       },
     });
 
@@ -151,7 +141,6 @@ describe('voiceQaRecordedAudioController target selection', () => {
         webFile: new File([new Uint8Array([1, 2, 3, 4])], 'recording.wav', { type: 'audio/wav' }),
       })).resolves.toBe('explicit target transcript');
 
-      expect(ambientDaemonResolver).not.toHaveBeenCalled();
       expect(machineRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
         machineId: 'explicit-machine',
         method: 'daemon.voiceInference.stt.transcribe',

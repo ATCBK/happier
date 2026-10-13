@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createSessionOwnerMetadataV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import {
   readVoiceProviderConversationMetadata,
@@ -29,6 +30,15 @@ describe('voice provider conversation metadata', () => {
       conversationId: 'external-conversation-1',
       updatedAt: 15,
     });
+    // Serialize the real writer's output into the exact Session owner schema.
+    const owner = createSessionOwnerMetadataV1({ metadata: JSON.parse(JSON.stringify(
+      writeVoiceProviderConversationMetadata({}, { providerId,
+        state: { conversationId: 'external-conversation-1' }, updatedAt: 15 }),
+    )) });
+    expect(owner.ok).toBe(true);
+    if (!owner.ok) throw new Error(`Invalid provider metadata: ${owner.unsupportedFields.join(',')}`);
+    expect(SessionOwnerMetadataV1Schema.parse(owner.ownerMetadata).system?.voiceProviderConversationsV1)
+      .toEqual(Reflect.get(metadata, 'voiceProviderConversationsV1'));
   });
 
   it('keeps the original timestamp when the same provider conversation is published again', () => {
@@ -64,16 +74,12 @@ describe('voice provider conversation metadata', () => {
   });
 
   it('clears only the requested provider and removes an empty envelope', () => {
-    const metadata = {
-      retained: true,
-      voiceProviderConversationsV1: {
-        v: 1,
-        providers: {
-          'happier.voice.xai/realtime-grok': { conversationId: 'conversation-1', updatedAt: 10 },
-          'happier.voice.openai/realtime-openai': { conversationId: 'conversation-2', updatedAt: 20 },
-        },
-      },
-    };
+    const metadata = writeVoiceProviderConversationMetadata(
+      writeVoiceProviderConversationMetadata({ retained: true }, {
+        providerId: 'happier.voice.xai/realtime-grok', state: { conversationId: 'conversation-1' }, updatedAt: 10,
+      }), {
+        providerId: 'happier.voice.openai/realtime-openai', state: { conversationId: 'conversation-2' }, updatedAt: 20,
+      });
 
     const oneLeft = writeVoiceProviderConversationMetadata(metadata, {
       providerId: 'happier.voice.xai/realtime-grok', state: null, updatedAt: 30,

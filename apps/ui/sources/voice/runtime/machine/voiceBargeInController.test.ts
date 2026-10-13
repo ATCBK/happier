@@ -4,6 +4,7 @@ import { createTurnTakingTelemetry } from '@/voice/input/turnTakingTelemetry';
 
 import { createVoiceConversationRuntimeMachine } from './VoiceConversationRuntimeMachine';
 import { createVoiceBargeInController } from './voiceBargeInController';
+import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
 
 type Harness = ReturnType<typeof createHarness>;
 
@@ -12,15 +13,22 @@ function createHarness(now = () => 10_000) {
     const telemetry = createTurnTakingTelemetry({ enabled: true, now: () => 0 });
     const beginInterruptionCandidate = vi.fn(() => 'retained' as const);
     const resolveInterruptionCandidate = vi.fn<(resolution: 'false_alarm' | 'confirmed') => void>();
+    const stopOutput = vi.fn();
+    const playback = createVoicePlaybackController();
+    playback.registerTarget({
+        beginCandidate: beginInterruptionCandidate,
+        resolveCandidate: resolveInterruptionCandidate,
+        stop: stopOutput,
+    });
     const startListening = vi.fn(() => Promise.resolve());
     const controller = createVoiceBargeInController({
         machine,
         telemetry,
         now,
-        playback: { beginInterruptionCandidate, resolveInterruptionCandidate },
+        playback,
         startListening: () => startListening(),
     });
-    return { machine, telemetry, beginInterruptionCandidate, resolveInterruptionCandidate, startListening, controller };
+    return { machine, telemetry, playback, stopOutput, beginInterruptionCandidate, resolveInterruptionCandidate, startListening, controller };
 }
 
 async function driveToSpeaking(machine: Harness['machine'], sessionId: string): Promise<void> {
@@ -35,8 +43,9 @@ describe('voiceBargeInController', () => {
     });
 
     it('barges in on substantive user speech during speaking: aborts playback, interrupts, rearms', async () => {
-        const { machine, resolveInterruptionCandidate, startListening, controller, telemetry } = createHarness();
+        const { machine, playback, stopOutput, resolveInterruptionCandidate, startListening, controller, telemetry } = createHarness();
         await driveToSpeaking(machine, 's1');
+        const outputEpoch = playback.captureEpoch();
 
         await controller.handleUserSpeechDuringPlayback({
             sessionId: 's1',
@@ -47,6 +56,8 @@ describe('voiceBargeInController', () => {
 
         // TTS playback aborted via the injected playback abort (single owner; no direct TtsController edit).
         expect(resolveInterruptionCandidate).toHaveBeenCalledWith('confirmed');
+        expect(stopOutput).toHaveBeenCalledOnce();
+        expect(playback.isEpochCurrent(outputEpoch)).toBe(false);
         // Capture rearmed through the machine's public interrupt+rearm API (honors the legal table).
         expect(startListening).toHaveBeenCalledTimes(1);
         expect(machine.getSnapshot()).toMatchObject({ controlSessionId: 's1', state: 'listening' });
@@ -54,8 +65,9 @@ describe('voiceBargeInController', () => {
     });
 
     it('does NOT barge-in on a one-word backchannel (reuses the T2 backchannel gate)', async () => {
-        const { machine, resolveInterruptionCandidate, startListening, controller, telemetry } = createHarness();
+        const { machine, playback, stopOutput, resolveInterruptionCandidate, startListening, controller, telemetry } = createHarness();
         await driveToSpeaking(machine, 's1');
+        const outputEpoch = playback.captureEpoch();
 
         await controller.handleUserSpeechDuringPlayback({
             sessionId: 's1',
@@ -65,6 +77,8 @@ describe('voiceBargeInController', () => {
         });
 
         expect(resolveInterruptionCandidate).toHaveBeenCalledWith('false_alarm');
+        expect(stopOutput).not.toHaveBeenCalled();
+        expect(playback.isEpochCurrent(outputEpoch)).toBe(true);
         expect(startListening).not.toHaveBeenCalled();
         expect(machine.getSnapshot()).toMatchObject({ state: 'speaking' });
         const counters = telemetry.snapshot().counters;

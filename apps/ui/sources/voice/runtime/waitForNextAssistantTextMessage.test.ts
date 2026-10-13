@@ -1,85 +1,56 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const state: { current: any } = {
-  current: { sessionMessages: { s1: { messages: [] } } },
-};
+import { createSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
+import type { Message } from '@happier-dev/session-core/messages';
+import { readMountedSessionRealtimeTranscriptConsumerSessionIds } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 
-const listeners = new Set<() => void>();
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-    storage: {
-    getState: () => state.current,
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  },
-});
-});
-
-import { waitForNextAssistantTextMessage } from './waitForNextAssistantTextMessage';
+import { captureAssistantTextMessageBaseline, waitForNextAssistantTextMessage } from './waitForNextAssistantTextMessage';
 
 describe('waitForNextAssistantTextMessage', () => {
+  let previousState: ReturnType<typeof storage.getState>;
+
+  beforeEach(() => {
+    previousState = storage.getState();
+    storage.setState({ sessionMessages: {}, sessions: { s1: createSessionFixture({ id: 's1', serverId: 'waiter-home' }) } });
+  });
+
+  afterEach(() => {
+    storage.setState(previousState, true);
+  });
+
   it('resolves null when aborted', async () => {
-    const sessionId = 's1';
-    state.current = { sessionMessages: { [sessionId]: { messages: [] } } };
-
-    const baselineIds = new Set<string>();
     const abortController = new AbortController();
-
-    const waitWithSignal =
-      waitForNextAssistantTextMessage as unknown as (
-        sessionId: string,
-        baselineIds: Set<string>,
-        baselineCount: number,
-        timeoutMs: number,
-        signal?: AbortSignal,
-      ) => Promise<string | null>;
-
-    const waitPromise = waitWithSignal(sessionId, baselineIds, 0, 60_000, abortController.signal);
+    const baseline = captureAssistantTextMessageBaseline('s1');
+    const waitPromise = waitForNextAssistantTextMessage(
+      's1', baseline.baselineIds, baseline.baselineCount, 60_000, abortController.signal,
+    );
+    expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
 
     abortController.abort();
 
     await expect(waitPromise).resolves.toBe(null);
+    expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).not.toContain('s1');
   });
 
-  it('reads assistant replies from normalized transcript state', async () => {
-    const sessionId = 's1';
-    state.current = {
-      sessionMessages: {
-        [sessionId]: {
-          messageIdsOldestFirst: ['m1'],
-          messagesById: {
-            m1: { id: 'm1', kind: 'user-text', text: 'hello' },
-          },
-          messagesMap: {
-            m1: { id: 'm1', kind: 'user-text', text: 'hello' },
-          },
-        },
-      },
-    };
+  it('reads new assistant replies from the real normalized transcript store', async () => {
+    const user = { id: 'm1', kind: 'user-text', text: 'hello', localId: null, createdAt: 1 } satisfies Message;
+    const olderReply = { id: 'm2', kind: 'agent-text', text: 'previous reply', localId: null, createdAt: 2 } satisfies Message;
+    storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+      messageIdsOldestFirst: [user.id, olderReply.id],
+      messagesById: { [user.id]: user, [olderReply.id]: olderReply },
+    }) } });
+    const baseline = captureAssistantTextMessageBaseline('s1');
+    const waitPromise = waitForNextAssistantTextMessage('s1', baseline.baselineIds, baseline.baselineCount, 60_000);
+    expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
 
-    const waitPromise = waitForNextAssistantTextMessage(sessionId, new Set(['m1']), 1, 60_000);
-
-    state.current = {
-      sessionMessages: {
-        [sessionId]: {
-          messageIdsOldestFirst: ['m1', 'm2'],
-          messagesById: {
-            m1: { id: 'm1', kind: 'user-text', text: 'hello' },
-            m2: { id: 'm2', kind: 'agent-text', text: 'assistant reply' },
-          },
-          messagesMap: {
-            m1: { id: 'm1', kind: 'user-text', text: 'hello' },
-            m2: { id: 'm2', kind: 'agent-text', text: 'assistant reply' },
-          },
-        },
-      },
-    };
-    listeners.forEach((listener) => listener());
+    const assistant = { id: 'm3', kind: 'agent-text', text: 'assistant reply', localId: null, createdAt: 3 } satisfies Message;
+    storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+      messageIdsOldestFirst: [user.id, olderReply.id, assistant.id],
+      messagesById: { [user.id]: user, [olderReply.id]: olderReply, [assistant.id]: assistant },
+    }) } });
 
     await expect(waitPromise).resolves.toBe('assistant reply');
+    expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).not.toContain('s1');
   });
 });

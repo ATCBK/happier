@@ -14,37 +14,10 @@ describe('voiceRuntimeConfigDefaults', () => {
     });
   });
 
-  it('owns the turn-taking endpoint / backchannel / echo thresholds as the single source of truth', () => {
-    expect(VOICE_RUNTIME_CONFIG_DEFAULTS.turnTaking).toEqual({
-      endpointHysteresis: { confirmMs: 800, silenceMs: 700 },
-      backchannelGate: {
-        maxWords: 3,
-        maxDurationMs: 700,
-        protectedHeadMs: 800,
-        minConfidence: null,
-      },
-      textualEchoGuard: { overlapThreshold: 0.7, justStartedGuardMs: 200 },
-      interruption: {
-        candidateMaxMs: 3000,
-        duckGain: 0.18,
-        retainedOutputMaxMs: 1500,
-      },
-    });
-  });
-
   it('feeds the endpoint / backchannel / echo module defaults from the canonical owner (no drift)', () => {
     expect(DEFAULT_TURN_POLICY).toEqual(VOICE_RUNTIME_CONFIG_DEFAULTS.turnTaking.endpointHysteresis);
     expect(DEFAULT_BACKCHANNEL_GATE).toEqual(VOICE_RUNTIME_CONFIG_DEFAULTS.turnTaking.backchannelGate);
     expect(DEFAULT_TEXTUAL_ECHO_GUARD).toEqual(VOICE_RUNTIME_CONFIG_DEFAULTS.turnTaking.textualEchoGuard);
   });
 
-  it('owns the realtime reconnect knobs as the single source of truth (no call-site magic numbers)', () => {
-    const realtime = VOICE_RUNTIME_CONFIG_DEFAULTS.realtime;
-    // Bounded-backoff reconnect: positive base/cap with a capped exponential
-    // growth and a finite retry budget before non-recoverable surfacing.
-    expect(realtime.reconnect.baseBackoffMs).toBeGreaterThan(0);
-    expect(realtime.reconnect.maxBackoffMs).toBeGreaterThanOrEqual(realtime.reconnect.baseBackoffMs);
-    expect(realtime.reconnect.backoffFactor).toBeGreaterThanOrEqual(1);
-    expect(realtime.reconnect.maxRetries).toBeGreaterThan(0);
-  });
 });

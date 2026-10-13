@@ -76,8 +76,10 @@ describe('turnTakingTelemetry', () => {
         const telemetry = createTurnTakingTelemetry({ enabled: true, now: () => now, capacity: 2 });
 
         telemetry.recordBargeIn({ sessionId: 'secret-session-a', source: 'native_vad' });
+        const firstOrdinal = telemetry.snapshot().events[0]?.sessionId;
         advance(5);
         telemetry.recordBargeIn({ sessionId: 'secret-session-a', source: 'native_vad' });
+        expect(telemetry.snapshot().events.map((event) => event.sessionId)).toEqual([firstOrdinal, firstOrdinal]);
         advance(5);
         telemetry.recordBargeIn({ sessionId: 'secret-session-b', source: 'web_vad' });
 
@@ -89,6 +91,8 @@ describe('turnTakingTelemetry', () => {
         expect(snapshot.counters.bargeIn).toBe(3);
         // Raw ids never appear; same raw id maps to the same redacted ordinal.
         const sessionIds = snapshot.events.map((event) => event.sessionId);
+        expect(sessionIds[0]).toBe(firstOrdinal);
+        expect(sessionIds[1]).not.toBe(firstOrdinal);
         for (const id of sessionIds) {
             expect(id).toMatch(/^session:\d+$/);
             expect(id).not.toContain('secret');

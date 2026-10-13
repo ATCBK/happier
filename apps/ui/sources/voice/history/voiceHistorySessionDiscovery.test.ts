@@ -1,102 +1,119 @@
-import { describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createSessionFixture } from '@/dev/testkit';
+import { buildSystemSessionMetadataV1, SessionCurrentProjectionRecordV1Schema, SessionLookupByTagsResponseV2Schema } from '@happier-dev/protocol';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
-import type { Session } from '@/sync/domains/state/storageTypes';
-import {
-  VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
-} from '@/voice/persistence/voiceTranscriptHistorySession';
+const http = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(http);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } = await import('@/voice/persistence/voiceTranscriptHistorySession');
+const { createDefaultVoiceHistoryConsumer } = await import('./defaultVoiceHistoryConsumer');
+const { storage } = await import('@/sync/domains/state/storage');
+const { switchConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+let homeId: string;
 
-import {
-  discoverVoiceHistorySession,
-  type VoiceHistorySessionDiscoveryDeps,
-} from './voiceHistorySessionDiscovery';
-
-function carrierSession(input: Readonly<{
-  id: string;
-  active?: boolean;
-  key?: string;
-  hidden?: boolean;
-}>) {
-  return {
-    id: input.id,
-    active: input.active ?? false,
-    metadata: {
-      systemSessionV1: {
-        v: 1,
-        key: input.key ?? 'voice_transcript_history',
-        hidden: input.hidden ?? true,
-      },
-    },
-  };
+function carrierSession(input: Readonly<{ id: string; active?: boolean; key?: 'voice_transcript_history' | 'voice_conversation'; hidden?: boolean }>) {
+  const marker = input.key === undefined && input.hidden === undefined
+    ? buildVoiceTranscriptHistorySessionMetadata()
+    : buildSystemSessionMetadataV1({ key: input.key ?? 'voice_transcript_history', hidden: input.hidden ?? true });
+  return createSessionFixture({ id: input.id, serverId: homeId, active: input.active ?? false,
+    metadata: { ...createSessionFixture().metadata, ...marker } });
 }
 
-describe('discoverVoiceHistorySession', () => {
-  it('performs the cold carrier lookup without a server-version preflight', async () => {
-    const lookupByTags = vi.fn(async () => []);
-    const deps = {
-      lookupByTags,
-      hydrateSession: vi.fn(async () => ({ kind: 'missing' })),
-      readHydratedSession: vi.fn(() => null),
-    };
+async function installCandidates(sessions: ReadonlyArray<ReturnType<typeof createSessionFixture>>) {
+  const boundary = createSessionMetadataHttpBoundary(() => Object.fromEntries(sessions.map(session => [session.id, session])));
+  const records = await Promise.all(sessions.map(async session => {
+    const response = boundary.handle(`https://history-discovery.test/v2/sessions/${session.id}`);
+    if (!response) throw new Error('Missing canonical Session detail');
+    const body: unknown = await response.json();
+    if (!body || typeof body !== 'object' || !('session' in body)) throw new Error('Invalid canonical detail');
+    const wire = SessionCurrentProjectionRecordV1Schema.parse(body.session);
+    http.answer(homeId, `/v2/sessions/${session.id}`, { body: { session: wire } });
+    http.answer(homeId, `/v1/sessions/${session.id}/messages`, { body: { messages: [], hasMore: false } });
+    return wire;
+  }));
+  http.answer(homeId, '/v2/sessions/lookup-by-tags', { body: SessionLookupByTagsResponseV2Schema.parse({ sessions: records }) });
+  return boundary;
+}
+beforeEach(async () => {
+  await http.reset();
+  installHomeGovernanceBoundaries(http);
+  homeId = await http.addHome({ name: 'Discovery Home', serverUrl: 'https://history-discovery.test', accountId: 'discovery-account', currentAccount: true });
+  setRuntimeFetch(http.request);
+  http.answer(homeId, '/v1/auth/ping', { body: {} });
+  http.answer(homeId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+  await switchConnectionToActiveServer();
+});
+afterEach(async () => {
+  await disconnectActiveServerConnection();
+  resetRuntimeFetch();
+  await http.reset();
+});
+const expectCanonicalTag = () => expect(http.requestsFor('/v2/sessions/lookup-by-tags').at(-1)?.input)
+  .toEqual({ tags: [VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG] });
 
-    await expect(discoverVoiceHistorySession(deps)).resolves.toBeNull();
-    expect(lookupByTags).toHaveBeenCalledWith([
-      VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
-    ]);
+describe('discoverVoiceHistorySession through its canonical Account consumer', () => {
+  it('performs the cold carrier lookup without a server-version preflight', async () => {
+    await installCandidates([]);
+    const consumer = createDefaultVoiceHistoryConsumer();
+    await consumer.open();
+    expect(consumer.read().sessionId).toBeNull();
+    expectCanonicalTag();
+    expect(http.requests.some(request => request.path.includes('/server-version'))).toBe(false);
   });
 
   it('looks up only the canonical fixed tag and accepts only its hydrated inactive hidden marker', async () => {
-    const sessions = new Map<string, ReturnType<typeof carrierSession>>([
-      ['active', carrierSession({ id: 'active', active: true })],
-      ['wrong-marker', carrierSession({ id: 'wrong-marker', key: 'voice_conversation' })],
-      ['history', carrierSession({ id: 'history' })],
-    ]);
-    const lookupByTags = vi.fn(async () => [
-      { id: 'active' },
-      { id: 'wrong-marker' },
-      { id: 'history' },
-    ]);
-    const hydrateSession = vi.fn(async (sessionId: string) => ({
-      kind: 'available',
-      sessionId,
-    }));
-
-    await expect(discoverVoiceHistorySession({
-      lookupByTags,
-      hydrateSession,
-      readHydratedSession: (sessionId) =>
-        (sessions.get(sessionId) as unknown as Session | undefined) ?? null,
-    })).resolves.toBe('history');
-
-    expect(lookupByTags).toHaveBeenCalledWith([
-      VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
-    ]);
-    expect(hydrateSession).toHaveBeenCalledTimes(3);
+    await installCandidates([carrierSession({ id: 'currently-recording', active: true }),
+      carrierSession({ id: 'wrong-marker', key: 'voice_conversation' }), carrierSession({ id: 'history' })]);
+    const consumer = createDefaultVoiceHistoryConsumer();
+    await consumer.open();
+    expect(consumer.read().sessionId).toBe('history');
+    expectCanonicalTag();
+    // Lookup rows already carry a canonical Session projection. Sync may use
+    // that admitted record without another HTTP detail read.
+    expect(storage.getState().sessions.history).toMatchObject({ id: 'history', active: false,
+      metadata: buildVoiceTranscriptHistorySessionMetadata() });
   });
 
   it('recognizes the carrier from the canonical owner metadata view in layout v1', async () => {
-    const session = {
-      ...carrierSession({ id: 'history' }),
-      metadataLayoutVersion: 1,
-      metadata: { v: 1 },
-      ownerMetadataView: carrierSession({ id: 'history' }).metadata,
-    } as unknown as Session;
-
-    await expect(discoverVoiceHistorySession({
-      lookupByTags: vi.fn(async () => [{ id: 'history' }]),
-      hydrateSession: vi.fn(async () => ({ kind: 'available', sessionId: 'history' })),
-      readHydratedSession: () => session,
-    })).resolves.toBe('history');
+    const carrier = carrierSession({ id: 'history' });
+    const boundary = await installCandidates([carrier]);
+    storage.getState().applySessions([carrier]);
+    const url = 'https://history-discovery.test/v2/sessions/history';
+    http.answer(homeId, 'PATCH /v2/sessions/history', { select: async input => {
+      const response = boundary.handle(url, { method: 'PATCH', body: JSON.stringify(input) });
+      if (!response) throw new Error('Missing canonical tuple mutation response');
+      return { status: response.status, body: await response.json() };
+    } });
+    const { sync } = await import('@/sync/sync');
+    await sync.patchSessionMetadataWithRetry('history', metadata => ({ ...metadata, name: 'Migrated History carrier' }));
+    http.answer(homeId, '/v2/sessions/history', { select: async () => {
+      const response = boundary.handle(url);
+      if (!response) throw new Error('Missing migrated Session detail');
+      return { status: response.status, body: await response.json() };
+    } });
+    const consumer = createDefaultVoiceHistoryConsumer();
+    await consumer.open();
+    expect(consumer.read().sessionId).toBe('history');
+    expect(storage.getState().sessions.history?.metadataLayoutVersion).toBe(1);
   });
 
   it('returns empty without creating when lookup has no exact carrier or hydration is unavailable', async () => {
-    const deps: VoiceHistorySessionDiscoveryDeps = {
-      lookupByTags: vi.fn(async () => [{ id: 'history' }]),
-      hydrateSession: vi.fn(async () => ({ kind: 'missing', sessionId: 'history' })),
-      readHydratedSession: vi.fn(() =>
-        carrierSession({ id: 'history' }) as unknown as Session),
-    };
-
-    await expect(discoverVoiceHistorySession(deps)).resolves.toBeNull();
-    expect(deps.readHydratedSession).not.toHaveBeenCalled();
+    await installCandidates([carrierSession({ id: 'history' })]);
+    http.answer(homeId, '/v2/sessions/history', { status: 404, body: { error: 'not_found' } });
+    const consumer = createDefaultVoiceHistoryConsumer();
+    await consumer.open();
+    expect(consumer.read().sessionId).toBeNull();
+    expect(http.requestsFor('/v1/sessions/history/messages')).toEqual([]);
+    expect(http.requestsFor('/v1/sessions').some(request =>
+      request.input !== null && typeof request.input === 'object' && 'tag' in request.input,
+    )).toBe(false);
   });
 });

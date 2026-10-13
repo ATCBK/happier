@@ -1,145 +1,79 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import 'fake-indexeddb/auto';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { createSessionFixture } from '@/dev/testkit';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import '@/sync/syncEngine';
-import { sync } from '@/sync/sync';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
 import { discoverVoiceHistorySession } from '@/voice/history/voiceHistorySessionDiscovery';
-import {
-  buildVoiceTranscriptHistorySessionMetadata,
-  VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
-} from '@/voice/persistence/voiceTranscriptHistorySession';
-
+import { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@/voice/persistence/voiceTranscriptHistorySession';
 import { createBundledConversationRuntimeHostLease } from './bundledConversationRuntimeHost';
 
-const XAI_ADAPTER_ID = 'happier.voice.xai/realtime-grok';
-const OPENAI_ADAPTER_ID = 'happier.voice.openai/realtime-openai';
-
-/**
- * Minimal stand-in for the one genuine boundary this invariant depends on: the
- * server's `(accountId, tag)` unique session table. `POST /v1/sessions` is a
- * get-or-create keyed by that pair
- * (`apps/server/.../registerSessionCreateOrLoadRoute.ts`), and
- * `POST /v2/sessions/lookup-by-tags` filters the same column
- * (`apps/server/.../registerSessionLookupByTagsRoute.ts`). Everything above it —
- * carrier acquisition, binding, identity validation, discovery — is the real
- * implementation.
- */
-function createFakeTaggedSessionTable() {
-  const sessionIdsByTag = new Map<string, string>();
-  let nextSessionId = 0;
-  return {
-    sessionIdsByTag,
-    ensureByTag(tag: string): string {
-      const existing = sessionIdsByTag.get(tag);
-      if (existing) return existing;
-      nextSessionId += 1;
-      const sessionId = `srv-session-${nextSessionId}`;
-      sessionIdsByTag.set(tag, sessionId);
-      return sessionId;
-    },
-    listByTags(tags: readonly string[]): readonly Readonly<{ id: string }>[] {
-      return tags
-        .map((tag) => sessionIdsByTag.get(tag))
-        .filter((id): id is string => Boolean(id))
-        .map((id) => Object.freeze({ id }));
-    },
-  };
-}
-
-function installCarrierSession(sessionId: string): void {
-  storage.setState((current) => ({
-    ...current,
-    sessions: {
-      ...current.sessions,
-      [sessionId]: createSessionFixture({
-        id: sessionId,
-        serverId: getActiveServerSnapshot().serverId,
-        active: false,
-        encryptionMode: 'plain',
-        metadata: {
-          path: '/voice-transcript-history',
-          host: 'happier.test',
-          ...buildVoiceTranscriptHistorySessionMetadata(),
-        } as never,
-      }),
-    },
-  }) as never);
-}
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
 describe('voice history carrier single ownership', () => {
-  let table: ReturnType<typeof createFakeTaggedSessionTable>;
-
-  beforeEach(() => {
-    table = createFakeTaggedSessionTable();
-    voiceSessionBindingStore.setState({
-      ...voiceSessionBindingStore.getInitialState(),
-      bind: voiceSessionBindingStore.getState().bind,
-      unbind: voiceSessionBindingStore.getState().unbind,
-      replacePersistedBindings: voiceSessionBindingStore.getState().replacePersistedBindings,
-      getByConversationSessionId: voiceSessionBindingStore.getState().getByConversationSessionId,
-      getByControlSessionId: voiceSessionBindingStore.getState().getByControlSessionId,
-      list: voiceSessionBindingStore.getState().list,
-    }, true);
-    storage.setState((current) => ({
-      ...current,
-      sessions: {},
-      sessionMessages: {},
-    }) as never);
-    vi.spyOn(sync, 'ensureHostedSystemSession').mockImplementation(async (input) => {
-      const sessionId = table.ensureByTag(input.tag);
-      installCarrierSession(sessionId);
-      return { sessionId };
-    });
-    vi.spyOn(sync, 'ensureSessionVisibleForMessageRoute').mockImplementation(
-      async (sessionId) => {
-        if (table.sessionIdsByTag.get(VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG) === sessionId) {
-          installCarrierSession(sessionId);
-        }
-        return { kind: 'available', sessionId } as never;
-      },
-    );
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it('gives every targetless provider attempt in one account the carrier Voice History reads', async () => {
+    const account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
+    onTestFinished(account.dispose);
+    const { sync } = await import('@/sync/sync');
+    const { apiSocket } = await import('@/sync/api/session/apiSocket');
+    const history = createSessionFixture({ id: 'history-carrier', serverId: account.scope.serverId,
+      metadata: { path: '/voice-transcript-history', host: 'happier.test', ...buildVoiceTranscriptHistorySessionMetadata() },
+    });
+    const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [history.id]: history }));
+    const request = account.request.getMockImplementation();
+    if (!request) throw new Error('Account HTTP boundary missing');
+    account.request.mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/v1/sessions' && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toMatchObject({ tag: VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG });
+        return sessionHttp.createSessionFromPost(history.id, init);
+      }
+      if (path === '/v2/sessions/lookup-by-tags') {
+        const { SessionLookupByTagsRequestV2Schema } = await import('@happier-dev/protocol');
+        expect(SessionLookupByTagsRequestV2Schema.parse(JSON.parse(String(init?.body))).tags)
+          .toEqual([VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG]);
+        const detail = sessionHttp.handle(new URL(`/v2/sessions/${history.id}`, String(input)));
+        if (!detail) throw new Error('Missing History HTTP record');
+        const { SessionLookupByTagsResponseV2Schema } = await import('@happier-dev/protocol');
+        return Response.json(SessionLookupByTagsResponseV2Schema.parse({ sessions: [(await detail.json()).session] }));
+      }
+      return sessionHttp.handle(input, init) ?? request(input, init);
+    });
+    storage.setState({ sessions: {}, sessionMessages: {} });
+    voiceSessionBindingStore.setState({ runtimeBindingsByConversationSessionId: {}, persistedBindingsByConversationSessionId: {} });
     const lease = createBundledConversationRuntimeHostLease();
-    try {
-      const xai = await lease.host.acquireDirectMediaConversation({
-        adapterId: XAI_ADAPTER_ID,
-        controlSessionId: lease.host.globalVoiceSessionId,
-        requestedTargetSessionAddress: null,
-      });
-      const openai = await lease.host.acquireDirectMediaConversation({
-        adapterId: OPENAI_ADAPTER_ID,
-        controlSessionId: lease.host.globalVoiceSessionId,
-        requestedTargetSessionAddress: null,
-      });
+    onTestFinished(() => lease.revoke());
+    const xai = await lease.host.acquireDirectMediaConversation({
+      adapterId: 'happier.voice.xai/realtime-grok', controlSessionId: lease.host.globalVoiceSessionId,
+      requestedTargetSessionAddress: null,
+    });
+    const openai = await lease.host.acquireDirectMediaConversation({
+      adapterId: 'happier.voice.openai/realtime-openai', controlSessionId: lease.host.globalVoiceSessionId,
+      requestedTargetSessionAddress: null,
+    });
+    expect(openai.conversationSessionId).toBe(xai.conversationSessionId);
+    expect(lease.host.resolveConversationSessionId(lease.host.globalVoiceSessionId,
+      'happier.voice.openai/realtime-openai')).toBe(xai.conversationSessionId);
 
-      expect(openai.conversationSessionId).toBe(xai.conversationSessionId);
-      expect(
-        lease.host.resolveConversationSessionId(
-          lease.host.globalVoiceSessionId,
-          OPENAI_ADAPTER_ID,
-        ),
-      ).toBe(xai.conversationSessionId);
-
-      const historyReaderSessionId = await discoverVoiceHistorySession({
-        lookupByTags: async (tags) => table.listByTags(tags),
-        hydrateSession: (sessionId) => sync.ensureSessionVisibleForMessageRoute(sessionId, {
-          forceRefresh: true,
-        }) as never,
-        readHydratedSession: (sessionId) =>
-          storage.getState().sessions[sessionId] ?? null,
-      });
-      expect(historyReaderSessionId).toBe(xai.conversationSessionId);
-    } finally {
-      lease.revoke();
-    }
+    const historyReaderSessionId = await discoverVoiceHistorySession({
+      lookupByTags: async tags => {
+        const response = await apiSocket.request('/v2/sessions/lookup-by-tags', {
+          method: 'POST', body: JSON.stringify({ tags }),
+        });
+        const { SessionLookupByTagsResponseV2Schema } = await import('@happier-dev/protocol');
+        return SessionLookupByTagsResponseV2Schema.parse(await response.json()).sessions;
+      },
+      hydrateSession: sessionId => sync.ensureSessionVisibleForMessageRoute(sessionId, {
+        forceRefresh: true, serverId: account.scope.serverId,
+      }),
+      readHydratedSession: sessionId => storage.getState().sessions[sessionId] ?? null,
+    });
+    expect(historyReaderSessionId).toBe(xai.conversationSessionId);
+    expect(readSessionOwnerMetadataView(storage.getState().sessions[historyReaderSessionId!]!)?.systemSessionV1)
+      .toEqual(buildVoiceTranscriptHistorySessionMetadata().systemSessionV1);
   });
 });

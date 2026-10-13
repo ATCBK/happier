@@ -9,8 +9,11 @@ import {
     getStorage,
     loadLocalVoiceEngineWithCompatState,
     registerLocalVoiceEngineHarnessHooks,
-    submitMessage,
+    localVoicePendingEnqueue,
+    localVoiceSpeechTranscription,
+    acknowledgeLocalVoicePendingEnqueue,
     speechRecStart,
+    publishLocalVoiceAssistantMessage,
 } from './localVoiceEngine.testHarness';
 
 let localVoiceEngine: Awaited<ReturnType<typeof loadLocalVoiceEngineWithCompatState>>;
@@ -82,15 +85,9 @@ describe('local voice engine TTS behavior', () => {
             onStoppedRef.current?.();
         });
 
-        submitMessage.mockImplementationOnce(() => {
-            storage.__setState({
-                sessionMessages: {
-                    s1: {
-                        messages: [{ id: 'm1', kind: 'agent-text', text: 'Hi there', createdAt: Date.now() + 60_000 }],
-                    },
-                },
-            });
-            storage.__notify();
+        localVoicePendingEnqueue.mockImplementationOnce(async request => {
+            await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: 'm1', text: 'Hi there' });
+            return acknowledgeLocalVoicePendingEnqueue(request);
         });
 
         const { toggleLocalVoiceTurn, getLocalVoiceState } = localVoiceEngine;
@@ -152,15 +149,9 @@ describe('local voice engine TTS behavior', () => {
             onStoppedRef.current?.();
         });
 
-        submitMessage.mockImplementationOnce(() => {
-            storage.__setState({
-                sessionMessages: {
-                    s1: {
-                        messages: [{ id: 'm1', kind: 'agent-text', text: 'Hi there', createdAt: Date.now() + 60_000 }],
-                    },
-                },
-            });
-            storage.__notify();
+        localVoicePendingEnqueue.mockImplementationOnce(async request => {
+            await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: 'm1', text: 'Hi there' });
+            return acknowledgeLocalVoicePendingEnqueue(request);
         });
 
         const { toggleLocalVoiceTurn, getLocalVoiceState } = localVoiceEngine;
@@ -205,20 +196,17 @@ describe('local voice engine TTS behavior', () => {
             },
         });
 
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
-        submitMessage.mockRejectedValueOnce(new Error('send failed'));
+        localVoicePendingEnqueue.mockResolvedValueOnce(Response.json({ error: 'send failed' }, { status: 400 }));
 
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
-        await expect(toggleLocalVoiceTurn('s1')).rejects.toThrow('send failed');
+        await expect(toggleLocalVoiceTurn('s1')).rejects.toBeInstanceOf(Error);
 
-        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+        expect(localVoiceSpeechTranscription).toHaveBeenCalledTimes(1);
         expect(expoSpeechSpeak).not.toHaveBeenCalled();
-        expect(localVoiceEngine.getLocalVoiceState().status).toBe('idle');
+        expect(localVoiceEngine.getLocalVoiceState()).toMatchObject({ status: 'idle', error: 'send_failed' });
     });
 
 });

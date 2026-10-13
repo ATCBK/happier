@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { storage } from '@/sync/domains/state/storage';
+import { createDeferred } from '@/dev/testkit';
+import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
+import { loadSettings, saveSettings } from '@/sync/domains/state/settingsPersistence';
 
 import { applySettings, settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
 import { voiceSettingsDefaults, voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
@@ -6,32 +10,12 @@ import { voiceSettingsDefaults, voiceSettingsParse } from '@/sync/domains/settin
 import { createVoiceQaTemporarySettingsScopeCoordinator } from './voiceQaTemporarySettingsScope';
 
 function createSettingsHarness(initial: Settings) {
-  let settings = initial;
-  let failNextApply = false;
+  storage.setState({ settings: initial, settingsScope: null });
+  saveSettings(initial, 0);
   return {
-    readSettings: () => settings,
-    applySettingsLocal: (delta: Partial<Settings>) => {
-      if (failNextApply) {
-        failNextApply = false;
-        settings = applySettings(settings, delta);
-        throw new Error('settings_apply_failed');
-      }
-      settings = applySettings(settings, delta);
-    },
-    failNextApply: () => {
-      failNextApply = true;
-    },
+    readSettings: () => storage.getState().settings,
+    applySettingsLocal: storage.getState().applySettingsLocal,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 function createVoiceSettings(marker: string) {
@@ -50,6 +34,11 @@ function createBaselineSettings(): Settings {
 }
 
 describe('voice QA temporary settings scope', () => {
+  const initialStorage = storage.getState();
+  afterEach(() => {
+    vi.restoreAllMocks();
+    storage.setState(initialStorage, true);
+  });
   it('restores the exact prior settings after successful and failed serial actions', async () => {
     const baseline = createBaselineSettings();
     const harness = createSettingsHarness(baseline);
@@ -85,8 +74,8 @@ describe('voice QA temporary settings scope', () => {
     const baseline = createBaselineSettings();
     const harness = createSettingsHarness(baseline);
     const coordinator = createVoiceQaTemporarySettingsScopeCoordinator(harness);
-    const first = deferred<string>();
-    const second = deferred<string>();
+    const first = createDeferred<string>();
+    const second = createDeferred<string>();
 
     const firstRun = coordinator.run({
       ownerId: 'screen-a',
@@ -113,7 +102,7 @@ describe('voice QA temporary settings scope', () => {
     const baseline = createBaselineSettings();
     const harness = createSettingsHarness(baseline);
     const coordinator = createVoiceQaTemporarySettingsScopeCoordinator(harness);
-    const action = deferred<string>();
+    const action = createDeferred<string>();
     const abortController = new AbortController();
 
     const run = coordinator.run({
@@ -132,16 +121,31 @@ describe('voice QA temporary settings scope', () => {
     expect(harness.readSettings()).toMatchObject(baseline);
   });
 
-  it('rolls back a partial setup when applying the temporary override throws', async () => {
+  it('retires a failed settings scope when native persistence rejects the override and permits a later run', async () => {
     const baseline = createBaselineSettings();
     const harness = createSettingsHarness(baseline);
     const coordinator = createVoiceQaTemporarySettingsScopeCoordinator(harness);
-    harness.failNextApply();
+    // The real settings owner persists before publishing its store projection.
+    // Fail only the native storage write, preserving that ordering.
+    vi.spyOn(getPersistenceStorage(), 'set').mockImplementationOnce(() => {
+      throw new Error('settings_apply_failed');
+    });
 
     await expect(coordinator.run({
       ownerId: 'screen-a',
       delta: { experiments: true, voice: createVoiceSettings('temporary') },
     }, async () => 'unreachable')).rejects.toThrow('settings_apply_failed');
     expect(harness.readSettings()).toMatchObject(baseline);
+    expect(loadSettings().settings).toMatchObject(baseline);
+
+    await coordinator.run({
+      ownerId: 'screen-b',
+      delta: { voice: createVoiceSettings('retry') },
+    }, async () => {
+      expect(harness.readSettings().voice.assistantLanguage).toBe('retry');
+      expect(loadSettings().settings).toMatchObject({ voice: { assistantLanguage: 'retry' } });
+    });
+    expect(harness.readSettings()).toMatchObject(baseline);
+    expect(loadSettings().settings).toMatchObject(baseline);
   });
 });

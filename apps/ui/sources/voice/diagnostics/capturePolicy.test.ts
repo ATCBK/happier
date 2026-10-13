@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 
 import {
   resetVoiceDiagnosticsSessionPolicyForTests,
@@ -7,19 +8,15 @@ import {
 } from './capturePolicy';
 
 const enabledSettings = {
-  voice: {
+  voice: voiceSettingsParse({
     diagnostics: {
       v: 1,
       enabled: true,
       consentVersion: 1,
       captureSttInput: true,
       captureTtsOutput: false,
-      maxAgeMs: 86_400_000,
-      maxFiles: 20,
-      maxBytes: 104_857_600,
-      maxDurationMs: 300_000,
     },
-  },
+  }),
 };
 
 describe('voice diagnostics capture policy', () => {

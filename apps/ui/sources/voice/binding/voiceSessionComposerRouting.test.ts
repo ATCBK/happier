@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createSessionFixture } from '@/dev/testkit';
 
 import { getStorage } from '@/sync/domains/state/storage';
 import { writeVoiceConversationBindingMetadata } from './voiceConversationBindingMetadata';
@@ -8,15 +9,16 @@ import { resolveVoiceSessionComposerRouting } from './voiceSessionComposerRoutin
 const initialStorageState = getStorage().getState();
 
 function setCurrentConversationSession(conversationSessionId: string, metadata: unknown = {}): void {
-    getStorage().setState((state: any) => ({
+    getStorage().setState((state) => ({
         ...state,
         sessions: {
             ...state.sessions,
-            [conversationSessionId]: {
+            [conversationSessionId]: createSessionFixture({
                 id: conversationSessionId,
                 serverId: 'server-a',
-                metadata,
-            },
+                metadata: { ...createSessionFixture().metadata,
+                    ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}) },
+            }),
         },
     }));
 }
@@ -142,11 +144,17 @@ describe('resolveVoiceSessionComposerRouting', () => {
         const second = resolveVoiceSessionComposerRouting({ conversationSessionId: 'carrier-memo', sessionMetadata });
         expect(second).toBe(first);
 
-        // A different metadata reference recomputes (no stale memo).
+        // A real target change must invalidate the retained route.
+        if (!first) throw new Error('Expected Voice composer routing');
+        const changedMetadata = writeVoiceConversationBindingMetadata(sessionMetadata, {
+            ...first.binding, targetSessionAddress: { serverId: 'server-a', sessionId: 's2' }, updatedAt: 2,
+        });
+        setCurrentConversationSession('carrier-memo', changedMetadata);
         const third = resolveVoiceSessionComposerRouting({
             conversationSessionId: 'carrier-memo',
-            sessionMetadata: { ...sessionMetadata },
+            sessionMetadata: changedMetadata,
         });
         expect(third).not.toBe(first);
+        expect(third?.binding.targetSessionAddress).toEqual({ serverId: 'server-a', sessionId: 's2' });
     });
 });

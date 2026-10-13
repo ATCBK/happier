@@ -2,6 +2,20 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+installDisconnectedServerSocketBoundary();
+// Warm the real Account/lifecycle graph during collection, outside behavior
+// deadlines; each case still constructs and retires its own actual owners.
+await loadSyncSingletonForTests();
+await Promise.all([
+  import('./voiceSessionLifecycleController'),
+  import('@/voice/adapters/localDirect/localDirectAdapter'),
+]);
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -13,12 +27,17 @@ afterEach(async () => {
 
 describe('voiceSessionStore', () => {
   it('keeps accepted Voice input scoped to its captured attempt and Account lifetime through End', async () => {
+    const account = await serveAccountHomes({ homes: [{ key: 'voice', serverUrl: 'https://voice-store.test', accountId: 'account-a' }],
+      route: () => undefined });
+    const disconnect = await account.restoreActiveConnection();
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    expect(lifetime).not.toBeNull();
+    if (!lifetime) throw new Error('Restored Voice Account lifetime unavailable');
+    try {
     const store = await import('./voiceSessionStore');
-    let current = true;
-    const lifetime = { scope: { serverId: 'home-a', accountId: 'account-a' },
-      isCurrent: () => current, onRetire: () => ({ dispose() {} }) };
     const binding = { adapterId: 'local_direct', controlSessionId: 'control', conversationSessionId: 'conversation',
-      conversationSessionAddress: { serverId: 'home-a', sessionId: 'conversation' }, targetSessionAddress: null,
+      conversationSessionAddress: { serverId: account.homes.voice!.id, sessionId: 'conversation' }, targetSessionAddress: null,
       transcriptMode: 'native_session' as const, updatedAt: 1 };
     const start = () => store.setVoiceSessionSnapshot({ adapterId: binding.adapterId, sessionId: binding.controlSessionId,
       status: 'connected', mode: 'listening', canStop: true }, binding, { accountScope: lifetime.scope, conversationScope: { kind: 'voice_home' } });
@@ -40,9 +59,14 @@ describe('voiceSessionStore', () => {
     expect(store.getVoiceSessionFirstSuccessInputIds()).toEqual([]);
     store.recordVoiceSessionFirstSuccessInput({ attemptId, lifetime, conversationSessionId: 'conversation', localId: 'later-input' });
     expect(store.getVoiceSessionFirstSuccessInputIds()).toEqual([]);
-    current = false;
+    await disconnect();
+    expect(lifetime.isCurrent()).toBe(false);
     expect(store.getVoiceSessionFirstSuccessAttemptId()).toBeNull();
     expect(store.getVoiceSessionFirstSuccessInputIds()).toEqual([]);
+    } finally {
+      await disconnect();
+      await account.dispose();
+    }
   });
   it('publishes changes to the applied voice and clears it when the attempt is no longer connected', async () => {
     const store = await import('./voiceSessionStore');
@@ -73,6 +97,44 @@ describe('voiceSessionStore', () => {
     });
     store.setVoiceSessionSnapshot({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
     expect(store.getVoiceSessionEndedAttempt()?.conversationSessionAddress).toEqual(conversationSessionAddress);
+  });
+  it('captures a direct-session target and Account independently of a conversation binding and retains the admitted scope', async () => {
+    const store = await import('./voiceSessionStore');
+    const targetSessionAddress = { serverId: 'home-direct', sessionId: 'coding-session' };
+    const accountScope = { serverId: targetSessionAddress.serverId, accountId: 'account-a' };
+    const snapshot = { adapterId: 'local_conversation', sessionId: targetSessionAddress.sessionId,
+      status: 'connected' as const, mode: 'listening' as const, canStop: true };
+    store.setVoiceSessionSnapshot(snapshot, null, { accountScope, targetSessionAddress, conversationScope: null });
+    // A later profile/route projection cannot relabel the admitted attempt.
+    store.setVoiceSessionSnapshot(snapshot, null, { accountScope: { ...accountScope, accountId: 'account-b' },
+      targetSessionAddress: { ...targetSessionAddress, sessionId: 'other-session' }, conversationScope: null });
+    store.setVoiceSessionSnapshot({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+    expect(store.getVoiceSessionEndedAttempt()).toMatchObject({ targetSessionAddress, accountScope,
+      conversationSessionAddress: null, conversationScope: null, transcriptMode: null });
+    store.setVoiceSessionSnapshot({ ...snapshot, sessionId: 'next-session' });
+    store.setVoiceSessionSnapshot({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+    expect(store.getVoiceSessionEndedAttempt()).toMatchObject({ targetSessionAddress: null, accountScope: null });
+  });
+  it('does not disclose a direct-session target whose captured Account belongs to another Home', async () => {
+    const store = await import('./voiceSessionStore');
+    store.setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: 'coding-session', status: 'connected', mode: 'listening', canStop: true }, null,
+      { accountScope: { serverId: 'other-home', accountId: 'account-a' },
+        targetSessionAddress: { serverId: 'home-direct', sessionId: 'coding-session' }, conversationScope: null });
+    store.setVoiceSessionSnapshot({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+    expect(store.getVoiceSessionEndedAttempt()).toMatchObject({ targetSessionAddress: null, accountScope: null });
+  });
+  it('does not attach a same-control-id binding from another Home to a direct-session attempt', async () => {
+    const store = await import('./voiceSessionStore');
+    const targetSessionAddress = { serverId: 'home-direct', sessionId: 'coding-session' };
+    const accountScope = { serverId: targetSessionAddress.serverId, accountId: 'account-a' };
+    store.setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: targetSessionAddress.sessionId,
+      status: 'connected', mode: 'listening', canStop: true }, {
+      adapterId: 'local_conversation', controlSessionId: targetSessionAddress.sessionId, conversationSessionId: 'other-conversation',
+      conversationSessionAddress: { serverId: 'other-home', sessionId: 'other-conversation' },
+      targetSessionAddress: null, transcriptMode: 'native_session', updatedAt: 1,
+    }, { accountScope, targetSessionAddress, conversationScope: null });
+    store.setVoiceSessionSnapshot({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+    expect(store.getVoiceSessionEndedAttempt()).toMatchObject({ targetSessionAddress, accountScope, conversationSessionAddress: null });
   });
   it('records an attempt that ended cleanly, never a failure, and forgets it at the next start or on dismiss', async () => {
     const store = await import('./voiceSessionStore');
@@ -132,7 +194,6 @@ describe('voiceSessionStore', () => {
   });
 
   it('mints one canonical attempt id per inactive-to-active start and keeps it through reconnect churn', async () => {
-    vi.resetModules();
     const {
       getVoiceSessionAttemptId,
       setVoiceSessionSnapshot,
@@ -153,7 +214,6 @@ describe('voiceSessionStore', () => {
   });
 
   it('mints a new attempt when the active control session changes without a disconnected publication', async () => {
-    vi.resetModules();
     const { getVoiceSessionAttemptId, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
     setVoiceSessionSnapshot({ adapterId: 'local_direct', sessionId: 's1', status: 'connected', mode: 'listening', canStop: true });
     const firstAttemptId = getVoiceSessionAttemptId();
@@ -162,7 +222,6 @@ describe('voiceSessionStore', () => {
   });
 
   it('does not rerender subscribers when setVoiceSessionSnapshot receives an identical snapshot', async () => {
-    vi.resetModules();
 
     const { useVoiceSessionSnapshot } = await import('./voiceSession');
     const { setVoiceSessionSnapshot } = await import('./voiceSessionStore');
@@ -215,7 +274,6 @@ describe('voiceSessionStore', () => {
   });
 
   it('clears error fields when the next snapshot omits them', async () => {
-    vi.resetModules();
 
     const { setVoiceSessionSnapshot, getVoiceSessionSnapshot } = await import('./voiceSessionStore');
 
@@ -247,7 +305,6 @@ describe('voiceSessionStore', () => {
   });
 
   it('publishes reconnecting and interrupted presentation-only changes', async () => {
-    vi.resetModules();
     const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
     const baseline = {
       adapterId: 'local_direct',
@@ -266,7 +323,6 @@ describe('voiceSessionStore', () => {
   });
 
   it('canonicalizes adapter and session ids when storing a snapshot', async () => {
-    vi.resetModules();
 
     const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
 
@@ -283,137 +339,51 @@ describe('voiceSessionStore', () => {
   });
 
   it('prefers the lifecycle-controller snapshot over a stale published store snapshot', async () => {
-    vi.resetModules();
-
     const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
     const { setVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
-
+    const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
     const controllerSnapshot = {
-      adapterId: 'local_conversation',
-      sessionId: 'runtime-session',
-      status: 'connected' as const,
-      mode: 'listening' as const,
-      canStop: true,
+      adapterId: 'local_conversation', sessionId: 'runtime-session',
+      status: 'connected' as const, mode: 'listening' as const, canStop: true,
     };
-
+    // Construct the real lifecycle from the public current projection before
+    // a stale store publication arrives; no copied lifecycle methods or readers.
+    setVoiceSessionSnapshot(controllerSnapshot);
+    const controller = createVoiceSessionLifecycleController();
     await act(async () => {
-      setVoiceSessionSnapshot({
-        adapterId: 'local_conversation',
-        sessionId: 'stale-session',
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-      });
-      setVoiceSessionLifecycleController({
-        observeSyncedConversationMessages: () => {},
-        commitInput: async () => {},
-        beginHoldToTalk: (await import('./voiceSessionManager')).createVoiceSessionManager({}).beginHoldToTalk,
-        finishHoldToTalk: async () => false,
-        getAttemptTargetSessionAddress: () => null,
-        dispose: async () => {},
-        getConfiguredProviderId: () => 'local_conversation',
-        rearmAfterCredentialAuthorityChange: vi.fn(() => {}),
-        getSnapshot: () => controllerSnapshot,
-        interrupt: vi.fn(async () => {}),
-        bargeIn: vi.fn(async () => {}),
-        sendContextUpdate: vi.fn(() => {}),
-        setConfiguredProviderId: vi.fn(() => {}),
-        setCurrentUiContextToolSetEnabled: vi.fn(() => {}),
-        setMuted: vi.fn(async () => {}),
-        suspendInput: vi.fn(async () => null),
-        retry: vi.fn(async () => {}),
-        dismissFailedAttempt: vi.fn(async () => {}),
-        stop: vi.fn(async () => {}),
-        subscribe: () => () => {},
-        toggle: vi.fn(async () => {}),
-      });
+      setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: 'stale-session',
+        status: 'disconnected', mode: 'idle', canStop: false });
+      setVoiceSessionLifecycleController(controller);
     });
-
     expect(getVoiceSessionSnapshot()).toEqual(controllerSnapshot);
-
     await act(async () => {
       setVoiceSessionLifecycleController(null);
+      await controller.dispose();
     });
   });
 
   it('resets the voice session runtime globals between specs', async () => {
-    vi.resetModules();
-
     const voiceSessionStoreModule = await import('./voiceSessionStore');
     const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = voiceSessionStoreModule;
     const { getVoiceSessionLifecycleController, setVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
     const { getVoiceAdapterRegistry, registerVoiceAdapters } = await import('./voiceAdapterRegistry');
-
-    const activeSnapshot = {
-      adapterId: 'local_direct',
-      sessionId: 'runtime-session',
-      status: 'connected' as const,
-      mode: 'listening' as const,
-      canStop: true,
-    };
-    setVoiceSessionSnapshot({
-      adapterId: null,
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
-    });
-    setVoiceSessionLifecycleController({
-      observeSyncedConversationMessages: () => {},
-      commitInput: async () => {},
-      beginHoldToTalk: (await import('./voiceSessionManager')).createVoiceSessionManager({}).beginHoldToTalk,
-      finishHoldToTalk: async () => false,
-      getAttemptTargetSessionAddress: () => null,
-      dispose: async () => {},
-      getConfiguredProviderId: () => 'local_direct',
-      rearmAfterCredentialAuthorityChange: vi.fn(() => {}),
-      getSnapshot: () => activeSnapshot,
-      interrupt: vi.fn(async () => {}),
-      bargeIn: vi.fn(async () => {}),
-      sendContextUpdate: vi.fn(() => {}),
-      setConfiguredProviderId: vi.fn(() => {}),
-      setCurrentUiContextToolSetEnabled: vi.fn(() => {}),
-      setMuted: vi.fn(async () => {}),
-      suspendInput: vi.fn(async () => null),
-      retry: vi.fn(async () => {}),
-      dismissFailedAttempt: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      subscribe: () => () => {},
-      toggle: vi.fn(async () => {}),
-    });
-    registerVoiceAdapters([{
-      id: 'local_direct',
-      engineKind: 'local',
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      toggle: vi.fn(async () => {}),
-      interrupt: vi.fn(async () => {}),
-      setMuted: vi.fn(async () => {}),
-      sendContextUpdate: vi.fn(() => {}),
-      getSnapshot: () => activeSnapshot,
-      subscribe: () => () => {},
-    }]);
-
+    const { createLocalDirectVoiceAdapter } = await import('@/voice/adapters/localDirect/localDirectAdapter');
+    registerVoiceAdapters([createLocalDirectVoiceAdapter()]);
+    const activeSnapshot = { adapterId: 'local_direct', sessionId: 'runtime-session',
+      status: 'connected' as const, mode: 'listening' as const, canStop: true };
+    setVoiceSessionSnapshot(activeSnapshot);
+    const controller = createVoiceSessionLifecycleController();
+    setVoiceSessionSnapshot({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+    setVoiceSessionLifecycleController(controller);
     expect(getVoiceSessionSnapshot()).toEqual(activeSnapshot);
-    expect(getVoiceSessionLifecycleController()).not.toBeNull();
+    expect(getVoiceSessionLifecycleController()).toBe(controller);
     expect(getVoiceAdapterRegistry().list()).toHaveLength(1);
-    expect(voiceSessionStoreModule.resetVoiceSessionRuntimeStateForTests).toBeTypeOf('function');
-
-    if (typeof voiceSessionStoreModule.resetVoiceSessionRuntimeStateForTests !== 'function') {
-      return;
-    }
-
     await voiceSessionStoreModule.resetVoiceSessionRuntimeStateForTests();
-
     expect(getVoiceSessionLifecycleController()).toBeNull();
     expect(getVoiceAdapterRegistry().list()).toHaveLength(0);
-    expect(getVoiceSessionSnapshot()).toEqual({
-      adapterId: null,
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
-    });
+    expect(getVoiceSessionSnapshot()).toEqual({ adapterId: null, sessionId: null,
+      status: 'disconnected', mode: 'idle', canStop: false });
   });
 });
 

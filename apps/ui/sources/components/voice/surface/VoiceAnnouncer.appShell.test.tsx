@@ -30,10 +30,6 @@ import { VoiceAnnouncer, VOICE_ANNOUNCER_TEST_ID } from './VoiceAnnouncer';
  * so presentation-local regions would announce the same transition repeatedly.
  */
 
-vi.mock('@/components/pets/source/useSelectedPetPackage', () => ({
-    useSelectedPetPackage: () => ({ enabled: false, source: null }),
-}));
-
 function noop(): void {}
 
 function buildSurfaceModel(control: VoiceAttemptControlProjection): VoiceSurfaceViewModel {
@@ -81,6 +77,7 @@ function MountedPresentations() {
 const initialStorageState = getStorage().getState();
 beforeEach(() => {
     getStorage().setState(initialStorageState, true);
+    getStorage().setState((state) => ({ localSettings: { ...state.localSettings, petsEnabledOverride: false } }));
     setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: 'voice-session-1', status: 'connected', mode: 'listening', canStop: true, micMuted: false });
 });
 afterEach(() => {

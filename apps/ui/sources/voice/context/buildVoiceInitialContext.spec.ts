@@ -6,11 +6,12 @@ import { storage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 import { buildVoiceInitialContext, resolveVoiceInitialContext } from './buildVoiceInitialContext';
 
 function createSession(summaryText: string): Session {
-  return {
+  return createSessionFixture({
     id: 's1',
     serverId: getActiveServerSnapshot().serverId,
     seq: 0,
@@ -18,21 +19,19 @@ function createSession(summaryText: string): Session {
     updatedAt: 0,
     active: true,
     activeAt: 0,
-    // Content availability is evidence, never inference: an undeclared mode projects `locked`
-    // and would make every context assertion below pass by withholding everything.
     encryptionMode: 'plain',
     metadata: {
       path: '/tmp/project',
       host: 'localhost',
       summary: { text: summaryText, updatedAt: 0 },
-    } as Session['metadata'],
+    },
     metadataVersion: 1,
     agentState: null,
     agentStateVersion: 0,
     thinking: false,
     thinkingAt: 0,
     presence: 'online',
-  };
+  });
 }
 
 function createUserMessage(text: string): Message {

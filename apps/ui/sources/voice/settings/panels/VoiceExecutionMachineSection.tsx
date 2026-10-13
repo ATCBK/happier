@@ -22,6 +22,7 @@ import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { t } from '@/text';
+import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { resolveAccountVoiceCredentialSourceSelection } from '@/voice/credentials/accountVoiceCredential';
 import { resolveVoiceDictationExecutionMachineRequirement } from '@/voice/dictation/voiceDictationReadiness';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
@@ -122,14 +123,14 @@ export function VoiceExecutionMachineSection(props: Readonly<{
 
   const items = React.useMemo(() => getMachineDropdownMenuItems({
     machines,
+    scope: settingsScope,
     iconColor: theme.colors.text.secondary,
     includeAuto: true,
     autoTitle: t('settingsVoice.local.executionMachine.autoTitle'),
     autoSubtitle: t('settingsVoice.local.executionMachine.autoSubtitle'),
     onlineLabel: t('settingsVoice.local.executionMachine.onlineLabel'),
     offlineLabel: t('settingsVoice.local.executionMachine.offlineLabel'),
-    unknownMachineLabel: t('settingsVoice.local.executionMachine.unknownMachineLabel'),
-  }), [machines, theme.colors.text.secondary]);
+  }), [machines, settingsScope, theme.colors.text.secondary]);
 
   if (!requiresExecutionMachine && !revealRequested) return null;
 
@@ -141,6 +142,7 @@ export function VoiceExecutionMachineSection(props: Readonly<{
     : '';
   const selectedId = fixedMachineId || 'auto';
   const selectedItem = items.find((item) => item.id === selectedId) ?? null;
+  const missingMachineLabel = getMachineDisplayName({ id: fixedMachineId, absence: 'unlisted' });
   const stickyAutoItem = stickyAutoMachineId
     ? items.find((item) => item.id === stickyAutoMachineId) ?? null
     : null;
@@ -161,13 +163,14 @@ export function VoiceExecutionMachineSection(props: Readonly<{
     const shownMachine = shownMachineId ? machines.find((machine) => machine.id === shownMachineId) ?? null : null;
     const valueLabel = selectedId === 'auto'
       ? (stickyAutoItem ? `${t('settingsVoice.local.executionMachine.autoTitle')} · ${stickyAutoItem.title}` : t('settingsVoice.local.executionMachine.autoTitle'))
-      : (selectedItem?.title ?? fixedMachineId);
+      : (selectedItem?.title ?? missingMachineLabel);
     return (
       <SettingAnchor setting={setting}>
       <SelectionListFilterChip
         filter={{
           id: 'voiceComputer',
           label: t('settingsVoice.pages.conversations.runsOn'),
+          showLabel: true,
           valueLabel,
           icon: <Icon name="desktop" size={14} color={theme.colors.text.secondary} />,
           ...(shownMachine ? { presence: isMachineReachable(settingsScope, shownMachine) ? 'online' as const : 'offline' as const } : {}),
@@ -205,7 +208,7 @@ export function VoiceExecutionMachineSection(props: Readonly<{
           subtitleFormatter: () => selectedItem?.subtitle ?? t('settingsVoice.local.executionMachine.fallbackSubtitle'),
           detailFormatter: () => selectedId === 'auto' && stickyAutoItem
             ? `${selectedItem?.title ?? t('settingsVoice.local.executionMachine.autoTitle')} · ${stickyAutoItem.title}`
-            : (selectedItem?.title ?? fixedMachineId) || selectedId,
+            : selectedItem?.title ?? missingMachineLabel,
         }}
         items={items}
         onSelect={selectMachine}

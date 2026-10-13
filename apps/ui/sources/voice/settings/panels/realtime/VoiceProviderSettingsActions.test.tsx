@@ -1,4 +1,15 @@
 import * as React from 'react';
+import { Alert } from 'react-native';
+import 'fake-indexeddb/auto';
+import { createDeferred, flushHookEffects } from '@/dev/testkit';
+import { ModalProvider } from '@/modal';
+import { log } from '@/log';
+import { CustomModal } from '@/modal/components/CustomModal';
+import { t, setPreferredLanguageFromSettings } from '@/text';
+import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
+import { saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
+import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { getSavedSecretCatalogSnapshot, resolveSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
@@ -11,20 +22,76 @@ import type {
   VoiceProviderSettingsActionDeclaration,
 } from '@happier-dev/protocol';
 import { PLUGIN_MANIFEST } from '@happier-dev/plugins-elevenlabs/manifest';
-import { createElevenLabsVoiceProviderRuntime } from '@happier-dev/plugins-elevenlabs/ui/voice';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '@happier-dev/plugins-elevenlabs/protocol/voice';
 
-import { createAccountVoiceOperationService } from '@/voice/credentials/accountVoiceOperationService';
 import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
 import { storage } from '@/sync/domains/state/storageStore';
 import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration, type ExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
-import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
+import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
 
 let accountFixture: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 let registration: ExternalVoiceProviderRegistration | null = null;
+let provider: ReturnType<typeof createElevenLabsSettingsRuntimeTestHarness>;
+let modalTree: renderer.ReactTestRenderer;
+function providerUrl(input: Parameters<typeof globalThis.fetch>[0]) {
+  return new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+}
+async function providerBody(init: RequestInit | undefined): Promise<unknown> {
+  if (!init?.body) throw new Error('Expected provider-authored HTTP body');
+  return await new Response(init.body).json();
+}
+async function replaceProviderRegistration() {
+  await provider.register();
+  registration = provider.registration;
+}
+const humanConfirmations: Array<() => void> = [];
+async function waitForConfirmation(count: number) {
+  await vi.waitFor(() => {
+    const control = modalTree.root.findAll(node => typeof node.type === 'string' && node.props.testID === 'app-shell-confirmation-confirm').at(-1);
+    expect(control).toBeTruthy();
+    if (humanConfirmations.length < count) humanConfirmations.push(control!.props.onPress);
+    expect(humanConfirmations).toHaveLength(count);
+  });
+}
+function hasConfirmation() {
+  return modalTree.root.findAllByType(CustomModal).some(node => node.props.visible === true
+    && node.findAll(child => typeof child.type === 'string' && child.props.testID === 'app-shell-confirmation-confirm').length > 0);
+}
+async function saveCredential() {
+  const declaration = VoiceProviderContributionSchema.parse(PLUGIN_MANIFEST.contributes.voiceProviders?.[0]);
+  const recipient = createBundledVoiceRecipientContract({ pluginId: PLUGIN_MANIFEST.id, declaration });
+  if (!recipient) throw new Error('Expected ElevenLabs recipient contract');
+  accountFixture.replaceSettings(saveAndUseAccountVoiceCredential({ settings: accountFixture.settings,
+    contribution: { pluginId: PLUGIN_MANIFEST.id, localId: 'realtime-elevenlabs' }, credentialSlotId: 'api_key',
+    currentDeclaration: declaration, expectedSettingsVersion: state.settingsVersion,
+    approvedRecipientContractDigest: createRecipientContractDigestV1(recipient),
+    value: 'test-only-api-key', generateId: () => 'elevenlabs-secret', now: 1,
+    expectedSecretId: null, expectedSecretUpdatedAt: null }).settings);
+  await refreshSavedSecretCatalog(accountFixture.scope);
+  // The catalog publishes readiness before its canonical retained-secret
+  // promotion completes. Start with the resulting persisted resource authority.
+  await vi.waitFor(() => {
+    expect(accountFixture.resources).toHaveLength(1);
+    const binding = accountFixture.settings.voiceSettingsV1.credentialBindings.find(candidate =>
+      candidate.contribution.pluginId === PLUGIN_MANIFEST.id && candidate.contribution.localId === 'realtime-elevenlabs');
+    expect(binding?.credentialBindings.account?.api_key).toMatch(/^happier:shared-secret:v1:/u);
+  });
+  await refreshSavedSecretCatalog(accountFixture.scope);
+  // Resource creation precedes retained-history cleanup; admit the operation
+  // only after the canonical catalog has published that completed maintenance.
+  await vi.waitFor(() => {
+    expect(getSavedSecretCatalogSnapshot(accountFixture.scope)).toMatchObject({
+      status: 'ready', stale: false, legacyImport: { status: 'complete' },
+    });
+    const binding = accountFixture.settings.voiceSettingsV1.credentialBindings.find(candidate =>
+      candidate.contribution.pluginId === PLUGIN_MANIFEST.id && candidate.contribution.localId === 'realtime-elevenlabs');
+    expect(resolveSavedSecretReference(accountFixture.scope, accountFixture.settings.secrets,
+      binding?.credentialBindings.account?.api_key ?? '')).toMatchObject({ status: 'ready', kind: 'shared_resource' });
+  });
+}
 function replaceVoiceFixture(change: Partial<Settings['voice']>) {
   accountFixture.replaceVoice({ ...storage.getState().settings.voice, ...change });
 }
@@ -61,11 +128,6 @@ const state = {
   },
   get selectedProviderId() { return storage.getState().settings.voice.providerId; },
   set selectedProviderId(providerId: string | null) { replaceVoiceFixture({ providerId }); },
-  set accountSettings(value: Record<string, unknown> | null) {
-    if (value) accountFixture.replaceSettings(settingsParse({ ...storage.getState().settings, ...value,
-      voiceSettingsV1: { ...storage.getState().settings.voiceSettingsV1,
-        ...(value.voiceSettingsV1 as Record<string, unknown> | undefined) } }));
-  },
 };
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -79,35 +141,10 @@ function mountActionView(element: React.ReactElement) {
 
 const PROVIDER_ID = vi.hoisted(() => 'happier.voice.elevenlabs/realtime-elevenlabs');
 
-const spies = vi.hoisted(() => ({
-  modalConfigs: [] as any[],
-  show: vi.fn((config: any) => {
-    spies.modalConfigs.push(config);
-    return `modal-${spies.modalConfigs.length}`;
-  }),
-  hide: vi.fn(),
-  alertAsync: vi.fn(async () => undefined),
-  execute: vi.fn(async () => ({ patch: { agentId: 'agent-created' } })),
-  log: vi.fn(),
-}));
-
-
-vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
-  spies: { show: spies.show, hide: spies.hide, alertAsync: spies.alertAsync },
-}).module);
-vi.mock('@/log', () => ({ log: { log: spies.log } }));
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({
-    // Render params inline so an assertion can see the exact facts a copy key
-    // was given without depending on the English wording around them.
-    translate: (key: string, params?: Record<string, unknown>) => (
-      params ? `${key}(${JSON.stringify(params)})` : key
-    ),
-  });
-});
+const nativeAlert = vi.spyOn(Alert, 'alert');
 
 const action: PluginSettingsActionDeclarationV2 = {
   id: 'create-agent',
@@ -129,13 +166,14 @@ const conditionalUpdateAction: VoiceProviderSettingsActionDeclaration = {
   enabledWhen: { kind: 'setting_nonempty', settingId: 'agentId' },
 };
 
+const settingsOwner = createDefaultVoiceProviderRegistry().get(PROVIDER_ID)?.providerSettings;
+if (!settingsOwner || !settingsOwner.defaultConfig || typeof settingsOwner.defaultConfig !== 'object' || Array.isArray(settingsOwner.defaultConfig)) throw new Error('Expected ElevenLabs catalog settings owner');
 const owner = {
-  schemaVersion: 2,
-  defaultConfig: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS, billingMode: 'byo', agentId: '' },
-  parseConfig(value: unknown) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const candidate = value as Record<string, unknown>;
-    return typeof candidate.agentId === 'string' ? candidate : null;
+  schemaVersion: settingsOwner.schemaVersion,
+  defaultConfig: settingsOwner.defaultConfig,
+  parseConfig: (value: unknown) => {
+    const parsed = settingsOwner.parseConfig(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
   },
 };
 
@@ -172,11 +210,14 @@ describe('VoiceProviderSettingsActions', () => {
         if (state.advanceDuringPreparation) {
           state.advanceDuringPreparation = false;
           accountFixture.replaceSettings(withProviderConfig(storage.getState().settings,
-            { ...state.config, billingMode: 'happier' }), { version: 5, publish: false });
+            { ...state.config, billingMode: 'happier', tts: {
+              ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
+              voiceSettings: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts.voiceSettings, stability: 0.25 },
+            } }), { version: state.settingsVersion + 1, publish: false });
         }
         if (init?.method === 'POST') {
           const body = JSON.parse(String(init.body));
-          if (body.content?.t === 'plain' && body.content.v?.voiceSettingsV1?.providers?.[PROVIDER_ID]?.config?.agentId === 'agent-created') {
+          if (body.content?.t === 'plain' && body.content.v?.voiceSettingsV1?.providers?.[PROVIDER_ID]?.config?.agentId === 'agent_created') {
             state.mutationAttempts += 1;
           }
           if (state.conflict) {
@@ -205,52 +246,55 @@ describe('VoiceProviderSettingsActions', () => {
     state.mutationApplied = false;
     state.advanceDuringPreparation = false;
     state.selectedProviderId = PROVIDER_ID;
-    state.accountSettings = null;
-    spies.modalConfigs.length = 0;
-    spies.show.mockClear();
-    spies.hide.mockClear();
-    spies.alertAsync.mockClear();
-    spies.execute.mockClear();
-    spies.log.mockClear();
-    state.registration = Object.freeze({
-      token: Object.freeze({}),
-      pluginId: 'happier.voice.elevenlabs',
-      localId: 'realtime-elevenlabs',
-      providerId: PROVIDER_ID,
-      descriptor: null,
-      adapter: null,
-      occurrenceId: 'voice-occurrence-a',
-      settingsActions: Object.freeze({ execute: spies.execute }),
-    });
+    humanConfirmations.length = 0;
+    nativeAlert.mockReset();
+    nativeAlert.mockImplementation((_title, _body, buttons) => { buttons?.find(button => button.style !== 'cancel')?.onPress?.(); });
+    log.clear();
+    provider = createElevenLabsSettingsRuntimeTestHarness();
+    await saveCredential();
+    await provider.register();
+    registration = provider.registration;
+    setPreferredLanguageFromSettings('en');
+    await act(async () => { modalTree = renderer.create(<ModalProvider><></></ModalProvider>); });
+    onTestFinished(async () => { await act(async () => modalTree.unmount()); await provider.dispose(); });
   });
 
   it('admits an agent-requested operation only after real confirmation and reports the applied patch', async () => {
     const { invokeVoiceProviderSettingsAction } = await import('@/voice/settings/voiceProviderSettingsActionInvoker');
-    const pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action });
-    await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
+    let pending!: ReturnType<typeof invokeVoiceProviderSettingsAction>;
+    await act(async () => { pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action }); });
+    await waitForConfirmation(1);
     expect(state.mutationApplied).toBe(false);
-    expect(spies.execute).not.toHaveBeenCalled();
-    spies.modalConfigs[0].props.onConfirm();
+    expect(provider.fetch).not.toHaveBeenCalled();
+    await act(async () => humanConfirmations[0]!());
     expect(await pending).toEqual({ status: 'completed' });
-    expect(state.config.agentId).toBe('agent-created');
+    expect(accountFixture.persistedSettings.voice.providers[PROVIDER_ID]?.config).toMatchObject({ agentId: 'agent_created' });
+    await vi.waitFor(() => expect(state.config.agentId, JSON.stringify({
+      persistedConfig: accountFixture.persistedSettings.voice.providers[PROVIDER_ID]?.config,
+      canonicalConfig: accountFixture.settings.voiceSettingsV1.providers[PROVIDER_ID]?.config,
+      runtimeConfig: state.config,
+      mutationAttempts: state.mutationAttempts,
+    })).toBe('agent_created'));
   });
 
   it('leaves the provider and settings untouched when the human declines an agent operation', async () => {
     const { invokeVoiceProviderSettingsAction } = await import('@/voice/settings/voiceProviderSettingsActionInvoker');
-    const pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action });
-    await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-    spies.modalConfigs[0].props.onCancel();
+    let pending!: ReturnType<typeof invokeVoiceProviderSettingsAction>;
+    await act(async () => { pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action }); });
+    await waitForConfirmation(1);
+    await act(async () => modalTree.root.findAll(node => typeof node.type === 'string' && node.props.testID === 'app-shell-confirmation-decline').at(-1)!.props.onPress());
     expect(await pending).toMatchObject({ status: 'cancelled' });
     expect(state.mutationApplied).toBe(false);
-    expect(spies.execute).not.toHaveBeenCalled();
+    expect(provider.fetch).not.toHaveBeenCalled();
   });
 
   it('does not expose plugin-supplied failure text through an operation result', async () => {
-    spies.execute.mockRejectedValueOnce({ code: 'private_provider_payload', message: 'private_provider_payload' });
+    provider.fetch.mockRejectedValueOnce({ code: 'private_provider_payload', message: 'private_provider_payload' });
     const { invokeVoiceProviderSettingsAction } = await import('@/voice/settings/voiceProviderSettingsActionInvoker');
-    const pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action });
-    await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-    spies.modalConfigs[0].props.onConfirm();
+    let pending!: ReturnType<typeof invokeVoiceProviderSettingsAction>;
+    await act(async () => { pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action }); });
+    await waitForConfirmation(1);
+    await act(async () => humanConfirmations[0]!());
     expect(await pending).toEqual({ status: 'unavailable', reason: 'internal_error' });
     expect(state.mutationApplied).toBe(false);
   });
@@ -259,25 +303,32 @@ describe('VoiceProviderSettingsActions', () => {
     state.schemaVersion = 99;
     const original = state.config;
     const { invokeVoiceProviderSettingsAction } = await import('@/voice/settings/voiceProviderSettingsActionInvoker');
-    const pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action });
-    await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-    spies.modalConfigs[0].props.onConfirm();
+    let pending!: ReturnType<typeof invokeVoiceProviderSettingsAction>;
+    await act(async () => { pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action }); });
+    await waitForConfirmation(1);
+    await act(async () => humanConfirmations[0]!());
     expect(await pending).toMatchObject({ status: 'unavailable', reason: 'voice_provider_settings_invalid' });
     expect(state.config).toBe(original);
     expect(state.mutationApplied).toBe(false);
-    expect(spies.execute).not.toHaveBeenCalled();
+    expect(provider.fetch).not.toHaveBeenCalled();
   });
 
   it('retires the captured Action Account before confirmation can invoke a new current Account', async () => {
-    let current = true;
+    const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+    const capturedAccount = await captureLazyActionAccountContext(accountFixture.scope.serverId);
+    onTestFinished(() => capturedAccount.dispose());
     const { invokeVoiceProviderSettingsAction } = await import('@/voice/settings/voiceProviderSettingsActionInvoker');
-    const pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action, isCurrent: () => current });
-    await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-    current = false;
-    spies.modalConfigs[0].props.onConfirm();
+    let pending!: ReturnType<typeof invokeVoiceProviderSettingsAction>;
+    await act(async () => { pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action,
+      isCurrent: capturedAccount.accountLifetime.isCurrent }); });
+    await waitForConfirmation(1);
+    const replacementAccount = await createVoiceSettingsAccountTestHarness(settingsParse({}));
+    onTestFinished(() => replacementAccount.dispose());
+    expect(capturedAccount.accountLifetime.isCurrent()).toBe(false);
+    await act(async () => humanConfirmations[0]!());
     expect(await pending).toMatchObject({ status: 'unavailable' });
     expect(state.mutationApplied).toBe(false);
-    expect(spies.execute).not.toHaveBeenCalled();
+    expect(provider.fetch).not.toHaveBeenCalled();
   });
 
   it('retires the old producer confirmation and admits a fresh confirmation after occurrence replacement', async () => {
@@ -294,14 +345,10 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
     });
+    await waitForConfirmation(1);
 
-    state.registration = Object.freeze({
-      ...state.registration,
-      token: Object.freeze({}),
-      occurrenceId: 'voice-occurrence-b',
-    });
+    await act(async () => replaceProviderRegistration());
     await act(async () => {
       tree.update(<VoiceProviderSettingsActions {...props} />);
     });
@@ -312,15 +359,15 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(2));
     });
+    await waitForConfirmation(2);
     await act(async () => {
-      spies.modalConfigs[0].props.onConfirm();
+      humanConfirmations[0]!();
     });
-    expect(spies.execute).not.toHaveBeenCalled();
+    expect(provider.fetch).not.toHaveBeenCalled();
     await act(async () => {
-      spies.modalConfigs[1].props.onConfirm();
-      await vi.waitFor(() => expect(state.config.agentId).toBe('agent-created'));
+      humanConfirmations[1]!();
+      await vi.waitFor(() => expect(state.config.agentId).toBe('agent_created'));
     });
     await act(async () => {
       tree.unmount();
@@ -361,7 +408,7 @@ describe('VoiceProviderSettingsActions', () => {
     const disabledRow = tree.root.findByProps({ testID: 'voice-settings-action-update-agent' });
     expect(disabledRow.props.disabled).toBe(true);
     disabledRow.props.onPress();
-    expect(spies.show).not.toHaveBeenCalled();
+    expect(hasConfirmation()).toBe(false);
 
     const configured = { ...state.config, agentId: 'agent-existing' };
     await act(async () => {
@@ -393,25 +440,29 @@ describe('VoiceProviderSettingsActions', () => {
     expect(row.props.title).toBe('Create agent');
     await act(async () => {
       row.props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => expect(state.mutationApplied).toBe(true));
     });
-    expect(spies.modalConfigs[0]).toMatchObject({
+    await waitForConfirmation(1);
+    expect(modalTree.root.findAllByType(CustomModal).find(node => node.props.visible)?.props.config).toMatchObject({
       props: { description: 'Creates the agent.', confirmLabel: 'Create' },
       chrome: { title: 'Create?', testID: 'app-shell-transient-interaction-dialog' },
     });
-    expect(spies.execute).toHaveBeenCalledWith(expect.objectContaining({
-      actionId: 'create-agent',
-      settings: expect.objectContaining({ agentId: '' }),
-      settingsRevision: '4',
-      signal: expect.any(AbortSignal),
-    }));
-    expect(state.config.agentId).toBe('agent-created');
+    await act(async () => {
+      humanConfirmations[0]!();
+      await vi.waitFor(() => expect(state.mutationApplied).toBe(true));
+    });
+    const created = provider.fetch.mock.calls.find(([input, init]) => providerUrl(input).pathname === '/v1/convai/agents/create' && init?.method === 'POST');
+    expect(await providerBody(created?.[1])).toMatchObject({ conversation_config: expect.any(Object) });
+    expect(state.config.agentId).toBe('agent_created');
   });
 
   it('pairs action values with the same canonical revision when settings advance during preparation', async () => {
     state.advanceDuringPreparation = true;
+    const http = provider.fetch.getMockImplementation()!;
+    let revisionAtProvisioning: number | undefined;
+    provider.fetch.mockImplementation(async (input, init) => {
+      if (providerUrl(input).pathname === '/v1/convai/agents/create' && init?.method === 'POST') revisionAtProvisioning = state.settingsVersion;
+      return await http(input, init);
+    });
     const { sync } = await import('@/sync/sync');
     sync.applySettings({ analyticsOptOut: true }, { expectedSettingsScope: accountFixture.scope });
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
@@ -426,15 +477,19 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
+    });
+    await waitForConfirmation(1);
+    await act(async () => {
+      humanConfirmations[0]!();
       await vi.waitFor(() => expect(state.mutationApplied).toBe(true));
     });
 
-    expect(spies.execute).toHaveBeenCalledWith(expect.objectContaining({
-      settings: expect.objectContaining({ billingMode: 'happier' }),
-      settingsRevision: '5',
-    }));
+    const created = provider.fetch.mock.calls.find(([input, init]) => providerUrl(input).pathname === '/v1/convai/agents/create' && init?.method === 'POST');
+    expect(state.config.tts).toMatchObject({ voiceSettings: { stability: 0.25 } });
+    expect(await providerBody(created?.[1])).toMatchObject({ conversation_config: { tts: { stability: 0.25 } } });
+    expect(revisionAtProvisioning).toBeTypeOf('number');
+    expect(accountFixture.writes.at(-1)).toMatchObject({ expectedVersion: revisionAtProvisioning });
+    expect(state.config.billingMode).toBe('happier');
     expect(state.mutationAttempts).toBe(1);
   });
 
@@ -452,13 +507,15 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
+    });
+    await waitForConfirmation(1);
+    await act(async () => {
+      humanConfirmations[0]!();
       await vi.waitFor(() => expect(state.mutationApplied).toBe(true));
     });
     expect(state.mutationAttempts).toBe(2);
-    expect(state.config.agentId).toBe('agent-created');
-    expect(spies.alertAsync).not.toHaveBeenCalled();
+    expect(state.config.agentId).toBe('agent_created');
+    expect(nativeAlert).not.toHaveBeenCalled();
   });
 
   it('does not merge after a CAS conflict changed provider config read by the action', async () => {
@@ -475,18 +532,20 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => expect(spies.alertAsync).toHaveBeenCalled());
+    });
+    await waitForConfirmation(1);
+    await act(async () => {
+      humanConfirmations[0]!();
+      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
     });
     expect(state.mutationApplied).toBe(false);
     expect(state.config.agentId).toBe('');
     expect(state.config.billingMode).toBe('happier');
     expect(state.mutationAttempts).toBe(1);
-    expect(spies.alertAsync).toHaveBeenCalledWith(
-      'common.error',
-      'settingsProviders.errors.mutationOutcomeUnknownDescription',
-    );
+    expect(nativeAlert.mock.calls.map(call => call.slice(0, 2))).toContainEqual([
+      t('common.error'),
+      t('settingsProviders.errors.mutationOutcomeUnknownDescription'),
+    ]);
   });
 
   it('surfaces an ambiguous Account Settings action patch without claiming it applied', async () => {
@@ -504,42 +563,33 @@ describe('VoiceProviderSettingsActions', () => {
 
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => expect(spies.alertAsync).toHaveBeenCalledWith(
-        'common.error',
-        'settingsProviders.errors.mutationOutcomeUnknownDescription',
-      ));
+    });
+    await waitForConfirmation(1);
+    await act(async () => {
+      humanConfirmations[0]!();
+      await vi.waitFor(() => expect(nativeAlert.mock.calls.map(call => call.slice(0, 2))).toContainEqual([
+        t('common.error'),
+        t('settingsProviders.errors.mutationOutcomeUnknownDescription'),
+      ]));
     });
 
     expect(state.mutationApplied).toBe(false);
     expect(state.config.agentId).toBe('');
-    expect(spies.log).toHaveBeenCalledWith(
+    expect(log.getLogs()).toContain(
       '[VoiceProviderSettingsActions] settings action failed {"actionId":"create-agent","code":"voice_provider_settings_action_outcome_unknown"}',
     );
   });
 
   it('surfaces the failing stage and status while stripping provider prose from the log and the alert', async () => {
-    spies.execute.mockRejectedValueOnce(Object.assign(
-      new Error('private provider response containing secret material'),
-      {
-        code: 'provider_response_invalid',
-        stage: 'update_agent',
-        responseFailure: {
-          kind: 'http_status',
-          status: 422,
-          statusClass: '4xx',
-          // A plugin may still attach arbitrary provider text. The host
-          // projection is an allowlist, so none of this may survive.
-          providerDetail: 'HAPPIER_PROVIDER_PROSE_SENTINEL tool ids must be owned by this workspace',
-          body: 'private provider response',
-          headers: { authorization: 'secret credential' },
-          url: 'https://provider.example/agents/private-agent-id',
-        },
-        parameters: { agentId: 'private-agent-id' },
-        settings: { apiKey: 'secret credential' },
-      },
-    ));
+    const http = provider.fetch.getMockImplementation()!;
+    provider.fetch.mockImplementation(async (input, init) => {
+      if (providerUrl(input).pathname !== '/v1/convai/agents/create') return await http(input, init);
+      return new Response(JSON.stringify({ detail:
+        'HAPPIER_PROVIDER_PROSE_SENTINEL private-agent-id secret credential: tool ids must be owned by this workspace' }), {
+        status: 422,
+        headers: { 'content-type': 'application/json', authorization: 'secret credential', 'x-provider-request-id': 'private-agent-id' },
+      });
+    });
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -553,52 +603,32 @@ describe('VoiceProviderSettingsActions', () => {
 
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => expect(spies.alertAsync).toHaveBeenCalled());
+    });
+    await waitForConfirmation(1);
+    await act(async () => {
+      humanConfirmations[0]!();
+      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
     });
 
-    expect(spies.log.mock.calls.filter(([message]) => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
-    expect(spies.log).toHaveBeenCalledWith(
-      '[VoiceProviderSettingsActions] settings action failed {"actionId":"create-agent","code":"provider_response_invalid","stage":"update_agent","responseFailure":{"kind":"http_status","status":422,"statusClass":"4xx"}}',
+    expect(log.getLogs().filter(message => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
+    expect(log.getLogs()).toContain(
+      '[VoiceProviderSettingsActions] settings action failed {"actionId":"create-agent","code":"provider_response_invalid","stage":"create_agent","responseFailure":{"kind":"http_status","status":422,"statusClass":"4xx"}}',
     );
     // The press is still actionable: the alert names the failing step and the
     // provider status without repeating a single character of provider prose.
-    expect(spies.alertAsync).toHaveBeenCalledWith(
-      'common.error',
-      'settingsVoice.realtimeProviders.operationFailedUnsaved'
-        + '\n\nsettingsVoice.realtimeProviders.operationFailedStage({"stage":"update_agent"})'
-        + '\nsettingsVoice.realtimeProviders.operationFailedStatus({"status":422})',
-    );
-    const surfaced = JSON.stringify([spies.log.mock.calls, spies.alertAsync.mock.calls]);
+    expect(nativeAlert.mock.calls.map(call => call.slice(0, 2))).toContainEqual([
+      t('common.error'),
+      t('settingsVoice.realtimeProviders.operationFailedUnsaved')
+        + '\n\n' + t('settingsVoice.realtimeProviders.operationFailedStage', { stage: 'create_agent' })
+        + '\n' + t('settingsVoice.realtimeProviders.operationFailedStatus', { status: 422 }),
+    ]);
+    const surfaced = JSON.stringify([log.getLogs(), nativeAlert.mock.calls]);
     expect(surfaced).not.toContain('HAPPIER_PROVIDER_PROSE_SENTINEL');
     expect(surfaced).not.toContain('secret credential');
     expect(surfaced).not.toContain('private-agent-id');
   });
 
   it('composes the final ElevenLabs Agent PATCH HTTP failure into a safe actionable diagnostic without applying settings', async () => {
-    const parsedDeclaration = VoiceProviderContributionSchema.safeParse(
-      (PLUGIN_MANIFEST.contributes.voiceProviders ?? [])[0],
-    );
-    if (
-      !parsedDeclaration.success
-      || parsedDeclaration.data.kind !== 'conversation'
-      || !parsedDeclaration.data.credentials?.hostMediated
-    ) {
-      throw new Error('elevenlabs_host_mediated_contract_missing');
-    }
-    const declaration = parsedDeclaration.data;
-    const recipientContract = createBundledVoiceRecipientContract({
-      pluginId: PLUGIN_MANIFEST.id,
-      declaration,
-    });
-    if (!recipientContract) throw new Error('elevenlabs_recipient_contract_missing');
-    const contribution = Object.freeze({
-      pluginId: PLUGIN_MANIFEST.id,
-      localId: declaration.id,
-    });
-    const runtime = createElevenLabsVoiceProviderRuntime();
-    const runtimeActions = runtime.settingsActions;
     const providerProse = 'HAPPIER_PROVIDER_PROSE_SENTINEL agent configuration is private';
     const failureResponse = new Response(providerProse, { status: 400 });
     const responseBody = failureResponse.body;
@@ -610,7 +640,7 @@ describe('VoiceProviderSettingsActions', () => {
       vi.spyOn(failureResponse, 'arrayBuffer'),
     ];
     const cancelBody = vi.spyOn(responseBody, 'cancel');
-    const fetch = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
+    provider.fetch.mockImplementation(async (input, init) => {
       const request = new URL(
         typeof input === 'string'
           ? input
@@ -630,7 +660,7 @@ describe('VoiceProviderSettingsActions', () => {
         });
       }
       if (request.pathname === '/v1/convai/tools' && init?.method === 'POST') {
-        return new Response(JSON.stringify({ id: `tool-${fetch.mock.calls.length}` }), {
+        return new Response(JSON.stringify({ id: `tool-${provider.fetch.mock.calls.length}` }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
@@ -656,57 +686,6 @@ describe('VoiceProviderSettingsActions', () => {
         voiceSettings: { stability: null, similarityBoost: null, speed: null },
       },
     };
-    state.accountSettings = {
-      voiceSettingsV1: {
-        credentialBindings: [{
-          contribution,
-          credentialSlotId: 'api_key',
-          credentialSource: { kind: 'savedSecret' },
-          credentialBindings: { account: { api_key: 'elevenlabs-secret' } },
-          approvedRecipientContractDigest: createRecipientContractDigestV1(recipientContract),
-        }],
-      },
-      secrets: [{
-        id: 'elevenlabs-secret',
-        name: 'ElevenLabs API key',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'not-materialized-in-this-test' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-    };
-    state.registration = Object.freeze({
-      token: Object.freeze({}),
-      pluginId: PLUGIN_MANIFEST.id,
-      localId: declaration.id,
-      providerId: PROVIDER_ID,
-      occurrenceId: 'voice-occurrence-composed',
-      descriptor: null,
-      adapter: null,
-      settingsActions: Object.freeze({
-        async execute(input: Parameters<typeof runtimeActions.execute>[0] & Readonly<{
-          signal: AbortSignal;
-        }>) {
-          const accountOperations = createAccountVoiceOperationService({
-            providerId: PROVIDER_ID,
-            contribution,
-            declaration,
-            phase: 'settings',
-            recipientContract,
-            signal: input.signal,
-            isCurrent: () => true,
-            fetch,
-          });
-          return await runtimeActions.execute(input, {
-            credentials: { phase: 'settings', mediated: accountOperations, raw: null },
-            interactions: { askQuestions: vi.fn() },
-            signal: input.signal,
-            tools: [],
-          });
-        },
-      }),
-    });
-
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -720,46 +699,41 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-update-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => expect(spies.alertAsync).toHaveBeenCalled());
+    });
+    await waitForConfirmation(1);
+    await act(async () => {
+      humanConfirmations[0]!();
+      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
     });
 
-    expect(spies.log).toHaveBeenCalledWith(
+    expect(log.getLogs()).toContain(
       '[VoiceProviderSettingsActions] settings action failed'
       + ' {"actionId":"update-agent","code":"provider_response_invalid","stage":"update_agent"'
       + ',"responseFailure":{"kind":"http_status","status":400,"statusClass":"4xx"}}',
     );
-    const providerMutations = fetch.mock.calls.filter(([, init]) => init?.method === 'PATCH');
+    const providerMutations = provider.fetch.mock.calls.filter(([, init]) => init?.method === 'PATCH');
     expect(providerMutations).toHaveLength(1);
     expect(state.mutationApplied).toBe(false);
     expect(state.config.agentId).toBe('agent-existing');
     for (const consume of responseConsumers) expect(consume).not.toHaveBeenCalled();
     expect(cancelBody).toHaveBeenCalledOnce();
-    expect(spies.alertAsync).toHaveBeenCalledWith(
-      'common.error',
-      'settingsVoice.realtimeProviders.operationFailedUnsaved'
-        + '\n\nsettingsVoice.realtimeProviders.operationFailedStage({"stage":"update_agent"})'
-        + '\nsettingsVoice.realtimeProviders.operationFailedStatus({"status":400})',
-    );
-    const surfaced = JSON.stringify([spies.log.mock.calls, spies.alertAsync.mock.calls]);
+    expect(nativeAlert.mock.calls.map(call => call.slice(0, 2))).toContainEqual([
+      t('common.error'),
+      t('settingsVoice.realtimeProviders.operationFailedUnsaved')
+        + '\n\n' + t('settingsVoice.realtimeProviders.operationFailedStage', { stage: 'update_agent' })
+        + '\n' + t('settingsVoice.realtimeProviders.operationFailedStatus', { status: 400 }),
+    ]);
+    const surfaced = JSON.stringify([log.getLogs(), nativeAlert.mock.calls]);
     expect(surfaced).not.toContain('HAPPIER_PROVIDER_PROSE_SENTINEL');
     expect(surfaced).not.toContain('elevenlabs-secret');
     expect(surfaced).not.toContain('agent-existing');
   });
 
   it('tells the user which setting to fix when the provider reports a typed unusable-voice code', async () => {
-    spies.execute.mockRejectedValueOnce(Object.assign(
-      new Error('voice_not_found'),
-      {
-        code: 'voice_not_found',
-        stage: 'validate_voice',
-        // A plugin may still attach the provider's own prose alongside the
-        // typed code. Only the code is structural, so only the code survives.
-        providerDetail: 'HAPPIER_PROVIDER_PROSE_SENTINEL A voice for the voice_id was not found.',
-        requestId: 'private-request-id',
-      },
-    ));
+    const http = provider.fetch.getMockImplementation()!;
+    provider.fetch.mockImplementation(async (input, init) => providerUrl(input).pathname === '/v1/voices'
+      ? provider.response({ voices: [{ voice_id: 'another-voice', name: 'HAPPIER_PROVIDER_PROSE_SENTINEL private-request-id' }] })
+      : await http(input, init));
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -773,33 +747,35 @@ describe('VoiceProviderSettingsActions', () => {
 
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => expect(spies.alertAsync).toHaveBeenCalled());
+    });
+    await waitForConfirmation(1);
+    await act(async () => {
+      humanConfirmations[0]!();
+      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
     });
 
     expect(state.mutationApplied).toBe(false);
     // The remedy replaces the generic "changes were not saved" headline: the
     // user is told the selected voice is the thing to change.
-    expect(spies.alertAsync).toHaveBeenCalledWith(
-      'common.error',
-      'settingsVoice.realtimeProviders.operationFailedVoiceNotFound'
-        + '\n\nsettingsVoice.realtimeProviders.operationFailedStage({"stage":"validate_voice"})',
-    );
-    expect(spies.log).toHaveBeenCalledWith(
+    expect(nativeAlert.mock.calls.map(call => call.slice(0, 2))).toContainEqual([
+      t('common.error'),
+      t('settingsVoice.realtimeProviders.operationFailedVoiceNotFound')
+        + '\n\n' + t('settingsVoice.realtimeProviders.operationFailedStage', { stage: 'validate_voice' }),
+    ]);
+    expect(log.getLogs()).toContain(
       '[VoiceProviderSettingsActions] settings action failed'
       + ' {"actionId":"create-agent","code":"voice_not_found","stage":"validate_voice"}',
     );
-    const surfaced = JSON.stringify([spies.log.mock.calls, spies.alertAsync.mock.calls]);
+    const surfaced = JSON.stringify([log.getLogs(), nativeAlert.mock.calls]);
     expect(surfaced).not.toContain('HAPPIER_PROVIDER_PROSE_SENTINEL');
     expect(surfaced).not.toContain('private-request-id');
   });
 
   it('quietly clears busy state without CAS mutation when the user cancels an interaction', async () => {
-    spies.execute.mockRejectedValueOnce(Object.assign(
-      new Error('plugin_settings_action_cancelled'),
-      { code: 'plugin_settings_action_cancelled' },
-    ));
+    const http = provider.fetch.getMockImplementation()!;
+    provider.fetch.mockImplementation(async (input, init) => providerUrl(input).pathname === '/v1/convai/agents' && init?.method === 'GET'
+      ? provider.response({ agents: [{ agent_id: 'agent-existing', name: 'Happier Voice', tags: ['happier_voice_config_v1'] }], has_more: false, next_cursor: null })
+      : await http(input, init));
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -812,18 +788,23 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => {
-        expect(tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.loading).toBe(false);
-      });
     });
+    await waitForConfirmation(1);
+    await act(async () => {
+      humanConfirmations[0]!();
+    });
+    await vi.waitFor(() => expect(modalTree.root.findAll(node => typeof node.type === 'string' && node.props.testID === 'app-shell-question-cancel')).toHaveLength(1));
+    await act(async () => {
+      modalTree.root.findAll(node => typeof node.type === 'string' && node.props.testID === 'app-shell-question-cancel')[0]!.props.onPress();
+    });
+    await flushHookEffects();
+    await vi.waitFor(() => expect(tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.loading).toBe(false));
     expect(state.mutationApplied).toBe(false);
-    expect(spies.alertAsync).not.toHaveBeenCalled();
+    expect(nativeAlert).not.toHaveBeenCalled();
   });
 
   it('names a confirmation that could not be presented instead of doing nothing', async () => {
-    spies.show.mockImplementationOnce(() => '');
+    await act(async () => modalTree.unmount());
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -836,12 +817,12 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.alertAsync).toHaveBeenCalled());
+      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
     });
-    expect(spies.execute).not.toHaveBeenCalled();
+    expect(provider.fetch).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
-    expect(spies.log.mock.calls.filter(([message]) => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
-    expect(spies.log).toHaveBeenCalledWith(
+    expect(log.getLogs().filter(message => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
+    expect(log.getLogs()).toContain(
       '[VoiceProviderSettingsActions] settings action failed'
       + ' {"actionId":"create-agent","code":"voice_provider_settings_action_confirmation_unavailable"}',
     );
@@ -863,28 +844,21 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
     });
+    await waitForConfirmation(1);
     // The activation scope re-commits the provider registration while the
-    // panel stays mounted: the press is retired without any lifecycle abort.
-    state.registration = Object.freeze({
-      token: Object.freeze({}),
-      pluginId: 'happier.voice.elevenlabs',
-      localId: 'realtime-elevenlabs',
-      providerId: PROVIDER_ID,
-      occurrenceId: 'voice-occurrence-b',
-      settingsActions: Object.freeze({ execute: spies.execute }),
-    });
+    // panel stays mounted, retiring the old producer's invocation lifecycle.
+    await act(async () => replaceProviderRegistration());
     await act(async () => {
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => expect(spies.alertAsync).toHaveBeenCalled());
+      humanConfirmations[0]!();
+      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
     });
-    expect(spies.execute).not.toHaveBeenCalled();
+    expect(provider.fetch).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
-    expect(spies.log.mock.calls.filter(([message]) => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
-    expect(spies.log).toHaveBeenCalledWith(
+    expect(log.getLogs().filter(message => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
+    expect(log.getLogs()).toContain(
       '[VoiceProviderSettingsActions] settings action failed'
-      + ' {"actionId":"create-agent","retired":true,"code":"plugin_settings_action_generation_retired"}',
+      + ' {"actionId":"create-agent","aborted":true,"retired":true,"code":"plugin_settings_action_generation_retired"}',
     );
     expect(tree.root.findByProps({
       testID: 'voice-settings-action-create-agent',
@@ -904,16 +878,16 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
     });
-    state.selectedProviderId = 'happier.voice.openai/realtime-openai';
+    await waitForConfirmation(1);
+    await act(async () => { state.selectedProviderId = 'happier.voice.openai/realtime-openai'; });
     await act(async () => {
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => expect(spies.log).toHaveBeenCalled());
+      humanConfirmations[0]!();
+      await vi.waitFor(() => expect(log.getLogs().length).toBeGreaterThan(0));
     });
-    expect(spies.alertAsync).not.toHaveBeenCalled();
+    expect(nativeAlert).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
-    expect(spies.log).toHaveBeenCalledWith(
+    expect(log.getLogs()).toContain(
       '[VoiceProviderSettingsActions] settings action deselected'
       + ' {"actionId":"create-agent","retired":true,"code":"plugin_settings_action_generation_retired"}',
     );
@@ -933,22 +907,16 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
     });
+    await waitForConfirmation(1);
 
-    state.registration = Object.freeze({
-      token: Object.freeze({}),
-      pluginId: 'happier.voice.elevenlabs',
-      localId: 'realtime-elevenlabs',
-      providerId: PROVIDER_ID,
-      occurrenceId: 'voice-occurrence-b',
-      settingsActions: Object.freeze({ execute: spies.execute }),
-    });
+    await act(async () => replaceProviderRegistration());
     await act(async () => {
       tree.update(<VoiceProviderSettingsActions {...props} />);
     });
-    expect(spies.hide).toHaveBeenCalledWith('modal-1');
-    expect(spies.execute).not.toHaveBeenCalled();
+    await flushHookEffects({ cycles: 1, turns: 4, frames: 1 });
+    expect(hasConfirmation()).toBe(false);
+    expect(provider.fetch).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
 
     await act(async () => {
@@ -958,11 +926,13 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(2));
-      spies.modalConfigs[1].props.onConfirm();
+    });
+    await waitForConfirmation(2);
+    await act(async () => {
+      humanConfirmations[1]!();
       await vi.waitFor(() => expect(state.mutationApplied).toBe(true));
     });
-    expect(spies.execute).toHaveBeenCalledTimes(1);
+    expect(provider.fetch.mock.calls.filter(([input, init]) => providerUrl(input).pathname === '/v1/convai/agents/create' && init?.method === 'POST')).toHaveLength(1);
   });
 
   it('dismisses a pending confirmation on unmount without execute/CAS', async () => {
@@ -978,26 +948,35 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
+    });
+    await waitForConfirmation(1);
+    await act(async () => {
       tree.unmount();
     });
-    expect(spies.hide).toHaveBeenCalledWith('modal-1');
-    expect(spies.execute).not.toHaveBeenCalled();
+    await flushHookEffects({ cycles: 1, turns: 4, frames: 1 });
+    expect(hasConfirmation()).toBe(false);
+    expect(provider.fetch).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
   });
 
   it('allows a remounted action lifecycle to replace an abort-ignoring invocation under the same registration token', async () => {
-    let resolveStale!: (value: Readonly<{ patch: Readonly<{ agentId: string }> }>) => void;
-    let resolveReplacement!: (value: Readonly<{ patch: Readonly<{ agentId: string }> }>) => void;
-    const staleResult = new Promise<Readonly<{ patch: Readonly<{ agentId: string }> }>>((resolve) => {
-      resolveStale = resolve;
+    const stale = createDeferred<ReturnType<typeof provider.response>>();
+    const replacement = createDeferred<ReturnType<typeof provider.response>>();
+    const http = provider.fetch.getMockImplementation()!;
+    let creations = 0;
+    provider.fetch.mockImplementation(async (input, init) => {
+      const url = providerUrl(input);
+      if (init?.method === 'GET' && ['replacement-agent', 'stale-agent'].some(id => url.pathname === `/v1/convai/agents/${id}`)) {
+        const authored = await http(new URL('/v1/convai/agents/agent_created', url.origin), init);
+        const body: unknown = await authored.json();
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected authored Agent HTTP state');
+        return provider.response({ ...body, agent_id: url.pathname.split('/').at(-1) });
+      }
+      if (providerUrl(input).pathname !== '/v1/convai/agents/create') return await http(input, init);
+      const response = await (++creations === 1 ? stale.promise : replacement.promise);
+      await http(input, init);
+      return response;
     });
-    const replacementResult = new Promise<Readonly<{ patch: Readonly<{ agentId: string }> }>>((resolve) => {
-      resolveReplacement = resolve;
-    });
-    spies.execute
-      .mockImplementationOnce(async () => await staleResult)
-      .mockImplementationOnce(async () => await replacementResult);
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     const props = {
       providerId: PROVIDER_ID,
@@ -1011,9 +990,11 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       staleTree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
-      spies.modalConfigs[0].props.onConfirm();
-      await vi.waitFor(() => expect(spies.execute).toHaveBeenCalledTimes(1));
+    });
+    await waitForConfirmation(1);
+    await act(async () => {
+      humanConfirmations[0]!();
+      await vi.waitFor(() => expect(creations).toBe(1));
     });
     await act(async () => {
       staleTree.unmount();
@@ -1025,20 +1006,22 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       replacementTree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(2));
-      spies.modalConfigs[1].props.onConfirm();
-      await vi.waitFor(() => expect(spies.execute).toHaveBeenCalledTimes(2));
+    });
+    await waitForConfirmation(2);
+    await act(async () => {
+      humanConfirmations[1]!();
+      await vi.waitFor(() => expect(creations).toBe(2));
     });
 
-    resolveReplacement({ patch: { agentId: 'replacement-agent' } });
+    replacement.resolve(provider.response({ agent_id: 'replacement-agent' }));
     await act(async () => {
       await vi.waitFor(() => expect(state.config.agentId).toBe('replacement-agent'));
     });
-    resolveStale({ patch: { agentId: 'stale-agent' } });
+    stale.resolve(provider.response({ agent_id: 'stale-agent' }));
     await act(async () => {
       await Promise.resolve();
     });
     expect(state.config.agentId).toBe('replacement-agent');
-    expect(spies.alertAsync).not.toHaveBeenCalled();
+    expect(nativeAlert).not.toHaveBeenCalled();
   });
 });

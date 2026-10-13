@@ -1,34 +1,25 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
+import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
-import { createPluginUiExecutableModuleHost } from '@/components/plugins/reactNative/executableModuleHost';
-import {
-    EMPTY_PLUGIN_UI_PROJECTION,
-    type PluginUiProjectionModel,
-} from '@/sync/domains/plugins/ui/projection';
-import {
-    createProjectedExternalVoiceProviderDerivedScopeFactory,
-    withdrawProjectedExternalVoiceProviders,
-} from '@/voice/registry/projectedExternalVoiceProviderActivation';
+const network = await installSessionOpsNetworkBoundary();
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+const { createMachineFixture } = await import("@/dev/testkit");
+const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+const { storage } = await import("@/sync/domains/state/storage");
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+const { createTransferRecipientKeyPair } = await import("@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption");
+import { DaemonVoiceSpeechTranscribeUploadInitResponseSchema, DaemonVoiceSpeechTranscribeUploadChunkResponseSchema,
+    DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema, DaemonVoiceSpeechTranscribeResponseSchema,
+} from '@happier-dev/protocol/daemon/voiceSpeech';
+import { VoiceProviderContributionSchema, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 
-const resolveDaemonVoiceInferenceExecutionSpy = vi.fn(
-    async (_params: unknown) => 'daemon' as const,
-);
-const daemonSttControllerTranscribeSpy = vi.fn(async (_params: unknown) => undefined);
-const prepareDaemonVoiceInferenceSttSourceSpy = vi.fn(async (_params: unknown) => ({
-    source: { kind: 'native', uri: 'file:///rec.wav' } as const,
-    inputMimeType: 'audio/wav',
-    normalization: {
-        inputTransport: 'upload_transfer',
-        strategy: 'daemon_decode',
-        systemFfmpegAllowed: false,
-    } as const,
-}));
-const bundledSpeechTranscribeSpy = vi.fn(async (params: Readonly<{
-    entry: Readonly<{ declaration?: Readonly<{ title?: unknown }> }>;
-    originMachineId?: string | null;
-}>) => String(params.entry.declaration?.title ?? 'missing'));
+const { createPluginUiExecutableModuleHost } = await import("@/components/plugins/reactNative/executableModuleHost");
+const { EMPTY_PLUGIN_UI_PROJECTION } = await import("@/sync/domains/plugins/ui/projection");
+import type { PluginUiProjectionModel } from "@/sync/domains/plugins/ui/projection";
+const { createProjectedExternalVoiceProviderDerivedScopeFactory, withdrawProjectedExternalVoiceProviders } = await import("@/voice/registry/projectedExternalVoiceProviderActivation");
 
+const machineRpc = vi.fn();
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
@@ -36,40 +27,78 @@ vi.mock('react-native', async () => {
     });
 });
 
-vi.mock('@/voice/runtime/daemonInference/daemonVoiceInferencePolicy', () => ({
-    resolveDaemonVoiceInferenceExecution: (params: unknown) =>
-        resolveDaemonVoiceInferenceExecutionSpy(params),
-}));
 
-vi.mock('@/voice/runtime/daemonInference/DaemonSttController', () => ({
-    DaemonSttController: vi.fn().mockImplementation(() => ({
-        transcribeRecordedAudio: (params: unknown) => daemonSttControllerTranscribeSpy(params),
-    })),
-}));
 
-vi.mock('@/voice/input/prepareDaemonVoiceInferenceSttSource', () => ({
-    prepareDaemonVoiceInferenceSttSource: (params: unknown) =>
-        prepareDaemonVoiceInferenceSttSourceSpy(params),
-}));
-
-vi.mock('@/voice/credentials/bundledSpeechClient', () => ({
-    bundledSpeechDaemonClient: {
-        transcribe: (params: Parameters<typeof bundledSpeechTranscribeSpy>[0]) =>
-            bundledSpeechTranscribeSpy(params),
-        synthesize: vi.fn(),
-    },
-}));
+vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
+vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
+vi.mock('expo-file-system', () => ({ File: class {
+    open() { return { size: 4, offset: 0, readBytes: () => new Uint8Array([1, 2, 3, 4]), close() {} }; }
+} }));
+let account: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
+const initialSettings = storage.getState().settings;
+const initialMachines = storage.getState().machines;
+const initialLists = storage.getState().machineListByServerId;
+function selectMachine(machineId: string) {
+    storage.getState().applySettingsLocal({ voice: { ...storage.getState().settings.voice, executionMachine: {
+        ...storage.getState().settings.voice.executionMachine, mode: 'fixed', machineId,
+    } } });
+}
+beforeEach(async () => {
+    network.resetRequests();
+    await network.addHome('https://recorded-speech.example.test', 'artifact-account');
+    account = await createPlainArtifactHomeFixture('https://recorded-speech.example.test', {
+        serverFeatures: FeaturesResponseSchema.parse({ ...{ features: { voice: { enabled: true }, execution: { runs: { enabled: true } } } }, features: { ...{ voice: { enabled: true }, execution: { runs: { enabled: true } } }, machines: {
+      enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } },
+    } }, capabilities: { machines: { liveStream: { serverRouted: {
+      caps: MachineLiveStreamRelayCapsV1Schema.parse({}), disabledReason: null,
+    } } } } }),
+        handleRequest: async path => path.startsWith('/v1/machines/') ? Response.json({ machine: {
+            id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+        } }) : null,
+    });
+    network.setRpcResponder(async request => await machineRpc(request));
+    const machines = ['machine-selected', 'machine-attempt', 'machine-other'].map(id => createMachineFixture({ id, activeAt: Date.now() }));
+    storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+        machineListByServerId: { ...initialLists, [account.home.id]: machines } });
+    selectMachine('machine-selected');
+    const recipient = createTransferRecipientKeyPair();
+    machineRpc.mockReset();
+    machineRpc.mockImplementation(async (request: { method: string; payload: { requestId?: string } }) => {
+        if (request.method === 'daemon.voice.speech.transcribe.upload.init') {
+            // A selection change after admission must not split any upload phase.
+            selectMachine('machine-other');
+            return DaemonVoiceSpeechTranscribeUploadInitResponseSchema.parse({
+                success: true, uploadId: 'recorded-upload', chunkSizeBytes: 1024,
+                recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
+            });
+        }
+        if (request.method === 'daemon.voice.speech.transcribe.upload.chunk') return DaemonVoiceSpeechTranscribeUploadChunkResponseSchema.parse({ success: true });
+        if (request.method === 'daemon.voice.speech.transcribe.upload.finalize') return DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema.parse({
+            success: true, uploadId: 'recorded-upload', sizeBytes: 4,
+            sha256: createHash('sha256').update(new Uint8Array([1, 2, 3, 4])).digest('hex'),
+        });
+        if (request.method === 'daemon.voice.speech.transcribe') return DaemonVoiceSpeechTranscribeResponseSchema.parse({
+            ok: true, requestId: request.payload.requestId, text: 'recognized speech',
+        });
+        throw new Error('unexpected speech RPC: ' + request.method);
+    });
+});
+afterEach(async () => {
+    await account?.dispose();
+    storage.setState({ settings: initialSettings, machines: initialMachines, machineListByServerId: initialLists });
+});
 
 function createExternalSpeechProjection(input: Readonly<{
     generation: number;
     pluginId: string;
     title: string;
+    roles?: Array<'dictation_stt' | 'conversation_stt' | 'conversation_tts'>;
 }>): PluginUiProjectionModel {
     const declaration = VoiceProviderContributionSchema.parse({
         id: 'stt',
         title: input.title,
         kind: 'speech',
-        roles: ['dictation_stt', 'conversation_stt'],
+        roles: input.roles ?? ['dictation_stt', 'conversation_stt'],
         platforms: ['web'],
         settings: {
             schemaVersion: 1,
@@ -79,7 +108,15 @@ function createExternalSpeechProjection(input: Readonly<{
                 schema: { type: 'string', minLength: 1, maxLength: 256 },
                 default: 'synthetic-stt-v1',
                 presentation: { control: 'text' },
-            }],
+            }, ...(input.roles?.includes('conversation_tts') ? [{
+                id: 'voiceName', title: 'Voice', schema: { type: 'string', minLength: 1, maxLength: 256 },
+                default: 'fixture-voice', presentation: { control: 'text' },
+            }, {
+                id: 'format', title: 'Format', schema: { type: 'string', enum: ['wav', 'mp3'] },
+                default: 'wav', presentation: { control: 'select', options: [
+                    { value: 'wav', title: 'WAV' }, { value: 'mp3', title: 'MP3' },
+                ] },
+            }] : [])],
         },
     });
     if (declaration.kind !== 'speech') throw new Error('expected speech declaration');
@@ -107,7 +144,6 @@ describe('recordedAudioTranscriptionController', () => {
         const executableHost = createPluginUiExecutableModuleHost();
         onTestFinished(async () => {
             await withdrawProjectedExternalVoiceProviders(executableHost);
-            bundledSpeechTranscribeSpy.mockClear();
         });
         const { createRecordedAudioTranscriptionController } = await import('./recordedAudioTranscriptionController');
         const controller = createRecordedAudioTranscriptionController();
@@ -139,20 +175,20 @@ describe('recordedAudioTranscriptionController', () => {
             hostPlatform: 'web',
             executableHost,
         });
-        await expect(controller.transcribe(request)).resolves.toBe('Runtime A');
+        await expect(controller.transcribe(request)).resolves.toBe('recognized speech');
 
         createProjectedExternalVoiceProviderDerivedScopeFactory({
-            projection: createExternalSpeechProjection({ generation: 2, pluginId, title: 'Runtime B' }),
+            projection: createExternalSpeechProjection({ generation: 2, pluginId, title: 'Runtime B', roles: ['conversation_tts'] }),
             hostPlatform: 'web',
             executableHost,
         });
-        await expect(controller.transcribe(request)).resolves.toBe('Runtime B');
+        await expect(controller.transcribe(request)).rejects.toMatchObject({ code: 'provider_unavailable' });
 
         await withdrawProjectedExternalVoiceProviders(executableHost);
         await expect(controller.transcribe(request)).rejects.toMatchObject({
             code: 'provider_unavailable',
         });
-        expect(bundledSpeechTranscribeSpy).toHaveBeenCalledTimes(2);
+        expect(machineRpc.mock.calls.filter(([request]) => request.method === 'daemon.voice.speech.transcribe')).toHaveLength(1);
     });
 
     it('uploads registered-speech recorded audio to the machine the attempt captured', async () => {
@@ -164,14 +200,12 @@ describe('recordedAudioTranscriptionController', () => {
         const executableHost = createPluginUiExecutableModuleHost();
         onTestFinished(async () => {
             await withdrawProjectedExternalVoiceProviders(executableHost);
-            bundledSpeechTranscribeSpy.mockClear();
         });
         createProjectedExternalVoiceProviderDerivedScopeFactory({
             projection: createExternalSpeechProjection({ generation: 1, pluginId, title: 'Runtime A' }),
             hostPlatform: 'web',
             executableHost,
         });
-        bundledSpeechTranscribeSpy.mockClear();
 
         const { createRecordedAudioTranscriptionController } = await import('./recordedAudioTranscriptionController');
         const controller = createRecordedAudioTranscriptionController();
@@ -197,121 +231,16 @@ describe('recordedAudioTranscriptionController', () => {
                     },
                 },
             },
-        })).resolves.toBe('Runtime A');
+        })).resolves.toBe('recognized speech');
 
-        expect(bundledSpeechTranscribeSpy).toHaveBeenCalledTimes(1);
-        expect(bundledSpeechTranscribeSpy).toHaveBeenCalledWith(expect.objectContaining({
-            originMachineId: 'machine-attempt',
+        expect(machineRpc.mock.calls.map(([request]) => request.targetId)).toEqual([
+            'machine-attempt', 'machine-attempt', 'machine-attempt', 'machine-attempt',
+        ]);
+        expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({
+            method: 'daemon.voice.speech.transcribe.upload.init',
+            payload: expect.objectContaining({ target: { pluginId, localId: 'stt' } }),
         }));
     });
-
-    it('delegates provider routing through the configured recorded-audio STT controller map', async () => {
-        const deviceTranscribeSpy = vi.fn(async (_params: unknown) => 'device');
-        const openAiCompatTranscribeSpy = vi.fn(async (_params: unknown) => 'openai');
-        const googleGeminiTranscribeSpy = vi.fn(async (_params: unknown) => 'gemini');
-        const localNeuralTranscribeSpy = vi.fn(async (_params: unknown) => 'local-neural');
-
-        const { createRecordedAudioTranscriptionController } = await import('./recordedAudioTranscriptionController');
-        const controller = createRecordedAudioTranscriptionController({
-            controllers: {
-                device: { transcribe: deviceTranscribeSpy },
-                openai_compat: { transcribe: openAiCompatTranscribeSpy },
-                'happier.voice.google/gemini-stt': { transcribe: googleGeminiTranscribeSpy },
-                local_neural: { transcribe: localNeuralTranscribeSpy },
-            },
-        });
-
-        await expect(
-            controller.transcribe({
-                sessionId: 'session-9',
-                uri: 'file:///rec.wav',
-                settings: {
-                    voice: {
-                        providerId: 'local_direct',
-                        assistantLanguage: 'en',
-                        providers: {
-                            local_direct: { schemaVersion: 1, config: {
-                                stt: {
-                                    provider: 'local_neural',
-                                    openaiCompat: { baseUrl: null, apiKey: null, model: 'whisper-1' },
-                                    googleGemini: { apiKey: null, model: 'gemini-2.5-flash', language: null },
-                                    localNeural: {
-                                        assetId: 'dummy',
-                                        language: 'en',
-                                        execution: 'daemon',
-                                    },
-                                },
-                                networkTimeoutMs: 15_000,
-                            } },
-                        },
-                    },
-                },
-            }),
-        ).resolves.toBe('local-neural');
-
-        expect(localNeuralTranscribeSpy).toHaveBeenCalledTimes(1);
-        expect(localNeuralTranscribeSpy).toHaveBeenCalledWith(expect.objectContaining({
-            sessionId: 'session-9',
-            uri: 'file:///rec.wav',
-        }));
-        expect(deviceTranscribeSpy).not.toHaveBeenCalled();
-        expect(openAiCompatTranscribeSpy).not.toHaveBeenCalled();
-        expect(googleGeminiTranscribeSpy).not.toHaveBeenCalled();
-    });
-
-    it.each(['machine_unreachable', 'runtime_unavailable'] as const)(
-        'surfaces %s after one daemon attempt when daemon local_neural STT is unavailable',
-        async (code) => {
-            daemonSttControllerTranscribeSpy.mockReset();
-            const error = Object.assign(new Error(`daemon_voice_inference_${code}`), { code });
-            daemonSttControllerTranscribeSpy.mockRejectedValueOnce(error);
-            resolveDaemonVoiceInferenceExecutionSpy.mockClear();
-            prepareDaemonVoiceInferenceSttSourceSpy.mockClear();
-
-            const { createRecordedAudioTranscriptionController } = await import('./recordedAudioTranscriptionController');
-            const controller = createRecordedAudioTranscriptionController();
-
-            await expect(
-                controller.transcribe({
-                    sessionId: 'session-1',
-                    uri: 'file:///rec.wav',
-                    settings: {
-                        voice: {
-                            providerId: 'local_direct',
-                            assistantLanguage: 'en',
-                            providers: {
-                                local_direct: { schemaVersion: 1, config: {
-                                    stt: {
-                                        provider: 'local_neural',
-                                        openaiCompat: { baseUrl: null, apiKey: null, model: 'whisper-1' },
-                                        googleGemini: { apiKey: null, model: 'gemini-2.5-flash', language: null },
-                                        localNeural: {
-                                            assetId: 'dummy',
-                                            language: 'en',
-                                            execution: 'daemon',
-                                        },
-                                    },
-                                    networkTimeoutMs: 15_000,
-                                } },
-                            },
-                        },
-                    },
-                }),
-            ).rejects.toMatchObject({
-                code,
-                message: `daemon_voice_inference_${code}`,
-            });
-
-            expect(resolveDaemonVoiceInferenceExecutionSpy).toHaveBeenCalledTimes(1);
-            expect(resolveDaemonVoiceInferenceExecutionSpy).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    requestedExecution: 'daemon',
-                    sessionId: 'session-1',
-                    surface: 'stt',
-                }),
-            );
-            expect(prepareDaemonVoiceInferenceSttSourceSpy).toHaveBeenCalledTimes(1);
-            expect(daemonSttControllerTranscribeSpy).toHaveBeenCalledTimes(1);
-        },
-    );
 });
+
+afterAll(() => network.dispose());

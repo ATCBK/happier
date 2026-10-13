@@ -1,165 +1,148 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildQualifiedPluginContributionKey, createPluginContributionIdentity, PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { createMachineFixture, createPlainMachineRowFixture, createSessionFixture, standardCleanup } from '@/dev/testkit';
+import { clearProjectedAgentUiBehaviorDescriptors } from '@/agents/registry/agentUiBehaviorProjection';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storage';
 
-import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
-const ensureAgentInstallablesBackground = vi.fn(async (_args: unknown) => {});
-const getActiveServerSnapshot = vi.fn(() => ({ serverId: 'server-a' }));
-const storageGetState = vi.fn<() => any>();
+const requests: Array<{ machineId: string; method: string; payload: unknown }> = [];
+const installs: string[] = [];
+let account: Awaited<ReturnType<typeof import('@/voice/settings/panels/voiceSettingsAccountTestHarness').createVoiceSettingsAccountTestHarness>>;
 
-vi.mock('@/capabilities/ensureAgentInstallablesBackground', () => ({
-  ensureAgentInstallablesBackground: (args: unknown) => ensureAgentInstallablesBackground(args),
-}));
+const externalAgentIdentity = createPluginContributionIdentity({ pluginId: 'acme.tools', localId: 'agent' });
+const externalAgentId = buildQualifiedPluginContributionKey(externalAgentIdentity);
+const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {
+    [externalAgentId]: {
+        id: externalAgentId, identity: externalAgentIdentity, title: 'Acme Agent', channel: 'plugin',
+        ui: { behavior: { newSession: { relevantInstallableDepKeys: ['codex-acp'] } } },
+    },
+}, familiesById: {
+    managedDependencies: { family: 'managedDependencies', entriesById: { 'codex-acp': {
+        id: 'codex-acp', pluginId: externalAgentIdentity.pluginId, key: 'codex-acp', capabilityId: 'dep.codex-acp',
+        sourceKind: 'github_release_binary', display: { name: 'Codex ACP' },
+        defaultPolicy: { autoInstallWhenNeeded: true, autoUpdateMode: 'auto' }, experimental: true,
+    } } },
+} });
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-  getActiveServerSnapshot: () => getActiveServerSnapshot(),
-}));
-
-const storageMock = createStorageModuleStub({
-  storage: {
-    getState: () => storageGetState(),
-  } as any,
+beforeEach(async () => {
+    requests.length = 0;
+    installs.length = 0;
+    const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    installDisconnectedServerSocketBoundary(socket => {
+        socket.connected = true;
+        socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
+            if (event !== 'rpc-call') throw new Error('Unexpected Machine RPC event');
+            const input = payload as { method: string; params: unknown };
+            const separator = input.method.indexOf(':');
+            const request = { machineId: input.method.slice(0, separator),
+                method: input.method.slice(separator + 1), payload: input.params };
+            requests.push(request);
+            if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+                return { ok: true, result: { protocolVersion: 1, projection } };
+            }
+            if (request.method === RPC_METHODS.CAPABILITIES_DETECT) {
+                return { ok: true, result: { protocolVersion: 1, results: { 'dep.codex-acp': {
+                    ok: true, checkedAt: Date.now(), data: {
+                        installed: installs.includes(request.machineId), installDir: '/managed',
+                        binPath: null, installedVersion: null, sourceKind: 'github_release_binary',
+                        lastInstallLogPath: null, lastBackgroundUpdateCheckAtMs: null,
+                    },
+                } } } };
+            }
+            if (request.method === RPC_METHODS.CAPABILITIES_INVOKE) {
+                expect(request.payload).toMatchObject({ id: 'dep.codex-acp', method: 'install' });
+                installs.push(request.machineId);
+                return { ok: true, result: { ok: true, result: null } };
+            }
+            return { ok: true, result: { error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' } };
+        });
+    });
+    const { createVoiceSettingsAccountTestHarness } = await import('@/voice/settings/panels/voiceSettingsAccountTestHarness');
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
+    const fallback = account.request.getMockImplementation();
+    if (!fallback) throw new Error('Expected canonical Account HTTP boundary');
+    account.request.mockImplementation(async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        const match = /^\/v1\/machines\/([^/]+)(\/access)?$/.exec(path);
+        if (match) {
+            const machineId = decodeURIComponent(match[1]);
+            const machine = createPlainMachineRowFixture({ id: machineId, accountId: account.scope.accountId });
+            return Response.json(match[2] ? MachineAccessGrantsListResponseV1Schema.parse({
+                machineId, custodian: machine.access.custodian, access: machine.access,
+                canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+            }) : { machine });
+        }
+        return fallback(input, init);
+    });
+    const machineIds = ['machine-raw', 'machine-cached', 'machine-target'];
+    storage.setState({ sessions: {}, machines: Object.fromEntries(machineIds.map(id => [id, createMachineFixture({ id })])), sessionListRowsByServerId: {},
+        ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {},
+        concurrentSessionListCacheByServerId: {} });
+    const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+    for (const machineId of machineIds) {
+        await expect(loadDaemonMergedProjectionInputs({ machineId, serverId: account.scope.serverId }))
+            .resolves.toMatchObject({ pluginProjectionV2: { agentsById: { [externalAgentId]: { identity: externalAgentIdentity } } } });
+    }
+    // Separate real projection preparation from the target-selection operation's transport receipts.
+    requests.length = 0;
 });
-
-vi.mock('@/sync/domains/state/storage', () => storageMock);
+afterEach(async () => {
+    clearProjectedAgentUiBehaviorDescriptors();
+    await account?.dispose();
+    await standardCleanup();
+});
+function publishTarget(withReplacement = false) {
+    const serverId = account.scope.serverId;
+    storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId,
+        // A stale raw row has no usable execution path; the visible row supplies it.
+        metadata: { ...createSessionFixture().metadata, machineId: 'machine-raw', path: withReplacement ? '/tmp/raw' : '' } }) },
+        machines: {
+            'machine-raw': createMachineFixture({ id: 'machine-raw', active: !withReplacement,
+                activeAt: withReplacement ? 1 : Date.now(),
+                ...(withReplacement ? { replacedByMachineId: 'machine-target', replacedAt: 2 } : {}) }),
+            'machine-cached': createMachineFixture({ id: 'machine-cached', activeAt: Date.now() }),
+            'machine-target': createMachineFixture({ id: 'machine-target', activeAt: Date.now() }),
+        },
+        sessionListRowsByServerId: { [serverId]: { s1: createSessionFixture({ id: 's1', serverId,
+            metadata: { ...createSessionFixture().metadata, machineId: 'machine-cached', path: '/tmp/cached' } }) } },
+        ordinarySessionListMembershipByServerId: { [serverId]: ['s1'] },
+        sessionListIndexByServerId: { [serverId]: [{ type: 'session', sessionId: 's1', serverId, serverName: 'Test' }] },
+    });
+}
 
 describe('ensureVoiceAgentInstallablesBackground', () => {
-  beforeEach(() => {
-    ensureAgentInstallablesBackground.mockReset();
-    getActiveServerSnapshot.mockReset();
-    getActiveServerSnapshot.mockReturnValue({ serverId: 'server-a' });
-    storageGetState.mockReset();
-  });
-
-  it('prefers visible lookup session metadata machine ids when the raw session metadata is stale', async () => {
-    storageGetState.mockReturnValue({
-      settings: { voice: { providers: { local_conversation: { schemaVersion: 1, config: {} } } } },
-      sessions: {
-        s1: {
-          id: 's1',
-          metadata: { machineId: 'machine-raw' },
-        },
-      },
-      sessionListRowsByServerId: {
-        'server-a': {
-          s1: {
-            id: 's1',
-            updatedAt: 1,
-            metadata: { machineId: 'machine-cached', path: '/tmp/cached' },
-          },
-        },
-      },
-      ordinarySessionListMembershipByServerId: { 'server-a': ['s1'] },
-      sessionListIndexByServerId: {
-        'server-a': [
-          { type: 'session', sessionId: 's1', serverId: 'server-a', serverName: 'Server A' },
-        ],
-      },
-      concurrentSessionListCacheByServerId: {},
+    it('installs on the visible lookup machine when raw session metadata is stale', async () => {
+        publishTarget();
+        const { ensureVoiceAgentInstallablesBackground } = await import('./ensureVoiceAgentInstallablesBackground');
+        await ensureVoiceAgentInstallablesBackground({ agentId: externalAgentId, sessionId: 's1' });
+        expect(installs).toEqual(['machine-cached']);
+        expect(requests.filter(request => request.method === RPC_METHODS.CAPABILITIES_DETECT))
+            .toEqual(expect.arrayContaining([expect.objectContaining({ machineId: 'machine-cached' })]));
+        expect(new Set(requests.map(request => request.machineId))).toEqual(new Set(['machine-cached']));
     });
-
-    const { ensureVoiceAgentInstallablesBackground } = await import('./ensureVoiceAgentInstallablesBackground');
-
-    await ensureVoiceAgentInstallablesBackground({ agentId: 'claude', sessionId: 's1' });
-
-    expect(ensureAgentInstallablesBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'claude',
-        machineId: 'machine-cached',
-        serverId: 'server-a',
-        resumeSessionId: 's1',
-      }),
-    );
-  });
-
-  it('uses the resolved session machine target before raw or visible metadata', async () => {
-    storageGetState.mockReturnValue({
-      settings: { voice: { providers: { local_conversation: { schemaVersion: 1, config: {} } } } },
-      sessions: {
-        s1: {
-          id: 's1',
-          active: false,
-          metadata: { machineId: 'machine-raw', path: '/tmp/raw' },
-        },
-      },
-      machines: {
-        'machine-raw': {
-          id: 'machine-raw',
-          active: false,
-          activeAt: 1,
-          metadata: { host: 'raw.local' },
-          replacedByMachineId: 'machine-target',
-          replacedAt: 2,
-        },
-        'machine-target': {
-          id: 'machine-target',
-          active: true,
-          activeAt: 3,
-          metadata: { host: 'target.local' },
-        },
-      },
-      getProjectForSession: (sessionId: string) =>
-        sessionId === 's1'
-          ? { key: { machineId: 'machine-target', rootPath: '/tmp/target' } }
-          : null,
-      sessionListRowsByServerId: {
-        'server-a': {
-          s1: {
-            id: 's1',
-            updatedAt: 1,
-            metadata: { machineId: 'machine-cached', path: '/tmp/cached' },
-          },
-        },
-      },
-      ordinarySessionListMembershipByServerId: { 'server-a': ['s1'] },
-      sessionListIndexByServerId: {
-        'server-a': [
-          { type: 'session', sessionId: 's1', serverId: 'server-a', serverName: 'Server A' },
-        ],
-      },
-      concurrentSessionListCacheByServerId: {},
+    it('installs on the resolved replacement before raw or visible metadata', async () => {
+        publishTarget(true);
+        const { ensureVoiceAgentInstallablesBackground } = await import('./ensureVoiceAgentInstallablesBackground');
+        await ensureVoiceAgentInstallablesBackground({ agentId: externalAgentId, sessionId: 's1' });
+        expect(installs).toEqual(['machine-target']);
+        expect(requests.filter(request => request.method === RPC_METHODS.CAPABILITIES_DETECT))
+            .toEqual(expect.arrayContaining([expect.objectContaining({ machineId: 'machine-target' })]));
+        expect(new Set(requests.map(request => request.machineId))).toEqual(new Set(['machine-target']));
     });
-
-    const { ensureVoiceAgentInstallablesBackground } = await import('./ensureVoiceAgentInstallablesBackground');
-
-    await ensureVoiceAgentInstallablesBackground({ agentId: 'claude', sessionId: 's1' });
-
-    expect(ensureAgentInstallablesBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'claude',
-        machineId: 'machine-target',
-        serverId: 'server-a',
-        resumeSessionId: 's1',
-      }),
-    );
-  });
-  it('ensures installables for an externally installed Agent id', async () => {
-    // Installable deps are contributed per Agent, including by plugin-contributed Agents.
-    // Narrowing to the bundled ids would deny an installed external Agent its own installables.
-    storageGetState.mockReturnValue({
-      settings: { voice: { providers: { local_conversation: { schemaVersion: 1, config: {} } } } },
-      sessions: {
-        s1: {
-          id: 's1',
-          metadata: { machineId: 'machine-raw' },
-        },
-      },
-      sessionListRowsByServerId: {},
-      ordinarySessionListMembershipByServerId: {},
-      sessionListIndexByServerId: {},
-      concurrentSessionListCacheByServerId: {},
+    it('honors an installed external Agent declaration at the raw session machine', async () => {
+        publishTarget();
+        storage.setState({ sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {},
+            sessionListIndexByServerId: {} });
+        storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId: account.scope.serverId,
+            metadata: { ...createSessionFixture().metadata, machineId: 'machine-raw', path: '/tmp/raw' } }) } });
+        const { ensureVoiceAgentInstallablesBackground } = await import('./ensureVoiceAgentInstallablesBackground');
+        await ensureVoiceAgentInstallablesBackground({ agentId: externalAgentId, sessionId: 's1' });
+        expect(installs).toEqual(['machine-raw']);
     });
-
-    const { ensureVoiceAgentInstallablesBackground } = await import('./ensureVoiceAgentInstallablesBackground');
-
-    await ensureVoiceAgentInstallablesBackground({ agentId: 'acme-agent', sessionId: 's1' });
-
-    expect(ensureAgentInstallablesBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'acme-agent',
-        machineId: 'machine-raw',
-        serverId: 'server-a',
-        resumeSessionId: 's1',
-      }),
-    );
-  });
 });

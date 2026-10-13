@@ -1,49 +1,28 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Platform } from 'react-native';
+import type { VoiceConnectionDriver } from '@/voice/runtime/connection/VoiceRealtimeConnection';
+// Exercise Metro's native owner beneath the host while substituting the native ABI only.
+vi.mock('react-native', async () => {
+  const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+  return createReactNativeNativeMock({ platformOS: 'ios' }, { NativeModules: { WebRTCModule: {} } });
+});
+vi.mock('@/voice/runtime/nativeWebRtcRuntime', async () => import('@/voice/runtime/nativeWebRtcRuntime.native'));
 
-const nativeWebRtc = vi.hoisted(() => ({
-  initializeVoiceNativeWebRtcBootstrap: vi.fn(),
-  requireVoiceNativeWebRtcBootstrap: vi.fn(),
-}));
-
-const connections = vi.hoisted(() => ({
-  createSdkHandleConnection: vi.fn(),
-  createWebSocketPcmConnection: vi.fn(),
-}));
-
-vi.mock('@/voice/runtime/nativeWebRtcRuntime', () => nativeWebRtc);
-vi.mock('@/voice/runtime/connection/VoiceRealtimeConnection', () => connections);
-
-import { createBundledConversationRuntimeHostLease } from './bundledConversationRuntimeHost';
+// Warm the real host graph during collection, not the native admission deadline.
+const { createBundledConversationRuntimeHostLease } = await import('./bundledConversationRuntimeHost');
 
 describe('bundled conversation runtime host native WebRTC admission', () => {
-  const originalPlatformOs = Platform.OS;
-
   afterEach(() => {
-    Platform.OS = originalPlatformOs;
-    nativeWebRtc.initializeVoiceNativeWebRtcBootstrap.mockReset();
-    nativeWebRtc.requireVoiceNativeWebRtcBootstrap.mockReset();
-    connections.createSdkHandleConnection.mockReset();
+    vi.restoreAllMocks();
   });
 
-  it('rejects provider-managed native WebRTC before the ElevenLabs SDK connection is created', () => {
-    Platform.OS = 'ios';
-    const incompatibleBridge = Object.assign(
-      new Error('Voice requires a current iOS WebRTC native module.'),
-      { code: 'voice_native_webrtc_incompatible' },
-    );
-    nativeWebRtc.requireVoiceNativeWebRtcBootstrap.mockImplementation(() => {
-      throw incompatibleBridge;
-    });
+  it('rejects provider-managed native WebRTC before the ElevenLabs SDK connection is created', async () => {
+    const driver = { open: async () => undefined, sendControl: async () => undefined, close: async () => undefined } satisfies VoiceConnectionDriver;
     const lease = createBundledConversationRuntimeHostLease();
 
     try {
-      expect(nativeWebRtc.initializeVoiceNativeWebRtcBootstrap).toHaveBeenCalledTimes(1);
-      expect(() => lease.host.createSdkHandleConnection({ driver: {} as never })).toThrow(
-        incompatibleBridge,
+      expect(() => lease.host.createSdkHandleConnection({ driver })).toThrow(
+        expect.objectContaining({ code: 'voice_native_webrtc_incompatible' }),
       );
-      expect(nativeWebRtc.requireVoiceNativeWebRtcBootstrap).toHaveBeenCalledTimes(1);
-      expect(connections.createSdkHandleConnection).not.toHaveBeenCalled();
     } finally {
       lease.revoke();
     }

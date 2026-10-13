@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createWebDaemonSpeechPcmCapture } from './WebDaemonSpeechPcmCapture.web';
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { installVoiceWebRtcBrowserBoundary } = await import('@/dev/testkit/harness/voiceWebRtcHarness');
+const browserBoundaries: Array<ReturnType<typeof installVoiceWebRtcBrowserBoundary>> = [];
 
 type TestAudioProcessEvent = ReturnType<typeof createAudioProcessEvent>;
 
@@ -91,6 +95,7 @@ function createAudioContext(options: {
     resume: vi.fn(async () => {
       audioContext.state = 'running';
     }),
+    close: vi.fn(async () => {}),
     createMediaStreamSource: vi.fn(() => source),
     createScriptProcessor: vi.fn(() => processor),
     ...(options.workletAvailable
@@ -106,18 +111,11 @@ function createAudioContext(options: {
 
 function createMicSession(options: {
   audioContext: unknown;
-  stream?: MediaStream;
-  isMuted?: () => boolean;
 }) {
-  const stream = options.stream ?? ({ getAudioTracks: vi.fn(() => [{ kind: 'audio' }]) } as unknown as MediaStream);
-  return {
-    ensureActive: vi.fn(async () => {}),
-    setMuted: vi.fn(),
-    isMuted: vi.fn(options.isMuted ?? (() => false)),
-    teardown: vi.fn(async () => {}),
-    getStream: vi.fn(() => stream),
-    getAudioContext: vi.fn(() => options.audioContext as AudioContext),
-  };
+  // Web Audio is the browser ABI; acquisition/mute/lifecycle remain WebMicSession.
+  const browser = installVoiceWebRtcBrowserBoundary({ createAudioContext: () => options.audioContext as AudioContext });
+  browserBoundaries.push(browser);
+  return browser.micSession;
 }
 
 function installWorkletNodeMock(workletNode = createWorkletNode()) {
@@ -163,14 +161,18 @@ function installVisibilityDocumentMock(): TestVisibilityDocument {
 }
 
 describe('createWebDaemonSpeechPcmCapture', () => {
-  afterEach(() => {
+  afterEach(async () => {
+    for (const browser of browserBoundaries.splice(0).reverse()) {
+      await browser.micSession.teardown();
+      browser.restore();
+    }
     vi.unstubAllGlobals();
   });
 
   it('preserves the microphone acquisition stage in the Voice machine error', async () => {
     const { audioContext } = createAudioContext();
     const micSession = createMicSession({ audioContext });
-    micSession.ensureActive.mockRejectedValueOnce(new Error('permission denied'));
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValueOnce(new Error('permission denied'));
     const onError = vi.fn();
     const capture = createWebDaemonSpeechPcmCapture({
       micSession,
@@ -239,7 +241,7 @@ describe('createWebDaemonSpeechPcmCapture', () => {
     await capture.stop();
 
     expect(micSession.ensureActive).toHaveBeenCalledTimes(1);
-    expect(micSession.getStream).toHaveBeenCalledTimes(1);
+    expect(micSession.getStream()?.getAudioTracks()).toHaveLength(1);
     expect(audioContext.createScriptProcessor).toHaveBeenCalledWith(4, 1, 1);
     expect(source.connect).toHaveBeenCalledWith(processor);
     expect(onAudioStarted).toHaveBeenCalledTimes(1);
@@ -300,13 +302,14 @@ describe('createWebDaemonSpeechPcmCapture', () => {
   });
 
   it('drops muted worklet frames without marking audio started or sending PCM', async () => {
-    let muted = true;
     const { audioContext } = createAudioContext({ workletAvailable: true });
     const { workletNode } = installWorkletNodeMock();
     const onAudioStarted = vi.fn();
     const onChunk = vi.fn(async (_chunk: Uint8Array) => {});
+    const micSession = createMicSession({ audioContext });
+    micSession.setMuted(true);
     const capture = createWebDaemonSpeechPcmCapture({
-      micSession: createMicSession({ audioContext, isMuted: () => muted }),
+      micSession,
       onAudioStarted,
       onChunk,
     });
@@ -319,7 +322,7 @@ describe('createWebDaemonSpeechPcmCapture', () => {
     expect(onAudioStarted).not.toHaveBeenCalled();
     expect(onChunk).not.toHaveBeenCalled();
 
-    muted = false;
+    micSession.setMuted(false);
     const audibleChunk = new Uint8Array(640);
     audibleChunk[0] = 2;
     emitWorkletPcm(workletNode, audibleChunk);

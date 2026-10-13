@@ -94,41 +94,47 @@ function VoiceBriefContent(props: Readonly<{ onClose: () => void }>) {
 
     return (
         <View testID="voice-brief" style={styles.root}>
-            <View style={styles.head}>
-                {voice.live ? <VoiceStatusLine voice={voice} size="island" /> : <View style={styles.grow} />}
-                <View style={styles.grow} />
-                {canStopReply && stopReply ? (
-                    <RoundButton testID="voice-brief.stop" size="small" display="secondary" title={t('voiceMoments.briefStop')} onPress={stopReply} />
-                ) : null}
-                <IconButton
-                    testID="voice-brief.close"
-                    iconName="x"
-                    variant="plain"
-                    size={24}
-                    iconSize={13}
-                    accessibilityLabel={t('common.close')}
-                    tooltip={t('common.close')}
-                    onPress={closeBrief}
-                />
-            </View>
-            {delivery === 'refused' && !waitingUnavailable ? <Text style={styles.note}>{t('voiceMoments.briefNotSpoken')}</Text> : null}
-            {waitingUnavailable ? (
-                <View testID="voice-brief.unavailable" style={styles.root}>
-                    <Text style={styles.note}>{t('voiceMoments.briefNotSpoken')}</Text>
-                    <Text style={styles.note}>{voice.primaryActionHint ?? voice.captionLabel}</Text>
-                    {voice.recoveryAvailable || setupAction ? (
-                        <RoundButton
-                            testID="voice-brief.recover"
-                            size="small"
-                            display="secondary"
-                            title={(voice.recoveryAvailable ? voice.recoveryLabel : voice.primaryActionLabel) ?? t('common.retry')}
-                            onPress={retry}
+            {/* The head and its notes read in Home's column, on the same edge as the sheet below (lab B1). */}
+            <ItemGroup surface="none">
+                <View style={styles.root}>
+                    <View style={styles.head}>
+                        {voice.live ? <VoiceStatusLine voice={voice} size="island" /> : <View style={styles.grow} />}
+                        <View style={styles.grow} />
+                        {canStopReply && stopReply ? (
+                            <RoundButton testID="voice-brief.stop" size="small" display="secondary" title={t('voiceMoments.briefStop')} onPress={stopReply} />
+                        ) : null}
+                        <IconButton
+                            testID="voice-brief.close"
+                            iconName="x"
+                            variant="plain"
+                            size={24}
+                            iconSize={13}
+                            accessibilityLabel={t('common.close')}
+                            tooltip={t('common.close')}
+                            onPress={closeBrief}
                         />
-                    ) : voice.primaryAction === 'start' ? (
-                        <RoundButton testID="voice-brief.retry" size="small" display="secondary" title={t('common.retry')} onPress={retry} />
+                    </View>
+                    {delivery === 'refused' && !waitingUnavailable ? <Text style={styles.note}>{t('voiceMoments.briefNotSpoken')}</Text> : null}
+                    {waitingUnavailable ? (
+                        <View testID="voice-brief.unavailable" style={styles.unavailable}>
+                            <Text style={styles.note}>{t('voiceMoments.briefNotSpoken')}</Text>
+                            {voice.recoveryAvailable || setupAction ? (
+                                <RoundButton
+                                    testID="voice-brief.recover"
+                                    size="small"
+                                    display="secondary"
+                                    title={(voice.recoveryAvailable ? voice.recoveryLabel : voice.primaryActionLabel) ?? t('common.retry')}
+                                    // The hint is for assistive technology: what the button opens, not body copy.
+                                    accessibilityHint={voice.primaryActionHint ?? undefined}
+                                    onPress={retry}
+                                />
+                            ) : voice.primaryAction === 'start' ? (
+                                <RoundButton testID="voice-brief.retry" size="small" display="secondary" title={t('common.retry')} onPress={retry} />
+                            ) : null}
+                        </View>
                     ) : null}
                 </View>
-            ) : null}
+            </ItemGroup>
             <VoiceBriefList brief={brief} onOpen={open} />
         </View>
     );
@@ -156,8 +162,12 @@ export const VoiceBriefList = React.memo(function VoiceBriefList(props: Readonly
     })).filter((group) => group.items.length > 0), [brief.items]);
     return (
         <>
-            {brief.incomplete ? <Text style={styles.note}>{t('voiceMoments.briefIncomplete')}</Text> : null}
-            {brief.caughtUp ? <Text style={styles.note}>{t('voiceMoments.briefCaughtUp')}</Text> : null}
+            {brief.incomplete || brief.caughtUp ? (
+                <ItemGroup surface="none">
+                    {brief.incomplete ? <Text style={styles.note}>{t('voiceMoments.briefIncomplete')}</Text> : null}
+                    {brief.caughtUp ? <Text style={styles.note}>{t('voiceMoments.briefCaughtUp')}</Text> : null}
+                </ItemGroup>
+            ) : null}
             {groups.length > 0 ? (
                 // One sheet in one rhythm (lab B1): the groups are sentence-case headings inside it,
                 // not three boxes competing with Home's own sections.
@@ -200,6 +210,7 @@ const VoiceBriefRow = React.memo(function VoiceBriefRow(props: Readonly<{
             <Item
                 testID={`voice-brief.item.${item.key}`}
                 title={item.title || props.fallbackTitle}
+                titleLines={1}
                 subtitle={item.subtitle}
                 icon={glyph}
                 onPress={() => props.onOpen(item)}
@@ -216,6 +227,11 @@ const VoiceBriefRow = React.memo(function VoiceBriefRow(props: Readonly<{
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
         gap: 8,
+    },
+    // The recovery button keeps its own width under the notes; it never stretches across the column.
+    unavailable: {
+        gap: 8,
+        alignItems: 'flex-start',
     },
     head: {
         flexDirection: 'row',

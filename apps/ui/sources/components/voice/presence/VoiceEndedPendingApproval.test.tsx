@@ -1,11 +1,13 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSessionFixture, renderScreen, type RenderScreenResult } from '@/dev/testkit';
+import { createSessionFixture, renderScreen, standardCleanup, type RenderScreenResult } from '@/dev/testkit';
+import { getStorage } from '@/sync/domains/state/storage';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { VoiceSessionEndedAttempt } from '@/voice/session/voiceSessionStore';
 
-import { VoiceEndedPendingApproval } from './VoiceEndedPendingApproval';
+const { VoiceEndedPendingApproval } = await import('./VoiceEndedPendingApproval');
 import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { Text } from '@/components/ui/text/Text';
 
@@ -15,34 +17,26 @@ import { Text } from '@/components/ui/text/Text';
  * session, where the real card decides it by a tap. Ending decided nothing.
  */
 
-const state = vi.hoisted(() => ({
-    sessions: {} as Record<string, unknown>,
-    scope: null as null | { serverId: string; accountId: string },
-}));
 const routerPush = vi.hoisted(() => vi.fn());
+vi.mock('socket.io-client', async (original) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(original));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: routerPush } }).module;
 });
-// The persisted session store is the boundary; the request readers beneath it stay real.
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useSession: (id: string) => (state.sessions[id] as Session | undefined) ?? null,
-        useSessionMessages: () => ({ messages: [], isLoaded: true }),
-        useActiveServerAccountScope: () => state.scope,
-    });
-});
-
-const TARGET = { serverId: 'server-a', sessionId: 'coding-session' } as const;
-const CARRIER = { serverId: 'server-a', sessionId: 'voice-carrier' } as const;
-const ACCOUNT = { serverId: 'server-a', accountId: 'account-1' } as const;
+const initialStorageState = getStorage().getState();
+let home: Awaited<ReturnType<typeof serveAccountHomes>>;
+let disconnect: (() => Promise<void>) | undefined;
+let TARGET = { serverId: '', sessionId: 'coding-session' };
+let CARRIER = { serverId: '', sessionId: 'voice-carrier' };
+let ACCOUNT = { serverId: '', accountId: 'account-1' };
 
 function pendingSession(id: string): Session {
     return createSessionFixture({
         id,
-        serverId: 'server-a',
+        serverId: ACCOUNT.serverId,
         active: true,
         presence: 'online',
         updatedAt: 10,
@@ -53,7 +47,7 @@ function pendingSession(id: string): Session {
             requests: { 'request-1': { tool: 'Bash', kind: 'permission', arguments: { command: 'git status' }, createdAt: 1 } },
             completedRequests: {},
         },
-    } as Partial<Session>);
+    });
 }
 
 function ended(overrides: Partial<VoiceSessionEndedAttempt> = {}): VoiceSessionEndedAttempt {
@@ -69,18 +63,32 @@ function ended(overrides: Partial<VoiceSessionEndedAttempt> = {}): VoiceSessionE
         accountScope: ACCOUNT,
         conversationScope: { kind: 'voice_home' },
         ...overrides,
-    } as VoiceSessionEndedAttempt;
+    };
 }
 
 let screen: RenderScreenResult | null = null;
-beforeEach(() => {
-    state.sessions = { [TARGET.sessionId]: pendingSession(TARGET.sessionId) };
-    state.scope = ACCOUNT;
+beforeEach(async () => {
+    getStorage().setState(initialStorageState, true);
+    // Real Home, Account lifetime and scoped Session readers; only the HTTP and
+    // Socket transports are synthetic beneath the canonical family fixture.
+    home = await serveAccountHomes({ homes: [{ key: 'ended', serverUrl: 'https://voice-ended-review.test',
+        accountId: 'account-1', currentAccount: true }], route: () => undefined });
+    disconnect = await home.restoreActiveConnection();
+    const serverId = home.homes.ended!.id;
+    ACCOUNT = { serverId, accountId: 'account-1' };
+    TARGET = { serverId, sessionId: 'coding-session' };
+    CARRIER = { serverId, sessionId: 'voice-carrier' };
+    getStorage().setState({ sessions: { [TARGET.sessionId]: pendingSession(TARGET.sessionId) } });
     routerPush.mockReset();
 });
 afterEach(async () => {
     await screen?.unmount();
     screen = null;
+    standardCleanup();
+    await disconnect?.();
+    disconnect = undefined;
+    await home.dispose();
+    getStorage().setState(initialStorageState, true);
 });
 
 async function render(value: VoiceSessionEndedAttempt) {
@@ -106,7 +114,7 @@ describe('VoiceEndedPendingApproval', () => {
         screen = await renderScreen(<HostedReview />);
         await screen.pressByTestIdAsync('pending.review');
         expect(screen.findByTestId('pending-open-destination')?.props.children)
-            .toBe('/session/coding-session?serverId=server-a');
+            .toBe(`/session/coding-session?serverId=${encodeURIComponent(TARGET.serverId)}`);
         expect(routerPush).not.toHaveBeenCalled();
     });
 
@@ -118,19 +126,18 @@ describe('VoiceEndedPendingApproval', () => {
     });
 
     it('shows nothing for an ended attempt of another Account', async () => {
-        state.scope = { serverId: 'server-a', accountId: 'account-2' };
-        const view = await render(ended());
+        const view = await render(ended({ accountScope: { ...ACCOUNT, accountId: 'account-2' } }));
         expect(view.findByTestId('pending.review')).toBeNull();
     });
 
     it('never falls back to the control id when the attempt captured no address', async () => {
-        state.sessions = { 'control-1': pendingSession('control-1') };
+        getStorage().setState({ sessions: { 'control-1': pendingSession('control-1') } });
         const view = await render(ended({ conversationSessionAddress: null, targetSessionAddress: null }));
         expect(view.findByTestId('pending.review')).toBeNull();
     });
 
     it('stays quiet when nothing is waiting', async () => {
-        state.sessions = { [TARGET.sessionId]: createSessionFixture({ id: TARGET.sessionId, serverId: 'server-a' }) };
+        getStorage().setState({ sessions: { [TARGET.sessionId]: createSessionFixture({ id: TARGET.sessionId, serverId: TARGET.serverId }) } });
         const view = await render(ended());
         expect(view.findByTestId('pending.review')).toBeNull();
     });

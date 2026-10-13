@@ -1,15 +1,61 @@
 import * as React from 'react';
 import { act, type ReactTestInstance } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { t } from '@/text';
-import { listModelPackCatalogEntries, type DaemonVoiceInferenceModelStatus } from '@happier-dev/protocol';
+import { listModelPackCatalogEntries } from '@happier-dev/protocol';
+import { DaemonVoiceInferenceModelStatusSchema, DaemonVoiceInferenceModelsListResponseSchema,
+    DaemonVoiceInferenceModelsStatusResponseSchema, DaemonVoiceInferenceModelsInstallResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
-import { DaemonModelPackRow, SelectedDaemonModelPackRow } from './DaemonModelPackRow';
 import type { ModelCatalogRow } from './buildModelCatalogRows';
-import { DaemonVoiceModelCatalogProvider } from './DaemonVoiceModelCatalogContext';
-import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
+
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+const account = createProviderSettingsAccountHarness();
+let reply: Parameters<typeof installSessionActionRpcBoundary>[0] = () => { throw new Error('Unexpected model RPC'); };
+installSessionActionRpcBoundary((request, context) => reply(request, context));
+const { DaemonModelPackRow, SelectedDaemonModelPackRow } = await import('./DaemonModelPackRow');
+const { DaemonVoiceModelCatalogProvider } = await import('./DaemonVoiceModelCatalogContext');
+const { useDaemonVoiceModelCatalogState } = await import('./useDaemonVoiceModelCatalogState');
+const { VOICE_CONVERSATIONS_SETTINGS } = await import('@/voice/settings/voiceSettingsDeclarations');
+
+async function restoreModelAccount() {
+    const machineId = 'model-row-machine';
+    const scope = await account.restore({ settings: { experiments: true,
+        featureToggles: { 'voice.agent': true, 'execution.runs': true, 'voice.daemonInference': true },
+        voice: { executionMachine: { mode: 'fixed', machineId } } },
+        machines: [createMachineFixture({ id: machineId, activeAt: Date.now() })],
+        features: createRootLayoutFeaturesResponse({ features: {
+            voice: { enabled: true },
+                execution: { runs: { enabled: true } },
+            machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+        }, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+            maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000, maxDurationMs: 60_000,
+            maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1,
+            maxConcurrentStreamsPerMachine: 1,
+        } } } } } }),
+    });
+    const machine = createPlainMachineRowFixture({ id: machineId, accountId: scope.accountId });
+    account.home.answer(scope.serverId, `/v1/machines/${machineId}`, { body: { machine } });
+    account.home.answer(scope.serverId, `/v1/machines/${machineId}/access`, { body: { machineId,
+        custodian: machine.access!.custodian, access: machine.access, canManage: true,
+        grants: [], ownDirectGrant: false, ownAccessSources: [] } });
+}
+
+function SelectedRowOwner(props: Readonly<{ packId: string; kind: 'stt_sherpa' | 'tts_sherpa'; anchored?: boolean }>) {
+    const controller = useDaemonVoiceModelCatalogState();
+    return <DaemonVoiceModelCatalogProvider value={controller}>
+        <SelectedDaemonModelPackRow packId={props.packId} kind={props.kind}
+            setting={props.anchored ? VOICE_CONVERSATIONS_SETTINGS.settings.ttsAssetId : undefined} />
+    </DaemonVoiceModelCatalogProvider>;
+}
 
 function hasAncestor(
     node: ReactTestInstance,
@@ -24,6 +70,7 @@ function hasAncestor(
 }
 
 describe('DaemonModelPackRow', () => {
+    afterEach(async () => { await account.reset(); vi.restoreAllMocks(); });
     it('says an unknown status once rather than as both the description and the value', async () => {
         const row: ModelCatalogRow = {
             packId: 'pack-unknown', kind: 'stt_sherpa', displayName: 'Unknown Pack', model: 'zipformer',
@@ -148,94 +195,43 @@ describe('DaemonModelPackRow', () => {
     });
 
     it('projects the canonical pack-local mutation failure into the selected-provider row', async () => {
+        await restoreModelAccount();
         const entry = listModelPackCatalogEntries('stt_sherpa')[0]!;
-        const status: DaemonVoiceInferenceModelStatus = {
-            packId: entry.packId,
-            pluginIdentity: null,
-            kind: entry.kind,
-            model: entry.model,
-            version: null,
-            executionSupport: ['daemon'],
-            runtimeFamily: entry.runtimeFamily,
-            runtimeSupported: true,
-            installState: 'not_installed',
-            progress: null,
-            lastError: null,
-            updatedAtMs: 0,
+        const status = DaemonVoiceInferenceModelStatusSchema.parse({
+            packId: entry.packId, kind: entry.kind, model: entry.model, pluginIdentity: null,
+            version: null, executionSupport: ['daemon'], runtimeFamily: entry.runtimeFamily,
+            runtimeSupported: true, installState: 'not_installed', progress: null, lastError: null, updatedAtMs: 0,
+        });
+        reply = request => {
+            if (request.method.endsWith(':daemon.voiceInference.models.list')) return DaemonVoiceInferenceModelsListResponseSchema.parse({ ok: true, models: [status] });
+            if (request.method.endsWith(':daemon.voiceInference.models.status')) return DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [] });
+            if (request.method.endsWith(':daemon.voiceInference.models.install')) return DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: false, error: 'daemon model request failed', errorCode: 'internal_error' });
+            throw new Error(`Unexpected model RPC: ${request.method}`);
         };
-        const controller = {
-            state: {
-                statuses: [status],
-                errorCode: null,
-                loading: false,
-                actionPackId: null,
-                actionError: {
-                    packId: entry.packId,
-                    operation: 'install' as const,
-                    errorCode: 'internal_error' as const,
-                },
-            },
-            refresh: vi.fn(async () => undefined),
-            install: vi.fn(async () => undefined),
-            remove: vi.fn(async () => undefined),
-            cancel: vi.fn(),
-        };
-
-        const { tree } = await renderScreen(
-            <DaemonVoiceModelCatalogProvider value={controller}>
-                <SelectedDaemonModelPackRow packId={entry.packId} kind="stt_sherpa" />
-            </DaemonVoiceModelCatalogProvider>,
-        );
-
-        expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }).props.destructive).toBe(true);
+        const { tree } = await renderScreen(<SelectedRowOwner packId={entry.packId} kind="stt_sherpa" />);
+        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }).props.onPress).toBeTypeOf('function'));
+        await pressTestInstanceAsync(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }));
+        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }).props.destructive).toBe(true));
     });
 
     it('renders the selected-provider row for the exact published q8 pack id', async () => {
+        await restoreModelAccount();
         const canonicalPackId = 'kokoro-82m-v1.0-onnx-q8-wasm';
-        const entry = listModelPackCatalogEntries('tts_sherpa')
-            .find((candidate) => candidate.packId === canonicalPackId)!;
-        const status: DaemonVoiceInferenceModelStatus = {
-            packId: entry.packId,
-            pluginIdentity: null,
-            kind: entry.kind,
-            model: entry.model,
-            version: null,
-            executionSupport: ['daemon'],
-            runtimeFamily: entry.runtimeFamily,
-            runtimeSupported: true,
-            installState: 'installed',
-            progress: null,
-            lastError: null,
-            updatedAtMs: 0,
+        const entry = listModelPackCatalogEntries('tts_sherpa').find(candidate => candidate.packId === canonicalPackId)!;
+        const status = DaemonVoiceInferenceModelStatusSchema.parse({
+            packId: entry.packId, kind: entry.kind, model: entry.model, pluginIdentity: null,
+            version: null, executionSupport: ['daemon'], runtimeFamily: entry.runtimeFamily,
+            runtimeSupported: true, installState: 'installed', progress: null, lastError: null, updatedAtMs: 0,
+        });
+        reply = request => {
+            if (request.method.endsWith(':daemon.voiceInference.models.list')) return DaemonVoiceInferenceModelsListResponseSchema.parse({ ok: true, models: [status] });
+            if (request.method.endsWith(':daemon.voiceInference.models.status')) return DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [] });
+            throw new Error(`Unexpected model RPC: ${request.method}`);
         };
-        const controller = {
-            state: {
-                statuses: [status],
-                errorCode: null,
-                loading: false,
-                actionPackId: null,
-                actionError: null,
-            },
-            refresh: vi.fn(async () => undefined),
-            install: vi.fn(async () => undefined),
-            remove: vi.fn(async () => undefined),
-            cancel: vi.fn(),
-        };
-
-        const screen = await renderScreen(
-            <DaemonVoiceModelCatalogProvider value={controller}>
-                <SelectedDaemonModelPackRow
-                    packId="kokoro-82m-v1.0-onnx-q8-wasm"
-                    kind="tts_sherpa"
-                    setting={VOICE_CONVERSATIONS_SETTINGS.settings.ttsAssetId}
-                />
-            </DaemonVoiceModelCatalogProvider>,
-        );
-
-        expect(screen.tree.root.findByProps({ testID: `voice-model-row-${canonicalPackId}` })).toBeTruthy();
+        const screen = await renderScreen(<SelectedRowOwner packId={canonicalPackId} kind="tts_sherpa" anchored />);
         const anchor = `setting-${VOICE_CONVERSATIONS_SETTINGS.settings.ttsAssetId.anchor}`;
+        await vi.waitFor(() => expect(screen.tree.root.findByProps({ testID: `voice-model-row-${canonicalPackId}` }).props.detail).toBe(t('settingsVoice.local.models.state.installed')));
         expect(screen.tree.root.findAllByProps({ nativeID: anchor }).length).toBeGreaterThan(0);
-
         await act(async () => screen.update(
             <DaemonVoiceModelCatalogProvider value={null}>
                 <SelectedDaemonModelPackRow packId={canonicalPackId} kind="tts_sherpa"

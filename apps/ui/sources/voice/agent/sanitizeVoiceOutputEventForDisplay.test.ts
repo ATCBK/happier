@@ -4,17 +4,19 @@ import { sanitizeVoiceOutputEventForDisplay } from './sanitizeVoiceOutputEventFo
 
 describe('sanitizeVoiceOutputEventForDisplay', () => {
   it('redacts paths and token-shaped values from display status only', () => {
-    expect(sanitizeVoiceOutputEventForDisplay({
+    const status = sanitizeVoiceOutputEventForDisplay({
       v: 1,
       kind: 'display_status',
       turnId: 'turn-1',
       seq: 0,
       statusId: 'status-1',
       text: 'Reading /Users/alice/private token=super-secret-value',
-    })).toMatchObject({
+    });
+    expect(status).toMatchObject({
       kind: 'display_status',
       text: expect.not.stringContaining('super-secret-value'),
     });
+    expect(status).toMatchObject({ text: expect.not.stringContaining('/Users/alice/private') });
     expect(sanitizeVoiceOutputEventForDisplay({
       v: 1,
       kind: 'speech_segment',

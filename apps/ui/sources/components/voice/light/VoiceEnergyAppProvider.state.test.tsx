@@ -1,6 +1,10 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { standardCleanup } from '@/dev/testkit';
+import { getStorage } from '@/sync/domains/state/storage';
+import { resetVoiceSessionStoreForTests, setVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
 
 import type { VoiceSurfaceState } from '@/components/voice/surface/resolveVoiceSurfaceState';
 import {
@@ -15,25 +19,8 @@ import { VoiceEnergyAppProvider } from './VoiceEnergyAppProvider';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const runtime = vi.hoisted(() => ({
-    snapshot: {
-        adapterId: null,
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-    } as VoiceSessionSnapshot,
-}));
-
+const initialStorageState = getStorage().getState();
 const observed = { energy: null as VoiceEnergy | null };
-
-vi.mock('@/sync/domains/state/storage', () => ({
-    useSetting: () => ({ providerId: null }),
-}));
-
-vi.mock('@/voice/session/voiceSession', () => ({
-    useVoiceSessionSnapshot: () => runtime.snapshot,
-}));
 
 function EnergyProbe(): null {
     observed.energy = useVoiceEnergy();
@@ -44,18 +31,26 @@ describe('VoiceEnergyAppProvider state bridge', () => {
     let tree: renderer.ReactTestRenderer | null = null;
     let inputWriter: VoiceRuntimeLevelWriter | null = null;
 
+    beforeEach(() => {
+        getStorage().setState(initialStorageState, true);
+        resetVoiceSessionStoreForTests();
+    });
+
     afterEach(() => {
         act(() => { tree?.unmount(); inputWriter?.close(); });
         inputWriter = null;
         tree = null;
         observed.energy = null;
+        standardCleanup();
+        resetVoiceSessionStoreForTests();
+        getStorage().setState(initialStorageState, true);
     });
 
     async function project(
         snapshot: VoiceSessionSnapshot,
         inputSourceActive = false,
     ): Promise<Readonly<{ luminosity: number; sourceActive: boolean }>> {
-        runtime.snapshot = snapshot;
+        setVoiceSessionSnapshot(snapshot);
         if (inputSourceActive) {
             inputWriter = voiceRuntimeLevelStore.open({
                 channel: 'input',

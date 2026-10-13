@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { storage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { Message } from "@happier-dev/session-core/messages";
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import {
   formatMessage,
   formatPermissionRequest,
@@ -18,28 +20,26 @@ import {
 } from './contextFormatters';
 
 function createSession(path: string | null, summaryText = 'Hello'): Session {
-  return {
+  return createSessionFixture({
     id: 's1',
     seq: 0,
     createdAt: 0,
     updatedAt: 0,
     active: true,
     activeAt: 0,
-    // Readability is evidence, never inference: without a declared mode the awareness owner
-    // reports `locked`, and every privacy case below would pass by withholding everything.
     encryptionMode: 'plain',
     metadata: {
       path: path ?? '',
       host: 'localhost',
       summary: { text: summaryText, updatedAt: 0 },
-    } as Session['metadata'],
+    },
     metadataVersion: 1,
     agentState: null,
     agentStateVersion: 0,
     thinking: false,
     thinkingAt: 0,
     presence: 'online',
-  };
+  });
 }
 
 function createUserMessage(id: string, text: string, createdAt: number): Message {
@@ -53,8 +53,7 @@ function createUserMessage(id: string, text: string, createdAt: number): Message
 }
 
 function createToolCallMessage(id: string, toolName: string, createdAt: number): Message {
-  return {
-    kind: 'tool-call',
+  return createToolCallMessageFixture({
     id,
     localId: null,
     createdAt,
@@ -68,7 +67,7 @@ function createToolCallMessage(id: string, toolName: string, createdAt: number):
       completedAt: createdAt + 1,
       description: null,
     },
-  };
+  });
 }
 
 function prefs(overrides: Partial<VoiceContextFormatterPrefs>): VoiceContextFormatterPrefs {
@@ -87,7 +86,8 @@ function prefs(overrides: Partial<VoiceContextFormatterPrefs>): VoiceContextForm
 
 describe('voice context privacy (opt-out defaults)', () => {
   it('withholds retained transcript content when Session details are locked', () => {
-    const session: Session = { ...createSession('/private'), metadata: null, encryptionMode: 'e2ee' };
+    const session: Session = { ...createSession('/private'), metadata: null, encryptionMode: 'e2ee',
+      encryptedContentAvailability: 'encrypted_content_unavailable' };
     const formatted = formatSessionFull(session, [createUserMessage('secret', 'RETAINED PRIVATE CONTENT', 1)], prefs({}));
     expect(formatted).not.toContain('RETAINED PRIVATE CONTENT');
     expect(formatted).toContain('Encrypted details unavailable');

@@ -1,8 +1,15 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineFixture, createPlainMachineRowFixture, registerStandardCleanupTarget, renderScreen, renderHook, standardCleanup, type RenderScreenResult } from '@/dev/testkit';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { VoiceSpeechDiagnosticsConfigureRequestV1Schema, VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema, VoiceSpeechDiagnosticsSettingsV1Schema, VoiceSpeechDiagnosticsStatusResponseV1Schema,
+  resolveVoiceSpeechDiagnosticsStoragePolicy, type VoiceSpeechDiagnosticsSettingsV1 } from '@happier-dev/protocol/voice/diagnostics';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { tLoose } from '@/text';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const machineState = vi.hoisted(() => ({
   machineId: 'm1',
@@ -10,8 +17,9 @@ const machineState = vi.hoisted(() => ({
   isOnline: true,
 }));
 const activeVoiceAttempt = vi.hoisted(() => ({ sessionId: null as string | null }));
+type DiagnosticsStatus = ReturnType<typeof VoiceSpeechDiagnosticsStatusResponseV1Schema.parse>;
 const testState = vi.hoisted(() => ({
-  artifacts: [] as any[],
+  artifacts: [] as DiagnosticsStatus['artifacts'],
   deleteError: null as Error | null,
   configureError: null as Error | null,
   statusError: null as Error | null,
@@ -22,11 +30,10 @@ const testState = vi.hoisted(() => ({
   health: {
     captureFailure: false,
     cleanup: { status: 'healthy' as const, code: null, ownedEntryCount: 0 as number | null },
-  } as any,
+  } as DiagnosticsStatus['health'],
 }));
-const modalAlert = vi.hoisted(() => vi.fn(async () => {}));
 const fireAndForgetError = vi.hoisted(() => vi.fn());
-const configure = vi.hoisted(() => vi.fn(async (machineId: string, settings: any) => {
+const configure = vi.hoisted(() => vi.fn(async (machineId: string, settings: VoiceSpeechDiagnosticsSettingsV1) => {
   if (testState.blockedEnabledMachineId === machineId && settings.enabled && testState.configureBarrier) {
     await testState.configureBarrier;
   }
@@ -39,21 +46,16 @@ const configure = vi.hoisted(() => vi.fn(async (machineId: string, settings: any
     settings,
     artifacts: testState.artifacts,
     health: testState.health,
-    backupPolicy: { status: 'best_effort' as const, storage: 'private_cache' as const, mechanism: 'cachedir_tag' as const, automaticSync: 'not_implemented' as const },
+    backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop'),
   };
 }));
 const status = vi.hoisted(() => vi.fn(async (machineId: string) => ({
   ok: true as const,
   root: `/private/${machineId}`,
-  settings: {},
   artifacts: testState.artifacts,
   health: testState.health,
-  backupPolicy: { status: 'best_effort' as const, storage: 'private_cache' as const, mechanism: 'cachedir_tag' as const, automaticSync: 'not_implemented' as const },
 })));
 
-vi.mock('@/components/ui/lists/Item', () => ({ Item: (props: any) => React.createElement('Item', props) }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children) }));
-vi.mock('@/components/ui/forms/Switch', () => ({ Switch: (props: any) => React.createElement('Switch', props) }));
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock();
@@ -62,58 +64,66 @@ vi.mock('react-native-unistyles', async () => {
   const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
   return createUnistylesMock();
 });
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text' }));
-vi.mock('@/modal', () => ({ Modal: { confirm: vi.fn(async () => true), alert: modalAlert } }));
-vi.mock('@/text', () => ({ t: (key: string) => key, tLoose: (key: string) => key }));
-vi.mock('@/utils/system/fireAndForget', () => ({
-  fireAndForget: (promise: Promise<unknown>) => void promise.catch(fireAndForgetError),
-}));
-vi.mock('@/sync/domains/state/storage', () => ({
-  useSetting: () => ({ diagnostics }),
-  useLocalSetting: () => undefined,
-}));
-vi.mock('@/sync/store/hooks', () => ({
-  useActiveServerAccountScope: () => null,
-  useMachineCliDetectionTarget: () => ({
-    daemonStateVersion: machineState.daemonStateVersion,
-    isOnline: machineState.isOnline,
-  }),
-  useMachineCliDetectionTargets: (machineIds: readonly string[]) => Object.fromEntries(machineIds.map((machineId) => [
-    machineId,
-    {
-      daemonStateVersion: machineState.daemonStateVersion,
-      isOnline: machineState.isOnline,
-    },
-  ])),
-}));
-vi.mock('@/voice/credentials/useExecutionMachinePresentation', () => ({
-  useVoiceExecutionMachinePresentation: () => ({ machineId: machineState.machineId, machineLabel: machineState.machineId }),
-}));
-vi.mock('@/components/voice/attempt/useVoiceAttemptControl', () => ({
-  useVoiceAttemptControl: () => ({ sessionId: activeVoiceAttempt.sessionId }),
-  VOICE_ATTEMPT_IDLE_TARGET_GLOBAL: { kind: 'global' },
-}));
-vi.mock('./artifactExportTarget', () => ({ createVoiceDiagnosticArtifactExportTarget: vi.fn() }));
-vi.mock('./client', () => ({
-  createVoiceDiagnosticsClient: () => ({
-    configure: (settings: any) => configure(machineState.machineId, settings),
-  }),
-  createVoiceDiagnosticsClientForMachine: (machineId: string) => ({
-    configure: async (settings: any) => {
-      if (testState.configureError) throw testState.configureError;
-      return await configure(machineId, settings);
-    },
-    deleteAll: async () => {
-      if (testState.deleteError) throw testState.deleteError;
-    },
-    status: async () => {
-      if (testState.statusError) throw testState.statusError;
-      return await status(machineId);
-    },
-  }),
-}));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+// Only the browser SDK's renderer boundary is substituted; the real Modal
+// owner and WebAlertModal confirmation buttons settle the user's choice.
+vi.mock('@/utils/web/radixCjs', async () => (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
+vi.mock('@/utils/web/reactDomCjs', () => ({ requireReactDOM: () => ({ createPortal: (children: React.ReactNode) => children }) }));
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installSessionActionRpcBoundary(async request => {
+  const separator = request.method.indexOf(':');
+  const machineId = request.method.slice(0, separator);
+  const method = request.method.slice(separator + 1);
+  if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE) {
+    if (testState.configureError) throw testState.configureError;
+    return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse(await configure(machineId,
+      VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params).settings));
+  }
+  if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS) {
+    if (testState.statusError) throw testState.statusError;
+    return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({ ...await status(machineId), settings: diagnostics,
+      backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop') });
+  }
+  if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_DELETE_ALL) {
+    if (testState.deleteError) throw testState.deleteError;
+    return { ok: true };
+  }
+  if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_REVOKE_CAPTURE) {
+    VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema.parse(request.params);
+    return { ok: true };
+  }
+  throw new Error(`Unexpected daemon RPC: ${method}`);
+});
+const { storage } = await import('@/sync/domains/state/storage');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const { useMachineCliDetectionTarget } = await import('@/sync/store/hooks');
+const { setVoiceSessionSnapshot, resetVoiceSessionStoreForTests } = await import('@/voice/session/voiceSessionStore');
+const { VoiceDiagnosticsSettingsSection: SettingsSection } = await import('./VoiceDiagnosticsSettingsSection');
+const { ModalProvider } = await import('@/modal');
+const { WebAlertModal } = await import('@/modal/components/WebAlertModal');
+let modalScreen: RenderScreenResult;
+let home: Awaited<ReturnType<typeof serveAccountHomes>>;
+let disconnect: (() => Promise<void>) | undefined;
+function publishSettingsFixture(voice: unknown) {
+  const machines = ['m1', 'm2', 'former-machine'].map(id => createMachineFixture({ id, active: machineState.isOnline,
+    activeAt: machineState.isOnline ? Date.now() : 0, daemonStateVersion: machineState.daemonStateVersion }));
+  storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+    machineListByServerId: { [home.homes.diagnostics!.id]: machines } });
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceSettingsParse({ ...voiceSettingsParse(voice),
+    executionMachine: { mode: 'fixed', machineId: machineState.machineId } }) }, storage.getState().settings));
+  if (activeVoiceAttempt.sessionId) setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: activeVoiceAttempt.sessionId,
+    status: 'connected', mode: 'listening', canStop: true });
+}
+function commitVoiceSettings(voice: React.ComponentProps<typeof SettingsSection>['voice']) {
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice }, storage.getState().settings));
+}
+function createSettingsSection(props: React.ComponentProps<typeof SettingsSection>) {
+  publishSettingsFixture(props.voice);
+  return React.createElement(SettingsSection, props);
+}
 
-import { VoiceDiagnosticsSettingsSection } from './VoiceDiagnosticsSettingsSection';
 import { VOICE_PRIVACY_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 import { useVoiceDiagnosticsRuntimeSync } from './useVoiceDiagnosticsRuntimeSync';
 import {
@@ -125,28 +135,50 @@ import { resetVoiceDiagnosticsRevocationForTests } from './runtimeRevocation';
 import { resetVoiceDiagnosticsSessionPolicyForTests } from './capturePolicy';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 
-function RuntimeSyncSettingsHarness(props: Readonly<{ voice: any }>) {
+function RuntimeSyncSettingsHarness(props: Readonly<{ voice: unknown }>) {
   useVoiceDiagnosticsRuntimeSync(props.voice);
-  return React.createElement(VoiceDiagnosticsSettingsSection, {
-    voice: props.voice,
-    setVoice: vi.fn(),
+  const voice = React.useMemo(() => voiceSettingsParse(props.voice), [props.voice]);
+  return React.createElement(SettingsSection, {
+    voice,
+    setVoice: commitVoiceSettings,
   });
 }
 
-const diagnostics = Object.freeze({
+function createRuntimeSettingsHarness(props: { voice: unknown }) {
+  publishSettingsFixture(props.voice);
+  return React.createElement(RuntimeSyncSettingsHarness, props);
+}
+
+async function mountRuntimeSettingsHarness(props: { voice: unknown }) {
+  storage.setState({ machines: {}, machineListByServerId: { [home.homes.diagnostics!.id]: [] } });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => {
+    tree = renderer.create(React.createElement(RuntimeSyncSettingsHarness, props));
+    registerStandardCleanupTarget(tree);
+  });
+  await act(async () => { tree.update(createRuntimeSettingsHarness(props)); });
+  return tree;
+}
+
+const diagnostics = VoiceSpeechDiagnosticsSettingsV1Schema.parse({
   v: 1 as const,
   enabled: true,
   consentVersion: 1 as const,
   captureSttInput: true,
   captureTtsOutput: false,
-  maxAgeMs: 86_400_000,
-  maxFiles: 20,
-  maxBytes: 104_857_600,
-  maxDurationMs: 300_000,
 });
 
 describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
-  beforeEach(() => {
+  afterEach(async () => { standardCleanup(); await disconnect?.(); await home?.dispose(); vi.restoreAllMocks(); });
+  beforeEach(async () => {
+    home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics-settings.test', accountId: 'account-a' }],
+      route: ({ path }) => path.startsWith('/v1/machines/')
+        ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
+        : undefined });
+    disconnect = await home.restoreActiveConnection();
+    modalScreen = await renderScreen(React.createElement(ModalProvider, { children: null }));
+    resetVoiceSessionStoreForTests();
+    vi.spyOn(console, 'error').mockImplementation(fireAndForgetError);
     machineState.machineId = 'm1';
     machineState.daemonStateVersion = 1;
     machineState.isOnline = true;
@@ -156,7 +188,6 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     resetVoiceDiagnosticsSessionPolicyForTests();
     configure.mockClear();
     status.mockClear();
-    modalAlert.mockClear();
     testState.artifacts = [];
     testState.deleteError = null;
     testState.configureError = null;
@@ -170,24 +201,32 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
       cleanup: { status: 'healthy', code: null, ownedEntryCount: 0 },
     };
     fireAndForgetError.mockClear();
+    const machine = createMachineFixture({ id: 'm1', activeAt: Date.now() });
+    storage.setState({ machines: { m1: machine }, machineListByServerId: { [home.homes.diagnostics!.id]: [machine] } });
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceSettingsParse({ diagnostics,
+      executionMachine: { mode: 'fixed', machineId: 'm1' } }) }, storage.getState().settings));
+    const readiness = await renderHook(() => useMachineCliDetectionTarget('m1'));
+    await vi.waitFor(() => expect(readiness.getCurrent().isOnline).toBe(true));
+    await readiness.unmount();
   });
 
   it('gives every diagnostics switch a programmatic accessible name', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
+      tree = renderer.create(createSettingsSection( {
         voice: voiceSettingsParse({ diagnostics }),
-        setVoice: vi.fn(),
-      }));
+        setVoice: commitVoiceSettings,
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
-    const switchLabels = tree.root.findAllByType('Item' as any)
-      .map((item) => item.props.rightElement?.props?.accessibilityLabel)
+    const switchLabels = tree.root.findAll((node) => typeof node.type === 'string' && node.props.accessibilityRole === 'switch')
+      .map((node) => node.props.accessibilityLabel)
       .filter((label): label is string => typeof label === 'string');
     expect(switchLabels).toEqual([
-      'settingsVoice.diagnostics.enabled',
-      'settingsVoice.diagnostics.sttInput',
-      'settingsVoice.diagnostics.ttsOutput',
+      tLoose('settingsVoice.diagnostics.enabled'),
+      tLoose('settingsVoice.diagnostics.sttInput'),
+      tLoose('settingsVoice.diagnostics.ttsOutput'),
     ]);
   });
 
@@ -198,17 +237,18 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     );
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics } as any,
-        setVoice: vi.fn(),
-      }));
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics }),
+        setVoice: commitVoiceSettings,
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
     expect(tree.root.findAllByType('Text' as any).some(
-      (node) => node.children.join('') === 'settingsVoice.diagnostics.shutdownFailedIndicator',
+      (node) => node.children.join('') === tLoose('settingsVoice.diagnostics.shutdownFailedIndicator'),
     )).toBe(true);
     const retry = tree.root.findByProps({
-      accessibilityLabel: 'settingsVoice.diagnostics.retryShutdown',
+      accessibilityLabel: tLoose('settingsVoice.diagnostics.retryShutdown'),
     });
     expect(retry.props.accessibilityRole).toBe('button');
     expect(retry.props.disabled).toBe(false);
@@ -219,14 +259,15 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     publishVoiceDiagnosticsRuntimeStatus({ machineId: 'm1', phase: 'active' });
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics } as any,
-        setVoice: vi.fn(),
-      }));
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics }),
+        setVoice: commitVoiceSettings,
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
     const optOut = tree.root.findByProps({
-      accessibilityLabel: 'settingsVoice.diagnostics.sessionOptOut',
+      accessibilityLabel: tLoose('settingsVoice.diagnostics.sessionOptOut'),
     });
     expect(optOut.props.accessibilityRole).toBe('button');
     expect(optOut.props.disabled).toBe(false);
@@ -234,42 +275,47 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
 
   it('invalidates retained artifacts and reloads status from the newly selected machine', async () => {
     let tree!: renderer.ReactTestRenderer;
-    const first = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } } as any;
-    const second = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm2' } } as any;
+    const first = voiceSettingsParse({ diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } });
+    const second = voiceSettingsParse({ diagnostics, executionMachine: { mode: 'fixed', machineId: 'm2' } });
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, { voice: first, setVoice: vi.fn() }));
+      tree = renderer.create(createSettingsSection( { voice: first, setVoice: commitVoiceSettings })); registerStandardCleanupTarget(tree);
     });
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.location' }).props.subtitle).toBe('/private/m1');
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.location') }).props.subtitle).toBe('/private/m1');
 
     machineState.machineId = 'm2';
     await act(async () => {
-      tree.update(React.createElement(VoiceDiagnosticsSettingsSection, { voice: second, setVoice: vi.fn() }));
+      tree.update(createSettingsSection( { voice: second, setVoice: commitVoiceSettings }));
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
     expect(status.mock.calls.map(([machineId]) => machineId)).toEqual(['m1', 'm2']);
     expect(configure).not.toHaveBeenCalled();
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.location' }).props.subtitle).toBe('/private/m2');
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.location') }).props.subtitle).toBe('/private/m2');
   });
 
   it('invalidates stale daemon status during restart reconciliation and reloads it after acknowledgement', async () => {
     let tree!: renderer.ReactTestRenderer;
-    const voice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } } as any;
+    const voice = voiceSettingsParse({ diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } });
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, { voice, setVoice: vi.fn() }));
+      tree = renderer.create(createSettingsSection( { voice, setVoice: commitVoiceSettings })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
     expect(status).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       publishVoiceDiagnosticsRuntimeStatus({ machineId: 'm1', phase: 'transitioning' });
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
     expect(tree.root.findByProps({ testID: 'settings-voice-diagnostics-unavailable' })).toBeTruthy();
-    expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.location' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ title: tLoose('settingsVoice.diagnostics.location') })).toHaveLength(0);
 
     await act(async () => {
       publishVoiceDiagnosticsRuntimeStatus({ machineId: 'm1', phase: 'active' });
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
     expect(status).toHaveBeenCalledTimes(2);
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.location' }).props.subtitle).toBe('/private/m1');
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.location') }).props.subtitle).toBe('/private/m1');
   });
 
   it('does not let an older cleanup retry re-enable or republish a revoked former machine', async () => {
@@ -284,48 +330,52 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     let releaseCleanup!: () => void;
     const cleanupBarrier = new Promise<void>((resolve) => { releaseCleanup = resolve; });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(React.createElement(RuntimeSyncSettingsHarness, { voice: voiceFor('m1') }));
-    });
+    tree = await mountRuntimeSettingsHarness({ voice: voiceFor('m1') });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
     expect(testState.policyByMachine.get('m1')).toBe(true);
 
     testState.blockedEnabledMachineId = 'm1';
     testState.configureBarrier = cleanupBarrier;
     await act(async () => {
-      tree.root.findByProps({ title: 'settingsVoice.diagnostics.retryCleanup' }).props.onPress();
+      tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.retryCleanup') }).props.onPress();
       await Promise.resolve();
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
     await vi.waitFor(() => expect(configure.mock.calls.filter(
       ([machineId, settings]) => machineId === 'm1' && settings.enabled === true,
     )).toHaveLength(2));
 
     machineState.machineId = 'm2';
     await act(async () => {
-      tree.update(React.createElement(RuntimeSyncSettingsHarness, { voice: voiceFor('m2') }));
+      tree.update(createRuntimeSettingsHarness({ voice: voiceFor('m2') }));
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
     await act(async () => {
       releaseCleanup();
       await vi.waitFor(() => expect(testState.configureCompletions).toHaveLength(4));
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
     expect(testState.configureCompletions.filter(([machineId]) => machineId === 'm1').at(-1))
       .toEqual(['m1', false]);
     expect(testState.policyByMachine.get('m1')).toBe(false);
     expect(tree.root.findAllByProps({ subtitle: '/private/m1' })).toHaveLength(0);
     await act(async () => { tree.unmount(); });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
   });
 
   it('discloses best-effort cache protection instead of claiming OS-enforced backup exclusion', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics } as any,
-        setVoice: vi.fn(),
-      }));
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics }),
+        setVoice: commitVoiceSettings,
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.backupPolicy' }).props.subtitle)
-      .toBe('settingsVoice.diagnostics.backupPolicyBestEffort');
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.backupPolicy') }).props.subtitle)
+      .toBe(tLoose('settingsVoice.diagnostics.backupPolicyBestEffort'));
   });
 
   it('reports a failed delete-all privacy action instead of failing silently', async () => {
@@ -340,76 +390,85 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     testState.deleteError = new Error('daemon unavailable');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics } as any,
-        setVoice: vi.fn(),
-      }));
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics }),
+        setVoice: commitVoiceSettings,
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
     expect(tree.root.findByProps({ testID: 'settings-voice-diagnostics-artifact-abcdef12-dead-beef' }).props.subtitle)
       .toBe('WEBM · 1.24 KB');
 
     await act(async () => {
-      tree.root.findByProps({ title: 'settingsVoice.diagnostics.deleteAll' }).props.onPress();
+      tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.deleteAll') }).props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
-    expect(modalAlert).toHaveBeenCalledWith(
-      'common.error',
-      'settingsVoice.diagnostics.deleteFailed',
-    );
+    expect(modalScreen.findAllByType(WebAlertModal).map(node => node.props.config)).toContainEqual(expect.objectContaining({
+      title: tLoose('common.error'), message: tLoose('settingsVoice.diagnostics.deleteFailed'),
+    }));
   });
 
   it('keeps an offline enable intent without leaking the expected machine failure to fire-and-forget', async () => {
     testState.configureError = new Error('machine unavailable');
     testState.statusError = new Error('machine unavailable');
-    const disabledDiagnostics = { ...diagnostics, enabled: false, consentVersion: null } as any;
-    const setVoice = vi.fn();
+    const disabledDiagnostics = VoiceSpeechDiagnosticsSettingsV1Schema.parse({ ...diagnostics, enabled: false, consentVersion: null });
+    const setVoice = vi.fn(commitVoiceSettings);
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics: disabledDiagnostics } as any,
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics: disabledDiagnostics }),
         setVoice,
-      }));
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
     await act(async () => {
-      tree.root.findByProps({ title: 'settingsVoice.diagnostics.enabled' })
+      tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.enabled') })
         .props.rightElement.props.onValueChange(true);
       await Promise.resolve();
       await Promise.resolve();
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
-    expect(fireAndForgetError).not.toHaveBeenCalled();
+    expect(fireAndForgetError.mock.calls.filter(([message]) => (
+      typeof message === 'string' && message.startsWith('[fireAndForget] VoiceDiagnosticsSettingsSection')
+    ))).toEqual([]);
     expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
       diagnostics: expect.objectContaining({ enabled: true, consentVersion: 1 }),
     }));
+    expect(storage.getState().settings.voice.diagnostics).toMatchObject({ enabled: true, consentVersion: 1 });
     expect(configure).not.toHaveBeenCalled();
     expect(tree.root.findByProps({ testID: 'settings-voice-diagnostics-unavailable' })).toBeTruthy();
   });
 
   it('commits desired diagnostics settings without writing current-machine policy from the settings surface', async () => {
-    const disabledDiagnostics = { ...diagnostics, enabled: false, consentVersion: null } as any;
-    const setVoice = vi.fn();
+    const disabledDiagnostics = VoiceSpeechDiagnosticsSettingsV1Schema.parse({ ...diagnostics, enabled: false, consentVersion: null });
+    const setVoice = vi.fn(commitVoiceSettings);
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics: disabledDiagnostics } as any,
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics: disabledDiagnostics }),
         setVoice,
-      }));
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
     await act(async () => {
-      tree.root.findByProps({ title: 'settingsVoice.diagnostics.enabled' })
+      tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.enabled') })
         .props.rightElement.props.onValueChange(true);
       await Promise.resolve();
       await Promise.resolve();
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
     expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
       diagnostics: expect.objectContaining({ enabled: true, consentVersion: 1 }),
     }));
+    expect(storage.getState().settings.voice.diagnostics).toMatchObject({ enabled: true, consentVersion: 1 });
     expect(configure).not.toHaveBeenCalled();
   });
 
@@ -420,20 +479,22 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     };
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics } as any,
-        setVoice: vi.fn(),
-      }));
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics }),
+        setVoice: commitVoiceSettings,
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.cleanupRequired' })).toBeTruthy();
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.deleteAll' }).props.disabled).toBe(false);
-    expect(tree.root.findAllByProps({ subtitle: 'settingsVoice.diagnostics.noArtifacts' })).toHaveLength(0);
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.cleanupRequired') })).toBeTruthy();
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.deleteAll') }).props.disabled).toBe(false);
+    expect(tree.root.findAllByProps({ subtitle: tLoose('settingsVoice.diagnostics.noArtifacts') })).toHaveLength(0);
     const beforeRetry = configure.mock.calls.length;
     await act(async () => {
-      tree.root.findByProps({ title: 'settingsVoice.diagnostics.retryCleanup' }).props.onPress();
+      tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.retryCleanup') }).props.onPress();
       await Promise.resolve();
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
     expect(configure.mock.calls.length).toBeGreaterThan(beforeRetry);
   });
 
@@ -444,39 +505,41 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     };
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics } as any,
-        setVoice: vi.fn(),
-      }));
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics }),
+        setVoice: commitVoiceSettings,
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.captureFailed' })).toBeTruthy();
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.captureFailed') })).toBeTruthy();
     expect(tree.root.findAllByProps({ nativeID: `setting-${VOICE_PRIVACY_SETTINGS.settings.diagnosticsExport.anchor}` })).toHaveLength(0);
-    expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.cleanupRequired' })).toHaveLength(0);
-    expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.retryCapture' })).toHaveLength(0);
-    expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.retryCleanup' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ title: tLoose('settingsVoice.diagnostics.cleanupRequired') })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ title: tLoose('settingsVoice.diagnostics.retryCapture') })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ title: tLoose('settingsVoice.diagnostics.retryCleanup') })).toHaveLength(0);
     // Nothing is retained, so there is nothing to delete: the action is hidden, not a dead red row.
-    expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.deleteAll' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ title: tLoose('settingsVoice.diagnostics.deleteAll') })).toHaveLength(0);
   });
 
   it('says once that the Voice computer cannot be reached instead of an unavailable value on every row', async () => {
     testState.statusError = new Error('machine unavailable');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics } as any,
-        setVoice: vi.fn(),
-      }));
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics }),
+        setVoice: commitVoiceSettings,
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
     const line = tree.root.findByProps({ testID: 'settings-voice-diagnostics-unavailable' });
-    expect(line.props.title).toBe('settingsVoice.pages.privacy.diagnosticsUnreachable');
-    expect(tree.root.findAll((node) => node.props?.subtitle === 'settingsVoice.diagnostics.unavailable')).toHaveLength(0);
+    expect(line.props.title).toBe(tLoose('settingsVoice.pages.privacy.diagnosticsUnreachable'));
+    expect(tree.root.findAll((node) => node.props?.subtitle === tLoose('settingsVoice.diagnostics.unavailable'))).toHaveLength(0);
     for (const title of ['location', 'backupPolicy', 'exportTitle', 'deleteAll']) {
-      expect(tree.root.findAllByProps({ title: `settingsVoice.diagnostics.${title}` })).toHaveLength(0);
+      expect(tree.root.findAllByProps({ title: tLoose(`settingsVoice.diagnostics.${title}`) })).toHaveLength(0);
     }
     // The setting the user can still change stays.
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.enabled' })).toBeTruthy();
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.enabled') })).toBeTruthy();
   });
 
   it('shows independent capture and cleanup obligations with only truthful actions', async () => {
@@ -490,16 +553,17 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     };
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
-        voice: { diagnostics } as any,
-        setVoice: vi.fn(),
-      }));
+      tree = renderer.create(createSettingsSection( {
+        voice: voiceSettingsParse({ diagnostics }),
+        setVoice: commitVoiceSettings,
+      })); registerStandardCleanupTarget(tree);
     });
+    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
 
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.captureFailed' })).toBeTruthy();
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.cleanupRequired' })).toBeTruthy();
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.retryCleanup' })).toBeTruthy();
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.deleteAll' }).props.disabled).toBe(false);
-    expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.retryCapture' })).toHaveLength(0);
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.captureFailed') })).toBeTruthy();
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.cleanupRequired') })).toBeTruthy();
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.retryCleanup') })).toBeTruthy();
+    expect(tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.deleteAll') }).props.disabled).toBe(false);
+    expect(tree.root.findAllByProps({ title: tLoose('settingsVoice.diagnostics.retryCapture') })).toHaveLength(0);
   });
 });

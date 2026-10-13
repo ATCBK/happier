@@ -1,35 +1,11 @@
-import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
 
-import { installLocalSttProviderCommonModuleMocks } from './localSttProviderTestHelpers';
+vi.mock('react-native-unistyles', async () =>
+  (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-installLocalSttProviderCommonModuleMocks();
-
-vi.mock('@expo/vector-icons', () => ({
-  Ionicons: 'Ionicons',
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: any) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-  ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children ?? null),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-  DropdownMenu: (props: any) =>
-    React.createElement(
-      'DropdownMenu',
-      props,
-      typeof props.trigger === 'function'
-        ? props.trigger({ open: false, toggle: () => {}, openMenu: () => {}, closeMenu: () => {} })
-        : props.trigger ?? null,
-    ),
-}));
+vi.mock('@expo/vector-icons', async () =>
+  (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 import { createLocalSttProviderRegistry, getLocalSttProviderSpec, listLocalSttProviderSpecs } from './registry';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';

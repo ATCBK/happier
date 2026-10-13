@@ -1,19 +1,21 @@
 import { vi } from 'vitest';
 import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
-import type { PluginApi } from '@happier-dev/plugin-sdk';
-import type { VoiceAccountOperationService } from '@happier-dev/plugin-sdk/voice';
 import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
-import { bindVoiceProviderSettingsActions, bindVoiceProviderSettingsOperations } from '@/voice/registry/externalVoiceProviderActivation';
-import { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
+import { createExternalVoiceProviderActivationScope } from '@/voice/registry/externalVoiceProviderActivation.testkit';
+import { getExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
+import { createBundledConversationRuntimeHostLease } from '@/voice/registry/bundledConversationRuntimeHost';
+import { createAccountVoiceOperationService } from '@/voice/credentials/accountVoiceOperationService';
+import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
 import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 
 /** Real Account Settings owner; only the Home HTTP transport is synthetic. */
-export async function createVoiceSettingsAccountTestHarness(settings: Settings) {
-    const account = await createSecretSettingsTestHarness({ settings, voiceEnabled: true, connectedPurposes: { v: 1, bindings: [] } });
+export async function createVoiceSettingsAccountTestHarness(settings: Settings,
+    options: Pick<NonNullable<Parameters<typeof createSecretSettingsTestHarness>[0]>, 'features'> = {}) {
+    const account = await createSecretSettingsTestHarness({ ...options, settings, voiceEnabled: true, connectedPurposes: { v: 1, bindings: [] } });
     const { replaceSettings } = account;
     await account.purposes!.hydrate(account.scope);
     return {
@@ -34,58 +36,69 @@ export async function createVoiceSettingsAccountTestHarness(settings: Settings) 
     };
 }
 
-/** Activates the shipped leaf and replaces only the provider's account HTTP port. */
+/** Real activation, Account credential admission, tools and human interactions;
+ * only the vendor HTTPS transport is synthetic. */
 export function createElevenLabsSettingsRuntimeTestHarness() {
     const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find((candidate) => candidate.declaration.id === 'realtime-elevenlabs');
     if (!entry) throw new Error('ElevenLabs runtime entry missing');
-    const runtimes: Parameters<PluginApi['voiceProviders']['register']>[1][] = [];
-    entry.activate({ voiceProviders: { register(_id, runtime) { runtimes.push(runtime); } } });
-    const runtime = runtimes[0];
-    if (runtime?.kind !== 'conversation' || !runtime.settingsOperations || !runtime.settingsActions) throw new Error('ElevenLabs settings runtime missing');
+    const recipientContract = createBundledVoiceRecipientContract({ pluginId: entry.pluginId, declaration: entry.declaration });
+    if (!recipientContract) throw new Error('ElevenLabs recipient contract missing');
+    const hostLease = createBundledConversationRuntimeHostLease();
+    let scope: ReturnType<typeof createExternalVoiceProviderActivationScope> | null = null;
+    let nextOccurrence = 0;
     let nextToolId = 0;
     let createdAgentConfig: Readonly<Record<string, unknown>> | null = null;
-    const response = (body: unknown, status = 200): Awaited<ReturnType<VoiceAccountOperationService['request']>> => Object.freeze({
-        status, finalUrl: 'https://api.elevenlabs.io/test', headers: { 'content-type': 'application/json' },
-        body: new TextEncoder().encode(JSON.stringify(body)),
+    const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+        status, headers: { 'content-type': 'application/json' },
     });
-    const request = vi.fn(async (input: Parameters<VoiceAccountOperationService['request']>[0]): ReturnType<VoiceAccountOperationService['request']> => {
-        if (input.operationId === 'agents') return response({ agents: [], has_more: false, next_cursor: null });
-        if (input.operationId === 'voices') return response({ voices: [{ voice_id: 'hpp4J3VqNfWAUOO0d1Us', name: 'Happier voice', category: 'premade' }] });
-        if (input.operationId === 'tools') return response({ tools: [], has_more: false, next_cursor: null });
-        if (input.operationId === 'create-tool') return response({ id: `tool_${++nextToolId}` });
-        if (input.operationId === 'create-agent') {
-            const body = input.parameters?.body;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.origin !== 'https://api.elevenlabs.io' || init?.redirect !== 'error'
+            || !new Headers(init.headers).get('xi-api-key')) throw new Error('Unexpected vendor HTTP authority');
+        const method = init.method ?? 'GET';
+        if (method === 'GET' && url.pathname === '/v1/convai/agents') return response({ agents: [], has_more: false, next_cursor: null });
+        if (method === 'GET' && url.pathname === '/v1/voices') return response({ voices: [{ voice_id: 'hpp4J3VqNfWAUOO0d1Us', name: 'Happier voice', category: 'premade' }] });
+        if (method === 'GET' && url.pathname === '/v1/convai/tools') return response({ tools: [], has_more: false, next_cursor: null });
+        if (method === 'POST' && url.pathname === '/v1/convai/tools') return response({ id: `tool_${++nextToolId}` });
+        if (method === 'POST' && url.pathname === '/v1/convai/agents/create') {
+            const body: unknown = JSON.parse(await new Response(init.body).text());
             if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected authored ElevenLabs Agent body');
             // The HTTP fixture retains the provider-authored JSON object, not a second config owner.
             createdAgentConfig = body as Readonly<Record<string, unknown>>;
             return response({ agent_id: 'agent_created' });
         }
-        if (input.operationId === 'agent') {
+        if (method === 'GET' && /^\/v1\/convai\/agents\/[^/]+$/.test(url.pathname)) {
             if (!createdAgentConfig) throw new Error('Expected an Agent created through the HTTP fixture');
-            return response({ ...createdAgentConfig, agent_id: input.parameters?.agentId });
+            return response({ ...createdAgentConfig, agent_id: url.pathname.slice('/v1/convai/agents/'.length) });
         }
-        return response({});
+        throw new Error(`Unexpected vendor HTTP request: ${method} ${url.pathname}`);
     });
-    const credentials = () => Object.freeze({ phase: 'settings' as const, mediated: Object.freeze({ request }), raw: null });
-    const settingsOperations = bindVoiceProviderSettingsOperations({ operations: runtime.settingsOperations, createCredentials: credentials, isCurrent: () => true });
-    const settingsActions = bindVoiceProviderSettingsActions({
-        actions: runtime.settingsActions, declaredActions: entry.declaration.settings?.actions ?? [],
-        createCredentials: credentials, createInteractions: () => Object.freeze({
-            askQuestions: async () => Object.freeze({ requestId: 'test-questions', kind: 'questions' as const, status: 'answered' as const,
-                answers: { 'existing-agent-action': { kind: 'singleChoice' as const, answer: { kind: 'choice' as const, choiceId: 'create-new' } } },
-            }),
-        }),
-        getRealtimeClientToolDefinitions: () => [{ name: 'listMachines', description: 'List machines',
-            parameters: { type: 'object', additionalProperties: false }, execute: async () => ({ ok: true }) }],
-        isCurrent: () => true,
-    });
-    const token = Object.freeze({});
-    const registration = Object.freeze({ token, pluginId: entry.pluginId, localId: entry.declaration.id,
-        providerId: `${entry.pluginId}/${entry.declaration.id}`, occurrenceId: 'voice-settings-test-occurrence',
-        descriptor: null, adapter: null, settingsOperations, settingsActions });
     return {
-        request, response, registration, entry,
-        register() { commitExternalVoiceProviderRegistration(registration); },
-        async dispose() { removeExternalVoiceProviderRegistration(token); await runtime.dispose?.(); },
+        fetch, response, entry,
+        get registration() {
+            const registration = getExternalVoiceProviderRegistration(entry.providerId);
+            if (!registration) throw new Error('ElevenLabs runtime has not been registered');
+            return registration;
+        },
+        async register() {
+            const next = createExternalVoiceProviderActivationScope({
+                pluginId: entry.pluginId, occurrenceId: `voice-settings-test-occurrence-${++nextOccurrence}`,
+                declarations: [entry.declaration], hostPlatform: 'web',
+                hostBindingsByLocalId: { [entry.declaration.id]: {
+                    descriptor: 'bundled', recipientContract,
+                    createInvocationAccountOperations: (signal, _sessionId, isCurrent, phase) => createAccountVoiceOperationService({
+                        providerId: entry.providerId,
+                        contribution: { pluginId: entry.pluginId, localId: entry.declaration.id },
+                        declaration: entry.declaration, phase, recipientContract, signal, isCurrent, fetch,
+                    }),
+                } },
+            });
+            entry.activate(next.api);
+            await next.commit();
+            const previous = scope;
+            scope = next;
+            await previous?.unwind();
+        },
+        async dispose() { await scope?.unwind(); hostLease.revoke(); },
     };
 }

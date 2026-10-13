@@ -1,6 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-
-vi.mock('@/sync/domains/state/storage', () => ({ storage: { getState: () => ({}) } }));
+import { describe, expect, it } from 'vitest';
 
 import { readSessionIncludedInVoiceFromState, resolveVoiceSessionUpdatePolicy } from '@/voice/runtime/voiceUpdatePolicy';
 

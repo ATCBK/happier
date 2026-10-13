@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ACTIONS_SETTINGS_V1 } from '@happier-dev/protocol';
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 import type {
@@ -7,83 +7,47 @@ import type {
 import type {
   PluginVoiceAgentSessionRealtimeService,
 } from '@happier-dev/plugin-sdk/voice/client';
-import {
-  getCurrentBundledConversationRuntimeHost,
-  type BundledConversationRuntimeHost,
-} from '@/voice/registry/bundledConversationRuntimeHost';
+import type { BundledConversationRuntimeHost } from '@/voice/registry/bundledConversationRuntimeHost';
 import type { BundledConversationRuntimeEntry } from '@/voice/registry/bundledConversationRuntimes';
-import { storage } from '@/sync/domains/state/storage';
-import { createBuiltinVoiceAdapterAssembly } from './registerBuiltinVoiceAdapters';
-import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
-import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
-import { createSessionFixture } from '@/dev/testkit';
+import { createMachineFixture, createSessionFixture } from '@/dev/testkit';
 import {
-  installDisconnectedServerSocketBoundary,
-  restoreServerAccountForTest,
-} from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+  audioSessionRelease,
+  localVoiceHomeId,
+  localVoiceSpeechOutputBoundary,
+  loadLocalVoiceEngineWithCompatState,
+  machineRpcWithServerScope,
+  registerLocalVoiceEngineHarnessHooks,
+  sessionRpcWithServerScope,
+  warmLocalVoiceEngineHarnessGraph,
+} from '@/voice/local/localVoiceEngine.testHarness';
+import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
+import { VOICE_ACTION_EXECUTE_TOOL_NAME } from '@/voice/tools/voiceActionExecution';
 
-installDisconnectedServerSocketBoundary();
-await loadSyncSingletonForTests();
-
-const sessionRpcBoundary = vi.hoisted(() => ({
-  sessionRpc: vi.fn(),
-}));
-const machineRpcBoundary = vi.hoisted(() => ({
-  machineRpc: vi.fn(),
-}));
-
-// Genuine daemon RPC boundary. Generation, binding, facade, and cleanup logic remain real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
-  sessionRpcWithServerScope: sessionRpcBoundary.sessionRpc,
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-  machineRpcWithServerScope: machineRpcBoundary.machineRpc,
-}));
-
-const acquiredAudioLeaseRelease = vi.fn(async () => undefined);
-const stopLocalVoiceSession = vi.hoisted(() => vi.fn(async () => undefined));
-let activeAudioLeaseCount = 0;
+const restoreHarnessModuleLoader = await warmLocalVoiceEngineHarnessGraph();
+afterAll(() => restoreHarnessModuleLoader());
+const [
+  { storage }, { createBuiltinVoiceAdapterAssembly },
+  { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES },
+  { voiceSessionBindingStore }, { clearDaemonMergedProjectionCacheForTests },
+  { getCurrentBundledConversationRuntimeHost },
+] = await Promise.all([
+  import('@/sync/domains/state/storage'), import('./registerBuiltinVoiceAdapters'),
+  import('@/voice/registry/generatedBundledVoiceRuntimeEntries'),
+  import('@/voice/binding/voiceConversationBindingStore'),
+  import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs'),
+  import('@/voice/registry/bundledConversationRuntimeHost'),
+]);
+// These observers sit beneath the real scoped RPC wrappers on the Socket SDK.
+const sessionRpcBoundary = { sessionRpc: sessionRpcWithServerScope };
+const machineRpcBoundary = { machineRpc: machineRpcWithServerScope };
 const initialSettings = structuredClone(storage.getState().settings);
 const installedTestSessionIds = new Set<string>();
-let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 function requireTestServerId(): string {
-  if (!accountConnection) throw new Error('Adapter test Account was not applied');
-  return accountConnection.home.id;
+  if (!localVoiceHomeId) throw new Error('Adapter test Account was not applied');
+  return localVoiceHomeId;
 }
-
-vi.mock('@/voice/runtime/voiceAudioMode', () => ({
-  acquireVoiceBackgroundCallAudioMode: async () => {
-    if (activeAudioLeaseCount > 0) throw new Error('exclusive_capture_conflict');
-    activeAudioLeaseCount += 1;
-    let released = false;
-    return Object.freeze({
-      async release() {
-        if (released) return;
-        released = true;
-        activeAudioLeaseCount -= 1;
-        await acquiredAudioLeaseRelease();
-      },
-    });
-  },
-}));
-
-vi.mock('@/voice/local/localVoiceRuntimeController', () => ({
-  localVoiceRuntimeController: {
-    abortTurn: vi.fn(async () => undefined),
-    announceAgentAssistantText: vi.fn(),
-    appendAgentContextUpdate: vi.fn(),
-    isAgentActive: vi.fn(() => false),
-    setMuted: vi.fn(async () => undefined),
-    sendAgentTextTurn: vi.fn(async () => undefined),
-    sendAgentTextUpdate: vi.fn(async () => undefined),
-    stopSession: stopLocalVoiceSession,
-    toggleTurn: vi.fn(async () => undefined),
-  },
-}));
 
 function createDeferred(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
   let resolve!: () => void;
@@ -119,7 +83,9 @@ function createPublicEntry(input: Readonly<{
     title: input.providerId,
     kind: 'conversation' as const,
     roles: ['realtime_conversation' as const],
-    platforms: ['web' as const],
+    // The authored fixture declines connections on every platform; its
+    // activation/lifetime hooks also exercise the genuine native audio owner.
+    platforms: ['web' as const, 'ios' as const, 'android' as const],
     capabilities: Object.freeze({
       turn: Object.freeze({ cancelResponse: false, bargeIn: false }),
       tools: Object.freeze({ effectCalls: 'none' as const }),
@@ -163,18 +129,22 @@ function readBundledEntryProviderId(entry: BundledConversationRuntimeEntry): str
 }
 
 describe('createBuiltinVoiceAdapterAssembly', () => {
+  registerLocalVoiceEngineHarnessHooks({ resetModulesBetweenTests: false });
   beforeEach(async () => {
-    accountConnection = await restoreServerAccountForTest({
-      serverUrl: 'https://voice-adapter.example.test',
-      accountId: 'voice-adapter-account',
-    });
-    acquiredAudioLeaseRelease.mockClear();
-    stopLocalVoiceSession.mockReset();
-    stopLocalVoiceSession.mockResolvedValue(undefined);
-    sessionRpcBoundary.sessionRpc.mockReset();
-    machineRpcBoundary.machineRpc.mockReset();
+    // Preserve the genuine neighboring RPC responders installed by the
+    // canonical Account/native fixture; each case overrides only its wire leaf.
+    sessionRpcBoundary.sessionRpc.mockClear();
+    machineRpcBoundary.machineRpc.mockClear();
     clearDaemonMergedProjectionCacheForTests();
-    activeAudioLeaseCount = 0;
+    const machines = ['machine-voice-agent-race-a', 'machine-voice-agent-race-b',
+      'machine-voice-generation-cleanup'].map(id => createMachineFixture({
+        id, active: true, activeAt: Date.now(),
+      }));
+    storage.setState(state => ({
+      machines: { ...state.machines, ...Object.fromEntries(machines.map(machine => [machine.id, machine])) },
+      machineListByServerId: { ...state.machineListByServerId,
+        [requireTestServerId()]: [...Object.values(state.machines), ...machines] },
+    }));
     const [{ resetBundledConversationRuntimeGenerationForTests }, store] = await Promise.all([
       import('@/voice/registry/bundledConversationRuntimeGeneration'),
       import('@/voice/runtime/machine/voiceConversationRuntimeStore'),
@@ -187,8 +157,6 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
   });
 
   afterEach(async () => {
-    await accountConnection?.dispose();
-    accountConnection = null;
     storage.setState((current) => {
       const sessions = { ...current.sessions };
       for (const sessionId of installedTestSessionIds) delete sessions[sessionId];
@@ -317,11 +285,25 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
 
   it('does not let a retired assembly stop the process-global Local Voice owner after remount', async () => {
     const retiredAssembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [] });
-    createBuiltinVoiceAdapterAssembly({ bundledEntries: [] });
-
+    const freshAssembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [] });
+    const localDirect = freshAssembly.adapters.find(adapter => adapter.id === 'local_direct');
+    if (!localDirect) throw new Error('Fresh Local Direct adapter unavailable');
+    storage.setState(state => ({ settings: {
+      ...state.settings,
+      ...normalizeVoiceSettingsLocalDelta({ voice: { ...state.settings.voice, providerId: 'local_direct' } }),
+    } }));
+    const engine = await loadLocalVoiceEngineWithCompatState();
+    await localDirect.start({ sessionId: 's1', requestedTargetSessionAddress: {
+      serverId: requireTestServerId(), sessionId: 's1',
+    } });
+    expect(engine.getLocalVoiceState()).toMatchObject({ sessionId: 's1', status: 'recording' });
+    const nativeStopsBeforeRetirement = localVoiceSpeechOutputBoundary.fileRecording.stop.mock.calls.length;
     await retiredAssembly.dispose();
-
-    expect(stopLocalVoiceSession).not.toHaveBeenCalled();
+    expect(engine.getLocalVoiceState()).toMatchObject({ sessionId: 's1', status: 'recording' });
+    expect(localVoiceSpeechOutputBoundary.fileRecording.stop).toHaveBeenCalledTimes(nativeStopsBeforeRetirement);
+    await localDirect.stop({ sessionId: 's1' });
+    expect(engine.getLocalVoiceState().status).toBe('idle');
+    await freshAssembly.dispose();
   });
 
   it('re-enables a fresh executable runtime after a physically absent contribution without retaining cached state', async () => {
@@ -352,19 +334,26 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
       settings: {
         ...state.settings,
         actionsSettingsV1: DEFAULT_ACTIONS_SETTINGS_V1,
-        voice: {
+        ...normalizeVoiceSettingsLocalDelta({ voice: {
           ...state.settings.voice,
           privacy: { ...state.settings.voice.privacy, shareDeviceInventory: true },
-        },
+        } }, state.settings),
       },
     }));
     const assembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [entry] });
     const host = capturedHostRef.current;
     if (!host) throw new Error('tool projection test runtime did not receive a host');
 
-    const baselineNames = host.getRealtimeClientToolDefinitions({ effectCalls: 'none', exposure: 'voice_assistant' }).map((tool) => tool.name);
+    const baselineDefinitions = host.getRealtimeClientToolDefinitions({ effectCalls: 'none', exposure: 'voice_assistant' });
+    const baselineNames = baselineDefinitions.map((tool) => tool.name);
     expect(baselineNames.length).toBeGreaterThan(0);
-    expect(baselineNames).toContain('listMachines');
+    expect(baselineNames).toContain('searchActionSpecs');
+    // Inventory actions are catalog-discovered, not separate direct tools.
+    const executeAction = baselineDefinitions.find((tool) => tool.name === VOICE_ACTION_EXECUTE_TOOL_NAME);
+    if (!executeAction) throw new Error('Expected canonical Voice Action execution entry');
+    const machines = await executeAction.execute({ actionId: 'machines.list', input: {} });
+    expect(machines).toMatchObject({ ok: true });
+    expect(JSON.stringify(machines)).toContain('machine-1');
 
     storage.setState((state) => ({
       ...state,
@@ -387,23 +376,24 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
         },
       },
     }));
-    expect(host.getRealtimeClientToolDefinitions({ effectCalls: 'none', exposure: 'voice_assistant' }).map((tool) => tool.name)).not.toContain('listMachines');
+    await expect(executeAction.execute({ actionId: 'machines.list', input: {} })).rejects.toThrow('voice_action_unavailable');
 
     storage.setState((state) => ({
       ...state,
       settings: {
         ...state.settings,
         actionsSettingsV1: DEFAULT_ACTIONS_SETTINGS_V1,
-        voice: {
+        ...normalizeVoiceSettingsLocalDelta({ voice: {
           ...state.settings.voice,
           privacy: { ...state.settings.voice.privacy, shareDeviceInventory: false },
-        },
+        } }, state.settings),
       },
     }));
     const privateNames = host.getRealtimeClientToolDefinitions({ effectCalls: 'none', exposure: 'voice_assistant' }).map((tool) => tool.name);
     expect(privateNames).not.toContain('listRecentPaths');
     expect(privateNames).not.toContain('listMachines');
     expect(privateNames).not.toContain('listServers');
+    await expect(executeAction.execute({ actionId: 'machines.list', input: {} })).rejects.toThrow('voice_action_unavailable');
 
     await assembly.dispose();
   });
@@ -466,17 +456,19 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
     });
     const oldAssembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [oldEntry] });
     if (!oldHost) throw new Error('old test runtime did not receive a host');
+    await oldAudioLease;
+    expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(1);
     const freshAssembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [freshEntry] });
 
     await oldAssembly.dispose();
 
-    expect(acquiredAudioLeaseRelease).toHaveBeenCalledTimes(1);
-    expect(activeAudioLeaseCount).toBe(0);
+    expect(audioSessionRelease).toHaveBeenCalledTimes(1);
+    expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
     const freshHost = freshHostRef.current;
     if (!freshHost) throw new Error('fresh test runtime did not receive a host');
     const freshLease = await freshHost.acquireAudioMode('test_fresh_audio');
     await freshLease.release();
-    expect(activeAudioLeaseCount).toBe(0);
+    expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
     await freshAssembly.dispose();
   });
 

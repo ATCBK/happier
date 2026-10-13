@@ -1,17 +1,18 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { VoiceEncodedAudioPlayback } from '@happier-dev/audio-stream-native';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+import { createVoiceEncodedAudioNativeBoundary } from '@/dev/testkit/harness/voiceEncodedAudioNativeBoundary';
+import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
 
 const platformOsMock = vi.hoisted(() => ({ value: 'web' as 'web' | 'ios' | 'android' }));
-const nativePlaybackLeaseRelease = vi.hoisted(() => vi.fn(async () => undefined));
-const nativePlaybackFactory = vi.hoisted(() => vi.fn<() => VoiceEncodedAudioPlayback | null>(() => null));
+const audioSession = createNativeVoicePcmCaptureHarness();
+const encodedNative = createVoiceEncodedAudioNativeBoundary();
+const nativeSdk = encodedNative.nativeModule(audioSession.nativeModule);
 
-vi.mock('@happier-dev/audio-stream-native', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@happier-dev/audio-stream-native')>(),
-  createVoiceEncodedAudioPlayback: () => nativePlaybackFactory(),
-  getSharedVoiceAudioSessionCoordinator: () => ({
-    acquire: async () => Object.freeze({ release: nativePlaybackLeaseRelease }),
-  }),
-}));
+vi.mock('expo-modules-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('expo-modules-core')>();
+  return { ...actual, requireOptionalNativeModule: (name: string) =>
+    name === 'HappierAudioStreamNative' ? nativeSdk : actual.requireOptionalNativeModule(name) };
+});
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -71,9 +72,12 @@ function stubBlobUrlHelpers(input: Readonly<{
     });
 }
 
-afterEach(() => {
-    nativePlaybackFactory.mockReset();
-    nativePlaybackLeaseRelease.mockClear();
+afterAll(async () => { await getSharedVoiceAudioSessionCoordinator()?.dispose(); await audioSession.coordinator.dispose(); });
+
+afterEach(async () => {
+    encodedNative.start.mockClear();
+    encodedNative.stop.mockClear();
+    encodedNative.setPaused.mockClear();
     resetWebAudioContextForTests();
     platformOsMock.value = 'web';
     (globalThis as typeof globalThis & { URL: typeof URL }).URL = realURL;
@@ -486,32 +490,17 @@ describe('playAudioBytesWithStopper (web)', () => {
       };
     } as any;
 
-    const target = {
-      current: null as import('@/voice/runtime/playback/VoicePlaybackController').VoicePlaybackTarget | null,
-    };
-    const registerPlaybackStopper = Object.assign(
-      (_stopper: () => void) => () => {},
-      {
-        registerTarget(next: import('@/voice/runtime/playback/VoicePlaybackController').VoicePlaybackTarget) {
-          target.current = next;
-          return () => {};
-        },
-      },
-    );
+    const controller = createVoicePlaybackController();
     const playback = playAudioBytesWithStopper({
       bytes: new ArrayBuffer(4),
       format: 'wav',
-      registerPlaybackStopper,
+      registerPlaybackStopper: controller.registerStopper,
     });
     await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(1));
 
-    const activeTarget = target.current;
-    if (!activeTarget?.beginCandidate || !activeTarget.resolveCandidate) {
-      throw new Error('Expected candidate-aware playback target');
-    }
-    expect(activeTarget.beginCandidate()).toBe('retained');
+    expect(controller.beginInterruptionCandidate()).toBe('retained');
     expect(pause).toHaveBeenCalledTimes(1);
-    activeTarget.resolveCandidate('false_alarm');
+    controller.resolveInterruptionCandidate('false_alarm');
     await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
 
     if (!endedHandler.current) throw new Error('Expected audio ended handler');
@@ -540,36 +529,20 @@ describe('playAudioBytesWithStopper (web)', () => {
       }
     }
     (globalThis as any).AudioContext = DeferredDecodeAudioContext;
-    const target = {
-      current: null as import('@/voice/runtime/playback/VoicePlaybackController').VoicePlaybackTarget | null,
-    };
-    const registerPlaybackStopper = Object.assign(
-      (_stopper: () => void) => () => {},
-      {
-        registerTarget(next: import('@/voice/runtime/playback/VoicePlaybackController').VoicePlaybackTarget) {
-          target.current = next;
-          return () => {};
-        },
-      },
-    );
+    const controller = createVoicePlaybackController();
     const playback = playAudioBytesWithStopper({
       bytes: new ArrayBuffer(4),
       format: 'wav',
-      registerPlaybackStopper,
+      registerPlaybackStopper: controller.registerStopper,
     });
-    await vi.waitFor(() => expect(target.current).not.toBeNull());
-    const activeTarget = target.current;
-    if (!activeTarget?.beginCandidate || !activeTarget.resolveCandidate) {
-      throw new Error('Expected candidate-aware WebAudio target');
-    }
-
-    expect(activeTarget.beginCandidate()).toBe('retained');
+    await vi.waitFor(() => expect(resolveDecode).toBeTypeOf('function'));
+    expect(controller.beginInterruptionCandidate()).toBe('retained');
     resolveDecode({ duration: 1 } as AudioBuffer);
     await Promise.resolve();
     await Promise.resolve();
     expect(start).not.toHaveBeenCalled();
 
-    activeTarget.resolveCandidate('false_alarm');
+    controller.resolveInterruptionCandidate('false_alarm');
     await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     if (!endedHandler) throw new Error('Expected WebAudio completion handler');
     (endedHandler as () => void)();
@@ -699,18 +672,7 @@ describe('playAudioBytesWithStopper (native)', () => {
   it.each(['ios', 'android'] as const)('uses the %s playback boundary and releases its audio-session lease', async (platformOs) => {
     platformOsMock.value = platformOs;
     vi.spyOn(Date, 'now').mockReturnValue(1234);
-    let nativeListener: Parameters<VoiceEncodedAudioPlayback['subscribe']>[0] | null = null;
-    const nativeStart = vi.fn(async (_uri: string) => {});
-    const nativeStop = vi.fn(async () => {});
-    nativePlaybackFactory.mockReturnValue({
-      start: nativeStart,
-      stop: nativeStop,
-      setPaused: vi.fn(async () => {}),
-      subscribe: (listener) => {
-        nativeListener = listener;
-        return () => { nativeListener = null; };
-      },
-    });
+    const { start: nativeStart, stop: nativeStop } = encodedNative;
 
     const createAudioPlayer = vi.fn((source: string) => {
       let listener: ((status: any) => void) | null = null;
@@ -767,8 +729,7 @@ describe('playAudioBytesWithStopper (native)', () => {
       if (platformOs === 'ios') {
         expect(nativeStart).toHaveBeenCalledWith('file:///tmp/happier-voice-1234.wav');
         expect(createAudioPlayer).not.toHaveBeenCalled();
-        if (!nativeListener) throw new Error('Expected native playback subscription');
-        (nativeListener as Parameters<VoiceEncodedAudioPlayback['subscribe']>[0])({ playbackId: 'native-playback', status: 'finished' });
+        encodedNative.emit({ status: 'finished' });
       } else {
         expect(createAudioPlayer).toHaveBeenCalledWith('file:///tmp/happier-voice-1234.wav', undefined);
         expect(nativeStart).not.toHaveBeenCalled();
@@ -780,7 +741,7 @@ describe('playAudioBytesWithStopper (native)', () => {
       await promise;
 
       expect(fileDelete).toHaveBeenCalledTimes(1);
-      expect(nativePlaybackLeaseRelease).toHaveBeenCalledTimes(1);
+      expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot()).toMatchObject({ leaseCount: 0, configuration: null });
     } finally {
       vi.restoreAllMocks();
     }

@@ -1,20 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { log } from '@/log';
 
-const logSpy = vi.hoisted(() => vi.fn());
-vi.mock('@/log', () => ({ log: { log: logSpy, warn: vi.fn(), error: vi.fn() } }));
+vi.mock('socket.io-client', async original => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(original));
+const machineRpc = vi.fn<(request: Readonly<{ machineId: string; method: string; payload: unknown }>) => Promise<unknown>>();
+const requests = installSessionActionRpcBoundary(request => {
+  const separator = request.method.indexOf(':');
+  return machineRpc({ machineId: request.method.slice(0, separator),
+    method: request.method.slice(separator + 1), payload: request.params });
+});
 
-const machineRpc = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-  machineRpcWithServerScope: machineRpc,
-}));
-// The ambient Voice target is re-derived from mutable ordering on every read,
-// so it has to be able to move for the captured pin to mean anything.
-const ambientMachine = vi.hoisted(() => ({ id: null as string | null }));
-vi.mock('@/voice/settings/executionMachine', () => ({
-  resolveVoiceExecutionMachineId: () => ambientMachine.id,
-}));
+const { storage } = await import('@/sync/domains/state/storage');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const { resolveVoiceExecutionMachineId } = await import('@/voice/settings/executionMachine');
+const { createVoiceClientAccountOperationExecutor } = await import('./mediatedCredentialClient');
+let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
-import { createVoiceClientAccountOperationExecutor } from './mediatedCredentialClient';
+function credentialLogLines() {
+  return log.getLogs().filter(line => line.startsWith('[voiceMediatedCredential]'));
+}
+
+function selectMachine(machineId: string) {
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
+    voice: { ...storage.getState().settings.voice, executionMachine: { mode: 'fixed', machineId } },
+  }, storage.getState().settings));
+}
 
 const contribution = Object.freeze({ pluginId: 'happier.openai', localId: 'realtime' });
 const service = Object.freeze({ pluginId: 'happier.agent.codex', localId: 'openai-codex' });
@@ -33,6 +47,7 @@ function materializer(
   invoke: (method: string, payload: unknown, signal?: AbortSignal | null) => Promise<unknown>,
   overrides?: Readonly<{ isInvocationCurrent?: () => boolean }>,
 ) {
+  machineRpc.mockImplementation(request => invoke(request.method, request.payload));
   return createVoiceClientAccountOperationExecutor({
     contribution,
     platform: 'web',
@@ -41,16 +56,31 @@ function materializer(
     machineId: 'machine-a',
     isCurrent: () => true,
     isInvocationCurrent: overrides?.isInvocationCurrent ?? (() => true),
-    client: { invoke },
   });
 }
 
 describe('createVoiceClientAccountOperationExecutor', () => {
-  beforeEach(() => {
-    logSpy.mockReset();
+  beforeEach(async () => {
+    log.clear();
     machineRpc.mockReset();
-    ambientMachine.id = null;
+    requests.length = 0;
+    account = await restoreServerAccountForTest({
+      serverUrl: 'https://voice-credential.test', accountId: 'account-a', credentialScope: 'restored-home',
+      request: async input => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+        if (path === '/v1/machines') return Response.json(['machine-a', 'machine-b'].map(id => createPlainMachineRowFixture({ id, accountId: 'account-a' })));
+        const machine = /^\/v1\/machines\/([^/]+)$/.exec(path);
+        if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: machine[1]!, accountId: 'account-a' }) });
+        return null;
+      },
+    });
+    const machines = ['machine-a', 'machine-b'].map(id => createMachineFixture({ id, activeAt: Date.now() }));
+    storage.getState().applyMachines(machines);
+    selectMachine('machine-a');
   });
+  afterEach(async () => { await account?.dispose(); account = null; });
 
   it('preserves an unreachable execution machine as distinct from credential failure', async () => {
     const materialize = materializer(async () => {
@@ -64,8 +94,8 @@ describe('createVoiceClientAccountOperationExecutor', () => {
       signal: new AbortController().signal,
     })).rejects.toMatchObject({ code: 'execution_machine_unavailable' });
 
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    const line = String(logSpy.mock.calls[0]?.[0]);
+    expect(credentialLogLines()).toHaveLength(1);
+    const line = credentialLogLines()[0]!;
     expect(line).toContain('machine_unavailable');
     expect(line).toContain('mint-client-secret');
   });
@@ -83,7 +113,7 @@ describe('createVoiceClientAccountOperationExecutor', () => {
       signal: new AbortController().signal,
     })).rejects.toMatchObject({ code: 'voice_account_operation_unauthorized' });
 
-    const line = String(logSpy.mock.calls[0]?.[0]);
+    const line = credentialLogLines()[0]!;
     expect(line).toContain('plugin_voice_provider_result_invalid');
     expect(line).not.toContain('machine_unavailable');
   });
@@ -101,7 +131,9 @@ describe('createVoiceClientAccountOperationExecutor', () => {
       signal: new AbortController().signal,
     })).resolves.toEqual(decodedResponse);
 
-    expect(logSpy).not.toHaveBeenCalled();
+    expect(credentialLogLines()).toEqual([]);
+    expect(JSON.stringify(log.getLogs())).not.toContain(operationResponse.bodyBase64);
+    expect(JSON.stringify(log.getLogs())).not.toContain('"value":"ephemeral"');
   });
 
   it('rejects a header-export response without logging the source credential', async () => {
@@ -112,7 +144,7 @@ describe('createVoiceClientAccountOperationExecutor', () => {
       operationId: 'mint-client-secret', parameters: {}, selection,
       signal: new AbortController().signal,
     })).rejects.toMatchObject({ code: 'provider_response_invalid' });
-    expect(JSON.stringify(logSpy.mock.calls)).not.toContain('long-lived-source-secret');
+    expect(JSON.stringify(log.getLogs())).not.toContain('long-lived-source-secret');
   });
 
   it('sends the captured declaration authority and Connected Account selection to the daemon', async () => {
@@ -140,7 +172,6 @@ describe('createVoiceClientAccountOperationExecutor', () => {
         declarationAuthority: { kind: 'projected', cacheIdentity },
         expectedSelection: selection,
       },
-      expect.any(AbortSignal),
     );
   });
 
@@ -201,7 +232,8 @@ describe('createVoiceClientAccountOperationExecutor', () => {
       isCurrent: () => true,
       isInvocationCurrent: () => true,
     });
-    ambientMachine.id = 'machine-b';
+    selectMachine('machine-b');
+    expect(resolveVoiceExecutionMachineId()).toBe('machine-b');
 
     await expect(materialize({
       operationId: 'mint-client-secret',
@@ -228,7 +260,8 @@ describe('createVoiceClientAccountOperationExecutor', () => {
       isCurrent: () => true,
       isInvocationCurrent: () => true,
     });
-    ambientMachine.id = 'machine-b';
+    selectMachine('machine-b');
+    expect(resolveVoiceExecutionMachineId()).toBe('machine-b');
 
     await expect(materialize({
       operationId: 'mint-client-secret',

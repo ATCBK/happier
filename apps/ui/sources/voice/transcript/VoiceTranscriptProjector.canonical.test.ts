@@ -1,16 +1,81 @@
 import { createVoiceTranscriptLadderMapper } from '@happier-dev/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const logSpy = vi.hoisted(() => vi.fn());
-vi.mock('@/log', () => ({ log: { log: logSpy, warn: vi.fn(), error: vi.fn() } }));
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { storage } from '@/sync/domains/state/storage';
+import { log } from '@/log';
+import { z } from 'zod';
+import { RawRecordSchema } from '@happier-dev/session-core/raw';
+import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
+import { persistSessionTranscriptMessage, readStoredSessionMessages } from '@happier-dev/session-core/messages';
 
 import type { PersistSessionTranscriptMessageInput } from "@happier-dev/session-core/messages";
 import { normalizeRawMessage, type NormalizedMessage } from "@happier-dev/session-core/raw";
-import { createCanonicalVoiceTranscriptProjector } from './canonicalProjector';
+import { createCanonicalVoiceTranscriptProjector, type CanonicalVoiceTranscriptItem } from './canonicalProjector';
 import {
   createVoiceTranscriptProjector,
   deriveCanonicalVoiceTranscriptEntryId,
+  buildRealtimeConversationRawRecord,
 } from './VoiceTranscriptProjector';
+
+
+type TranscriptRequest = PersistSessionTranscriptMessageInput;
+const wireRequests: TranscriptRequest[] = [];
+// Retained state belongs to the substituted Home HTTP service, not the projector/store.
+const durableRows = new Map<string, TranscriptRequest>();
+const acknowledgements = new Map<string, { id: string; seq: number; localId: string; createdAt: number }>();
+const wireSchema = z.object({
+  content: z.object({ t: z.literal('plain'), v: RawRecordSchema }).strict(),
+  localId: z.string().min(1), messageRole: SessionMessageRoleSchema,
+}).strict();
+let beforeAcknowledgement: (request: TranscriptRequest) => void | Promise<void>;
+const pendingWriterOperations: Promise<unknown>[] = [];
+
+beforeEach(() => {
+  wireRequests.length = 0;
+  durableRows.clear();
+  acknowledgements.clear();
+  pendingWriterOperations.length = 0;
+  beforeAcknowledgement = () => undefined;
+  log.clear();
+  storage.setState({ sessionMessages: {}, sessions: Object.fromEntries(
+    ['carrier', 'one', 'two', 'three', 'released-attempt'].map(id => [id, createSessionFixture({ id })])) });
+});
+
+function writeTranscript(input: PersistSessionTranscriptMessageInput) {
+  const pending = persistSessionTranscriptMessage({
+    sessionEncryptionMode: 'plain',
+    request: async (path, init) => {
+      const body = wireSchema.parse(JSON.parse(String(init?.body)));
+      const sessionId = decodeURIComponent(path.split('/')[3]!);
+      const request = { sessionId, localId: body.localId, messageRole: body.messageRole,
+        rawRecord: body.content.v, createdAt: 100 };
+      wireRequests.push(request);
+      await beforeAcknowledgement(request);
+      const existing = acknowledgements.get(body.localId);
+      const acknowledgement = existing ?? { id: 'ack-' + (acknowledgements.size + 1),
+        seq: acknowledgements.size + 1, localId: body.localId, createdAt: 100 };
+      acknowledgements.set(body.localId, acknowledgement);
+      durableRows.set(body.localId, request);
+      return Response.json({ didWrite: !existing, didUpdate: !!existing, message: acknowledgement });
+    },
+  }, input).then(result => {
+    storage.getState().applyMessages(input.sessionId, [result.message]);
+    return result;
+  });
+  pendingWriterOperations.push(pending);
+  return pending;
+}
+
+function persistCanonicalItem(item: CanonicalVoiceTranscriptItem) {
+  const localId = deriveCanonicalVoiceTranscriptEntryId({ attemptIdentity: item.attemptIdentity,
+    itemId: item.itemId, role: item.role });
+  return writeTranscript({ sessionId: 'carrier', localId, createdAt: 100,
+    messageRole: item.role === 'user' ? 'user' : 'agent',
+    rawRecord: buildRealtimeConversationRawRecord({ id: localId, role: item.role, text: item.text }) });
+}
+
+function storedCarrierRows() { return readStoredSessionMessages(storage.getState(), 'carrier'); }
+async function settleWrites() { await Promise.allSettled(pendingWriterOperations); }
 
 function event(overrides: Record<string, unknown>) {
   return {
@@ -29,8 +94,8 @@ function event(overrides: Record<string, unknown>) {
 }
 
 describe('canonical voice transcript projector', () => {
-  it('replaces cumulative partial corrections and persists one final exactly once', () => {
-    const persistFinal = vi.fn();
+  it('replaces cumulative partial corrections and persists one final exactly once', async () => {
+    const persistFinal = persistCanonicalItem;
     const projector = createCanonicalVoiceTranscriptProjector({ persistFinal });
 
     expect(projector.project(event({ text: 'hello wor' })).status).toBe('applied');
@@ -58,7 +123,9 @@ describe('canonical voice transcript projector', () => {
       revision: 3,
       announce: 'polite',
     })]);
-    expect(persistFinal).toHaveBeenCalledTimes(1);
+    await settleWrites();
+    expect(wireRequests).toHaveLength(1);
+    expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'hello world' })]);
   });
 
   it('assembles assistant deltas while keeping user and assistant items separate', () => {
@@ -111,9 +178,9 @@ describe('canonical voice transcript projector', () => {
     expect(projector.snapshot()).toHaveLength(2);
   });
 
-  it('deduplicates an identical final replay with a new event id and rejects event-id reuse with different payload', () => {
+  it('deduplicates an identical final replay with a new event id and rejects event-id reuse with different payload', async () => {
     const diagnostics: string[] = [];
-    const persistFinal = vi.fn();
+    const persistFinal = persistCanonicalItem;
     const projector = createCanonicalVoiceTranscriptProjector({
       persistFinal,
       onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.code),
@@ -134,12 +201,14 @@ describe('canonical voice transcript projector', () => {
       text: 'conflicting event id reuse',
     })).status).toBe('rejected');
     expect(diagnostics).toContain('conflicting_duplicate');
-    expect(persistFinal).toHaveBeenCalledTimes(1);
+    await settleWrites();
+    expect(wireRequests).toHaveLength(1);
+    expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'stable final' })]);
   });
 
-  it('accepts only an explicit higher-revision correction after final and persists the replacement once', () => {
+  it('accepts only an explicit higher-revision correction after final and persists the replacement once', async () => {
     const diagnostics: string[] = [];
-    const persistFinal = vi.fn();
+    const persistFinal = persistCanonicalItem;
     const projector = createCanonicalVoiceTranscriptProjector({
       persistFinal,
       onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.code),
@@ -200,14 +269,15 @@ describe('canonical voice transcript projector', () => {
     expect(projector.snapshot()).toEqual([
       expect.objectContaining({ itemId: 'assistant-1', text: 'corrected answer', final: true, revision: 3 }),
     ]);
-    expect(persistFinal).toHaveBeenCalledTimes(2);
-    expect(persistFinal).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'corrected answer', revision: 3 }));
+    await settleWrites();
+    expect(wireRequests).toHaveLength(2);
+    expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'corrected answer' })]);
     expect(diagnostics).toEqual(['correction_without_final', 'late_after_final', 'out_of_order']);
   });
 
-  it('keeps evicted finals as correction authority for the active attempt', () => {
+  it('keeps evicted finals as correction authority for the active attempt', async () => {
     const diagnostics: string[] = [];
-    const persistFinal = vi.fn();
+    const persistFinal = persistCanonicalItem;
     const projector = createCanonicalVoiceTranscriptProjector({
       maxItems: 1,
       persistFinal,
@@ -274,24 +344,16 @@ describe('canonical voice transcript projector', () => {
     }))).toMatchObject({ status: 'rejected' });
 
     expect(projector.snapshot().map((item) => item.itemId)).toEqual(['retained-item']);
-    expect(persistFinal).toHaveBeenCalledTimes(4);
+    await settleWrites();
+    expect(wireRequests).toHaveLength(4);
+    expect(storedCarrierRows().map(row => 'text' in row ? row.text : null)).toEqual(['second correction', 'newer item']);
     expect(diagnostics).toEqual(['late_after_final']);
   });
 
-  it('replaces one persisted canonical row when an explicit correction follows final', () => {
-    let messages: any[] = [];
+  it('replaces one persisted canonical row when an explicit correction follows final', async () => {
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({
-        sessionMessages: { carrier: { messages } },
-        applyMessagesLoaded: () => undefined,
-        applyMessages: (_sessionId, incoming) => {
-          for (const message of incoming) {
-            const index = messages.findIndex((candidate) => candidate.id === message.id);
-            if (index >= 0) messages[index] = message;
-            else messages.push(message);
-          }
-        },
-      }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
       nowMs: () => 100,
     });
 
@@ -320,22 +382,22 @@ describe('canonical voice transcript projector', () => {
       }),
     });
 
+    await projector.settleAdmittedCanonicalPersistence({ conversationSessionId: 'carrier',
+      attemptIdentity: projector.canonicalSnapshot('carrier')[0]!.attemptIdentity });
+    const messages = storedCarrierRows();
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
-      id: expect.stringMatching(/^voice-realtime:[^:]+:assistant:assistant-1$/),
+      localId: expect.stringMatching(/^voice-realtime:[^:]+:assistant:assistant-1$/),
       createdAt: 100,
-      content: [expect.objectContaining({ type: 'text', text: 'corrected answer' })],
+      realID: 'ack-1',
+      text: 'corrected answer',
     });
   });
 
   it('rejects malformed canonical identities before persistence without throwing or colliding', () => {
-    const applied: any[] = [];
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({
-        sessionMessages: { carrier: { messages: applied } },
-        applyMessagesLoaded: () => undefined,
-        applyMessages: (_sessionId, messages) => applied.push(...messages),
-      }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
       nowMs: () => 100,
     });
 
@@ -354,7 +416,8 @@ describe('canonical voice transcript projector', () => {
       })).not.toThrow();
     }
 
-    expect(applied).toEqual([]);
+    expect(storedCarrierRows()).toEqual([]);
+    expect(wireRequests).toEqual([]);
     const encoded = ['item-\uD800', 'item-\uDC00', 'item-\uFFFD'].map((itemId) =>
       deriveCanonicalVoiceTranscriptEntryId({
         attemptIdentity: 'attempt-safe',
@@ -364,21 +427,10 @@ describe('canonical voice transcript projector', () => {
     expect(new Set(encoded).size).toBe(encoded.length);
   });
 
-  it('keeps persisted turn identities distinct when projector state reloads and upstream ids repeat', () => {
-    let messages: any[] = [];
-    const getState = () => ({
-      sessionMessages: { carrier: { messages } },
-      applyMessagesLoaded: () => undefined,
-      applyMessages: (_sessionId: string, incoming: any[]) => {
-        for (const message of incoming) {
-          const index = messages.findIndex((candidate) => candidate.id === message.id);
-          if (index >= 0) messages[index] = message;
-          else messages.push(message);
-        }
-      },
-    });
+  it('keeps persisted turn identities distinct when projector state reloads and upstream ids repeat', async () => {
     const firstRuntimeProjector = createVoiceTranscriptProjector({
-      getState,
+      getState: storage.getState,
+      persistFinal: writeTranscript,
       nowMs: () => 100,
     });
     expect(firstRuntimeProjector.beginCanonicalAttempt('carrier')).toMatchObject({
@@ -397,7 +449,8 @@ describe('canonical voice transcript projector', () => {
     });
 
     const reloadedRuntimeProjector = createVoiceTranscriptProjector({
-      getState,
+      getState: storage.getState,
+      persistFinal: writeTranscript,
       nowMs: () => 200,
     });
     expect(reloadedRuntimeProjector.beginCanonicalAttempt('carrier')).toMatchObject({
@@ -415,9 +468,11 @@ describe('canonical voice transcript projector', () => {
       }),
     });
 
+    await settleWrites();
+    const messages = storedCarrierRows();
     expect(messages).toHaveLength(2);
-    expect(new Set(messages.map((message) => message.id)).size).toBe(2);
-    expect(messages.map((message) => message.content[0]?.text ?? message.content?.text)).toEqual([
+    expect(new Set(messages.map((message) => message.localId)).size).toBe(2);
+    expect(messages.map((message) => 'text' in message ? message.text : null)).toEqual([
       'before reload',
       'after reload',
     ]);
@@ -490,19 +545,16 @@ describe('canonical voice transcript projector', () => {
     ]);
   });
 
-  it('keeps partials ephemeral and persists a canonical final under one stable item id', () => {
-    const applied: any[] = [];
+  it('keeps partials ephemeral and persists a canonical final under one stable item id', async () => {
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({
-        sessionMessages: { carrier: { messages: applied } },
-        applyMessagesLoaded: () => undefined,
-        applyMessages: (_sessionId, messages) => applied.push(...messages),
-      }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
       nowMs: () => 100,
     });
 
     projector.projectCanonicalEvent({ conversationSessionId: 'carrier', event: event({ text: 'par' }) });
-    expect(applied).toEqual([]);
+    expect(storedCarrierRows()).toEqual([]);
+    expect(wireRequests).toEqual([]);
     projector.projectCanonicalEvent({
       conversationSessionId: 'carrier',
       event: event({ type: 'voice.transcript.final', eventId: 'final', sequence: 2, revision: 2, text: 'partial final' }),
@@ -512,11 +564,13 @@ describe('canonical voice transcript projector', () => {
       event: event({ type: 'voice.transcript.final', eventId: 'final', sequence: 2, revision: 2, text: 'partial final', provenance: 'replay' }),
     });
 
+    await settleWrites();
+    const applied = storedCarrierRows();
     expect(applied).toHaveLength(1);
     expect(applied[0]).toMatchObject({
-      id: expect.stringMatching(/^voice-realtime:[^:]+:user:item-1$/),
-      role: 'user',
-      content: { type: 'text', text: 'partial final' },
+      localId: expect.stringMatching(/^voice-realtime:[^:]+:user:item-1$/),
+      kind: 'user-text',
+      text: 'partial final',
       meta: {
         happier: {
           kind: 'conversation_turn.v1',
@@ -535,17 +589,9 @@ describe('canonical voice transcript projector', () => {
   });
 
   it('reloads canonical finals through the durable message boundary without duplicating replay or corrections', async () => {
-    const durableRows = new Map<string, PersistSessionTranscriptMessageInput>();
-    const persistFinal = vi.fn((input: PersistSessionTranscriptMessageInput) => {
-      durableRows.set(input.localId, input);
-    });
-    const projected: any[] = [];
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({
-        sessionMessages: { carrier: { messages: projected } },
-        applyMessagesLoaded: () => undefined,
-        applyMessages: (_sessionId, messages) => projected.push(...messages),
-      }),
+      getState: storage.getState,
       nowMs: () => 100,
       persistFinal,
     });
@@ -603,8 +649,9 @@ describe('canonical voice transcript projector', () => {
       }),
     });
 
-    await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(3));
-    expect(projected).toEqual([]);
+    await vi.waitFor(() => expect(wireRequests).toHaveLength(3));
+    await settleWrites();
+    expect(storedCarrierRows()).toHaveLength(2);
     expect(durableRows).toHaveLength(2);
     const reloaded = [...durableRows.values()]
       .map((row, index) => normalizeRawMessage(
@@ -657,15 +704,13 @@ describe('canonical voice transcript projector', () => {
       seq: number;
       input: PersistSessionTranscriptMessageInput;
     }>> = [];
-    const persistFinal = vi.fn(async (input: PersistSessionTranscriptMessageInput) => {
+    beforeAcknowledgement = async input => {
       if (input.messageRole === 'user') await firstWriteBlocked;
-      committedHistory.push({
-        seq: committedHistory.length + 1,
-        input,
-      });
-    });
+      committedHistory.push({ seq: committedHistory.length + 1, input });
+    };
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
+      getState: storage.getState,
       persistFinal,
     });
 
@@ -679,7 +724,7 @@ describe('canonical voice transcript projector', () => {
         text: 'first question',
       }),
     });
-    await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
     projector.projectCanonicalEvent({
       conversationSessionId: 'carrier',
       event: event({
@@ -699,17 +744,19 @@ describe('canonical voice transcript projector', () => {
       { role: 'user', text: 'first question' },
       { role: 'assistant', text: 'later answer' },
     ]);
-    expect(persistFinal).toHaveBeenCalledTimes(1);
+    expect(wireRequests).toHaveLength(1);
     expect(committedHistory).toEqual([]);
 
     resolveFirstWrite();
-    await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(wireRequests).toHaveLength(2));
     await vi.waitFor(() => expect(committedHistory).toHaveLength(2));
 
     expect(committedHistory
       .sort((left, right) => left.seq - right.seq)
       .map(({ input }) => input.messageRole))
       .toEqual(['user', 'agent']);
+    await settleWrites();
+    expect(storedCarrierRows().map(row => 'text' in row ? row.text : null)).toEqual(['first question', 'later answer']);
   });
 
   it('settles the persistence tail admitted by an exact canonical projection', async () => {
@@ -717,11 +764,10 @@ describe('canonical voice transcript projector', () => {
     const writeBlocked = new Promise<void>((resolve) => {
       resolveWrite = resolve;
     });
+    beforeAcknowledgement = async () => { await writeBlocked; };
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
-      persistFinal: vi.fn(async () => {
-        await writeBlocked;
-      }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
     });
     const projected = projector.projectCanonicalEvent({
       conversationSessionId: 'carrier',
@@ -747,10 +793,11 @@ describe('canonical voice transcript projector', () => {
     resolveWrite();
     await settlement;
     expect(settled).toBe(true);
+    expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'answer pending persistence' })]);
   });
 
   it('commits one exact final admitted by A after B owns the canonical snapshot', async () => {
-    const persisted: PersistSessionTranscriptMessageInput[] = [];
+    const persisted = wireRequests;
     const sourceA = Object.freeze({
       pluginId: 'happier.voice.a',
       contributionId: 'realtime-a',
@@ -760,10 +807,8 @@ describe('canonical voice transcript projector', () => {
       contributionId: 'realtime-b',
     });
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
-      persistFinal: vi.fn(async (input: PersistSessionTranscriptMessageInput) => {
-        persisted.push(input);
-      }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
     });
     const a = projector.beginCanonicalAttempt('carrier');
     const aFinal = event({
@@ -860,7 +905,7 @@ describe('canonical voice transcript projector', () => {
   });
 
   it('commits one exact correction admitted by A after B owns the canonical snapshot', async () => {
-    const persisted: PersistSessionTranscriptMessageInput[] = [];
+    const persisted = wireRequests;
     const sourceA = Object.freeze({
       pluginId: 'happier.voice.a',
       contributionId: 'realtime-a',
@@ -870,10 +915,8 @@ describe('canonical voice transcript projector', () => {
       contributionId: 'realtime-b',
     });
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
-      persistFinal: vi.fn(async (input: PersistSessionTranscriptMessageInput) => {
-        persisted.push(input);
-      }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
     });
     const a = projector.beginCanonicalAttempt('carrier');
     const aFinal = event({
@@ -967,16 +1010,14 @@ describe('canonical voice transcript projector', () => {
   });
 
   it('serializes a final and correction both admitted before the acceptance barrier releases', async () => {
-    const persisted: PersistSessionTranscriptMessageInput[] = [];
+    const persisted = wireRequests;
     const source = Object.freeze({
       pluginId: 'happier.voice.pending-chain',
       contributionId: 'realtime-pending-chain',
     });
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
-      persistFinal: vi.fn(async (input: PersistSessionTranscriptMessageInput) => {
-        persisted.push(input);
-      }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
     });
     const attempt = projector.beginCanonicalAttempt('carrier');
     const admittedFinal = projector.admitCanonicalPersistenceEvent({
@@ -1049,10 +1090,10 @@ describe('canonical voice transcript projector', () => {
     ]);
   });
 
-  it('releases a canceled exact-final admission without retaining its duplicate reservation', () => {
+  it('releases a canceled exact-final admission without retaining its duplicate reservation', async () => {
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
-      persistFinal: vi.fn(),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
     });
     const attempt = projector.beginCanonicalAttempt('carrier');
     const final = event({
@@ -1074,6 +1115,8 @@ describe('canonical voice transcript projector', () => {
       conversationSessionId: 'carrier',
       event: final,
     })).toMatchObject({ status: 'applied' });
+    await settleWrites();
+    expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'release this reservation' })]);
   });
 
   it('serializes same-row final and correction persistence so the correction cannot be overwritten by a late final', async () => {
@@ -1081,15 +1124,14 @@ describe('canonical voice transcript projector', () => {
     const firstWriteBlocked = new Promise<void>((resolve) => {
       resolveFirstWrite = resolve;
     });
-    const durableRows = new Map<string, PersistSessionTranscriptMessageInput>();
     let writeCount = 0;
-    const persistFinal = vi.fn(async (input: PersistSessionTranscriptMessageInput) => {
+    beforeAcknowledgement = async () => {
       writeCount += 1;
       if (writeCount === 1) await firstWriteBlocked;
-      durableRows.set(input.localId, input);
-    });
+    };
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
+      getState: storage.getState,
       persistFinal,
     });
 
@@ -1103,7 +1145,7 @@ describe('canonical voice transcript projector', () => {
         text: 'initial question',
       }),
     });
-    await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
     projector.projectCanonicalEvent({
       conversationSessionId: 'carrier',
       event: event({
@@ -1117,9 +1159,9 @@ describe('canonical voice transcript projector', () => {
       }),
     });
 
-    expect(persistFinal).toHaveBeenCalledTimes(1);
+    expect(wireRequests).toHaveLength(1);
     resolveFirstWrite();
-    await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(wireRequests).toHaveLength(2));
     await vi.waitFor(() => {
       expect([...durableRows.values()]).toEqual([
         expect.objectContaining({
@@ -1137,12 +1179,13 @@ describe('canonical voice transcript projector', () => {
       resolveFirstWrite = resolve;
     });
     let writeCount = 0;
-    const persistFinal = vi.fn(async () => {
+    beforeAcknowledgement = async () => {
       writeCount += 1;
       if (writeCount === 1) await firstWriteBlocked;
-    });
+    };
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
+      getState: storage.getState,
       persistFinal,
     });
     const firstAttempt = projector.beginCanonicalAttempt('carrier');
@@ -1156,7 +1199,7 @@ describe('canonical voice transcript projector', () => {
         text: 'first attempt',
       }),
     });
-    await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
 
     const secondAttempt = projector.beginCanonicalAttempt('carrier');
     projector.projectCanonicalEvent({
@@ -1169,7 +1212,7 @@ describe('canonical voice transcript projector', () => {
         text: 'second attempt',
       }),
     });
-    await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(wireRequests).toHaveLength(2));
 
     let releaseSettled = false;
     const releaseFirstAttempt = projector.releaseCanonicalConversation(
@@ -1199,13 +1242,12 @@ describe('canonical voice transcript projector', () => {
   it('settles a rejected admitted write without retrying or blocking attempt release', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let rejectWrite!: (error: Error) => void;
-    const persistFinal = vi.fn(async () => {
-      await new Promise<never>((_resolve, reject) => {
-        rejectWrite = reject;
-      });
-    });
+    beforeAcknowledgement = async () => {
+      await new Promise<never>((_resolve, reject) => { rejectWrite = reject; });
+    };
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
+      getState: storage.getState,
       persistFinal,
     });
     const attempt = projector.beginCanonicalAttempt('carrier');
@@ -1221,7 +1263,7 @@ describe('canonical voice transcript projector', () => {
           text: 'cannot persist',
         }),
       });
-      await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
 
       let releaseSettled = false;
       const release = projector.releaseCanonicalConversation(
@@ -1236,7 +1278,9 @@ describe('canonical voice transcript projector', () => {
 
       rejectWrite(new Error('offline'));
       await expect(release).resolves.toBe(true);
-      expect(persistFinal).toHaveBeenCalledOnce();
+      expect(wireRequests).toHaveLength(1);
+      expect(durableRows.size).toBe(0);
+      expect(storedCarrierRows()).toEqual([]);
       expect(consoleError).toHaveBeenCalledWith(
         '[fireAndForget] VoiceTranscriptProjector.persistFinal',
         expect.objectContaining({ message: 'offline' }),
@@ -1248,15 +1292,14 @@ describe('canonical voice transcript projector', () => {
 
   it('lets a same-row correction proceed after the preceding persistence attempt fails', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const durableRows = new Map<string, PersistSessionTranscriptMessageInput>();
     let writeCount = 0;
-    const persistFinal = vi.fn(async (input: PersistSessionTranscriptMessageInput) => {
+    beforeAcknowledgement = async () => {
       writeCount += 1;
       if (writeCount === 1) throw new Error('offline');
-      durableRows.set(input.localId, input);
-    });
+    };
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {} }),
+      getState: storage.getState,
       persistFinal,
     });
 
@@ -1271,7 +1314,7 @@ describe('canonical voice transcript projector', () => {
           text: 'initial question',
         }),
       });
-      await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
       projector.projectCanonicalEvent({
         conversationSessionId: 'carrier',
         event: event({
@@ -1285,7 +1328,7 @@ describe('canonical voice transcript projector', () => {
         }),
       });
 
-      await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(wireRequests).toHaveLength(2));
       await vi.waitFor(() => expect([...durableRows.values()]).toEqual([
         expect.objectContaining({
           rawRecord: expect.objectContaining({
@@ -1293,6 +1336,8 @@ describe('canonical voice transcript projector', () => {
           }),
         }),
       ]));
+      await settleWrites();
+      expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'corrected question' })]);
       expect(consoleError).toHaveBeenCalledWith(
         '[fireAndForget] VoiceTranscriptProjector.persistFinal',
         expect.objectContaining({ message: 'offline' }),
@@ -1304,25 +1349,15 @@ describe('canonical voice transcript projector', () => {
 
   it('keeps an identical authoritative final replay inert after its host write fails without creating a ghost', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const durableRows = new Map<string, PersistSessionTranscriptMessageInput>();
     let writeCount = 0;
     let rejectFirstWrite!: (error: Error) => void;
-    const persistFinal = vi.fn(async (input: PersistSessionTranscriptMessageInput) => {
+    beforeAcknowledgement = async () => {
       writeCount += 1;
-      if (writeCount === 1) {
-        await new Promise<never>((_resolve, reject) => {
-          rejectFirstWrite = reject;
-        });
-      }
-      durableRows.set(input.localId, input);
-    });
-    const projected: unknown[] = [];
+      if (writeCount === 1) await new Promise<never>((_resolve, reject) => { rejectFirstWrite = reject; });
+    };
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({
-        sessionMessages: { carrier: { messages: projected } },
-        applyMessagesLoaded: () => undefined,
-        applyMessages: (_sessionId, messages) => projected.push(...messages),
-      }),
+      getState: storage.getState,
       persistFinal,
     });
     const final = event({
@@ -1338,7 +1373,7 @@ describe('canonical voice transcript projector', () => {
         conversationSessionId: 'carrier',
         event: final,
       }).status).toBe('applied');
-      await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
       expect(projector.projectCanonicalEvent({
         conversationSessionId: 'carrier',
         event: {
@@ -1348,14 +1383,14 @@ describe('canonical voice transcript projector', () => {
         },
       }).status).toBe('duplicate');
       await Promise.resolve();
-      expect(persistFinal).toHaveBeenCalledTimes(1);
+      expect(wireRequests).toHaveLength(1);
 
       rejectFirstWrite(new Error('offline'));
       await vi.waitFor(() => expect(consoleError).toHaveBeenCalledWith(
         '[fireAndForget] VoiceTranscriptProjector.persistFinal',
         expect.objectContaining({ message: 'offline' }),
       ));
-      expect(projected).toEqual([]);
+      expect(storedCarrierRows()).toEqual([]);
       expect(durableRows).toHaveLength(0);
 
       expect(projector.projectCanonicalEvent({
@@ -1368,8 +1403,8 @@ describe('canonical voice transcript projector', () => {
       }).status).toBe('duplicate');
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(persistFinal).toHaveBeenCalledTimes(1);
-      expect(projected).toEqual([]);
+      expect(wireRequests).toHaveLength(1);
+      expect(storedCarrierRows()).toEqual([]);
       expect(durableRows).toHaveLength(0);
     } finally {
       consoleError.mockRestore();
@@ -1378,7 +1413,8 @@ describe('canonical voice transcript projector', () => {
 
   it('bounds per-conversation canonical projector state with least-recently-used eviction', () => {
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ applyMessages: () => undefined, applyMessagesLoaded: () => undefined }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
       nowMs: () => 100,
       maxCanonicalConversations: 2,
     });
@@ -1395,7 +1431,8 @@ describe('canonical voice transcript projector', () => {
 
   it('does not create state or evict an active conversation when reading a missing snapshot', () => {
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ applyMessages: () => undefined, applyMessagesLoaded: () => undefined }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
       nowMs: () => 100,
       maxCanonicalConversations: 2,
     });
@@ -1415,19 +1452,9 @@ describe('canonical voice transcript projector', () => {
     // separate "You" rows. The provider ladder is the canonical owner of that
     // rule, so drive it exactly as the provider leaves do and require the
     // corridor to land one corrected row rather than three appended ones.
-    const durableRows = new Map<string, PersistSessionTranscriptMessageInput>();
-    const persistedLocalIds: string[] = [];
-    const persistFinal = vi.fn((input: PersistSessionTranscriptMessageInput) => {
-      persistedLocalIds.push(input.localId);
-      durableRows.set(input.localId, input);
-    });
-    const projected: NormalizedMessage[] = [];
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({
-        sessionMessages: { carrier: { messages: projected } },
-        applyMessagesLoaded: () => undefined,
-        applyMessages: (_sessionId, messages) => projected.push(...messages),
-      }),
+      getState: storage.getState,
       nowMs: () => 100,
       persistFinal,
     });
@@ -1453,8 +1480,10 @@ describe('canonical voice transcript projector', () => {
       }).status).toBe('applied');
     }
 
-    await vi.waitFor(() => expect(persistFinal).toHaveBeenCalledTimes(3));
-    expect(new Set(persistedLocalIds).size).toBe(1);
+    await vi.waitFor(() => expect(wireRequests).toHaveLength(3));
+    await settleWrites();
+    expect(new Set(wireRequests.map(request => request.localId)).size).toBe(1);
+    expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: supersedingFinals[2] })]);
     expect(durableRows.size).toBe(1);
     expect([...durableRows.values()][0]?.rawRecord).toMatchObject({
       role: 'user',
@@ -1473,11 +1502,8 @@ describe('canonical voice transcript projector', () => {
 
   it('retires attempt-owned canonical transcript subscriptions on release', async () => {
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({
-        sessionMessages: {},
-        applyMessages: () => undefined,
-        applyMessagesLoaded: () => undefined,
-      }),
+      getState: storage.getState,
+      persistFinal: writeTranscript,
     });
     const listener = vi.fn();
     const unsubscribe = projector.subscribeCanonical('released-attempt', listener);
@@ -1515,20 +1541,19 @@ describe('canonical voice transcript projector', () => {
 
 describe('canonical voice transcript refusals are named', () => {
   beforeEach(() => {
-    logSpy.mockClear();
+    log.clear();
   });
 
   function readNamedDrops(): ReadonlyArray<Record<string, unknown>> {
-    return logSpy.mock.calls
-      .map((call) => String(call[0]))
+    return log.getLogs()
       .filter((line) => line.startsWith('[voiceRuntimeFailure] '))
       .map((line) => JSON.parse(line.slice('[voiceRuntimeFailure] '.length)) as Record<string, unknown>);
   }
 
-  it('names a projection the canonical owner refuses, once per guard per attempt', () => {
+  it('names a projection the canonical owner refuses, once per guard per attempt', async () => {
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {}, applyMessagesLoaded: () => undefined, applyMessages: () => undefined }),
-      persistFinal: () => undefined,
+      getState: storage.getState,
+      persistFinal: writeTranscript,
     });
     projector.beginCanonicalAttempt('carrier');
     projector.projectCanonicalEvent({
@@ -1553,6 +1578,8 @@ describe('canonical voice transcript refusals are named', () => {
       }).status).toBe('rejected');
     }
 
+    await settleWrites();
+    expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'authoritative words' })]);
     expect(readNamedDrops()).toEqual([{
       providerId: 'happier.voice.openai/realtime-openai',
       outcome: 'transcript_dropped',
@@ -1562,9 +1589,9 @@ describe('canonical voice transcript refusals are named', () => {
   });
 
   it('names an authoritative final that carries no text to write', () => {
-    const persistFinal = vi.fn();
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {}, applyMessagesLoaded: () => undefined, applyMessages: () => undefined }),
+      getState: storage.getState,
       persistFinal,
     });
     projector.beginCanonicalAttempt('carrier');
@@ -1574,7 +1601,7 @@ describe('canonical voice transcript refusals are named', () => {
       event: event({ type: 'voice.transcript.final', text: '   ' }),
     });
 
-    expect(persistFinal).not.toHaveBeenCalled();
+    expect(wireRequests).toEqual([]);
     expect(readNamedDrops()).toEqual([{
       providerId: 'happier.voice.openai/realtime-openai',
       outcome: 'transcript_dropped',
@@ -1584,11 +1611,10 @@ describe('canonical voice transcript refusals are named', () => {
   });
 
   it('names an authoritative final whose only write fails', async () => {
-    const persistFinal = vi.fn(async () => {
-      throw Object.assign(new Error('write rejected'), { code: 'voice_transcript_write_failed' });
-    });
+    beforeAcknowledgement = async () => { throw Object.assign(new Error('write rejected'), { code: 'voice_transcript_write_failed' }); };
+    const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
-      getState: () => ({ sessionMessages: {}, applyMessagesLoaded: () => undefined, applyMessages: () => undefined }),
+      getState: storage.getState,
       persistFinal,
     });
     projector.beginCanonicalAttempt('carrier');

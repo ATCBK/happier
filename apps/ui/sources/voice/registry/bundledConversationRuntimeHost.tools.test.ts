@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import * as React from 'react';
 
 import {
   getActionSpec,
@@ -9,13 +11,61 @@ import {
 
 import { storage } from '@/sync/domains/state/storage';
 import { resolveEnabledVoiceToolActionSpecsFromState } from '@/voice/tools/resolveDisabledVoiceActionIds';
+import { renderScreen } from '@/dev/testkit';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { MainAppTabStateProvider } from '@/components/navigation/mobile/chrome/MainAppTabStateProvider';
+import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { CurrentUiContextProvider, usePublishCurrentUiContext } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import { useCurrentUiContextVoiceToolPort, type CurrentUiContextVoiceToolPort } from '@/components/appShell/currentUiContext/currentUiContextVoiceToolPort';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { useCurrentUiContextLocalCommands } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
+import { useRouter } from 'expo-router';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import { createBundledConversationRuntimeHostLease } from './bundledConversationRuntimeHost';
+
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const route = vi.hoisted(() => ({ pathname: '/settings/voice', segments: ['(app)', 'settings', 'voice'] }));
+const nativeNavigation = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+  pathname: () => route.pathname, segments: () => route.segments, router: nativeNavigation,
+}).module);
+await loadSyncSingletonForTests();
+
+async function mountCurrentUiPort(withCommand = false) {
+  const account = await createVoiceSettingsAccountTestHarness(settingsParse(storage.getState().settings));
+  const mountedPort: { current: CurrentUiContextVoiceToolPort | null } = { current: null };
+  const enrichment = { commands: [] };
+  function Publication() {
+    const router = useRouter();
+    const commands = React.useMemo(() => withCommand ? [{ key: 'open-voice-settings', title: 'Open Voice settings',
+      invoke: () => router.push('/settings/voice') }] : [], [router]);
+    useCurrentUiContextLocalCommands(commands);
+    usePublishCurrentUiContext(enrichment);
+    mountedPort.current = useCurrentUiContextVoiceToolPort();
+    return null;
+  }
+  const tree = React.createElement(InjectedAuthProvider, { credentials: account.credentials, children:
+    React.createElement(MainAppTabStateProvider, { children: React.createElement(AppPaneProvider, { children:
+      React.createElement(CurrentUiContextProvider, { children: React.createElement(PluginSurfaceFocusEligibilityProvider,
+        { active: true, currentUiContextActive: true, children: React.createElement(Publication) }) }) }) }) });
+  let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
+  onTestFinished(async () => { await screen?.unmount(); await account.dispose(); });
+  screen = await renderScreen(tree);
+  const port = mountedPort.current;
+  if (!port) throw new Error('Actual mounted AppShell port unavailable');
+  expect(port.readCurrentUiContext()).toMatchObject({ navigation: { area: 'settings', screen: 'settings/voice' } });
+  return port;
+}
 
 describe('bundled Conversation runtime host tool projection', () => {
   let previousSettings: ReturnType<typeof storage.getState>['settings'];
 
   beforeEach(() => {
+    nativeNavigation.push.mockClear();
     previousSettings = storage.getState().settings;
     storage.setState((current) => ({
       ...current,
@@ -38,23 +88,16 @@ describe('bundled Conversation runtime host tool projection', () => {
     }));
   });
 
-  afterEach(() => {
-    storage.setState((current) => ({ ...current, settings: previousSettings }));
+  afterEach(async () => {
+    await React.act(async () => {
+      storage.setState((current) => ({ ...current, settings: previousSettings }));
+    });
   });
 
-  it('projects current UI read and effect capabilities only from the local AppShell port and only with stable effect custody', () => {
+  it('projects current UI read and effect capabilities only from the local AppShell port and only with stable effect custody', async () => {
     const withoutPort = createBundledConversationRuntimeHostLease();
     const withPort = createBundledConversationRuntimeHostLease({
-      currentUiContext: {
-        readCurrentUiContext: () => ({
-          navigation: { area: 'app', screen: 'home' },
-          commands: [],
-        }),
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeCurrentUiCommand: async () => ({ ok: true as const }),
-        invokeAction: async () => ({ ok: true as const }),
-      },
+      currentUiContext: await mountCurrentUiPort(),
     });
     try {
       const toolNames = (
@@ -100,12 +143,8 @@ describe('bundled Conversation runtime host tool projection', () => {
     }
   });
 
-  it('projects hot-path tools and discovery while retaining non-hot-path Actions through generic execution', () => {
-    const lease = createBundledConversationRuntimeHostLease({ currentUiContext: {
-      readCurrentUiContext: () => ({ navigation: { area: 'app', screen: 'home' }, commands: [] }),
-      resolveCurrentUiCommand: () => null,
-      subscribe: () => () => {},
-    } });
+  it('projects hot-path tools and discovery while retaining non-hot-path Actions through generic execution', async () => {
+    const lease = createBundledConversationRuntimeHostLease({ currentUiContext: await mountCurrentUiPort() });
     try {
       const enabled = resolveEnabledVoiceToolActionSpecsFromState(storage.getState());
       const nonHotPath = enabled.find((spec) => !isVoicePromptHotPathSpec(spec)
@@ -125,18 +164,14 @@ describe('bundled Conversation runtime host tool projection', () => {
   });
 
   it('keeps generic direct SDK callbacks read-only and rechecks target availability', async () => {
-    const lease = createBundledConversationRuntimeHostLease({ currentUiContext: {
-      readCurrentUiContext: () => ({ navigation: { area: 'app', screen: 'home' }, commands: [] }),
-      resolveCurrentUiCommand: () => null,
-      subscribe: () => () => {},
-    } });
+    const lease = createBundledConversationRuntimeHostLease({ currentUiContext: await mountCurrentUiPort() });
     try {
       const generic = lease.host.getRealtimeClientToolDefinitions({ effectCalls: 'none', exposure: 'voice_assistant' })
         .find((tool) => tool.name === 'action_execute');
       expect(generic).toBeDefined();
       if (!generic) throw new Error('Expected generic Voice tool');
       await expect(generic.execute({ actionId: 'ui.current_context.read', input: {} }))
-        .resolves.toMatchObject({ ok: true, result: { navigation: { area: 'app', screen: 'home' } } });
+        .resolves.toMatchObject({ ok: true, result: { navigation: { area: 'settings', screen: 'settings/voice' } } });
       await expect(generic.execute({ actionId: 'session.message.send', input: { message: 'do not send' } }))
         .rejects.toMatchObject({ code: 'voice_effect_call_custody_required' });
       storage.setState((current) => ({ ...current, settings: { ...current.settings, voice: {
@@ -150,38 +185,13 @@ describe('bundled Conversation runtime host tool projection', () => {
   });
 
   it('keeps direct provider callbacks read-only and rejects effectful Action definitions without a call identity', async () => {
-    const readCurrentUiContext = vi.fn(() => ({
-      navigation: { area: 'app', screen: 'home' },
-      commands: [],
-    }));
-    const invokeAction = vi.fn(async () => ({
-      ok: true as const,
-      result: {
-        credential: { token: 'private-action-token' },
-        providerId: 'private-action-provider',
-        connectionId: 'private-action-connection',
-        originalInput: { body: 'private action body' },
-        error: { message: 'raw action error' },
-      },
-    }));
-    const invokeCurrentUiCommand = vi.fn(async () => ({
-      ok: true as const,
-      result: {
-        credential: { token: 'private-command-token' },
-        providerId: 'private-command-provider',
-        connectionId: 'private-command-connection',
-        commandId: 'current-ui-command:private-selection',
-        error: { message: 'raw command error' },
-      },
-    }));
+    const currentUiContext = await mountCurrentUiPort(true);
+    const currentUiBefore = currentUiContext.readCurrentUiContext();
+    const commandId = currentUiBefore?.commands.find(command => command.title === 'Open Voice settings')?.id;
+    if (!commandId) throw new Error('Actual mounted command descriptor unavailable');
+    expect(currentUiContext.resolveCurrentUiCommand(commandId)?.retirementSignal.aborted).toBe(false);
     const lease = createBundledConversationRuntimeHostLease({
-      currentUiContext: {
-        readCurrentUiContext,
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeAction,
-        invokeCurrentUiCommand,
-      },
+      currentUiContext,
     });
     const invokeActionToolName = String(
       getActionSpec('action.invoke').bindings?.voiceClientToolName ?? '',
@@ -204,37 +214,26 @@ describe('bundled Conversation runtime host tool projection', () => {
         throw new Error('Expected stable-id Action, current UI command, and read tools');
       }
 
-      await expect(readCurrentUiContextTool.execute({})).resolves.toEqual({
-        navigation: { area: 'app', screen: 'home' },
-        commands: [],
-      });
+      await expect(readCurrentUiContextTool.execute({})).resolves.toEqual(currentUiBefore);
       await expect(invokeActionTool.execute({
         action: { pluginId: 'acme.triage', localId: 'comment' },
         input: { body: 'private action body' },
       })).rejects.toMatchObject({ code: 'voice_effect_call_custody_required' });
       await expect(invokeCurrentUiCommandTool.execute({
-        commandId: 'current-ui-command:private-selection',
+        commandId,
       })).rejects.toMatchObject({ code: 'voice_effect_call_custody_required' });
     } finally {
       lease.revoke();
     }
 
-    expect(readCurrentUiContext).toHaveBeenCalledTimes(1);
-    expect(invokeAction).not.toHaveBeenCalled();
-    expect(invokeCurrentUiCommand).not.toHaveBeenCalled();
+    expect(currentUiContext.readCurrentUiContext()).toEqual(currentUiBefore);
+    expect(nativeNavigation.push).not.toHaveBeenCalled();
   });
 
   it('keeps a direct read bounded to its current host generation', async () => {
-    const readCurrentUiContext = vi.fn(() => ({
-      navigation: { area: 'app', screen: 'home' },
-      commands: [],
-    }));
+    const currentUiContext = await mountCurrentUiPort();
     const lease = createBundledConversationRuntimeHostLease({
-      currentUiContext: {
-        readCurrentUiContext,
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-      },
+      currentUiContext,
     });
     const toolName = String(
       getActionSpec('ui.current_context.read').bindings?.voiceClientToolName ?? '',
@@ -246,13 +245,9 @@ describe('bundled Conversation runtime host tool projection', () => {
 
     if (!tool) throw new Error('Expected current UI read tool');
 
-    await expect(tool.execute({})).resolves.toEqual({
-      navigation: { area: 'app', screen: 'home' },
-      commands: [],
-    });
+    await expect(tool.execute({})).resolves.toEqual(currentUiContext.readCurrentUiContext());
     lease.revoke();
     await expect(tool.execute({})).rejects.toThrow('voice_runtime_generation_revoked');
-    expect(readCurrentUiContext).toHaveBeenCalledTimes(1);
   });
 
   it('rechecks Voice inventory privacy before executing a captured direct read', async () => {
@@ -320,18 +315,9 @@ describe('bundled Conversation runtime host tool projection', () => {
       storage.setState((current) => ({ ...current, settings: previousSettings }) as never);
     }
   });
-  it('narrows the canonical Action projection to the current-UI tools for a current-UI-only exposure', () => {
+  it('narrows the canonical Action projection to the current-UI tools for a current-UI-only exposure', async () => {
     const lease = createBundledConversationRuntimeHostLease({
-      currentUiContext: {
-        readCurrentUiContext: () => ({
-          navigation: { area: 'app', screen: 'home' },
-          commands: [],
-        }),
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeCurrentUiCommand: async () => ({ ok: true as const }),
-        invokeAction: async () => ({ ok: true as const }),
-      },
+      currentUiContext: await mountCurrentUiPort(),
     });
     try {
       const currentUiToolNames = new Set(

@@ -1,34 +1,46 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 
-import { confirmAccountVoiceCredentialWrite } from './confirmAccountVoiceCredentialWrite';
+const nativeAlert = vi.hoisted(() => vi.fn<typeof import('react-native')['Alert']['alert']>());
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
+  { platformOS: 'ios' }, { Alert: { alert: nativeAlert } },
+));
+const { Modal } = await import('@/modal/ModalManager');
+const { fetchAccountEncryptionMode } = await import('@/sync/api/account/apiAccountEncryptionMode');
+const { confirmAccountVoiceCredentialWrite } = await import('./confirmAccountVoiceCredentialWrite');
+
+const credentials = { token: 'synthetic-account-token' };
+function resolveAccountMode(mode: 'plain' | 'e2ee') {
+  return async () => (await fetchAccountEncryptionMode(credentials, { request: async (path, init) => {
+    expect(path).toBe('/v1/account/encryption');
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer ' + credentials.token);
+    return Response.json(AccountEncryptionModeResponseSchema.parse({ mode, updatedAt: 1 }));
+  } })).mode;
+}
+const confirm = () => Modal.confirm('Save credential', 'This Account stores the credential in plaintext.');
 
 describe('confirmAccountVoiceCredentialWrite', () => {
-  it('requires explicit confirmation before a cloud account credential is saved to a plain account', async () => {
-    const confirm = vi.fn(async () => false);
+  beforeEach(() => nativeAlert.mockClear());
 
-    await expect(confirmAccountVoiceCredentialWrite({
-      disclosePlainStorage: true,
-      resolveAccountMode: async () => 'plain',
-      confirm,
-    })).resolves.toBe(false);
-
-    expect(confirm).toHaveBeenCalledOnce();
+  it.each([false, true])('requires the actual user decision %s before saving to a plain Account', async accepted => {
+    const pending = confirmAccountVoiceCredentialWrite({
+      disclosePlainStorage: true, resolveAccountMode: resolveAccountMode('plain'), confirm,
+    });
+    await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledOnce());
+    const buttons = nativeAlert.mock.calls[0]![2]!;
+    const button = buttons.find(candidate => accepted ? candidate.style !== 'cancel' : candidate.style === 'cancel');
+    expect(button?.onPress).toBeTypeOf('function');
+    button!.onPress!();
+    await expect(pending).resolves.toBe(accepted);
   });
 
-  it('skips confirmation for E2EE or credentials explicitly exempted from disclosure', async () => {
-    const confirm = vi.fn(async () => true);
-
+  it('skips the user decision for E2EE or credentials explicitly exempted from disclosure', async () => {
     await expect(confirmAccountVoiceCredentialWrite({
-      disclosePlainStorage: true,
-      resolveAccountMode: async () => 'e2ee',
-      confirm,
+      disclosePlainStorage: true, resolveAccountMode: resolveAccountMode('e2ee'), confirm,
     })).resolves.toBe(true);
     await expect(confirmAccountVoiceCredentialWrite({
-      disclosePlainStorage: false,
-      resolveAccountMode: async () => 'plain',
-      confirm,
+      disclosePlainStorage: false, resolveAccountMode: resolveAccountMode('plain'), confirm,
     })).resolves.toBe(true);
-
-    expect(confirm).not.toHaveBeenCalled();
+    expect(nativeAlert).not.toHaveBeenCalled();
   });
 });

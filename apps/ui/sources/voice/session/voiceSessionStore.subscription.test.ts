@@ -3,15 +3,6 @@ import { createVoiceConversationRuntimeMachine } from '@/voice/runtime/machine/V
 import { deriveLocalVoiceSessionSnapshot } from '@/voice/runtime/machine/deriveLocalVoiceSessionSnapshot';
 import { useVoiceConversationRuntimeStore } from '@/voice/runtime/machine/voiceConversationRuntimeStore';
 
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock();
-});
-vi.mock('@/modal', async () => {
-  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock().module;
-});
-
 describe('voiceSessionStore subscriptions', () => {
   it('publishes Retry availability and withdrawal during the real reconnect projection', async () => {
     vi.resetModules();

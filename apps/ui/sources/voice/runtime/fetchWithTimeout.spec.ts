@@ -1,19 +1,24 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 type RuntimeFetchInit = RequestInit & { signal: AbortSignal };
 
 const runtimeFetch = vi.fn<(input: RequestInfo | URL, init: RuntimeFetchInit) => Promise<Response>>();
-
-vi.mock('@/utils/system/runtimeFetch', () => ({
-  runtimeFetch: (input: RequestInfo | URL, init: RuntimeFetchInit) => runtimeFetch(input, init),
-}));
 
 function abortError(message: string): Error {
   return Object.assign(new Error(message), { name: 'AbortError' });
 }
 
 describe('fetchWithTimeout', () => {
+  beforeEach(() => {
+    setRuntimeFetch((input, init) => {
+      if (!init?.signal) throw new Error('Speech request omitted its abort signal');
+      return runtimeFetch(input, { ...init, signal: init.signal });
+    });
+  });
+
   afterEach(() => {
+    resetRuntimeFetch();
     runtimeFetch.mockReset();
     vi.useRealTimers();
   });
@@ -71,7 +76,11 @@ describe('fetchWithTimeout', () => {
   });
 
   it('removes the external abort listener after the request settles (no leak)', async () => {
-    runtimeFetch.mockResolvedValue({ ok: true } as Response);
+    let requestSignal: AbortSignal | undefined;
+    runtimeFetch.mockImplementation(async (_input, init) => {
+      requestSignal = init.signal;
+      return new Response(null, { status: 200 });
+    });
 
     const { fetchWithTimeout } = await import('./fetchWithTimeout');
     const external = new AbortController();
@@ -82,7 +91,8 @@ describe('fetchWithTimeout', () => {
     expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
 
     // A late abort after completion must not reach the request's controller.
-    expect(() => external.abort()).not.toThrow();
+    external.abort();
+    expect(requestSignal?.aborted).toBe(false);
   });
 
   it('still maps a timeout abort to the timeout error code when no external signal is provided', async () => {

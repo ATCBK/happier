@@ -1,6 +1,6 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   ConnectedServiceBindingsV1Schema,
   ConnectedServiceBindingsV2Schema,
@@ -8,7 +8,7 @@ import {
   readBuiltInLegacyConnectedAccountServiceKeyIngress,
 } from '@happier-dev/protocol';
 
-import { renderScreen as renderTestScreen } from '@/dev/testkit';
+import { renderScreen as renderTestScreen, standardCleanup } from '@/dev/testkit';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { Item } from '@/components/ui/lists/Item';
 import { NewSessionConnectedServicesSelectionContent } from '@/components/sessions/new/components/NewSessionConnectedServicesSelectionContent';
@@ -16,9 +16,16 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
+import { ModalProvider } from '@/modal/ModalProvider';
+import { t, setPreferredLanguageFromSettings } from '@/text';
+import { createConnectedServiceOptionId } from '@/components/sessions/new/components/buildNewSessionConnectedServicesSelectionListModel';
+
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 
 function renderScreen(element: React.ReactElement) {
-  return renderTestScreen(<InjectedAuthProvider credentials={null}>{element}</InjectedAuthProvider>);
+  return renderTestScreen(<InjectedAuthProvider credentials={account.credentials}>
+    <ModalProvider>{element}</ModalProvider>
+  </InjectedAuthProvider>);
 }
 
 const profileState = {
@@ -37,30 +44,25 @@ vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
-const modalShow = vi.hoisted(() => vi.fn());
 
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
   return createExpoRouterMock().module;
 });
-vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+  Platform: { OS: 'ios', select: (values: Record<string, unknown>) => values.ios ?? values.native ?? values.default },
+  useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }),
+}));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('@/modal', async () => {
-  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock({ spies: { show: modalShow } }).module;
-});
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({ translate: (key) => key });
-});
 
 describe('VoiceGlobalConnectedServicesBindingField', () => {
   beforeEach(async () => {
-    const account = await createVoiceSettingsAccountTestHarness(settingsDefaults);
+    account = await createVoiceSettingsAccountTestHarness(settingsDefaults);
     onTestFinished(account.dispose);
+    setPreferredLanguageFromSettings('en');
     profileState.connectedServicesV2 = [];
-    modalShow.mockClear();
   });
+  afterEach(standardCleanup);
 
   it('keeps the declared core binding interactive when optional account groups are disabled', async () => {
     const { VoiceGlobalConnectedServicesBindingField } = await import(
@@ -80,23 +82,13 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
       testID: 'voice-realtime-connected-services-codex',
       title: 'Codex account',
       subtitle: 'Account used for global Codex Voice',
-      detail: 'common.none',
+      detail: t('common.none'),
       showChevron: true,
     });
     expect(item.props.onPress).toEqual(expect.any(Function));
 
-    act(() => item.props.onPress());
-    const modalConfig = modalShow.mock.calls[0]?.[0] as {
-      component: React.ComponentType<Record<string, unknown>>;
-      props: Record<string, unknown>;
-    } | undefined;
-    expect(modalConfig).toBeDefined();
-    if (!modalConfig) throw new Error('expected Connected Services picker modal');
-    const pickerScreen = await renderScreen(React.createElement(
-      modalConfig.component,
-      { ...modalConfig.props, onClose: vi.fn() },
-    ));
-    expect(pickerScreen.tree.findByType(NewSessionConnectedServicesSelectionContent).props).toMatchObject({
+    await act(async () => item.props.onPress());
+    expect(screen.tree.findByType(NewSessionConnectedServicesSelectionContent).props).toMatchObject({
       bindingsByServiceId: {},
       allowDefaultProfileFallback: false,
       includeNativeAuthOption: false,
@@ -134,36 +126,20 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
     const { VoiceGlobalConnectedServicesBindingField } = await import(
       './VoiceGlobalConnectedServicesBindingField'
     );
-    const screen = await renderScreen(<VoiceGlobalConnectedServicesBindingField
+    // React replays updaters in StrictMode; the actual modal host and picker
+    // remain inside that lifecycle, and one physical selection must emit once.
+    const screen = await renderScreen(<React.StrictMode><VoiceGlobalConnectedServicesBindingField
       agentId="codex"
       serviceIds={[serviceId]}
       title="Voice account"
       value={null}
       onChange={onChange}
-    />);
+    /></React.StrictMode>);
 
     const item = screen.tree.findByType(Item);
     expect(item.props.onPress).toEqual(expect.any(Function));
-    act(() => item.props.onPress());
-
-    const modalConfig = modalShow.mock.calls[0]?.[0] as {
-      component: React.ComponentType<Record<string, unknown>>;
-      props: Record<string, unknown>;
-    } | undefined;
-    expect(modalConfig).toBeDefined();
-    if (!modalConfig) throw new Error('expected Connected Services picker modal');
-    // StrictMode replays functional state updaters, which is the cheapest real
-    // reproduction of React evaluating one more than once. Persistence is an
-    // external side effect, so a single selection must still write exactly once.
-    const pickerScreen = await renderScreen(React.createElement(
-      React.StrictMode,
-      null,
-      React.createElement(
-        modalConfig.component,
-        { ...modalConfig.props, onClose: vi.fn() },
-      ),
-    ));
-    const picker = pickerScreen.tree.findByType(NewSessionConnectedServicesSelectionContent);
+    await act(async () => item.props.onPress());
+    const picker = screen.tree.findByType(NewSessionConnectedServicesSelectionContent);
 
     expect(picker.props.supportedServiceIds).toEqual([serviceId]);
     expect(picker.props.profileOptionsByServiceId[serviceId]).toEqual([
@@ -174,11 +150,13 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
       }),
     ]);
 
-    act(() => picker.props.setBindingForService(serviceId, {
-      source: 'connected',
-      selection: 'profile',
-      profileId,
-    }));
+    const optionId = createConnectedServiceOptionId(serviceId, profileId);
+    const options = () => screen.tree.findAll(node => typeof node.type === 'string'
+      && typeof node.props.onPress === 'function'
+      && node.props.testID?.endsWith(`:option:${optionId}`));
+    await vi.waitFor(() => expect(options(), JSON.stringify(screen.tree.findAll(node => typeof node.type === 'string'
+      && node.props.testID).map(node => node.props.testID))).toHaveLength(1));
+    await act(async () => options()[0]!.props.onPress());
     const qualifiedServiceId = readBuiltInLegacyConnectedAccountServiceKeyIngress(serviceId);
     expect(qualifiedServiceId).not.toBeNull();
     expect(onChange).toHaveBeenCalledTimes(1);
@@ -273,7 +251,7 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
 
     expect(screen.tree.findByType(Item).props).toMatchObject({
       title: 'Installed Agent account',
-      detail: 'common.none',
+      detail: t('common.none'),
       showChevron: true,
       onPress: expect.any(Function),
     });

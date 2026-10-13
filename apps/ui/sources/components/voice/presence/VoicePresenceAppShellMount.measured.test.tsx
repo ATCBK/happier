@@ -12,6 +12,7 @@ import { getStorage } from '@/sync/domains/state/storage';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { registerVoiceAdapters } from '@/voice/session/voiceAdapterRegistry';
+import { createLocalConversationVoiceAdapter } from '@/voice/adapters/localConversation/localConversationAdapter';
 import { resetVoiceSessionStoreForTests, setVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
 import {
     SessionCockpitChromeRegistryProvider,
@@ -19,15 +20,40 @@ import {
     useSessionCockpitComposerBottomChromeHeight,
     useReportSessionCockpitComposerChromeHeight,
     useReportSessionCockpitViewerRect,
+    useReportSessionCockpitActionRailRect,
     useSessionCockpitVoicePresenceRect,
 } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { VoicePresenceAppShellMount } from './VoicePresenceAppShellMount';
 import { VoiceTopBarPresenceMount } from './VoiceTopBarPresence';
+import { VoiceTopBarPresence } from './VoiceTopBarPresence';
+import { SessionCompanionContent } from '@/components/sessions/companion/SessionCompanionContent';
+import { useSessionCompanionController } from '@/components/sessions/companion/state/useSessionCompanionController';
+import { useVoiceAttemptControl, VOICE_ATTEMPT_IDLE_TARGET_GLOBAL } from '../attempt/useVoiceAttemptControl';
 
 const keyboard = vi.hoisted(() => ({ height: 0 }));
 const viewport = vi.hoisted(() => ({ width: 390, height: 844, scale: 1, fontScale: 1 }));
-// Settled OS keyboard geometry is the environment boundary.
-vi.mock('@/hooks/ui/useKeyboardHeight', () => ({ useKeyboardHeight: () => keyboard.height }));
+const initialInnerHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+const initialVisualViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+const initialTouchPoints = Object.getOwnPropertyDescriptor(navigator, 'maxTouchPoints');
+let focusedInput: HTMLInputElement | null = null;
+
+// The browser viewport and editable focus are the external inputs; the real
+// keyboard hook and inset projector decide what the shell must clear.
+function installViewportBoundary(): void {
+    const events = new window.EventTarget();
+    Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: 1 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => viewport.height });
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: {
+        get width() { return viewport.width; },
+        get height() { return viewport.height - keyboard.height; },
+        offsetTop: 0,
+        addEventListener: events.addEventListener.bind(events),
+        removeEventListener: events.removeEventListener.bind(events),
+    } });
+    focusedInput = document.createElement('input');
+    document.body.append(focusedInput);
+    focusedInput.focus();
+}
 
 // The platform's dimensions are the external boundary; feature policy, attempt projection,
 // settings, ended-attempt lifecycle and shell geometry all remain real.
@@ -74,6 +100,12 @@ function ViewerObstacle(props: Readonly<{ rect: FrameRect | null }>) {
     return null;
 }
 
+function ActionRailObstacle(props: Readonly<{ rect: FrameRect | null }>) {
+    const report = useReportSessionCockpitActionRailRect(props.rect !== null);
+    React.useEffect(() => { report(props.rect); }, [props.rect, report]);
+    return null;
+}
+
 function PresenceRectProbe() {
     return <View testID="presence-rect-probe" accessibilityValue={{ text: JSON.stringify(useSessionCockpitVoicePresenceRect()) }} />;
 }
@@ -81,6 +113,7 @@ function PresenceRectProbe() {
 describe('phone Island shell clearance', () => {
     beforeEach(() => {
         keyboard.height = 0;
+        installViewportBoundary();
         resetVoiceSessionStoreForTests();
         resetServerFeaturesClientForTests();
         primeServerFeaturesSnapshot({ snapshot: {
@@ -89,21 +122,14 @@ describe('phone Island shell clearance', () => {
         } });
         getStorage().setState((state) => ({
             settings: { ...state.settings, experiments: true,
-                featureToggles: { ...state.settings.featureToggles, voice: true },
+                featureToggles: { ...state.settings.featureToggles, voice: true, 'voice.agent': true, 'execution.runs': true },
                 voice: voiceSettingsParse({ providerId: 'local_conversation', providers: {
                     local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } },
                 } }),
             },
             localSettings: { ...state.localSettings, voicePresenceContainer: 'island' },
         }));
-        registerVoiceAdapters([{
-            id: 'local_conversation', engineKind: 'realtime',
-            start: async () => {}, stop: async () => {}, toggle: async () => {},
-            interrupt: async () => {}, bargeIn: async () => {}, setMuted: async () => {},
-            sendContextUpdate: () => {},
-            getSnapshot: () => ({ adapterId: 'local_conversation', sessionId: null, status: 'disconnected', mode: 'idle', canStop: false }),
-            resolveSurfaceCapabilities: () => ({ allowsGlobalStart: true, controlSessionScope: 'global', requiresVoiceAgentFeature: false, bargeInEnabled: false }),
-        }]);
+        registerVoiceAdapters([createLocalConversationVoiceAdapter()]);
         setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: 'voice-shell', status: 'connected', mode: 'listening', canStop: true });
     });
     it('publishes the measured Island clear of a mounted viewer and removes the obstacle on close', async () => {
@@ -123,6 +149,24 @@ describe('phone Island shell clearance', () => {
             expect(readRect()!.y).toBeGreaterThan(viewer.y);
             await screen.update(scene(null, false));
             expect(readRect()).toBeNull();
+        } finally { await screen.unmount(); }
+    });
+    it('keeps the Orb off the pane action rail at the window edge and returns to the edge when the rail goes', async () => {
+        getStorage().setState((state) => ({ localSettings: { ...state.localSettings, voicePresenceContainer: 'orb' } }));
+        // The session's right tool rail: a full-height strip against the right edge, where the Orb rests.
+        const rail = { x: 346, y: 90, width: 44, height: 700 };
+        const scene = (rect: FrameRect | null) => <SessionCockpitChromeRegistryProvider>
+            <ActionRailObstacle rect={rect} /><PresenceRectProbe /><VoicePresenceAppShellMount />
+        </SessionCockpitChromeRegistryProvider>;
+        const screen = await renderScreen(scene(rail));
+        try {
+            await layOutPhonePresence(screen);
+            const readRect = (): FrameRect => JSON.parse(screen.findByTestId('presence-rect-probe')!.props.accessibilityValue.text);
+            expect(frameRectsOverlap(readRect(), rail)).toBe(false);
+            const clear = readRect();
+            await screen.update(scene(null));
+            await layOutPhonePresence(screen);
+            expect(readRect().x).toBeGreaterThan(clear.x);
         } finally { await screen.unmount(); }
     });
     it('retires the Orb measurement callback when the actual shell switches to Island', async () => {
@@ -192,6 +236,13 @@ describe('phone Island shell clearance', () => {
     });
 
     afterEach(() => {
+        focusedInput?.remove();
+        focusedInput = null;
+        if (initialInnerHeight) Object.defineProperty(window, 'innerHeight', initialInnerHeight);
+        if (initialVisualViewport) Object.defineProperty(window, 'visualViewport', initialVisualViewport);
+        else Reflect.deleteProperty(window, 'visualViewport');
+        if (initialTouchPoints) Object.defineProperty(navigator, 'maxTouchPoints', initialTouchPoints);
+        else Reflect.deleteProperty(navigator, 'maxTouchPoints');
         viewport.width = 390;
         viewport.height = 844;
         getStorage().setState(initialStorage, true);
@@ -201,8 +252,6 @@ describe('phone Island shell clearance', () => {
     });
 
     it('reveals an offscreen Voice section through the Companion scroll owner without opening a second glance', async () => {
-        const { SessionCompanionContent } = await import('@/components/sessions/companion/SessionCompanionContent');
-        const { useSessionCompanionController } = await import('@/components/sessions/companion/state/useSessionCompanionController');
         // ScrollView is an OS/browser boundary; controller, section, presentation tracker and glance stay real.
         let scrollY = 600;
         let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
@@ -218,8 +267,6 @@ describe('phone Island shell clearance', () => {
                 boardBinding={null} resolvePrimaryHost={() => null} testID="companion-scroll" /></>;
         }
         // Render the actual pill independently of phone placement for this scroll-contract slice.
-        const { VoiceTopBarPresence } = await import('./VoiceTopBarPresence');
-        const { useVoiceAttemptControl, VOICE_ATTEMPT_IDLE_TARGET_GLOBAL } = await import('../attempt/useVoiceAttemptControl');
         function Pill() { return <VoiceTopBarPresence voice={useVoiceAttemptControl(VOICE_ATTEMPT_IDLE_TARGET_GLOBAL)} />; }
         screen = await renderScreen(<><Pill /><Scene /></>, { createNodeMock: (element) => {
             const props = element.props;

@@ -1,5 +1,44 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
+import { createSessionFixture } from '@/dev/testkit';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { storage } from '@/sync/domains/state/storage';
+import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
+import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { normalizeAccountSettingsForLocalStorage } from '@/sync/domains/settings/accountSettingsNormalization';
+import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol';
+import { sync } from '@/sync/sync';
+import { createBuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
+import { getVoiceAdapterRegistry, registerVoiceAdapters } from '@/voice/session/voiceAdapterRegistry';
+import { resetVoiceSessionRuntimeStateForTests } from '@/voice/session/voiceSessionStore';
+import { createVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleController';
+import { getVoiceSessionLifecycleController, setVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
+import { buildVoiceTranscriptHistorySessionMetadata } from '@/voice/persistence/voiceTranscriptHistorySession';
+import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
+import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
+import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
+import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
+import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
+import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { createRecipientContractDigestV1 } from '@happier-dev/protocol/plugins/recipientContractV1';
+import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
+import { applyAccountVoiceCredentialSourceSelection, saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
+import { createAccountVoiceOperationService } from '@/voice/credentials/accountVoiceOperationService';
+import { createBundledConversationRuntimeHostLease, getCurrentBundledConversationRuntimeHost } from '@/voice/registry/bundledConversationRuntimeHost';
+import { createExternalVoiceProviderActivationScope } from '@/voice/registry/externalVoiceProviderActivation.testkit';
+import { getExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
+import { createNativeMicSession } from '@/voice/runtime/mic/NativeMicSession';
+import { createWebSocketPcmMedia } from '@/voice/runtime/connection/WebSocketPcmMedia.native';
+import { requestMicrophonePermission, rejectRefusedMicrophone } from '@/utils/platform/microphonePermissions';
+import { XAI_REALTIME_DEFAULT_SETTINGS } from '../../../../../packages/plugins/xai/src/protocol/voice/settings';
 import {
   createVoiceAudioSessionCoordinator,
   type VoiceAudioSessionPlatform,
@@ -10,6 +49,259 @@ import {
 import { createNativeAudioSessionLifecycleBridge } from './nativeAudioSessionLifecycleBridge';
 
 const ORIGINAL_PLATFORM_OS = Platform.OS;
+
+vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const vendor = vi.hoisted(() => ({ startSession: vi.fn(), setAudioModeAsync: vi.fn(async () => undefined), requestRecordingPermissionsAsync: vi.fn(async () => ({ granted: true, canAskAgain: true })) }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'ios' } }));
+const nativeAudio = createNativeVoicePcmCaptureHarness();
+const configureNativeAudioSession = nativeAudio.nativeModule.configureAudioSession.getMockImplementation();
+if (!configureNativeAudioSession) throw new Error('Missing initial native configure boundary');
+vi.mock('expo-modules-core', async original => {
+  const actual = await original<typeof import('expo-modules-core')>();
+  return { ...actual, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative' ? nativeAudio.nativeModule : actual.requireOptionalNativeModule(name) };
+});
+vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: vendor.startSession } }));
+vi.mock('@elevenlabs/client/internal', () => ({ setSetupStrategy: vi.fn(), createConnection: vi.fn(), setupWebRTCSession: vi.fn() }));
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vendor.setAudioModeAsync, requestRecordingPermissionsAsync: vendor.requestRecordingPermissionsAsync } }));
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+
+function createVendorConversation() {
+  let muted = false;
+  let volume = 1;
+  return {
+    endSession: vi.fn(async () => undefined),
+    setMicMuted: vi.fn((value: boolean) => { muted = value; }),
+    setVolume: vi.fn(({ volume: value }: Readonly<{ volume: number }>) => { volume = value; }),
+    sendUserMessage: vi.fn(),
+    sendContextualUpdate: vi.fn(),
+    getId: () => 'native-bridge-conversation',
+    isMuted: () => muted,
+    getVolume: () => volume,
+  };
+}
+
+async function withNativeBridge(
+  run: (fixture: Readonly<{
+    bridge: ReturnType<typeof createNativeAudioSessionLifecycleBridge>;
+    lifecycle: ReturnType<typeof createVoiceSessionLifecycleController>;
+    conversation: ReturnType<typeof createVendorConversation>;
+    coordinator: NonNullable<ReturnType<typeof getSharedVoiceAudioSessionCoordinator>>;
+    emit(event: VoiceAudioSessionPlatformEvent): void;
+  }>) => Promise<void>,
+  micMuted = false,
+  platform: 'ios' | 'android' = 'ios',
+) {
+  const previousState = storage.getState();
+  const previousAdapters = getVoiceAdapterRegistry().list();
+  const previousLifecycle = getVoiceSessionLifecycleController();
+  voiceConversationRuntimeMachine.reset();
+  (Platform as unknown as { OS: string }).OS = platform;
+  const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.elevenlabs');
+  if (!entry) throw new Error('Missing generated ElevenLabs contribution');
+  const conversation = createVendorConversation();
+  vendor.startSession.mockReset().mockResolvedValue(conversation);
+  vi.mocked(nativeAudio.nativeModule.restoreAudioSession).mockReset().mockResolvedValue(undefined);
+  vi.stubGlobal('navigator', { language: 'en-US', languages: ['en-US'] });
+  const historyMetadata = { path: '/voice', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() };
+  const historyOwner = createSessionOwnerMetadataV1({ metadata: historyMetadata });
+  if (!historyOwner.ok) throw new Error('Native fixture requires supported history owner metadata');
+  const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+  sessionHttp.createSessionFromPost('bridge-history', { method: 'POST', body: JSON.stringify({
+    tag: 'system:voice-transcript-history:v1', metadataLayoutVersion: 1,
+    sharedMetadata: { ciphertext: JSON.stringify(projectSessionSharedMetadataV1({ metadata: historyMetadata, agentState: null })) },
+    ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(historyOwner.ownerMetadata),
+    agentState: null, dataEncryptionKey: null, encryptionMode: 'plain',
+  }) });
+  const account = await restoreServerAccountForTest({
+    serverUrl: 'https://native-bridge.example.test', credentialScope: 'restored-home', activation: 'switch',
+    request: async (url, init) => {
+      if (new URL(String(url)).pathname === '/v1/sessions' && init?.method === 'POST') {
+        return sessionHttp.createSessionFromPost('bridge-history', init);
+      }
+      const sessionResponse = sessionHttp.handle(url, init);
+      if (sessionResponse) return sessionResponse;
+      if (new URL(String(url)).pathname === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'account-a' }));
+      const preparation = answerVoiceRealtimePreparationHttpRequest(url, storage.getState().settings);
+      if (preparation) return preparation;
+      const path = new URL(String(url)).pathname;
+      if (path === '/health') return Response.json({ status: 'ok' });
+      if (path === '/v1/voice/token') return Response.json({ allowed: true, token: 'bridge-hosted-token', leaseId: 'bridge-lease', bindingNonce: 'bridge-nonce', expiresAtMs: Date.now() + 60_000 });
+      if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
+      return new Response('{}', { status: 404 });
+    },
+  });
+  const voice = writeVoiceProviderSettingsConfig(previousState.settings.voice, entry.providerId, ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS);
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
+    voice: { ...voice, providerId: entry.providerId },
+  }, storage.getState().settings));
+  storage.setState({ sessions: {
+    ...previousState.sessions, 'bridge-history': createSessionFixture({ id: 'bridge-history', serverId: account.home.id, encryptionMode: 'plain', active: false, metadata: { path: '/voice', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() } }),
+  } });
+  const history = await sync.ensureSessionVisibleForMessageRoute('bridge-history', { forceRefresh: true, serverId: account.home.id });
+  if (history.kind !== 'available') throw new Error('Native fixture history must hydrate through its Home');
+  const assembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [entry] });
+  registerVoiceAdapters(assembly.adapters);
+  voiceSessionBindingStore.getState().bind({ adapterId: entry.providerId, controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID, conversationSessionId: 'bridge-history', conversationSessionAddress: { serverId: account.home.id, sessionId: 'bridge-history' }, targetSessionAddress: null, lifetime: 'runtime_attempt', transcriptMode: 'synthetic', updatedAt: 1 });
+  const lifecycle = createVoiceSessionLifecycleController();
+  setVoiceSessionLifecycleController(lifecycle);
+  lifecycle.setConfiguredProviderId(entry.providerId);
+  const coordinator = getSharedVoiceAudioSessionCoordinator();
+  if (!coordinator) throw new Error('Missing canonical native coordinator');
+  const bridge = createNativeAudioSessionLifecycleBridge({ coordinator, controller: lifecycle });
+  try {
+    await lifecycle.toggle(null);
+    expect(lifecycle.getSnapshot().status).toBe('connected');
+    expect(coordinator.getSnapshot()).toMatchObject({ leaseCount: 1, configuration: { capture: 'provider_managed_exclusive' } });
+    if (micMuted) await lifecycle.setMuted(VOICE_AGENT_GLOBAL_SESSION_ID, true);
+    conversation.setMicMuted.mockClear();
+    conversation.setVolume.mockClear();
+    await run({ bridge, lifecycle, conversation, coordinator,
+      emit: event => nativeAudio.emitEvent('voiceAudioSessionEvent', { ...event, generation: coordinator.getSnapshot().generation }),
+    });
+  } finally {
+    bridge.dispose();
+    vi.mocked(nativeAudio.nativeModule.restoreAudioSession).mockResolvedValue(undefined);
+    await lifecycle.dispose();
+    setVoiceSessionLifecycleController(previousLifecycle);
+    await assembly.dispose();
+    await resetVoiceSessionRuntimeStateForTests();
+    voiceConversationRuntimeMachine.reset();
+    registerVoiceAdapters(previousAdapters);
+    await account.dispose();
+    storage.setState(previousState, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+}
+
+const settleBridge = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
+// The xAI native contribution is the real host-PCM consumer. Selecting Metro's
+// native media owner here avoids substituting the browser PCM owner in Node.
+async function withNativePcmBridge(run: (fixture: Readonly<{
+  lifecycle: ReturnType<typeof createVoiceSessionLifecycleController>;
+  coordinator: NonNullable<ReturnType<typeof getSharedVoiceAudioSessionCoordinator>>;
+  emit(event: VoiceAudioSessionPlatformEvent): void;
+}>) => Promise<void>) {
+  const previousState = storage.getState();
+  const previousAdapters = getVoiceAdapterRegistry().list();
+  const previousLifecycle = getVoiceSessionLifecycleController();
+  const configure = vi.mocked(nativeAudio.nativeModule.configureAudioSession);
+  configure.mockImplementation(configureNativeAudioSession);
+  vi.mocked(nativeAudio.nativeModule.stop).mockClear();
+  vi.mocked(nativeAudio.nativeModule.stopPlayback).mockClear();
+  voiceConversationRuntimeMachine.reset();
+  (Platform as unknown as { OS: string }).OS = 'ios';
+  const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.xai');
+  if (!entry) throw new Error('Missing generated xAI contribution');
+  const recipientContract = createBundledVoiceRecipientContract({ pluginId: entry.pluginId, declaration: entry.declaration });
+  if (!recipientContract) throw new Error('Missing generated xAI recipient contract');
+  const purposes = createConnectedPurposeCatalogHttpBoundary();
+  vi.stubGlobal('navigator', { language: 'en-US', languages: ['en-US'] });
+  // The testkit owns Socket.IO and WebRTC; neither supplies React Native's
+  // WebSocket constructor with its third authentication-header argument.
+  // This local boundary replaces only that vendor/OS transport.
+  class NativeWebSocketBoundary extends EventTarget {
+    readyState = 0;
+    bufferedAmount = 0;
+    constructor(_url: string, _protocols?: string | string[], _options?: unknown) {
+      super();
+      queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event('open')); });
+    }
+    send(_data: string) {}
+    close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
+  }
+  vi.stubGlobal('WebSocket', NativeWebSocketBoundary);
+  const account = await restoreServerAccountForTest({
+    serverUrl: 'https://native-bridge-pcm.example.test', credentialScope: 'restored-home', activation: 'switch',
+    request: async (url, init) => new URL(String(url)).pathname === '/v1/account/profile'
+      ? Response.json(AccountProfileSchema.parse({ id: 'account-a' }))
+      : await purposes.handle(url, init)
+      ?? answerVoiceRealtimePreparationHttpRequest(url, storage.getState().settings)
+      ?? (new URL(String(url)).pathname === '/health' ? Response.json({ status: 'ok' }) : new Response('{}', { status: 404 })),
+  });
+  const voice = writeVoiceProviderSettingsConfig(previousState.settings.voice, entry.providerId, { ...XAI_REALTIME_DEFAULT_SETTINGS, resumptionEnabled: false });
+  const contribution = { pluginId: entry.pluginId, localId: entry.declaration.id };
+  const saved = saveAndUseAccountVoiceCredential({ settings: settingsParse({
+    ...previousState.settings,
+    ...normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: entry.providerId } }, previousState.settings),
+  }),
+    contribution, credentialSlotId: recipientContract.credentialSlot.id, expectedSettingsVersion: 1, currentDeclaration: entry.declaration,
+    value: 'xai_native_bridge', generateId: () => 'native-bridge-secret', now: 1, expectedSecretId: null, expectedSecretUpdatedAt: null,
+    approvedRecipientContractDigest: createRecipientContractDigestV1(recipientContract),
+  });
+  const selected = applyAccountVoiceCredentialSourceSelection({ settings: saved.settings, connectedPurposes: purposes.value, currentDeclaration: entry.declaration,
+    mutation: { contribution, credentialSlotId: recipientContract.credentialSlot.id, expectedSettingsVersion: 1, selection: { kind: 'savedSecret' } },
+  });
+  purposes.replace(selected.connectedPurposes);
+  const settingsScope = storage.getState().settingsScope;
+  if (!settingsScope) throw new Error('Native PCM fixture requires its admitted Account settings scope');
+  const secretKeys = await resolveSettingsSecretsKeySet({ credentials: account.credentials, scope: settingsScope });
+  if (!secretKeys) throw new Error('Native PCM fixture requires device-local secret custody');
+  storage.getState().applySettingsLocal(normalizeAccountSettingsForLocalStorage({
+    raw: selected.accountSettings,
+    mode: 'plain',
+    settingsSecretsKey: secretKeys.writeKey,
+    settingsSecretsReadKeys: secretKeys.readKeys,
+    localSettings: storage.getState().settings,
+  }));
+  storage.setState({ sessions: { ...previousState.sessions,
+    'bridge-pcm-history': createSessionFixture({ id: 'bridge-pcm-history', serverId: account.home.id, encryptionMode: 'plain', active: false, metadata: { path: '/voice', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() } }),
+  } });
+  await purposes.hydrate({ serverId: account.home.id, accountId: 'account-a' });
+  const providerFetch = async (url: URL | RequestInfo) => {
+    if (String(url).endsWith('/v1/realtime/client_secrets')) return Response.json({ value: 'native-bridge-client-secret', expires_at: Math.floor(Date.now() / 1000) + 60 });
+    throw new Error(`Unexpected provider request: ${String(url)}`);
+  };
+  const hostLease = createBundledConversationRuntimeHostLease();
+  const host = Object.freeze({ ...hostLease.host,
+    createWebSocketPcmMedia,
+    createMicSession: (options: Parameters<typeof createNativeMicSession>[0]) => createNativeMicSession({ ...options,
+      ensurePermission: async () => rejectRefusedMicrophone(await requestMicrophonePermission(), () => {}),
+    }),
+  });
+  const scope = createExternalVoiceProviderActivationScope({ pluginId: entry.pluginId, occurrenceId: 'xai-native-bridge-occurrence', declarations: [entry.declaration], hostPlatform: 'ios',
+    runtimeHost: host, isRuntimeHostCurrent: () => getCurrentBundledConversationRuntimeHost() === hostLease.host,
+    hostBindingsByLocalId: { [entry.declaration.id]: { recipientContract, descriptor: 'bundled',
+      createInvocationAccountOperations: (signal, _conversationSessionId, isCurrent, phase) => createAccountVoiceOperationService({
+        providerId: entry.providerId, contribution, declaration: entry.declaration, phase, recipientContract, signal, isCurrent, fetch: providerFetch,
+      }),
+    } },
+  });
+  entry.activate(scope.api);
+  await scope.commit();
+  const adapter = getExternalVoiceProviderRegistration(entry.providerId)?.adapter;
+  if (!adapter) throw new Error('Generated native xAI entry was not activated');
+  registerVoiceAdapters([adapter]);
+  voiceSessionBindingStore.getState().bind({ adapterId: entry.providerId, controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID, conversationSessionId: 'bridge-pcm-history', conversationSessionAddress: { serverId: account.home.id, sessionId: 'bridge-pcm-history' }, targetSessionAddress: null, lifetime: 'runtime_attempt', transcriptMode: 'synthetic', updatedAt: 1 });
+  const lifecycle = createVoiceSessionLifecycleController();
+  setVoiceSessionLifecycleController(lifecycle);
+  lifecycle.setConfiguredProviderId(entry.providerId);
+  const coordinator = getSharedVoiceAudioSessionCoordinator();
+  if (!coordinator) throw new Error('Missing canonical native PCM coordinator');
+  const bridge = createNativeAudioSessionLifecycleBridge({ coordinator, controller: lifecycle });
+  try {
+    await lifecycle.toggle(null);
+    expect(lifecycle.getSnapshot().status).toBe('connected');
+    expect(coordinator.getSnapshot()).toMatchObject({ configuration: { input: true, output: true, aec: 'required', capture: 'host_managed' }, capabilities: { aecActive: true } });
+    await run({ lifecycle, coordinator, emit: event => nativeAudio.emitEvent('voiceAudioSessionEvent', event) });
+  } finally {
+    bridge.dispose();
+    configure.mockImplementation(configureNativeAudioSession);
+    await lifecycle.dispose();
+    setVoiceSessionLifecycleController(previousLifecycle);
+    await scope.unwind();
+    hostLease.revoke();
+    await resetVoiceSessionRuntimeStateForTests();
+    voiceConversationRuntimeMachine.reset();
+    registerVoiceAdapters(previousAdapters);
+    await account.dispose();
+    storage.setState(previousState, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+}
 
 afterEach(() => {
   (Platform as unknown as { OS: string }).OS = ORIGINAL_PLATFORM_OS;
@@ -26,60 +318,10 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function createHarness(micMuted = false, aec: 'required' | 'preferred' = 'preferred') {
-  let listener: ((event: VoiceAudioSessionPlatformEvent) => void) | null = null;
-  const remove = vi.fn();
-  const coordinator = {
-    subscribe: vi.fn((next: (event: VoiceAudioSessionPlatformEvent) => void) => {
-      listener = next;
-      return { remove };
-    }),
-    getSnapshot: () => ({ configuration: { aec } }),
-  };
-  let snapshot = {
-    adapterId: 'local_conversation', sessionId: 'voice-global', status: 'connected' as const,
-    mode: 'listening' as const, canStop: true, micMuted,
-  };
-  let userMuted = micMuted;
-  let suspensionCount = 0;
-  const setMuted = vi.fn(async (_sessionId: string, muted: boolean) => {
-    snapshot = { ...snapshot, micMuted: muted };
-  });
-  const controller = {
-    getSnapshot: vi.fn(() => snapshot),
-    setOutputFocusState: vi.fn(async (): Promise<'applied' | 'unsupported'> => 'applied'),
-    setMuted,
-    suspendInput: vi.fn(async () => {
-      suspensionCount += 1;
-      if (suspensionCount === 1 && !snapshot.micMuted) await setMuted('voice-global', true);
-      let released = false;
-      return {
-        async release() {
-          if (released) return;
-          released = true;
-          suspensionCount -= 1;
-          if (suspensionCount === 0 && !userMuted) await setMuted('voice-global', false);
-        },
-      };
-    }),
-    stop: vi.fn(async () => undefined),
-  };
-  const bridge = createNativeAudioSessionLifecycleBridge({
-    coordinator: coordinator as never,
-    controller,
-  });
-  return {
-    bridge,
-    controller,
-    emit: (event: VoiceAudioSessionPlatformEvent) => listener?.(event),
-    remove,
-    async setUserMuted(muted: boolean) {
-      userMuted = muted;
-      if (suspensionCount === 0 || muted) await setMuted('voice-global', muted);
-    },
-  };
-}
-
+// F: a currently active generated native Voice contribution always retains an
+// output request (PCM conversation policy or provider-exclusive call mode).
+// This unique input-only reconfiguration port contract stays until a real
+// input-only Voice consumer can produce it; it is not composed runtime proof.
 function createReconfigurationHarness() {
   let platformListener: ((event: VoiceAudioSessionPlatformEvent) => void) | null = null;
   const platform: VoiceAudioSessionPlatform = {
@@ -145,302 +387,300 @@ function createReconfigurationHarness() {
 
 describe('createNativeAudioSessionLifecycleBridge', () => {
   it('auto-mutes across overlapping transient suspension reasons and resumes only after all clear', async () => {
-    (Platform as unknown as { OS: string }).OS = 'ios';
-    const { controller, emit } = createHarness();
+    await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'interruption_began' });
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
+    await vi.waitFor(() => expect(conversation.getVolume()).toBe(0));
     emit({ generation: 1, kind: 'interruption_ended', shouldResume: true });
-    await Promise.resolve();
-    expect(controller.setMuted).toHaveBeenCalledTimes(1);
+    await settleBridge();
+    expect(conversation.isMuted()).toBe(true);
+    expect(lifecycle.getSnapshot().micMuted).toBe(true);
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', false));
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(false));
+    expect(conversation.getVolume()).toBe(1);
+    });
   });
 
   it('removes only its interruption suspension when the user mutes during the interruption', async () => {
-    const { controller, emit, setUserMuted } = createHarness();
-
+    await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'interruption_began' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
-
-    await setUserMuted(true);
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
+    await lifecycle.setMuted(VOICE_AGENT_GLOBAL_SESSION_ID, true);
     emit({ generation: 1, kind: 'interruption_ended', shouldResume: true });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-    expect(controller.setMuted).not.toHaveBeenCalledWith('voice-global', false);
-    expect(controller.getSnapshot().micMuted).toBe(true);
+    await settleBridge();
+    expect(conversation.setMicMuted).not.toHaveBeenCalledWith(false);
+    expect(conversation.isMuted()).toBe(true);
+    expect(lifecycle.getSnapshot().micMuted).toBe(true);
+    });
   });
 
   it('does not unmute a Voice attempt that was already user-muted before interruption', async () => {
-    const { controller, emit } = createHarness(true);
-
+    await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'interruption_began' });
     emit({ generation: 1, kind: 'interruption_ended', shouldResume: true });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-    expect(controller.setMuted).not.toHaveBeenCalled();
-    expect(controller.getSnapshot().micMuted).toBe(true);
+    await settleBridge();
+    expect(conversation.setMicMuted).not.toHaveBeenCalled();
+    expect(conversation.isMuted()).toBe(true);
+    expect(lifecycle.getSnapshot().micMuted).toBe(true);
+    }, true);
   });
 
   it('releases an acquired suspension lease when the bridge is disposed', async () => {
-    const { bridge, controller, emit } = createHarness();
+    await withNativeBridge(async ({ bridge, conversation, emit }) => {
     emit({ generation: 1, kind: 'interruption_began' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
-
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
     bridge.dispose();
-
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', false));
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(false));
+    });
   });
 
   it('releases a suspension lease that materializes after disposal', async () => {
-    const acquired = createDeferred<Readonly<{ release(): Promise<void> }>>();
-    let listener: (event: VoiceAudioSessionPlatformEvent) => void = () => {};
-    const release = vi.fn(async () => undefined);
-    const suspendInput = vi.fn(() => acquired.promise);
-    const bridge = createNativeAudioSessionLifecycleBridge({
-      coordinator: {
-        subscribe(next: (event: VoiceAudioSessionPlatformEvent) => void) {
-          listener = next;
-          return { remove: vi.fn() };
-        },
-        getSnapshot: () => ({ configuration: { aec: 'preferred' as const } }),
-      } as never,
-      controller: {
-        getSnapshot: () => ({ sessionId: 'voice-global', status: 'connected' as const }),
-        suspendInput,
-        setOutputFocusState: vi.fn(async () => 'applied' as const),
-        stop: vi.fn(async () => undefined),
-      },
+    await withNativeBridge(async ({ bridge, lifecycle, conversation, emit }) => {
+      const setPhysicalMute = conversation.setMicMuted.getMockImplementation();
+      if (!setPhysicalMute) throw new Error('Missing SDK mute boundary');
+      // Dispose inside the synchronous SDK write, before the real lifecycle's
+      // async mute settlement can return its suspension lease to the bridge.
+      conversation.setMicMuted.mockImplementation(muted => {
+        setPhysicalMute(muted);
+        if (muted) bridge.dispose();
+      });
+      emit({ generation: 1, kind: 'interruption_began' });
+      await vi.waitFor(() => expect(conversation.setMicMuted.mock.calls).toEqual([[true], [false]]));
+      expect(conversation.isMuted()).toBe(false);
+      expect(lifecycle.getSnapshot().micMuted === true).toBe(false);
     });
-
-    listener({ generation: 1, kind: 'interruption_began' });
-    await vi.waitFor(() => expect(suspendInput).toHaveBeenCalledTimes(1));
-    bridge.dispose();
-    acquired.resolve({ release });
-
-    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 
   it('keeps an active unmuted iOS Voice attempt unchanged through ordinary background and foreground transitions', async () => {
-    (Platform as unknown as { OS: string }).OS = 'ios';
-    const { controller, emit } = createHarness();
-
+    await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'lifecycle_changed', state: 'background' });
     emit({ generation: 1, kind: 'lifecycle_changed', state: 'foreground' });
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(controller.setMuted).not.toHaveBeenCalled();
-    expect(controller.setOutputFocusState).not.toHaveBeenCalled();
-    expect(controller.stop).not.toHaveBeenCalled();
+    await settleBridge();
+    expect(lifecycle.getSnapshot().status).toBe('connected');
+    expect(conversation.isMuted()).toBe(false);
+    expect(conversation.setMicMuted).not.toHaveBeenCalled();
+    expect(conversation.setVolume).not.toHaveBeenCalled();
+    expect(conversation.endSession).not.toHaveBeenCalled();
+    });
   });
 
   it('preserves an explicit iOS Voice mute through ordinary background and foreground transitions', async () => {
-    (Platform as unknown as { OS: string }).OS = 'ios';
-    const { controller, emit } = createHarness(true);
-
+    await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'lifecycle_changed', state: 'background' });
     emit({ generation: 1, kind: 'lifecycle_changed', state: 'foreground' });
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(controller.setMuted).not.toHaveBeenCalled();
-    expect(controller.setOutputFocusState).not.toHaveBeenCalled();
-    expect(controller.stop).not.toHaveBeenCalled();
+    await settleBridge();
+    expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', micMuted: true });
+    expect(conversation.isMuted()).toBe(true);
+    expect(conversation.setMicMuted).not.toHaveBeenCalled();
+    expect(conversation.setVolume).not.toHaveBeenCalled();
+    expect(conversation.endSession).not.toHaveBeenCalled();
+    }, true);
   });
 
   it('keeps an active unmuted Android Voice attempt unchanged through ordinary background and foreground transitions', async () => {
-    (Platform as unknown as { OS: string }).OS = 'android';
-    const { controller, emit } = createHarness();
-
+    await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'lifecycle_changed', state: 'background' });
     emit({ generation: 1, kind: 'lifecycle_changed', state: 'foreground' });
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(controller.setMuted).not.toHaveBeenCalled();
-    expect(controller.setOutputFocusState).not.toHaveBeenCalled();
-    expect(controller.stop).not.toHaveBeenCalled();
+    await settleBridge();
+    expect(lifecycle.getSnapshot().status).toBe('connected');
+    expect(conversation.isMuted()).toBe(false);
+    expect(conversation.setMicMuted).not.toHaveBeenCalled();
+    expect(conversation.setVolume).not.toHaveBeenCalled();
+    expect(conversation.endSession).not.toHaveBeenCalled();
+    }, false, 'android');
   });
 
   it('does not let a duckable focus signal clear a true transient capture suspension', async () => {
-    const { controller, emit } = createHarness();
+    await withNativeBridge(async ({ conversation, emit }) => {
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
 
     // This platform fact is intentionally distinct from transient loss. The
     // native output owner can apply its own duck policy, while capture stays
     // suspended until Android reports focus gain.
     emit({ generation: 1, kind: 'focus_duckable' });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(controller.setMuted).toHaveBeenCalledTimes(1);
+    await settleBridge();
+    expect(conversation.isMuted()).toBe(true);
+    expect(conversation.getVolume()).toBe(0);
 
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', false));
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(false));
+    });
   });
 
   it('suspends provider-neutral output for transient focus loss and restores only on gain', async () => {
-    const { controller, emit } = createHarness();
-
+    await withNativeBridge(async ({ conversation, emit }) => {
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(controller.setOutputFocusState).toHaveBeenLastCalledWith(
-      'voice-global',
-      'suspended',
-    ));
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
+    await vi.waitFor(() => expect(conversation.getVolume()).toBe(0));
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
 
     // A duckable notification after a real transient loss must not downgrade
     // the output suspension before Android has returned focus.
     emit({ generation: 1, kind: 'focus_duckable' });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(controller.setOutputFocusState).toHaveBeenCalledTimes(1);
+    await settleBridge();
+    expect(conversation.getVolume()).toBe(0);
 
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(controller.setOutputFocusState).toHaveBeenLastCalledWith(
-      'voice-global',
-      'active',
-    ));
+    await vi.waitFor(() => expect(conversation.getVolume()).toBe(1));
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(false));
+    });
   });
 
   it('ducks output without muting capture and restores it on focus gain', async () => {
-    const { controller, emit } = createHarness();
-
+    await withNativeBridge(async ({ conversation, emit }) => {
     emit({ generation: 1, kind: 'focus_duckable' });
-    await vi.waitFor(() => expect(controller.setOutputFocusState).toHaveBeenLastCalledWith(
-      'voice-global',
-      'ducked',
-    ));
-    expect(controller.setMuted).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(conversation.getVolume()).toBe(0.18));
+    expect(conversation.isMuted()).toBe(false);
+    expect(conversation.setMicMuted).not.toHaveBeenCalled();
 
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(controller.setOutputFocusState).toHaveBeenLastCalledWith(
-      'voice-global',
-      'active',
-    ));
+    await vi.waitFor(() => expect(conversation.getVolume()).toBe(1));
+    });
   });
 
   it('does not mute capture when the lifecycle owner reports output suspension unsupported', async () => {
-    const { controller, emit } = createHarness();
-    controller.setOutputFocusState.mockResolvedValueOnce('unsupported');
-
+    await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
+    conversation.setVolume.mockImplementation(() => { throw new TypeError('Vendor output volume is unsupported'); });
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
 
-    await vi.waitFor(() => expect(controller.setOutputFocusState).toHaveBeenCalledWith(
-      'voice-global',
-      'suspended',
-    ));
+    await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
     // Exact-adapter fail-closed settlement belongs to the lifecycle controller;
     // this bridge must not re-resolve and stop a same-id replacement.
-    expect(controller.stop).not.toHaveBeenCalled();
-    expect(controller.setMuted).not.toHaveBeenCalled();
+    expect(conversation.endSession).toHaveBeenCalledTimes(1);
+    expect(conversation.setMicMuted).not.toHaveBeenCalled();
+    });
   });
 
   it('does not unmute when active output restoration is unsupported', async () => {
-    const { controller, emit } = createHarness();
-    controller.setOutputFocusState
-      .mockResolvedValueOnce('applied')
-      .mockResolvedValueOnce('unsupported');
-
+    await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
-
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
+    conversation.setVolume.mockImplementation(() => { throw new TypeError('Vendor output restoration is unsupported'); });
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(controller.stop).not.toHaveBeenCalled();
-    expect(controller.setMuted).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+    expect(conversation.endSession).toHaveBeenCalledTimes(1);
+    expect(conversation.setMicMuted).not.toHaveBeenCalledWith(false);
+    });
   });
 
   it('does not unmute when active output restoration throws', async () => {
-    const { controller, emit } = createHarness();
-    controller.setOutputFocusState
-      .mockResolvedValueOnce('applied')
-      .mockRejectedValueOnce(new Error('output_restore_failed'));
-
-    emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
-
-    emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
-
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(controller.stop).not.toHaveBeenCalled();
-    expect(controller.setMuted).toHaveBeenCalledTimes(1);
+    // F: the current lifecycle normalizes adapter and Stop errors to
+    // 'unsupported'. Retain its rejected-Promise port contract independently;
+    // throwing at SDK setVolume exercises unsupported, not this catch branch.
+    let listener: (event: VoiceAudioSessionPlatformEvent) => void = () => {};
+    const release = vi.fn(async () => undefined);
+    const suspendInput = vi.fn(async () => ({ release }));
+    const stop = vi.fn(async () => undefined);
+    const focus = vi.fn(async (): Promise<'applied' | 'unsupported'> => 'applied')
+      .mockResolvedValueOnce('applied').mockRejectedValueOnce(new Error('output_restore_failed'));
+    const bridge = createNativeAudioSessionLifecycleBridge({
+      coordinator: {
+        subscribe(next: (event: VoiceAudioSessionPlatformEvent) => void) { listener = next; return { remove() {} }; },
+        getSnapshot: () => ({ configuration: { aec: 'preferred' as const } }),
+      } as never,
+      controller: { getSnapshot: () => ({ sessionId: 'voice-global', status: 'connected' as const }), suspendInput, setOutputFocusState: focus, stop },
+    });
+    try {
+      listener({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
+      await vi.waitFor(() => expect(suspendInput).toHaveBeenCalledTimes(1));
+      listener({ generation: 1, kind: 'focus_changed', state: 'gained' });
+      await vi.waitFor(() => expect(focus).toHaveBeenCalledTimes(2));
+      await settleBridge();
+      expect(release).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      bridge.dispose();
+      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    }
   });
 
   it('does not stop a same-session replacement after delayed output focus failure', async () => {
-    const outputFocus = createDeferred<'applied' | 'unsupported'>();
-    let listener: (event: VoiceAudioSessionPlatformEvent) => void = () => {
-      throw new Error('native_audio_bridge_listener_missing');
-    };
-    let snapshot: Readonly<{
-      adapterId: string;
-      sessionId: string;
-      status: 'connected';
-      mode: 'listening';
-      canStop: true;
-      micMuted: false;
-    }> = {
-      adapterId: 'incumbent',
-      sessionId: 'voice-global',
-      status: 'connected',
-      mode: 'listening',
-      canStop: true,
-      micMuted: false,
-    };
-    const controller = {
-      getSnapshot: vi.fn(() => snapshot),
-      setOutputFocusState: vi.fn(() => outputFocus.promise),
-      setMuted: vi.fn(async () => undefined),
-      suspendInput: vi.fn(async () => null),
-      stop: vi.fn(async () => undefined),
-    };
-    const bridge = createNativeAudioSessionLifecycleBridge({
-      coordinator: {
-        subscribe(next: (event: VoiceAudioSessionPlatformEvent) => void) {
-          listener = next;
-          return { remove: vi.fn() };
-        },
-        getSnapshot: () => ({ configuration: { aec: 'preferred' as const } }),
-      } as never,
-      controller,
+    await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
+      const ending = createDeferred<void>();
+      conversation.endSession.mockImplementationOnce(async () => await ending.promise);
+      conversation.setVolume.mockImplementationOnce(() => {
+        throw new TypeError('Vendor output focus is unavailable');
+      });
+      const focusObserver = vi.spyOn(lifecycle, 'setOutputFocusState');
+      emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
+      await vi.waitFor(() => expect(conversation.endSession).toHaveBeenCalledTimes(1));
+      const focusResult = focusObserver.mock.results[0];
+      if (focusResult?.type !== 'return') throw new Error('Expected the actual lifecycle focus work');
+      let focusSettled = false;
+      const focusWork = focusResult.value.then(result => {
+        focusSettled = true;
+        return result;
+      });
+      await vi.waitFor(() => expect(coordinator.getSnapshot().leaseCount).toBe(0));
+      const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.elevenlabs');
+      if (!entry) throw new Error('Missing generated ElevenLabs contribution');
+      const replacement = createVendorConversation();
+      vendor.startSession.mockResolvedValueOnce(replacement);
+      const replacementAssembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [entry] });
+      const replacementAdapter = replacementAssembly.adapters.find(adapter => adapter.id === entry.providerId);
+      if (!replacementAdapter) throw new Error('Missing generated replacement adapter');
+      try {
+        registerVoiceAdapters(replacementAssembly.adapters);
+        await replacementAdapter.start({
+          sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+          requestedTargetSessionAddress: null,
+          textOnly: true,
+        });
+        expect(replacementAdapter.getSnapshot()).toMatchObject({
+          sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, status: 'connected',
+        });
+        expect(vendor.startSession.mock.calls.at(-1)?.[0]).toMatchObject({
+          textOnly: true, overrides: { conversation: { textOnly: true } },
+        });
+        expect(coordinator.getSnapshot().leaseCount).toBe(1);
+        expect(focusSettled).toBe(false);
+        await replacementAdapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true });
+        expect(replacement.isMuted()).toBe(true);
+        ending.resolve();
+        await expect(focusWork).resolves.toBe('unsupported');
+        expect(replacementAdapter.getSnapshot().status).toBe('connected');
+        expect(replacement.isMuted()).toBe(true);
+        expect(replacement.endSession).not.toHaveBeenCalled();
+      } finally {
+        ending.resolve();
+        await focusWork;
+        await replacementAssembly.dispose();
+      }
     });
-
-    listener({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(controller.setOutputFocusState).toHaveBeenCalledWith(
-      'voice-global',
-      'suspended',
-    ));
-
-    snapshot = { ...snapshot, adapterId: 'replacement' };
-    outputFocus.resolve('unsupported');
-    await outputFocus.promise;
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-    expect(controller.stop).not.toHaveBeenCalled();
-    expect(controller.setMuted).not.toHaveBeenCalled();
-    bridge.dispose();
   });
 
   it('clears a transient capture suspension only from the replacement focus generation', async () => {
-    const { bridge, controller, coordinator, emit, request } = createReconfigurationHarness();
-    const first = await coordinator.acquire(request());
+    await withNativePcmBridge(async ({ lifecycle, coordinator, emit }) => {
     const firstGeneration = coordinator.getSnapshot().generation;
     emit({ generation: firstGeneration, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
-
-    const replacement = await coordinator.acquire(request({ ownerId: 'replacement' }));
+    await vi.waitFor(() => expect(lifecycle.getSnapshot().micMuted).toBe(true));
+    const configure = vi.mocked(nativeAudio.nativeModule.configureAudioSession);
+    configure.mockImplementation(async request => {
+      const result = await configureNativeAudioSession(request);
+      emit({ generation: request.generation, kind: 'focus_changed', state: request.configuration.output ? 'gained' : 'not_required' });
+      return result;
+    });
+    const replacement = await coordinator.acquire({ ownerId: 'replacement-playback', mode: 'playback', input: false, output: true, aec: 'off', capture: 'host_managed' });
     const replacementGeneration = coordinator.getSnapshot().generation;
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', false));
+    await vi.waitFor(() => expect(lifecycle.getSnapshot().micMuted === true).toBe(false));
 
     emit({ generation: replacementGeneration, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
+    await vi.waitFor(() => expect(lifecycle.getSnapshot().micMuted).toBe(true));
     emit({ generation: firstGeneration, kind: 'focus_changed', state: 'gained' });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true);
+    await settleBridge();
+    expect(lifecycle.getSnapshot().micMuted).toBe(true);
 
     emit({ generation: replacementGeneration, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', false));
+    await vi.waitFor(() => expect(lifecycle.getSnapshot().micMuted === true).toBe(false));
 
     await replacement.release();
-    await first.release();
-    bridge.dispose();
+    configure.mockImplementation(configureNativeAudioSession);
+    });
   });
 
   it('clears a focus suspension when the replacement configuration no longer needs output focus', async () => {
@@ -465,79 +705,101 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
   });
 
   it('never unmutes a session that was already user-muted', async () => {
-    (Platform as unknown as { OS: string }).OS = 'android';
-    const { controller, emit } = createHarness(true);
+    await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'lifecycle_changed', state: 'background' });
     emit({ generation: 1, kind: 'lifecycle_changed', state: 'foreground' });
-    await Promise.resolve();
-    expect(controller.setMuted).not.toHaveBeenCalled();
+    await settleBridge();
+    expect(conversation.isMuted()).toBe(true);
+    expect(lifecycle.getSnapshot().micMuted).toBe(true);
+    expect(conversation.setMicMuted).not.toHaveBeenCalled();
+    }, true, 'android');
   });
 
   it('stops fail-closed when interruption cannot resume or focus is permanently lost', async () => {
-    const first = createHarness();
-    first.emit({ generation: 1, kind: 'interruption_began' });
-    first.emit({ generation: 1, kind: 'interruption_ended', shouldResume: false });
-    await vi.waitFor(() => expect(first.controller.stop).toHaveBeenCalledWith('voice-global'));
-
-    const second = createHarness();
-    second.emit({ generation: 2, kind: 'focus_changed', state: 'lost_permanent' });
-    await vi.waitFor(() => expect(second.controller.stop).toHaveBeenCalledWith('voice-global'));
+    await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
+      emit({ generation: 1, kind: 'interruption_began' });
+      emit({ generation: 1, kind: 'interruption_ended', shouldResume: false });
+      await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+      expect(conversation.endSession).toHaveBeenCalledTimes(1);
+      expect(coordinator.getSnapshot().leaseCount).toBe(0);
+    });
+    await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
+      emit({ generation: 2, kind: 'focus_changed', state: 'lost_permanent' });
+      await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+      expect(conversation.endSession).toHaveBeenCalledTimes(1);
+      expect(coordinator.getSnapshot().leaseCount).toBe(0);
+    });
   });
 
   it('releases suspension leases even when terminal session stop fails', async () => {
-    const { controller, emit } = createHarness();
-    controller.stop.mockRejectedValueOnce(new Error('session_stop_failed'));
-
+    await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
+    // The vendor End boundary is best-effort by contract. Native lease release
+    // is the fallible teardown boundary that reaches the real lifecycle Stop.
+    const restore = vi.mocked(nativeAudio.nativeModule.restoreAudioSession);
+    restore.mockRejectedValueOnce(new Error('session_stop_failed'));
     emit({ generation: 1, kind: 'interruption_began' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
+    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
 
     emit({ generation: 1, kind: 'interruption_ended', shouldResume: false });
 
-    await vi.waitFor(() => expect(controller.stop).toHaveBeenCalledWith('voice-global'));
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', false));
+    await vi.waitFor(() => expect(conversation.endSession).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(coordinator.getSnapshot().pendingReleaseCount).toBe(1));
+    restore.mockResolvedValue(undefined);
+    const recovery = await coordinator.acquire({ ownerId: 'bridge-release-recovery', mode: 'conversation', input: true, output: true, aec: 'preferred', capture: 'provider_managed_exclusive' });
+    await recovery.release();
+    expect(coordinator.getSnapshot()).toMatchObject({ leaseCount: 0, pendingReleaseCount: 0 });
+    });
   });
 
   it('stops when required echo cancellation is lost at runtime', async () => {
-    const { controller, emit } = createHarness(false, 'required');
-    emit({ generation: 1, kind: 'capabilities_changed', aecAvailable: true, aecActive: false });
-    await vi.waitFor(() => expect(controller.stop).toHaveBeenCalledWith('voice-global'));
+    await withNativePcmBridge(async ({ lifecycle, coordinator, emit }) => {
+      emit({ generation: coordinator.getSnapshot().generation, kind: 'capabilities_changed', aecAvailable: true, aecActive: false });
+      await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+      expect(coordinator.getSnapshot().leaseCount).toBe(0);
+      expect(nativeAudio.nativeModule.stop).toHaveBeenCalled();
+      expect(nativeAudio.nativeModule.stopPlayback).toHaveBeenCalled();
+    });
   });
 
   it('stops the session when the native audio graph reports itself terminal', async () => {
     // A media-services reset or an unrecoverable engine configuration change
     // leaves the native graph dead while the session still looks connected.
     // Nothing else observes that, so the lifecycle owner has to end the session.
-    const reset = createHarness();
-    reset.emit({ generation: 1, kind: 'audio_graph_terminal', reason: 'media_services_reset' });
-    await vi.waitFor(() => expect(reset.controller.stop).toHaveBeenCalledWith('voice-global'));
-
-    const configuration = createHarness();
-    configuration.emit({
-      generation: 1,
-      kind: 'audio_graph_terminal',
-      reason: 'configuration_unrecoverable',
-    });
-    await vi.waitFor(() => expect(configuration.controller.stop).toHaveBeenCalledWith('voice-global'));
+    for (const reason of ['media_services_reset', 'configuration_unrecoverable'] as const) {
+      await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
+        emit({ generation: 1, kind: 'audio_graph_terminal', reason });
+        await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+        expect(conversation.endSession).toHaveBeenCalledTimes(1);
+        expect(coordinator.getSnapshot().leaseCount).toBe(0);
+      });
+    }
   });
 
   it('leaves an ordinary route change to the native owner instead of ending the session', async () => {
     // Route changes are constant and survivable; the native owner is the only
     // party that can tell a survivable one from a dead graph, and it says so
     // with `audio_graph_terminal`.
-    const { controller, emit } = createHarness();
+    await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
     emit({ generation: 1, kind: 'route_changed', route: 'BluetoothHFP' });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(controller.stop).not.toHaveBeenCalled();
-    expect(controller.setMuted).not.toHaveBeenCalled();
+    await settleBridge();
+    expect(lifecycle.getSnapshot().status).toBe('connected');
+    expect(coordinator.getSnapshot().capabilities?.route).toBe('BluetoothHFP');
+    expect(conversation.endSession).not.toHaveBeenCalled();
+    expect(conversation.setMicMuted).not.toHaveBeenCalled();
+    });
   });
 
   it('removes the native listener and makes queued work inert on disposal', async () => {
-    const { bridge, controller, emit, remove } = createHarness();
+    await withNativeBridge(async ({ bridge, lifecycle, conversation, emit }) => {
+    // Queue one event before disposal, then deliver another after subscription
+    // removal: neither may mutate the still-connected physical SDK capture.
+    emit({ generation: 1, kind: 'interruption_began' });
     bridge.dispose();
     emit({ generation: 1, kind: 'interruption_began' });
-    await Promise.resolve();
-    expect(remove).toHaveBeenCalledTimes(1);
-    expect(controller.setMuted).not.toHaveBeenCalled();
+    await settleBridge();
+    expect(lifecycle.getSnapshot().status).toBe('connected');
+    expect(conversation.isMuted()).toBe(false);
+    expect(conversation.setMicMuted).not.toHaveBeenCalled();
+    });
   });
 });

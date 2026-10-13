@@ -1,33 +1,23 @@
 import * as React from 'react';
+import { createOpenAiVoiceRuntimeEnvironment, type OpenAiMintTransport } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEncoding } from 'js-tiktoken';
 import { z } from 'zod';
-import {
-  createRecipientContractDigestV1,
-  createPlainSessionOwnerMetadataEnvelopeV1,
-  createSessionOwnerMetadataV1,
-  projectSessionSharedMetadataV1,
-  type PluginMachineExecutionOriginV1,
-} from '@happier-dev/protocol';
-import { DaemonVoiceClientAccountOperationRequestV1Schema, DaemonVoiceClientAccountOperationResponseV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
-import { PLUGIN_MANIFEST as OPENAI_SOURCE_MANIFEST } from '../../../../../packages/plugins/openai/src/manifest';
-import { activate as activateOpenAiVoice } from '../../../../../packages/plugins/openai/src/ui/voice/runtime';
+import { type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
 
-import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
+
 import { log } from '@/log';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
-import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
-import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
-import { resetConnectedAccountCatalogEngineForTests } from '@/sync/engine/settings/connectedAccountCatalogEngine';
-import { resetConnectedAccountCatalogSnapshotsForTests } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { sync } from '@/sync/sync';
+
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('expo-audio', async () => (await import('@/dev/testkit/mocks/expoAudio')).expoAudioModuleMock());
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import {
   installVoiceWebRtcBrowserBoundary,
@@ -53,30 +43,25 @@ import { apiSocket } from '@/sync/api/session/apiSocket';
 import { readStoredSessionMessages } from "@happier-dev/session-core/messages";
 import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
-import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
+
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
+
 import { storage } from '@/sync/domains/state/storage';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
-import { resetServerReachabilitySupervisors } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
+
 import { runtimeFetchWithServerReachability } from '@/sync/runtime/connectivity/serverReachabilityRuntimeFetch';
 import {
   captureServerRequestAuthorityForServerAccountScope,
 } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import '@/sync/syncEngine';
-import { sync } from '@/sync/sync';
-import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { voiceSessionBindingManager } from '@/voice/binding/voiceConversationBindingRuntime';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
 import { createVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleController';
 import { handleDeleteSessionSocketUpdate } from '@/sync/engine/sessions/syncSessions';
-import { createAccountVoiceOperationService } from '@/voice/credentials/accountVoiceOperationService';
-import { createVoiceClientAccountOperationExecutor } from '@/voice/credentials/mediatedCredentialClient';
-import { resolveVoiceExecutionMachineId, isCapturedVoiceExecutionMachineCurrent } from '@/voice/settings/executionMachine';
-import { saveAndUseAccountVoiceCredential, applyAccountVoiceCredentialSourceSelection } from '@/voice/credentials/accountVoiceCredential';
-import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
+
 import {
   buildVoiceTranscriptHistorySessionMetadata,
   runVoiceTranscriptHistoryCarrierOperation,
@@ -84,9 +69,7 @@ import {
 import {
   VOICE_WEBRTC_LIMITS,
 } from '@/voice/runtime/connection/VoiceRealtimeConnection';
-import {
-  voiceConversationRuntimeMachine,
-} from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
+
 import * as realtimeMicSession from '@/voice/runtime/mic/createRealtimeMicSession';
 import { createVoiceHistoryConsumer } from '@/voice/history/voiceHistoryConsumer';
 import {
@@ -94,31 +77,22 @@ import {
   type DefaultVoiceHistoryRuntime,
 } from '@/voice/history/defaultVoiceHistoryConsumer';
 import type { VoiceProviderRegistry } from '@/voice/registry/providerRegistry';
-import {
-  registerVoiceAdapters,
-  resetVoiceAdapterRegistryForTests,
-} from '@/voice/session/voiceAdapterRegistry';
+import { getVoiceAdapterRegistry } from '@/voice/session/voiceAdapterRegistry';
 import { VoiceSessionRuntime } from '@/voice/session/VoiceSessionRuntime';
 import { getVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
-import { resetVoiceSessionStoreForTests } from '@/voice/session/voiceSessionStore';
+
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { createBuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
 import {
   readCanonicalVoiceTranscriptSnapshot,
 } from '@/voice/transcript/voiceConversationTranscript';
-import {
-  __resetVoiceTurnInterruptions,
-} from '@/voice/transcript/voiceTurnInterruption';
+
 import {
   selectVoiceTranscriptEntriesForConversationSession,
 } from '@/voice/transcript/voiceTranscriptSelectors';
-import {
-  createBundledConversationRuntimeHostLease,
-  getCurrentBundledConversationRuntimeHost,
-} from './bundledConversationRuntimeHost';
-import { createExternalVoiceProviderActivationScope } from './externalVoiceProviderActivation.testkit';
+import { getCurrentBundledConversationRuntimeHost } from './bundledConversationRuntimeHost';
+
 import { getExternalVoiceProviderRegistration } from './externalVoiceProviderRegistrations';
-import { createBundledConversationRuntimeEntries } from './bundledConversationRuntimeEntries';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -139,23 +113,8 @@ vi.mock('react-native', async () => {
   return createReactNativeWebMock({ Platform: { OS: 'web' } });
 });
 
-function openAiEntry() {
-  const entry = createBundledConversationRuntimeEntries(OPENAI_SOURCE_MANIFEST, activateOpenAiVoice)
-    .find((candidate) => candidate.declaration.id === 'realtime-openai');
-  if (!entry) throw new Error('realtime_openai bundled entry missing');
-  return entry;
-}
-
 const OPENAI_HISTORY_SESSION_ID = 'voice-history-openai-composed';
 const OPENAI_CREDENTIAL_MACHINE_ID = 'openai-credential-machine';
-type OpenAiMintTransport = (request: ReturnType<typeof DaemonVoiceClientAccountOperationRequestV1Schema.parse>) => Promise<Readonly<{
-  status: number;
-  finalUrl: string;
-  headers: Readonly<Record<string, string>>;
-  body: Uint8Array;
-}>>;
-let daemonAccountOperationTransport: OpenAiMintTransport;
-
 function readMintRequestAccount(request: Parameters<OpenAiMintTransport>[0]): string {
   expect(request).toMatchObject({
     contribution: { pluginId: 'happier.voice.openai', localId: 'realtime-openai' },
@@ -165,39 +124,6 @@ function readMintRequestAccount(request: Parameters<OpenAiMintTransport>[0]): st
   });
   if (request.expectedSelection.kind !== 'account') throw new Error('Expected an Account mint request');
   return request.expectedSelection.account.accountId;
-}
-
-function installOpenAiDaemonSocketBoundary(): void {
-  // Only the external Socket.IO relay is replaced. Machine RPC scope, codecs,
-  // purpose selection, Account operation admission and artifact parsing stay real.
-  installDisconnectedServerSocketBoundary(socket => {
-    // The scoped pool may retain this cold transport beyond per-test spy restore.
-    socket.connect = vi.fn<typeof socket.connect>(() => {
-      if (socket.connected) return socket;
-      socket.connected = true;
-      for (const listener of socket.listeners('connect')) listener();
-      return socket;
-    });
-    socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
-    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
-      if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
-      const request = payload as Readonly<{ method: string; params: unknown }>;
-      if (request.method !== `${OPENAI_CREDENTIAL_MACHINE_ID}:${RPC_METHODS.DAEMON_VOICE_CLIENT_ACCOUNT_OPERATION}`) {
-        return { ok: false, error: 'RPC_METHOD_NOT_AVAILABLE' };
-      }
-      const parsed = DaemonVoiceClientAccountOperationRequestV1Schema.parse(request.params);
-      const response = await daemonAccountOperationTransport(parsed);
-      return { ok: true, result: DaemonVoiceClientAccountOperationResponseV1Schema.parse({ ok: true,
-        response: { status: response.status, finalUrl: response.finalUrl, headers: response.headers,
-          bodyBase64: Buffer.from(response.body).toString('base64') },
-      }) };
-    });
-  });
-}
-const OPENAI_SOURCE_CREDENTIAL = 'sk_source_composed';
-
-function transcriptMessageUrl(sessionId: string): string {
-  return `https://openai-composed.example.test/v2/sessions/${encodeURIComponent(sessionId)}/messages`;
 }
 
 function createDeferredVoid(): Readonly<{
@@ -212,184 +138,6 @@ function createDeferredVoid(): Readonly<{
     reject = rejectPromise;
   });
   return Object.freeze({ promise, resolve, reject });
-}
-
-function createOpenAiClientAuthProviderResponse(
-  value: string,
-  expiresAt: number,
-) {
-  return Object.freeze({
-    value,
-    expires_at: expiresAt,
-    session: Object.freeze({
-      type: 'realtime',
-      object: 'realtime.session',
-      id: 'sess_openai_composed_gate',
-      model: 'gpt-realtime',
-    }),
-  });
-}
-
-function installOpenAiSettings(): ReturnType<typeof applyAccountVoiceCredentialSourceSelection>['connectedPurposes'] {
-  const { voice: _runtimeVoice, ...accountSettingsDefaults } = settingsDefaults;
-  const entry = openAiEntry();
-  const recipientContract = createBundledVoiceRecipientContract({
-    pluginId: entry.pluginId,
-    declaration: entry.declaration,
-  });
-  if (!recipientContract) throw new Error('realtime_openai recipient contract missing');
-  const voice = voiceSettingsParse({
-    providerId: entry.providerId,
-    providers: {
-      [entry.providerId]: {
-        schemaVersion: 1,
-        config: {
-          model: { kind: 'pinned', id: 'gpt-realtime' },
-          voice: 'marin',
-          instructions: '',
-          turnDetection: 'server_vad',
-          inputTranscriptionModel: '',
-        },
-      },
-    },
-  });
-  const credentialInput = {
-    settings: settingsParse({
-      ...accountSettingsDefaults,
-      voiceSettingsV1: voice,
-    }),
-    contribution: {
-      pluginId: entry.pluginId,
-      localId: entry.declaration.id,
-    },
-    credentialSlotId: recipientContract.credentialSlot.id,
-    expectedSettingsVersion: 1,
-    currentDeclaration: entry.declaration,
-    value: OPENAI_SOURCE_CREDENTIAL,
-    generateId: () => 'realtime-openai-composed-secret',
-    now: 1,
-    expectedSecretId: null,
-    expectedSecretUpdatedAt: null,
-    approvedRecipientContractDigest:
-      createRecipientContractDigestV1(recipientContract),
-  };
-  const selected = applyAccountVoiceCredentialSourceSelection({
-    settings: saveAndUseAccountVoiceCredential(credentialInput).settings,
-    connectedPurposes: { v: 1, bindings: [] },
-    currentDeclaration: entry.declaration,
-    mutation: { contribution: credentialInput.contribution, credentialSlotId: credentialInput.credentialSlotId,
-      expectedSettingsVersion: 1, selection: { kind: 'savedSecret' } },
-  });
-  const credentialSettings = selected.settings;
-  storage.setState((current) => ({
-    ...current,
-    settings: {
-      ...credentialSettings,
-      voiceSettingsV1: {
-        ...credentialSettings.voiceSettingsV1,
-        providerId: voice.providerId,
-        providers: voice.providers,
-      },
-      voice: {
-        ...voice,
-        credentialBindings: credentialSettings.voice.credentialBindings,
-      },
-    },
-    sessions: {
-      [OPENAI_HISTORY_SESSION_ID]: createSessionFixture({
-        id: OPENAI_HISTORY_SESSION_ID,
-        serverId: getActiveServerSnapshot().serverId,
-        active: false,
-        encryptionMode: 'plain',
-        metadata: {
-          path: '/voice-transcript-history',
-          host: 'happier.test',
-          ...buildVoiceTranscriptHistorySessionMetadata(),
-        },
-      }),
-    },
-    sessionMessages: {},
-  }) as never);
-  return selected.connectedPurposes;
-}
-
-function installOpenAiConnectedAccountSettings(): void {
-  const { voice: _runtimeVoice, ...accountSettingsDefaults } = settingsDefaults;
-  const voice = voiceSettingsParse({
-    providerId: 'happier.voice.openai/realtime-openai',
-    credentialBindings: [{
-      contribution: {
-        pluginId: 'happier.voice.openai',
-        localId: 'realtime-openai',
-      },
-      credentialSlotId: 'api_key',
-      credentialSource: { kind: 'connectedAccount' },
-      credentialBindings: {},
-    }],
-    providers: {
-      'happier.voice.openai/realtime-openai': {
-        schemaVersion: 1,
-        config: {
-          model: { kind: 'pinned', id: 'gpt-realtime' },
-          voice: 'marin',
-          instructions: '',
-          turnDetection: 'server_vad',
-          inputTranscriptionModel: '',
-        },
-      },
-    },
-  });
-  const settings = settingsParse({
-    ...accountSettingsDefaults,
-    voiceSettingsV1: voice,
-  });
-  storage.setState((current) => ({
-    ...current,
-    settings: {
-      ...settings,
-      voice,
-    },
-    sessions: {
-      [OPENAI_HISTORY_SESSION_ID]: createSessionFixture({
-        id: OPENAI_HISTORY_SESSION_ID,
-        serverId: getActiveServerSnapshot().serverId,
-        active: false,
-        encryptionMode: 'plain',
-        metadata: {
-          path: '/voice-transcript-history',
-          host: 'happier.test',
-          ...buildVoiceTranscriptHistorySessionMetadata(),
-        },
-      }),
-    },
-    sessionMessages: {},
-  }) as never);
-}
-
-function installOpenAiFetchBoundary(): ReturnType<typeof vi.fn> {
-  const fetch = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith('/v1/realtime/client_secrets')) {
-      expect(new Headers(init?.headers).get('authorization'))
-        .toBe(`Bearer ${OPENAI_SOURCE_CREDENTIAL}`);
-      return new Response(JSON.stringify(createOpenAiClientAuthProviderResponse(
-        'ek_source_composed',
-        Math.floor(Date.now() / 1_000) + 60,
-      )), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-    if (url.endsWith('/v1/realtime/calls')) {
-      expect(init?.headers).toMatchObject({
-        Authorization: 'Bearer ek_source_composed',
-      });
-      return new Response('v=0\r\na=openai-answer\r\n', { status: 201 });
-    }
-    throw new Error(`unexpected OpenAI fetch: ${url}`);
-  });
-  vi.stubGlobal('fetch', fetch);
-  return fetch;
 }
 
 const COMPOSED_CURRENT_UI_DESTINATION = Object.freeze({
@@ -577,144 +325,6 @@ function openAiSessionUpdates(sent: readonly string[]): readonly unknown[] {
     ));
 }
 
-function createSourceComposedOpenAiRuntime(
-  browser: ReturnType<typeof installVoiceWebRtcBrowserBoundary>,
-  options?: Readonly<{
-    respondToDaemonAccountOperation?: OpenAiMintTransport;
-    readPlaybackCursorMs?(): number | null;
-    initialConversationSessionId?: string;
-  }>,
-) {
-  const hostLease = createBundledConversationRuntimeHostLease();
-  if (options?.respondToDaemonAccountOperation) daemonAccountOperationTransport = options.respondToDaemonAccountOperation;
-  const controlSessionId = hostLease.host.globalVoiceSessionId;
-  const readPlaybackCursorMs = options?.readPlaybackCursorMs;
-  let requestReconnect: (() => Promise<boolean>) | null = null;
-  const baseHost = Object.freeze({
-    ...hostLease.host,
-    getPlatform: () => 'web' as const,
-    createMicSession: () => browser.micSession,
-    createConversationController: (
-      input: Parameters<typeof hostLease.host.createConversationController>[0],
-    ) => {
-      const controller = hostLease.host.createConversationController(input);
-      requestReconnect = () => controller.requestReconnect();
-      return controller;
-    },
-    acquireAudioMode: async () => Object.freeze({
-      release: async () => undefined,
-    }),
-  });
-  const host = Object.freeze({
-    ...baseHost,
-    ...(readPlaybackCursorMs
-      ? {
-          createWebRtcConnection: (
-            input: Parameters<typeof baseHost.createWebRtcConnection>[0],
-          ) => {
-            const connection = baseHost.createWebRtcConnection(input);
-            return Object.freeze({
-              ...connection,
-              playbackCursorMs: readPlaybackCursorMs,
-            });
-          },
-        }
-      : {}),
-  });
-  const entry = openAiEntry();
-  const providerId = entry.providerId;
-  const recipientContract = createBundledVoiceRecipientContract({
-    pluginId: entry.pluginId,
-    declaration: entry.declaration,
-  });
-  if (!recipientContract) throw new Error('realtime_openai recipient contract missing');
-  const initialConversationSessionId = options?.initialConversationSessionId
-    ?? OPENAI_HISTORY_SESSION_ID;
-  voiceSessionBindingStore.getState().bind({
-    adapterId: providerId,
-    controlSessionId,
-    conversationSessionId: initialConversationSessionId,
-    conversationSessionAddress: {
-      serverId: getActiveServerSnapshot().serverId,
-      sessionId: initialConversationSessionId,
-    },
-    lifetime: 'runtime_attempt',
-    transcriptMode: 'synthetic',
-    targetSessionAddress: null,
-    updatedAt: 1,
-  });
-  const requestAccountOperation = vi.fn();
-  const scope = createExternalVoiceProviderActivationScope({
-    pluginId: entry.pluginId,
-    occurrenceId: `${entry.pluginId}-activation-occurrence`,
-    declarations: [entry.declaration],
-    hostPlatform: 'web',
-    runtimeHost: host,
-    isRuntimeHostCurrent: () =>
-      getCurrentBundledConversationRuntimeHost() === hostLease.host,
-    hostBindingsByLocalId: Object.freeze({
-      [entry.declaration.id]: Object.freeze({
-        recipientContract,
-        createInvocationAccountOperations: (
-          signal: AbortSignal,
-          _conversationSessionId: string | null,
-          isCurrent: () => boolean,
-          phase: 'settings' | 'prepare' | 'connection',
-        ) => {
-          const machineId = resolveVoiceExecutionMachineId();
-          const accountOperations = createAccountVoiceOperationService({
-            providerId,
-            contribution: {
-              pluginId: entry.pluginId,
-              localId: entry.declaration.id,
-            },
-            declaration: entry.declaration,
-            phase,
-            recipientContract,
-            signal,
-            isCurrent,
-            executeConnectedAccountOperation: createVoiceClientAccountOperationExecutor({
-              contribution: { pluginId: entry.pluginId, localId: entry.declaration.id },
-              platform: 'web', phase, declarationAuthority: { kind: 'bundled' }, machineId,
-              isCurrent, isInvocationCurrent: () => isCapturedVoiceExecutionMachineCurrent(machineId),
-            }),
-          });
-          requestAccountOperation.mockImplementation(accountOperations.request);
-          return Object.freeze({ request: requestAccountOperation });
-        },
-        descriptor: 'bundled' as const,
-      }),
-    }),
-  });
-  entry.activate(scope.api as Parameters<typeof entry.activate>[0]);
-  const commit = scope.commit();
-  if (commit) void commit.catch(() => undefined);
-  const registration = getExternalVoiceProviderRegistration(
-    providerId,
-  );
-  if (!registration?.adapter) {
-    throw new Error('realtime_openai bundled activation failed');
-  }
-  const runtime = Object.freeze({
-    adapter: registration.adapter,
-    async dispose() {
-      await scope.unwind();
-    },
-  });
-  registerVoiceAdapters([runtime.adapter]);
-  return Object.freeze({
-    controlSessionId,
-    hostLease,
-    requestAccountOperation,
-    async requestReconnect() {
-      const request = requestReconnect;
-      if (!request) throw new Error('voice conversation controller unavailable');
-      return await request();
-    },
-    runtime,
-  });
-}
-
 /**
  * The event ladder a live OpenAI Realtime WebRTC session emits over
  * `oai-events` for two complete spoken turns, including the opening
@@ -834,183 +444,27 @@ function removeOpenAiSavedSecret(): void {
 }
 
 describe('realtime_openai source-composed WebRTC gate', () => {
-  const originalSyncEncryption = sync.encryption;
-  const originalSyncCredentials = Reflect.get(sync, 'credentials');
-  let transcriptRequest: ReturnType<typeof vi.fn>;
-  let sessionHttp: ReturnType<typeof createSessionMetadataHttpBoundary>;
-  let historySessionPost: (init: RequestInit) => Promise<Response>;
-  let homeRequest: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response | null>;
+  let environment: Awaited<ReturnType<typeof createOpenAiVoiceRuntimeEnvironment>>;
+  const openAiEntry = () => environment.entry;
+  const createOpenAiClientAuthProviderResponse = (...args: Parameters<typeof environment.createClientAuthProviderResponse>) => environment.createClientAuthProviderResponse(...args);
+  const transcriptMessageUrl = (sessionId: string) => environment.transcriptMessageUrl(sessionId);
+  let transcriptRequest: Awaited<ReturnType<typeof createOpenAiVoiceRuntimeEnvironment>>['transcriptRequest'];
+  let sessionHttp: Awaited<ReturnType<typeof createOpenAiVoiceRuntimeEnvironment>>['sessionHttp'];
+  let homeRequest: Awaited<ReturnType<typeof createOpenAiVoiceRuntimeEnvironment>>['homeRequest'];
   let allowedTranscriptMessageUrls: Set<string>;
-  let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
-  let purposes: ReturnType<typeof createConnectedPurposeCatalogHttpBoundary>;
-  let persistedAccountSettings: ReturnType<typeof storage.getState>['settings'];
-
-  const selectConnectedAccount = async (accountId: string | null): Promise<void> => {
-    const selected = applyAccountVoiceCredentialSourceSelection({
-      settings: storage.getState().settings, connectedPurposes: purposes.value, currentDeclaration: openAiEntry().declaration,
-      mutation: { contribution: { pluginId: 'happier.voice.openai', localId: 'realtime-openai' }, credentialSlotId: 'api_key',
-        expectedSettingsVersion: 1, selection: accountId ? { kind: 'connectedAccount', target: { kind: 'account',
-          account: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId } } } : { kind: 'none' } },
-    });
-    storage.setState({ settings: selected.settings });
-    persistedAccountSettings = selected.settings;
-    purposes.replace(selected.connectedPurposes);
-    await purposes.hydrate({ serverId: getActiveServerSnapshot().serverId, accountId: 'openai-composed-account' });
-    storage.getState().applyMachines([createMachineFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, activeAt: Date.now() })], true,
-      { sourceServerId: getActiveServerSnapshot().serverId });
-  };
-
-  beforeEach(async (context) => {
-    resetScopedMachineTransportCacheForTests();
-    daemonAccountOperationTransport = async () => { throw new Error('Unexpected daemon mint transport'); };
-    installOpenAiDaemonSocketBoundary();
-    purposes = createConnectedPurposeCatalogHttpBoundary();
-    await resetServerReachabilitySupervisors();
-    const server = await upsertServerProfile({
-      serverUrl: 'https://openai-composed.example.test',
-      name: 'OpenAI composed test',
-    });
-    await setActiveServerId(server.id, { scope: 'device' });
-    // Apply the selected Home through the real connection owner before mounting
-    // its Account. Merely selecting a server does not establish a serving runtime.
-    const credentialsForServer = vi.spyOn(
-      TokenStorage,
-      'getCredentialsForServerUrl',
-    ).mockResolvedValue(null);
-    await switchConnectionToActiveServer();
-    credentialsForServer.mockRestore();
-    // Each restored Account gets a fresh catalog observation; an intentionally
-    // retired previous case must not leave a retained loader flight in this one.
-    resetConnectedAccountCatalogEngineForTests();
-    resetConnectedAccountCatalogSnapshotsForTests();
-    storage.getState().activateProfileScope({
-      serverId: server.id,
-      accountId: 'openai-composed-account',
-    });
-    await storage.getState().activateSettingsScope({
-      serverId: server.id,
-      accountId: 'openai-composed-account',
-    });
-    resetVoiceAdapterRegistryForTests();
-    resetVoiceSessionStoreForTests();
-    __resetVoiceTurnInterruptions();
-    voiceConversationRuntimeMachine.reset();
-    voiceSessionBindingStore.setState({
-      ...voiceSessionBindingStore.getInitialState(),
-      bind: voiceSessionBindingStore.getState().bind,
-      unbind: voiceSessionBindingStore.getState().unbind,
-      replacePersistedBindings: voiceSessionBindingStore.getState().replacePersistedBindings,
-      getByConversationSessionId: voiceSessionBindingStore.getState().getByConversationSessionId,
-      getByControlSessionId: voiceSessionBindingStore.getState().getByControlSessionId,
-      list: voiceSessionBindingStore.getState().list,
-    }, true);
-    if (
+  let accountConnection: Awaited<ReturnType<typeof createOpenAiVoiceRuntimeEnvironment>>['accountConnection'];
+  let purposes: Awaited<ReturnType<typeof createOpenAiVoiceRuntimeEnvironment>>['purposes'];
+  beforeEach(async context => {
+    environment = await createOpenAiVoiceRuntimeEnvironment({ credentialSource:
       context.task.name.startsWith('keeps the exact minted OpenAI authority')
-      || context.task.name.startsWith('fails typed before OpenAI signaling')
-    ) {
-      installOpenAiConnectedAccountSettings();
-    } else {
-      purposes = createConnectedPurposeCatalogHttpBoundary({ initialValue: installOpenAiSettings() });
-    }
-    persistedAccountSettings = storage.getState().settings;
-    sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
-    const carrierMetadata = storage.getState().sessions[OPENAI_HISTORY_SESSION_ID]!.metadata;
-    const carrierOwner = createSessionOwnerMetadataV1({ metadata: carrierMetadata });
-    if (!carrierOwner.ok) throw new Error('Expected supported Voice carrier owner metadata');
-    sessionHttp.createSessionFromPost(OPENAI_HISTORY_SESSION_ID, { method: 'POST', body: JSON.stringify({
-      tag: 'system:voice-transcript-history:v1', metadataLayoutVersion: 1,
-      sharedMetadata: { ciphertext: JSON.stringify(projectSessionSharedMetadataV1({ metadata: carrierMetadata, agentState: null })) },
-      ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(carrierOwner.ownerMetadata),
-      agentState: null, dataEncryptionKey: null, encryptionMode: 'plain',
-    }) });
-    historySessionPost = async init => sessionHttp.createSessionFromPost(OPENAI_HISTORY_SESSION_ID, init);
-    installOpenAiFetchBoundary();
-    allowedTranscriptMessageUrls = new Set([
-      transcriptMessageUrl(OPENAI_HISTORY_SESSION_ID),
-    ]);
-    let nextTranscriptSeq = 0;
-    const activeRequest = apiSocket.request.bind(apiSocket);
-    vi.spyOn(apiSocket, 'request').mockImplementation((path, init, options) =>
-      String(path).endsWith('/messages') && init?.method === 'POST'
-        ? Promise.reject(new Error('dynamic active request must not own transcript persistence'))
-        : activeRequest(path, init, options));
-    homeRequest = async (input: URL | RequestInfo, init?: RequestInit) => {
-      const url = String(input);
-      if (new URL(url).pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account' })]);
-      if (new URL(url).pathname === `/v1/machines/${OPENAI_CREDENTIAL_MACHINE_ID}`) return Response.json({ machine: createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account' }) });
-      if (/^\/v[123]\/sessions\/[^/]+\/messages$/.test(new URL(url).pathname) && (init?.method ?? 'GET') === 'GET') return Response.json({ messages: [], hasMore: false });
-      if (new URL(url).pathname === '/v1/sessions' && init?.method === 'POST') return historySessionPost(init);
-      const sessionResponse = sessionHttp.handle(input, init);
-      if (sessionResponse) return sessionResponse;
-      const purposeResponse = await purposes.handle(input, init);
-      if (purposeResponse) return purposeResponse;
-      const preparation = answerVoiceRealtimePreparationHttpRequest(input, persistedAccountSettings);
-      if (preparation) return preparation;
-      return null;
-    };
-    transcriptRequest = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
-      const homeResponse = await homeRequest(input, init);
-      if (homeResponse) return homeResponse;
-      const url = String(input);
-      if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
-        return new Response('{}', {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (!allowedTranscriptMessageUrls.has(url)) return Response.json({ error: 'not_found' }, { status: 404 });
-      expect(init?.method).toBe('POST');
-      const body = JSON.parse(String(init?.body)) as Readonly<{
-        localId: string;
-      }>;
-      nextTranscriptSeq += 1;
-      return new Response(JSON.stringify({
-        didWrite: true,
-        message: {
-          id: `openai-history-message-${nextTranscriptSeq}`,
-          seq: nextTranscriptSeq,
-          localId: body.localId,
-          createdAt: Date.now(),
-        },
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    });
-    accountConnection = await restoreServerAccountForTest({
-      serverUrl: server.serverUrl,
-      accountId: 'openai-composed-account',
-      credentialScope: 'restored-home',
-      request: (input, init) => {
-        // Keep domain bootstrap/refresh traffic outside the replaceable
-        // transcript writer. The shared Home boundary owns unclaimed HTTP 404s.
-        const path = new URL(String(input)).pathname;
-        return init?.method === 'POST' && /^\/v2\/sessions\/[^/]+\/messages$/.test(path)
-          ? transcriptRequest(input, init)
-          : homeRequest(input, init);
-      },
-    });
-    await purposes.hydrate({ serverId: server.id, accountId: 'openai-composed-account' });
+      || context.task.name.startsWith('fails typed before OpenAI signaling') ? 'connectedAccount' : 'savedSecret' });
+    ({ transcriptRequest, sessionHttp, homeRequest, allowedTranscriptMessageUrls, accountConnection, purposes } = environment);
   });
-
-  afterEach(async () => {
-    await accountConnection?.dispose(); accountConnection = null;
-    resetScopedMachineTransportCacheForTests();
-    await resetServerReachabilitySupervisors();
-    resetRuntimeFetch();
-    sync.encryption = originalSyncEncryption;
-    Reflect.set(sync, 'credentials', originalSyncCredentials);
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-    resetVoiceAdapterRegistryForTests();
-    __resetVoiceTurnInterruptions();
-    voiceConversationRuntimeMachine.reset();
-  });
+  afterEach(async () => { await environment?.dispose(); });
 
   it('fences an Account-retired real OpenAI attempt before retained current-UI read or command tool calls can reach A or B', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
     // The real web Home mutation owner also reaches the browser Web Locks API.
-    vi.stubGlobal('navigator', { ...globalThis.navigator });
     const webLocks = installWebLockManagerMock();
     storage.setState((current) => ({
       settings: {
@@ -1025,7 +479,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
     vi.stubGlobal('window', Object.freeze({}));
     vi.stubGlobal('document', Object.freeze({}));
     vi.spyOn(realtimeMicSession, 'createRealtimeMicSession')
-      .mockReturnValue(browser.micSession);
+      .mockImplementation(browser.createMicSession);
     const openSurface = vi.fn(async () => ({ ok: true as const }));
     const navigationBinding = createPluginSurfaceDestinationNavigationBinding({
       placements: [composedCurrentUiPlacement],
@@ -1036,6 +490,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       container: 'appPage',
       handler: openSurface,
     });
+    let accountB: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
     const readerRef: { current: CurrentUiContextReader | null } = { current: null };
     let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
 
@@ -1138,18 +593,26 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         expect(controller.getSnapshot().status).toBe('disconnected');
       });
 
-      const serverB = await upsertServerProfile({
+      accountB = await restoreServerAccountForTest({
         serverUrl: 'https://openai-composed-account-b.example.test',
-        name: 'OpenAI composed Account B',
-      });
-      await setActiveServerId(serverB.id, { scope: 'device' });
-      storage.getState().activateProfileScope({
-        serverId: serverB.id,
         accountId: 'openai-composed-account-b',
+        activation: 'switch',
+        additionalRequestOrigins: [accountConnection.home.serverUrl],
+        request: async (input, init) => {
+          const url = new URL(String(input));
+          if (url.origin === new URL(accountConnection.home.serverUrl).origin) return homeRequest(input, init);
+          if (url.pathname === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'openai-composed-account-b' }));
+          if (url.pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account-b' })]);
+          if (url.pathname === `/v1/machines/${OPENAI_CREDENTIAL_MACHINE_ID}`) return Response.json({ machine: createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account-b' }) });
+          return homeRequest(input, init);
+        },
       });
+      await sync.refreshProfile();
+      expect(storage.getState().profileScope).toEqual({ serverId: accountB.home.id, accountId: 'openai-composed-account-b' });
+      expect(storage.getState().profile.id).toBe('openai-composed-account-b');
       await screen.update(renderAccountRetirementVoiceComposition({
         label: 'Account B',
-        credentials: accountConnection!.credentials,
+        credentials: accountB.credentials,
         navigationBinding,
         onReader: (next) => { readerRef.current = next; },
       }));
@@ -1173,6 +636,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
     } finally {
       unregisterNavigationOwner();
       if (screen) await screen.unmount();
+      await accountB?.dispose();
       retireActiveServerAccountScopeLifetime();
       await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
       webLocks.restore();
@@ -1182,7 +646,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('rehydrates a persisted history carrier missing from local state before reusing it for a new runtime attempt', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     // The persisted plain owner tuple remains present at the Home boundary.
     // Eviction exercises real rehydration without inventing an E2EE→plain transition.
     storage.setState((current) => {
@@ -1209,7 +673,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('runs approved SavedSecret through public activation and reuses the canonical no-daemon history carrier', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
 
     try {
       const starting = composed.runtime.adapter.start({
@@ -1292,7 +756,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
   it('declines a missing SavedSecret before microphone or WebRTC admission', async () => {
     removeOpenAiSavedSecret();
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     const peerConstructor = vi.mocked(globalThis.RTCPeerConnection);
     const getUserMedia = vi.mocked(
       globalThis.navigator.mediaDevices.getUserMedia,
@@ -1316,7 +780,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       expect(browser.micSession.ensureActive).not.toHaveBeenCalled();
       expect(getUserMedia).not.toHaveBeenCalled();
       expect(peerConstructor).not.toHaveBeenCalled();
-      expect(browser.peer.createDataChannel).not.toHaveBeenCalled();
+      expect(browser.peers).toEqual([]);
       expect(providerFetch).not.toHaveBeenCalled();
       expect(composed.requestAccountOperation).toHaveBeenCalledOnce();
     } finally {
@@ -1327,13 +791,13 @@ describe('realtime_openai source-composed WebRTC gate', () => {
   });
 
   it('reports an indeterminate selected Connected Account binding before microphone or WebRTC admission', async () => {
-    installOpenAiConnectedAccountSettings();
+    await environment.installConnectedAccountSettings();
     // Invalid stored selection is indeterminate, unlike an acknowledged source removal.
-    persistedAccountSettings = storage.getState().settings;
+    environment.persistedAccountSettings = storage.getState().settings;
     purposes.replace({ v: 1, bindings: [] });
     await purposes.hydrate({ serverId: getActiveServerSnapshot().serverId, accountId: 'openai-composed-account' });
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     const peerConstructor = vi.mocked(globalThis.RTCPeerConnection);
     const getUserMedia = vi.mocked(
       globalThis.navigator.mediaDevices.getUserMedia,
@@ -1355,7 +819,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       expect(browser.micSession.ensureActive).not.toHaveBeenCalled();
       expect(getUserMedia).not.toHaveBeenCalled();
       expect(peerConstructor).not.toHaveBeenCalled();
-      expect(browser.peer.createDataChannel).not.toHaveBeenCalled();
+      expect(browser.peers).toEqual([]);
       expect(providerFetch).not.toHaveBeenCalled();
       expect(composed.requestAccountOperation).toHaveBeenCalledOnce();
     } finally {
@@ -1371,8 +835,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
   ] as const)(
     'fences an OpenAI Connected Account attempt that %s before client-auth issuance',
     async (_change, invalidatedBinding) => {
-      installOpenAiConnectedAccountSettings();
-      await selectConnectedAccount('account-a');
+      await environment.installConnectedAccountSettings();
+      await environment.selectConnectedAccount('account-a');
       let binding: string | null = 'account-a';
       const authorityInvalidation = createDeferredVoid();
       const watchReady = createDeferredVoid();
@@ -1396,7 +860,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         throw new Error('unreachable_connected_account_authority');
       });
       const browser = installVoiceWebRtcBrowserBoundary();
-      const composed = createSourceComposedOpenAiRuntime(browser, {
+      const composed = await environment.createRuntime(browser, {
         respondToDaemonAccountOperation: request,
       });
       const peerConstructor = vi.mocked(globalThis.RTCPeerConnection);
@@ -1412,7 +876,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         }).then(() => null, (error: unknown) => error);
         await watchReady.promise;
         binding = invalidatedBinding;
-        await selectConnectedAccount(binding);
+        await environment.selectConnectedAccount(binding);
         authorityInvalidation.reject(Object.assign(
           new Error('credential_unavailable'),
           { code: 'credential_unavailable' },
@@ -1427,13 +891,13 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         expect(browser.micSession.ensureActive).not.toHaveBeenCalled();
         expect(getUserMedia).not.toHaveBeenCalled();
         expect(peerConstructor).not.toHaveBeenCalled();
-        expect(browser.peer.createDataChannel).not.toHaveBeenCalled();
+        expect(browser.peers).toEqual([]);
         expect(request).toHaveBeenCalledOnce();
         expect(globalThis.fetch).not.toHaveBeenCalled();
-        expect(openAiSessionUpdates(browser.peer.channel.sent)).toEqual([]);
+        expect(openAiSessionUpdates(browser.peers.flatMap(peer => peer.channel.sent))).toEqual([]);
 
         binding = 'account-b';
-        await selectConnectedAccount(binding);
+        await environment.selectConnectedAccount(binding);
         const secondStart = composed.runtime.adapter.start({
           sessionId: '',
           requestedTargetSessionAddress: null,
@@ -1462,8 +926,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
   ] as const)(
     'admits the minted OpenAI authority when its Connected Account %s before media and applies the change to the next attempt',
     async (_change, nextBinding) => {
-      installOpenAiConnectedAccountSettings();
-      await selectConnectedAccount('account-a');
+      await environment.installConnectedAccountSettings();
+      await environment.selectConnectedAccount('account-a');
       let binding: string | null = 'account-a';
       const firstResourcePreparationEntered = createDeferredVoid();
       const releaseFirstResourcePreparation = createDeferredVoid();
@@ -1492,7 +956,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         delete sessions[OPENAI_HISTORY_SESSION_ID];
         return { sessions };
       });
-      historySessionPost = async init => {
+      sessionHttp.replaceSession(OPENAI_HISTORY_SESSION_ID);
+      environment.historySessionPost = async init => {
         resourcePreparationCount += 1;
         if (resourcePreparationCount === 1) {
           firstResourcePreparationEntered.resolve();
@@ -1503,7 +968,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         }
         return sessionHttp.createSessionFromPost(OPENAI_HISTORY_SESSION_ID, init);
       };
-      const composed = createSourceComposedOpenAiRuntime(browser, {
+      const composed = await environment.createRuntime(browser, {
         respondToDaemonAccountOperation: request,
       });
       const peerConstructor = vi.mocked(globalThis.RTCPeerConnection);
@@ -1526,7 +991,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         expect(peerConstructor).not.toHaveBeenCalled();
 
         binding = nextBinding;
-        await selectConnectedAccount(binding);
+        await environment.selectConnectedAccount(binding);
         releaseFirstResourcePreparation.resolve();
         await vi.waitFor(() => expect(
           browser.peer.createDataChannel,
@@ -1586,8 +1051,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
   ] as const)(
     'keeps the exact minted OpenAI authority when its Connected Account %s during a forced reconnect and applies the change only to the next Start',
     async (_change, nextBinding) => {
-      installOpenAiConnectedAccountSettings();
-      await selectConnectedAccount('account-a');
+      await environment.installConnectedAccountSettings();
+      await environment.selectConnectedAccount('account-a');
       let binding: string | null = 'account-a';
       const requestBindings: Array<string | null> = [];
       const request = vi.fn(async (packet: Parameters<OpenAiMintTransport>[0]) => {
@@ -1617,20 +1082,16 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         callAuthorizations.push(new Headers(init?.headers).get('authorization') ?? '');
         return new Response('v=0\r\na=openai-answer\r\n', { status: 201 });
       });
-      const browser = installVoiceWebRtcBrowserBoundary();
-      const reconnectPeer = new TestVoiceWebRtcPeer();
-      const nextPeer = new TestVoiceWebRtcPeer();
       const releaseNextOffer = createDeferredVoid();
-      nextPeer.createOffer.mockImplementation(async () => {
-        await releaseNextOffer.promise;
-        return { type: 'offer', sdp: 'v=0\r\na=next-attempt-offer\r\n' };
-      });
-      const peerConstructor = vi.mocked(globalThis.RTCPeerConnection);
-      peerConstructor
-        .mockImplementationOnce(() => browser.peer as unknown as RTCPeerConnection)
-        .mockImplementationOnce(() => reconnectPeer as unknown as RTCPeerConnection)
-        .mockImplementationOnce(() => nextPeer as unknown as RTCPeerConnection);
-      const composed = createSourceComposedOpenAiRuntime(browser, {
+      let peerNumber = 0;
+      const browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer: peer => {
+        peerNumber += 1;
+        if (peerNumber === 3) peer.createOffer.mockImplementation(async () => {
+          await releaseNextOffer.promise;
+          return { type: 'offer', sdp: 'v=0\r\na=next-attempt-offer\r\n' };
+        });
+      } });
+      const composed = await environment.createRuntime(browser, {
         respondToDaemonAccountOperation: request,
       });
 
@@ -1645,16 +1106,23 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         ).toHaveBeenCalledWith('oai-events'));
         browser.peer.channel.open();
         await firstStart;
+        const firstPeer = browser.peer;
+        const firstTrack = browser.micTrack;
+        const firstStream = browser.micStream;
 
         expect(requestBindings).toEqual(['account-a']);
         expect(callAuthorizations).toEqual(['Bearer ek_account-a']);
         binding = nextBinding;
-        await selectConnectedAccount(binding);
+        await environment.selectConnectedAccount(binding);
         const reconnect = composed.requestReconnect();
-
+        await vi.waitFor(() => expect(browser.peers).toHaveLength(2));
+        const reconnectPeer = browser.peers[1]!;
         await vi.waitFor(() => expect(
           reconnectPeer.createDataChannel,
         ).toHaveBeenCalledWith('oai-events'));
+        expect(reconnectPeer).not.toBe(firstPeer);
+        expect(reconnectPeer.channel).not.toBe(firstPeer.channel);
+        expect(firstPeer.close).toHaveBeenCalledOnce();
         expect(requestBindings).toEqual(['account-a']);
         expect(callAuthorizations).toEqual([
           'Bearer ek_account-a',
@@ -1669,6 +1137,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         await composed.runtime.adapter.stop({
           sessionId: composed.controlSessionId,
         });
+        expect(firstTrack.readyState).toBe('ended');
         const nextStart = composed.runtime.adapter.start({
           sessionId: '',
           requestedTargetSessionAddress: null,
@@ -1693,6 +1162,10 @@ describe('realtime_openai source-composed WebRTC gate', () => {
             'account-a',
             'account-b',
           ]));
+          await vi.waitFor(() => expect(browser.peers).toHaveLength(3));
+          expect(browser.micStream).not.toBe(firstStream);
+          expect(browser.micTrack).not.toBe(firstTrack);
+          expect(browser.micTrack.readyState).toBe('live');
           expect(requestBindings).toEqual(['account-a', 'account-b']);
           expect(callAuthorizations).toEqual([
             'Bearer ek_account-a',
@@ -1716,7 +1189,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
   it('fails typed before OpenAI signaling when admitted auth expires during offer creation and requires a new Start', async () => {
     const initialNow = 1_800_000_000_000;
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(initialNow);
-    await selectConnectedAccount('account-a');
+    await environment.selectConnectedAccount('account-a');
     let binding = 'account-a';
     const requestBindings: string[] = [];
     const request = vi.fn(async (packet: Parameters<OpenAiMintTransport>[0]) => {
@@ -1754,13 +1227,13 @@ describe('realtime_openai source-composed WebRTC gate', () => {
     const nextOffer = new Promise<{ type: 'offer'; sdp: string }>((resolve) => {
       resolveNextOffer = resolve;
     });
-    const browser = installVoiceWebRtcBrowserBoundary();
-    browser.peer.createOffer
-      .mockImplementationOnce(async () => await delayedOffer)
-      .mockImplementationOnce(async () => await nextOffer);
-    vi.mocked(globalThis.RTCPeerConnection)
-      .mockImplementationOnce(() => browser.peer as unknown as RTCPeerConnection);
-    const composed = createSourceComposedOpenAiRuntime(browser, {
+    let offerNumber = 0;
+    const browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer: peer => {
+      offerNumber += 1;
+      const offer = offerNumber === 1 ? delayedOffer : nextOffer;
+      peer.createOffer.mockImplementation(async () => await offer);
+    } });
+    const composed = await environment.createRuntime(browser, {
       respondToDaemonAccountOperation: request,
     });
 
@@ -1771,16 +1244,21 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         initialContext: '',
       });
       await vi.waitFor(() => expect(browser.peer.createOffer).toHaveBeenCalledTimes(1));
+      const failedPeer = browser.peer;
+      const failedStream = browser.micStream;
+      const failedTrack = browser.micTrack;
       expect(requestBindings).toEqual(['account-a']);
       expect(callAuthorizations).toEqual([]);
 
       binding = 'account-b';
-      await selectConnectedAccount(binding);
+      await environment.selectConnectedAccount(binding);
       nowSpy.mockReturnValue(initialNow + 59_500);
       browser.peer.channel.open();
       resolveOffer({ type: 'offer', sdp: 'v=0\r\na=delayed-offer\r\n' });
 
       await expect(firstStart).rejects.toMatchObject({ code: 'voice_auth_expired' });
+      expect(failedPeer.close).toHaveBeenCalledOnce();
+      expect(failedTrack.readyState).toBe('ended');
       expect(requestBindings).toEqual(['account-a']);
       expect(callAuthorizations).toEqual([]);
       expect(composed.runtime.adapter.getSnapshot()).toMatchObject({
@@ -1800,6 +1278,12 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         'account-a',
         'account-b',
       ]));
+      await vi.waitFor(() => expect(browser.peers).toHaveLength(2));
+      expect(browser.peer).not.toBe(failedPeer);
+      expect(browser.peer.channel).not.toBe(failedPeer.channel);
+      expect(browser.micStream).not.toBe(failedStream);
+      expect(browser.micTrack).not.toBe(failedTrack);
+      expect(browser.micTrack.readyState).toBe('live');
       expect(requestBindings).toEqual(['account-a', 'account-b']);
       expect(callAuthorizations).toEqual([]);
       const stopping = composed.runtime.adapter.stop({
@@ -1817,7 +1301,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('persists standalone SavedSecret finals through canonical session-message storage', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
 
     try {
       const starting = composed.runtime.adapter.start({
@@ -1873,7 +1357,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('persists both finals of a turn whose payloads carry fields the adapter never reads', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
 
     try {
       const starting = composed.runtime.adapter.start({
@@ -1949,7 +1433,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       return { ...current, settings: { ...current.settings, voiceSettingsV1: updatedVoice,
         voice: { ...updatedVoice, credentialBindings: current.settings.voice.credentialBindings } } };
     });
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
       await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
@@ -1983,7 +1467,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       return { ...current, settings: { ...current.settings, voiceSettingsV1: updatedVoice,
         voice: { ...updatedVoice, credentialBindings: current.settings.voice.credentialBindings } } };
     });
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     let lifecycle: ReturnType<typeof createVoiceSessionLifecycleController> | null = null;
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
@@ -1994,7 +1478,11 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       expect(composed.runtime.adapter.getSnapshot().canHoldToTalk).toBe(true);
       const send = browser.peer.channel.send.bind(browser.peer.channel);
       browser.peer.channel.send = (value: string) => {
-        if (JSON.parse(value).type === 'input_audio_buffer.commit') {
+        const event = JSON.parse(value);
+        if (event.type === 'input_audio_buffer.clear' || event.type === 'input_audio_buffer.commit') {
+          expect(browser.micTrack.enabled).toBe(false);
+        }
+        if (event.type === 'input_audio_buffer.commit') {
           expect(browser.micSession.setMuted).toHaveBeenLastCalledWith(true);
         }
         send(value);
@@ -2013,10 +1501,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         { type: 'input_audio_buffer.clear' }, { type: 'input_audio_buffer.commit' }, { type: 'response.create' },
       ]);
       if (userMuted) {
-        lifecycle = createVoiceSessionLifecycleController({ getRegistry: () => ({
-          get: (id) => id === composed.runtime.adapter.id ? composed.runtime.adapter : null,
-          list: () => [composed.runtime.adapter],
-        }) });
+        lifecycle = createVoiceSessionLifecycleController({ getRegistry: getVoiceAdapterRegistry });
         lifecycle.setConfiguredProviderId(composed.runtime.adapter.id);
         const nextHold = composed.runtime.adapter.beginHoldToTalk?.({ sessionId: composed.controlSessionId });
         expect(await nextHold!.ready).toBe(true);
@@ -2036,9 +1521,116 @@ describe('realtime_openai source-composed WebRTC gate', () => {
     }
   });
 
+  it.each(['cancel', 'stale', 'early_release', 'stopped', 'pending_capture', 'reconnected'] as const)(
+    'retires held capture without committing a cancelled turn through the real owner (%s)', async (outcome) => {
+      const browser = installVoiceWebRtcBrowserBoundary();
+      storage.setState(current => {
+        const voice = voiceSettingsParse(current.settings.voiceSettingsV1);
+        const providerId = openAiEntry().providerId;
+        const selected = voice.providers[providerId]!;
+        const updated = { ...voice, providers: { ...voice.providers, [providerId]: {
+          ...selected, config: { ...selected.config as Readonly<Record<string, unknown>>, turnDetection: 'manual' },
+        } } };
+        return { ...current, settings: { ...current.settings, voiceSettingsV1: updated,
+          voice: { ...updated, credentialBindings: current.settings.voice.credentialBindings } } };
+      });
+      const composed = await environment.createRuntime(browser);
+      const captureOpening = createDeferredVoid();
+      try {
+        const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
+        await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+        browser.peer.channel.open();
+        await starting;
+        await composed.runtime.adapter.setMuted({ sessionId: composed.controlSessionId, muted: true });
+        const attemptPeer = browser.peer;
+        const attemptTrack = browser.micTrack;
+        expect(attemptTrack.enabled).toBe(false);
+        const sentBefore = attemptPeer.channel.sent.length;
+
+        if (outcome === 'pending_capture') {
+          // Observe the physical track write without replacing WebMicSession.
+          // Release runs in the following browser microtask, before the real
+          // async hold-admission operation has acknowledged capture readiness.
+          let enabled = attemptTrack.enabled;
+          Object.defineProperty(attemptTrack, 'enabled', {
+            configurable: true,
+            get: () => enabled,
+            set: (value: boolean) => { enabled = value; if (value) captureOpening.resolve(); },
+          });
+        }
+        if (outcome === 'early_release') {
+          attemptPeer.channel.bufferedAmount = VOICE_WEBRTC_LIMITS.outboundBufferedBytes;
+        }
+        const held = composed.runtime.adapter.beginHoldToTalk?.({ sessionId: composed.controlSessionId });
+        expect(held).toBeTruthy();
+        if (outcome === 'early_release') {
+          await vi.waitFor(() => expect(attemptPeer.channel.bufferedAmountLowThreshold).toBeGreaterThan(0));
+          const release = held!.release();
+          attemptPeer.channel.drainTo(0);
+          await release;
+          expect(await held!.ready).toBe(false);
+        } else if (outcome === 'pending_capture') {
+          await captureOpening.promise;
+          await held!.release();
+          expect(await held!.ready).toBe(false);
+        } else {
+          expect(await held!.ready).toBe(true);
+          expect(attemptTrack.enabled).toBe(true);
+          if (outcome === 'cancel') await held!.cancel();
+          if (outcome === 'stale') {
+            storage.setState(current => {
+              const voice = voiceSettingsParse(current.settings.voiceSettingsV1);
+              const updated = { ...voice, providerId: null };
+              return { ...current, settings: { ...current.settings, voiceSettingsV1: updated,
+                voice: { ...updated, credentialBindings: current.settings.voice.credentialBindings } } };
+            });
+          }
+          if (outcome === 'stopped') await composed.runtime.adapter.stop({ sessionId: composed.controlSessionId });
+          if (outcome === 'reconnected') {
+            const reconnect = composed.requestReconnect();
+            await vi.waitFor(() => expect(browser.peers).toHaveLength(2));
+            const reconnectPeer = browser.peers[1]!;
+            await vi.waitFor(() => expect(reconnectPeer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            expect(reconnectPeer).not.toBe(attemptPeer);
+            expect(reconnectPeer.channel).not.toBe(attemptPeer.channel);
+            reconnectPeer.channel.open();
+            await expect(reconnect).resolves.toBe(true);
+          }
+          await held!.release();
+        }
+        await held!.release();
+        await held!.cancel();
+        const heldControls = attemptPeer.channel.sent.slice(sentBefore).map(value => JSON.parse(value));
+        expect(heldControls.length).toBeGreaterThanOrEqual(1);
+        expect(heldControls.every(event => event.type === 'input_audio_buffer.clear')).toBe(true);
+        expect(browser.peers.slice(1).flatMap(peer => peer.channel.sent).map(value => JSON.parse(value)).filter(event => (
+          event.type === 'input_audio_buffer.commit' || event.type === 'response.create'
+        ))).toEqual([]);
+        if (outcome === 'stopped') {
+          expect(browser.micSession.getStream()).toBeNull();
+          // MediaStreamTrack.stop ends capture; its enabled flag may remain
+          // true and is not an activity oracle once the owning stream is gone.
+          expect(attemptTrack.stop).toHaveBeenCalledOnce();
+          expect(attemptTrack.readyState).toBe('ended');
+          expect(attemptPeer.close).toHaveBeenCalledOnce();
+        } else {
+          expect(attemptTrack.enabled).toBe(false);
+          expect(composed.runtime.adapter.getSnapshot()).toMatchObject({ status: 'connected', micMuted: true });
+          expect(browser.micSession.getStream()).not.toBeNull();
+          expect(browser.peer.channel.readyState).toBe('open');
+        }
+      } finally {
+        browser.peers.forEach(peer => peer.channel.drainTo(0));
+        await composed.runtime.dispose();
+        composed.hostLease.revoke();
+        browser.restore();
+      }
+    },
+  );
+
   it('transcribes and answers a committed user turn taken while the assistant is idle', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
 
     try {
       const starting = composed.runtime.adapter.start({
@@ -2090,6 +1682,9 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       await vi.waitFor(() => expect(browser.peer.channel.sent.map(
         (value) => (JSON.parse(value) as Readonly<{ type?: unknown }>).type,
       )).toContain('response.create'));
+      expect(browser.peer.channel.sent.filter(
+        (value) => (JSON.parse(value) as Readonly<{ type?: unknown }>).type === 'response.create',
+      )).toHaveLength(1);
     } finally {
       await composed.runtime.dispose();
       composed.hostLease.revoke();
@@ -2099,7 +1694,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('persists every final of a live-shaped OpenAI session across two turns', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
 
     try {
       const starting = composed.runtime.adapter.start({
@@ -2214,7 +1809,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       });
     });
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
 
     try {
       const starting = composed.runtime.adapter.start({
@@ -2331,7 +1926,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
     });
 
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser, {
+    const composed = await environment.createRuntime(browser, {
       readPlaybackCursorMs: () => 250,
     });
 
@@ -2423,7 +2018,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('clears the active carrier without ending the retained Voice attempt', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     let discoveredSessionId: string | null = OPENAI_HISTORY_SESSION_ID;
     const deleteSession = vi.fn(async (sessionId: string) => {
       expect(sessionId).toBe(discoveredSessionId);
@@ -2489,7 +2084,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('serializes same-device carrier acquisition behind an in-flight whole-history clear', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     const recreatedSessionId = 'voice-history-openai-recreated';
     const deleteStarted = createDeferredVoid();
     const releaseDelete = createDeferredVoid();
@@ -2505,7 +2100,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
           : OPENAI_HISTORY_SESSION_ID;
         return sessionHttp.createSessionFromPost(sessionId, init);
       });
-    historySessionPost = ensureHistorySession;
+    environment.historySessionPost = ensureHistorySession;
     const deleteSession = vi.fn(async () => {
       deleteStarted.resolve();
       await releaseDelete.promise;
@@ -2595,7 +2190,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('lets a cross-device carrier deletion win without ending Voice and binds only later finals to a recreated carrier', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     const recreatedSessionId = 'voice-history-openai-cross-device-recreated';
     const oldWriteStarted = createDeferredVoid();
     const releaseOldWrite = createDeferredVoid();
@@ -2611,7 +2206,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         await releaseRebind.promise;
         return sessionHttp.createSessionFromPost(recreatedSessionId, init);
       });
-    historySessionPost = ensureHistorySession;
+    environment.historySessionPost = ensureHistorySession;
 
     try {
       const starting = composed.runtime.adapter.start({
@@ -2718,6 +2313,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         log: { log: vi.fn() },
       });
 
+      sessionHttp.replaceSession(OPENAI_HISTORY_SESSION_ID);
       expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
       expect(browser.micSession.teardown).not.toHaveBeenCalled();
       expect(storage.getState().sessions[OPENAI_HISTORY_SESSION_ID]).toBeUndefined();
@@ -2795,12 +2391,12 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('drains an admitted final through End Voice without leaving its recreated carrier bound', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     const recreatedSessionId = 'voice-history-openai-stop-during-rebind';
     const recreatedTranscriptMessageUrl = transcriptMessageUrl(recreatedSessionId);
     const ensureStarted = createDeferredVoid();
     const releaseEnsure = createDeferredVoid();
-    historySessionPost = async (init: RequestInit) => {
+    environment.historySessionPost = async (init: RequestInit) => {
       ensureStarted.resolve();
       await releaseEnsure.promise;
       return sessionHttp.createSessionFromPost(recreatedSessionId, init);
@@ -2827,6 +2423,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         clearScmStatusForSession: vi.fn(),
         log: { log: vi.fn() },
       });
+      sessionHttp.replaceSession(OPENAI_HISTORY_SESSION_ID);
       allowedTranscriptMessageUrls.add(recreatedTranscriptMessageUrl);
       browser.peer.channel.message(JSON.stringify({
         type: 'conversation.item.input_audio_transcription.completed',
@@ -2907,7 +2504,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
     }) as never);
     allowedTranscriptMessageUrls.add(transcriptMessageUrl(carrierId));
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser, {
+    const composed = await environment.createRuntime(browser, {
       initialConversationSessionId: carrierId,
     });
     const acceptanceStarted = createDeferredVoid();
@@ -2993,7 +2590,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('surfaces a real offline Home transcript refusal through the existing failure owner', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({
         sessionId: '',
@@ -3067,7 +2664,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       },
     }) as never);
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser, {
+    const composed = await environment.createRuntime(browser, {
       initialConversationSessionId: recreatedCarrierId,
     });
     const typedAcceptanceStarted = createDeferredVoid();
@@ -3169,11 +2766,10 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       // B replaces A through the registered OpenAI adapter, with a separate
       // peer and microphone fixture, but receives the same recreated carrier.
       replacementBrowser = installVoiceWebRtcBrowserBoundary();
-      const replacementPeer = replacementBrowser.peer;
       vi.stubGlobal('window', Object.freeze({}));
       vi.stubGlobal('document', Object.freeze({}));
       vi.spyOn(realtimeMicSession, 'createRealtimeMicSession')
-        .mockReturnValue(replacementBrowser.micSession);
+        .mockImplementation(replacementBrowser.createMicSession);
       replacementAssembly = createBuiltinVoiceAdapterAssembly();
       const replacementHost = getCurrentBundledConversationRuntimeHost();
       if (!replacementHost) throw new Error('replacement Voice generation did not become current');
@@ -3189,8 +2785,9 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         initialContext: '',
       });
       await vi.waitFor(() => expect(
-        replacementPeer.createDataChannel,
+        replacementBrowser!.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
+      const replacementPeer = replacementBrowser.peer;
       replacementPeer.channel.open();
       await replacementStarting;
 
@@ -3330,7 +2927,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       },
     }) as never);
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser, {
+    const composed = await environment.createRuntime(browser, {
       initialConversationSessionId: recreatedCarrierId,
     });
     const typedAcceptanceStarted = createDeferredVoid();
@@ -3447,11 +3044,10 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       // B replaces A through the registered OpenAI adapter with a distinct
       // peer and microphone fixture, while retaining the same carrier.
       replacementBrowser = installVoiceWebRtcBrowserBoundary();
-      const replacementPeer = replacementBrowser.peer;
       vi.stubGlobal('window', Object.freeze({}));
       vi.stubGlobal('document', Object.freeze({}));
       vi.spyOn(realtimeMicSession, 'createRealtimeMicSession')
-        .mockReturnValue(replacementBrowser.micSession);
+        .mockImplementation(replacementBrowser.createMicSession);
       replacementAssembly = createBuiltinVoiceAdapterAssembly();
       const replacementHost = getCurrentBundledConversationRuntimeHost();
       if (!replacementHost) throw new Error('replacement Voice generation did not become current');
@@ -3467,8 +3063,9 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         initialContext: '',
       });
       await vi.waitFor(() => expect(
-        replacementPeer.createDataChannel,
+        replacementBrowser!.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
+      const replacementPeer = replacementBrowser.peer;
       replacementPeer.channel.open();
       await replacementStarting;
 
@@ -3573,7 +3170,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
   it('drains an admitted targetless final across generation replacement without letting retirement mutate the new binding', async () => {
     const browser = installVoiceWebRtcBrowserBoundary();
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const composed = await environment.createRuntime(browser);
     const recreatedCarrierId = 'voice-history-openai-generation-drain-recreated';
     const carrierEnsureStarted = createDeferredVoid();
     const releaseCarrierEnsure = createDeferredVoid();
@@ -3589,7 +3186,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
     let replacementBrowser: ReturnType<typeof installVoiceWebRtcBrowserBoundary> | null = null;
     let oldDisposalSettled = false;
 
-    historySessionPost = async (init: RequestInit) => {
+    environment.historySessionPost = async (init: RequestInit) => {
       carrierEnsureStarted.resolve();
       await releaseCarrierEnsure.promise;
       return sessionHttp.createSessionFromPost(recreatedCarrierId, init);
@@ -3657,6 +3254,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         clearScmStatusForSession: vi.fn(),
         log: { log: vi.fn() },
       });
+      sessionHttp.replaceSession(OPENAI_HISTORY_SESSION_ID);
       browser.peer.channel.message(JSON.stringify({
         type: 'conversation.item.input_audio_transcription.completed',
         event_id: 'generation-drain-admitted-final',
@@ -3672,7 +3270,6 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       // carrier-operation slot; it must acquire the carrier and establish its
       // own opaque runtime binding rather than receiving either by test setup.
       replacementBrowser = installVoiceWebRtcBrowserBoundary();
-      const replacementPeer = replacementBrowser.peer;
       // The source-composed gate runs in a Node test process. Establish the
       // browser host boundary so B follows the real web audio-mode branch
       // instead of asking the unavailable native coordinator for a lease.
@@ -3684,7 +3281,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       // Its fixture is intentionally distinct from A's so A disposal cannot
       // make this replacement survive merely by sharing capture ownership.
       vi.spyOn(realtimeMicSession, 'createRealtimeMicSession')
-        .mockReturnValue(replacementBrowser.micSession);
+        .mockImplementation(replacementBrowser.createMicSession);
       replacementAssembly = createBuiltinVoiceAdapterAssembly();
       const replacementHost = getCurrentBundledConversationRuntimeHost();
       if (!replacementHost) throw new Error('replacement Voice generation did not become current');
@@ -3700,12 +3297,13 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      expect(replacementPeer.createDataChannel).not.toHaveBeenCalled();
+      expect(replacementBrowser.peers).toEqual([]);
       releaseCarrierEnsure.resolve();
       await persistenceStarted.promise;
       await vi.waitFor(() => expect(
-        replacementPeer.createDataChannel,
+        replacementBrowser!.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
+      const replacementPeer = replacementBrowser.peer;
       replacementPeer.channel.open();
       await replacementStarting;
 
@@ -3829,9 +3427,10 @@ describe('realtime_openai source-composed WebRTC gate', () => {
   });
 
   it('awaits real session.update send acceptance before publishing connected', async () => {
-    const browser = installVoiceWebRtcBrowserBoundary();
-    setBufferedAmount(browser.peer.channel, VOICE_WEBRTC_LIMITS.outboundBufferedBytes);
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer: peer => {
+      setBufferedAmount(peer.channel, VOICE_WEBRTC_LIMITS.outboundBufferedBytes);
+    } });
+    const composed = await environment.createRuntime(browser);
 
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
@@ -3896,11 +3495,12 @@ describe('realtime_openai source-composed WebRTC gate', () => {
   });
 
   it('closes the peer and never publishes connected when session.update is rejected', async () => {
-    const browser = installVoiceWebRtcBrowserBoundary();
-    vi.spyOn(browser.peer.channel, 'send').mockImplementation(() => {
-      throw new Error('data channel rejected session.update');
-    });
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer: peer => {
+      vi.spyOn(peer.channel, 'send').mockImplementation(() => {
+        throw new Error('data channel rejected session.update');
+      });
+    } });
+    const composed = await environment.createRuntime(browser);
     const statuses: string[] = [];
     const unsubscribe = composed.runtime.adapter.subscribe?.(() => {
       statuses.push(composed.runtime.adapter.getSnapshot().status);
@@ -3924,9 +3524,10 @@ describe('realtime_openai source-composed WebRTC gate', () => {
   });
 
   it('closes the peer and never publishes connected when aborted at the session.update barrier', async () => {
-    const browser = installVoiceWebRtcBrowserBoundary();
-    setBufferedAmount(browser.peer.channel, VOICE_WEBRTC_LIMITS.outboundBufferedBytes);
-    const composed = createSourceComposedOpenAiRuntime(browser);
+    const browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer: peer => {
+      setBufferedAmount(peer.channel, VOICE_WEBRTC_LIMITS.outboundBufferedBytes);
+    } });
+    const composed = await environment.createRuntime(browser);
     const statuses: string[] = [];
     const unsubscribe = composed.runtime.adapter.subscribe?.(() => {
       statuses.push(composed.runtime.adapter.getSnapshot().status);

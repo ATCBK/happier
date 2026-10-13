@@ -1,6 +1,7 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 import {
     readReanimatedFrameCallbacks,
@@ -17,10 +18,6 @@ import {
 } from './useVoiceEnergy';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => false,
-}));
 
 const LISTENING: VoiceEnergyState = { luminosity: 0.62, energized: true, direction: 'inward' };
 const ERROR: VoiceEnergyState = { luminosity: 0.3, energized: false, direction: 'none' };
@@ -67,6 +64,7 @@ describe('VoiceEnergyProvider activation', () => {
     let input: VoiceRuntimeLevelWriter | null = null;
 
     beforeEach(() => {
+        setReducedMotionPreferenceOverride(false);
         vi.useFakeTimers();
         resetReanimatedFrameCallbacks();
         probe.renders = 0;
@@ -83,6 +81,7 @@ describe('VoiceEnergyProvider activation', () => {
         tree = null;
         input = null;
         vi.useRealTimers();
+        setReducedMotionPreferenceOverride(null);
     });
 
     function render(node: React.ReactElement): void {

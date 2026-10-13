@@ -72,7 +72,7 @@ import {
     type VoiceAttemptRecoveryRuntimeTarget,
 } from './voiceAttemptRecovery';
 
-type OpenConversationTarget = Readonly<{ address: SessionAddress | null }>;
+type OpenConversationTarget = Readonly<{ address: SessionAddress | null; requestAddress: SessionAddress | null }>;
 
 const voiceProviderRegistry = createDefaultVoiceProviderRegistry();
 
@@ -134,10 +134,12 @@ export type VoiceAttemptControlProjection = VoiceAttemptControl & Readonly<{
     /** The presented service, including an active attempt that outlives a settings selection. Omitted by static previews. */
     serviceTitle?: string;
     /**
-     * The Session the running attempt talks to, captured when it started (null in global mode or while
-     * idle). Presence names this target; opening another Session never changes it.
+     * The admitted Session target, retained for the same Account's clean ended moment (null in
+     * global mode or after dismissal). Presentation never substitutes the caller's next idle target.
      */
     targetSessionAddress?: SessionAddress | null;
+    /** Exact request owner, independent of whether navigation exposes a conversation or History. */
+    pendingRequestSessionAddress?: SessionAddress | null;
     /** Applied voice from the current admitted attempt; never the next saved preference. */
     inUseVoice?: import('@happier-dev/protocol/actions/voiceConversationActionFamily').VoiceConversationInUseVoice | null;
     onPrimaryAction: () => void;
@@ -285,12 +287,6 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     );
     const capturedAttemptTarget = expectedAttempt ? voiceSessionManager.getAttemptTargetSessionAddress() : null;
     const recoveryBindingScope = expectedAttempt ? capturedAttemptTarget ? 'session' : 'global' : bindingScope;
-    const targetServerId = capturedAttemptTarget?.serverId ?? null;
-    const targetSessionId = capturedAttemptTarget?.sessionId ?? null;
-    const targetSessionAddress = React.useMemo<SessionAddress | null>(
-        () => targetSessionId && targetServerId ? { serverId: targetServerId, sessionId: targetSessionId } : null,
-        [targetServerId, targetSessionId],
-    );
     /*
      * The session a recovery is about: the running attempt's control session, or — when nothing is
      * running — the conversation this caller would start. Never a third session.
@@ -395,6 +391,16 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
         getVoiceSessionArrivedAttemptId,
     );
     const currentAccountScope = useActiveServerAccountScope();
+    const presentedTarget = presentedEnded
+        ? areServerAccountScopesEqual(presentedEnded.accountScope, currentAccountScope)
+            ? presentedEnded.targetSessionAddress : null
+        : capturedAttemptTarget;
+    const targetServerId = presentedTarget?.serverId ?? null;
+    const targetSessionId = presentedTarget?.sessionId ?? null;
+    const targetSessionAddress = React.useMemo<SessionAddress | null>(
+        () => targetSessionId && targetServerId ? { serverId: targetServerId, sessionId: targetSessionId } : null,
+        [targetServerId, targetSessionId],
+    );
     const subscribeBindingSources = React.useCallback((notify: () => void) => {
         const unsubscribeSessions = storage.subscribe(notify);
         const unsubscribeBindings = voiceSessionBindingStore.subscribe(notify);
@@ -431,12 +437,15 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
             ? resolveVoiceBindingBySessionId({ sessionId: controlSessionId, adapterId: snapAdapterId })
             : null;
         const address = binding ? resolveVoiceConversationNavigationAddress(binding) : null;
+        const requestAddress = binding?.targetSessionAddress ?? binding?.conversationSessionAddress ?? null;
         const previous = cached?.value;
         const value = binding
             ? previous && previous.address?.sessionId === address?.sessionId
                 && previous.address?.serverId === address?.serverId
+                && previous.requestAddress?.sessionId === requestAddress?.sessionId
+                && previous.requestAddress?.serverId === requestAddress?.serverId
                 ? previous
-                : { address }
+                : { address, requestAddress }
             : null;
         bindingCacheRef.current = {
             sessions,
@@ -458,12 +467,14 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
         if (!presentedEnded || !areServerAccountScopesEqual(presentedEnded.accountScope, currentAccountScope)) return null;
         const conversationSessionAddress = presentedEnded.conversationSessionAddress;
         if (!conversationSessionAddress) return null;
-        return { address: resolveVoiceConversationNavigationAddress({ ...presentedEnded, conversationSessionAddress }) };
+        return { address: resolveVoiceConversationNavigationAddress({ ...presentedEnded, conversationSessionAddress }),
+            requestAddress: presentedEnded.targetSessionAddress ?? conversationSessionAddress };
     }, [currentAccountScope, presentedEnded]);
     const openConversationTarget = presentedEnded ? endedOpenConversationTarget : activeOpenConversationTarget;
     const openConversationSessionAddress = openConversationTarget?.address ?? null;
     const openConversationSessionId = openConversationSessionAddress?.sessionId ?? null;
     const canOpenConversation = openConversationTarget !== null;
+    const pendingRequestSessionAddress = targetSessionAddress ?? activeOpenConversationTarget?.requestAddress ?? null;
 
     const firstSuccessAttemptId = React.useSyncExternalStore(
         subscribeToVoiceSessionEndedAttempt,
@@ -491,7 +502,8 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     }, [openConversationTarget, presentedEnded, router]);
 
 
-    const presentedSession = useSession(openConversationSessionId ?? snapSessionId ?? '', openConversationSessionAddress?.serverId ?? recoverySessionServerId);
+    const presentedSession = useSession(pendingRequestSessionAddress?.sessionId ?? openConversationSessionId ?? snapSessionId ?? '',
+        pendingRequestSessionAddress?.serverId ?? openConversationSessionAddress?.serverId ?? recoverySessionServerId);
     const sessionStatus = useSessionStatus(presentedSession, { subscribeToSession: false, workingTextMode: 'static' });
     const elapsedStartedAt = getVoiceSessionAttemptStartedAt();
     // Hold is not inferred from commitInput or mute: the capture-input owner must admit the gesture.
@@ -698,6 +710,7 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
             serviceTitle,
             inUseVoice: snap.status === 'connected' ? snap.inUseVoice ?? null : null,
             targetSessionAddress,
+            pendingRequestSessionAddress,
             openConversationSessionId,
             openConversationSessionAddress,
             canOpenConversation,
@@ -710,6 +723,7 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
             snap.status,
             snap.inUseVoice,
             targetSessionAddress,
+            pendingRequestSessionAddress,
             statusLabel,
             elapsedStartedAt,
             canHoldToTalk,

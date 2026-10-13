@@ -53,7 +53,7 @@ export const VoiceGlance = React.memo(function VoiceGlance(props: Readonly<{
     const testID = props.testID ?? 'voice-glance';
     // Talking to a Session (lab `b-voice A`): the title names it beside its avatar, and the source is
     // the provider with the voice the attempt actually applied — never the saved preference.
-    const boundTarget = voice.live ? voice.targetSessionAddress ?? null : null;
+    const boundTarget = voice.targetSessionAddress ?? null;
     const boundName = useVoiceTargetName(boundTarget);
     const target = model.targetLabel ?? t('voicePresence.globalVoice');
     const source = boundName
@@ -69,8 +69,13 @@ export const VoiceGlance = React.memo(function VoiceGlance(props: Readonly<{
             mark={boundTarget && boundName
                 ? <VoiceTargetIdentity address={boundTarget} size="hero" avatarOnly testID={`${testID}-target`} />
                 : undefined}
-            title={boundName ? t('sessionVoice.talkingTo', { name: boundName }) : t('voicePresence.title')}
+            title={boundName
+                ? voice.live ? t('sessionVoice.talkingTo', { name: boundName }) : boundName
+                : t('voicePresence.title')}
             source={source}
+            // A Session's own name can run long in any state (live with a clock, or ended without one):
+            // the service line always reads beneath it instead of being pushed out of the header.
+            sourcePlacement={boundName ? 'below' : undefined}
             menu={props.menu}
             // Alone on its own floating surface (popover, sheet) the surface is the boundary; the
             // "next item" hairline belongs only between Companion items.
@@ -106,7 +111,7 @@ const VoiceGlanceBody = React.memo(function VoiceGlanceBody(props: Readonly<{
         () => model.visibleTranscriptEntries.filter((entry) => entry.kind !== 'note').slice(-GLANCE_TURNS),
         [model.visibleTranscriptEntries],
     );
-    const targetName = useVoiceTargetName(voice.live ? voice.targetSessionAddress ?? null : null);
+    const targetName = useVoiceTargetName(voice.targetSessionAddress);
     if (!voice.live && voice.ended) {
         return <VoiceGlanceEnded model={model} sheet={sheet} testID={props.testID} />;
     }
@@ -136,8 +141,8 @@ const VoiceGlanceBody = React.memo(function VoiceGlanceBody(props: Readonly<{
                     <Text style={styles.quietLinkLabel}>{t('voicePresence.showConversation')}</Text>
                 </Pressable>
             ) : null}
-            {voice.statusCell === 'needs_you' && voice.openConversationSessionAddress ? (
-                <VoiceNeedsYouPrompts address={voice.openConversationSessionAddress} testID={`${props.testID}-needs-you`} />
+            {voice.statusCell === 'needs_you' && voice.pendingRequestSessionAddress ? (
+                <VoiceNeedsYouPrompts address={voice.pendingRequestSessionAddress} testID={`${props.testID}-needs-you`} />
             ) : null}
             {model.delegatedWork ? <VoiceGlanceHandoff model={model} testID={`${props.testID}-handoff`} /> : null}
             <VoiceGlanceControls model={model} sheet={sheet} testID={props.testID} />

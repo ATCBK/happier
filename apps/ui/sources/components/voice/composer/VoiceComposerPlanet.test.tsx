@@ -3,6 +3,7 @@ import renderer, { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { Platform } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 import {
     readReanimatedFrameCallbacks,
@@ -14,15 +15,43 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { voiceRuntimeLevelStore, type VoiceRuntimeLevelWriter } from '@/voice/runtime/levels/voiceRuntimeLevelStore';
 
 import { VoiceComposerPlanet } from './VoiceComposerPlanet';
-import { createVoiceConversationController } from '@/voice/runtime/controller/VoiceConversationController';
-import { createSdkHandleConnection } from '@/voice/runtime/connection/VoiceRealtimeConnection';
-import { createOpenAiRealtimeProtocolAdapter } from '../../../../../../packages/plugins/openai/src/ui/voice/protocol';
+import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionFixture } from '@/dev/testkit';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storage';
+import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
+import { createRecipientContractDigestV1 } from '@happier-dev/protocol';
+import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
+import { saveAndUseAccountVoiceCredential, applyAccountVoiceCredentialSourceSelection } from '@/voice/credentials/accountVoiceCredential';
+import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
+import { createBundledConversationRuntimeHostLease, getCurrentBundledConversationRuntimeHost } from '@/voice/registry/bundledConversationRuntimeHost';
+import { createExternalVoiceProviderActivationScope } from '@/voice/registry/externalVoiceProviderActivation.testkit';
+import { getExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
+import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
+import { buildVoiceTranscriptHistorySessionMetadata } from '@/voice/persistence/voiceTranscriptHistorySession';
+import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
+import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
+import { OPENAI_REALTIME_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/openai/src/protocol/voice/settings';
+
+vi.mock('socket.io-client', async importOriginal => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+vi.mock('react-native', async () => {
+    // These press-frame and held-gesture cases model a touch web host. Browser
+    // hardware must exist before the composer reads its static target floor.
+    vi.stubGlobal('navigator', { maxTouchPoints: 1, language: 'en-US', languages: ['en-US'] });
+    return (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock();
+});
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
+await loadSyncSingletonForTests();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => false,
-}));
 
 const LISTENING: VoiceEnergyState = { luminosity: 0.62, energized: true, direction: 'inward' };
 const TEST_ID = 'session-composer-voice';
@@ -40,6 +69,7 @@ describe('VoiceComposerPlanet', () => {
     let input: VoiceRuntimeLevelWriter | null = null;
 
     beforeEach(() => {
+        setReducedMotionPreferenceOverride(false);
         resetReanimatedFrameCallbacks();
         onPress.mockClear();
         // Real microphone audio at the level store, so only consumer presence decides the clock.
@@ -54,6 +84,7 @@ describe('VoiceComposerPlanet', () => {
         });
         tree = null;
         input = null;
+        setReducedMotionPreferenceOverride(null);
     });
 
     function scene(
@@ -148,32 +179,73 @@ describe('VoiceComposerPlanet', () => {
     });
 
     it.each(['release', 'jitter', 'drag', 'cancel', 'blur', 'background'] as const)('admits a held turn through the real input owner (%s)', async (outcome) => {
-        const sent: unknown[] = [];
-        let captureOpen = false;
-        const adapter = createOpenAiRealtimeProtocolAdapter({
-            prepare: async () => ({ kind: 'prepared', session: { config: {}, safeMetadata: null, inputCommitRequired: true } }),
-        });
-        const connection = createSdkHandleConnection({ driver: {
-            open: async () => {}, close: async () => {}, sendControl: async (event) => { sent.push(event); },
+        const initialStorage = storage.getState();
+        const previousBinding = voiceSessionBindingStore.getState().getByConversationSessionId('composer-hold-history');
+        const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.declaration.id === 'realtime-openai')!;
+        const recipient = createBundledVoiceRecipientContract({ pluginId: entry.pluginId, declaration: entry.declaration });
+        if (!recipient) throw new Error('OpenAI recipient contract is missing');
+        // Manual input is produced by the shipped settings/preparation leaf;
+        // neither inputCommitRequired nor the controller's capabilities are overridden.
+        const voice = voiceSettingsParse({ providerId: entry.providerId, welcome: { enabled: false }, providers: {
+            [entry.providerId]: { schemaVersion: 1, config: { ...OPENAI_REALTIME_DEFAULT_SETTINGS, turnDetection: 'manual' } },
         } });
-        const controller = createVoiceConversationController({
-            adapter: { ...adapter, id: 'composer-hold', turnControls: {
-                cancelResponse: 'immediate', truncatePlayback: 'unsupported', clearInput: true,
-                stopSession: true, resumption: 'none', replay: 'none', exactMessage: false,
-            } }, createConnection: async () => connection,
-            machine: { connecting() {}, connected() {}, ending() {}, disconnected() {}, failed() {} },
-            isSelectionCurrent: () => true, onCanonicalEvent: async () => {},
-            holdCapture: { async setOpen({ open }) { captureOpen = open === true; } },
+        const saved = saveAndUseAccountVoiceCredential({ settings: settingsParse({ voiceSettingsV1: voice }),
+            contribution: { pluginId: entry.pluginId, localId: entry.declaration.id }, credentialSlotId: recipient.credentialSlot.id,
+            expectedSettingsVersion: 1, currentDeclaration: entry.declaration, value: 'sk_composer_hold', generateId: () => 'composer-hold-secret', now: 1,
+            expectedSecretId: null, expectedSecretUpdatedAt: null, approvedRecipientContractDigest: createRecipientContractDigestV1(recipient) });
+        const selected = applyAccountVoiceCredentialSourceSelection({ settings: saved.settings, connectedPurposes: { v: 1, bindings: [] }, currentDeclaration: entry.declaration,
+            mutation: { contribution: { pluginId: entry.pluginId, localId: entry.declaration.id }, credentialSlotId: recipient.credentialSlot.id, expectedSettingsVersion: 1, selection: { kind: 'savedSecret' } } });
+        const account = await createVoiceSettingsAccountTestHarness(selected.settings);
+        const request = account.request.getMockImplementation()!;
+        const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+        account.request.mockImplementation(async (url, init) => {
+            if (new URL(String(url)).pathname.startsWith('/v1/features')) return request(url, init);
+            const preparation = answerVoiceRealtimePreparationHttpRequest(url, storage.getState().settings);
+            if (preparation) return preparation;
+            const sessionResponse = sessionHttp.handle(url, init);
+            return sessionResponse ?? request(url, init);
         });
-        expect(await controller.start({ controlSessionId: 'composer-hold' })).toEqual({ status: 'connected' });
+        storage.setState({ sessions: { 'composer-hold-history': createSessionFixture({ id: 'composer-hold-history', serverId: account.scope.serverId, encryptionMode: 'plain', active: false,
+            metadata: { path: '/voice-history', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() } }) } });
+        voiceSessionBindingStore.getState().bind({ adapterId: entry.providerId, controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+            conversationSessionId: 'composer-hold-history', conversationSessionAddress: { serverId: account.scope.serverId, sessionId: 'composer-hold-history' },
+            targetSessionAddress: null, lifetime: 'runtime_attempt', transcriptMode: 'synthetic', updatedAt: 1 });
+        const browser = installVoiceWebRtcBrowserBoundary();
+        vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/realtime/client_secrets') return Response.json({ value: 'ek_composer_hold', expires_at: Math.floor(Date.now() / 1000) + 60,
+                session: { type: 'realtime', object: 'realtime.session', id: 'composer-hold-provider', model: OPENAI_REALTIME_DEFAULT_SETTINGS.model.id } });
+            if (path === '/v1/realtime/calls') return new Response('v=0\r\na=composer-hold-answer\r\n', { status: 201 });
+            throw new Error(`Unexpected provider HTTP request: ${path}`);
+        }));
+        voiceConversationRuntimeMachine.reset();
+        const hostLease = createBundledConversationRuntimeHostLease();
+        const scope = createExternalVoiceProviderActivationScope({
+            pluginId: entry.pluginId, occurrenceId: 'composer-openai-hold', declarations: [entry.declaration], hostPlatform: 'web',
+            runtimeHost: { ...hostLease.host, createMicSession: () => browser.micSession },
+            isRuntimeHostCurrent: () => getCurrentBundledConversationRuntimeHost() === hostLease.host,
+            hostBindingsByLocalId: { [entry.declaration.id]: { recipientContract: recipient, descriptor: 'bundled' } },
+        });
+        entry.activate(scope.api as Parameters<typeof entry.activate>[0]);
+        await scope.commit();
+        const adapter = getExternalVoiceProviderRegistration(entry.providerId)?.adapter;
+        if (!adapter) throw new Error('OpenAI Voice adapter was not activated');
+        const beginHoldToTalk = () => adapter.beginHoldToTalk?.({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID }) ?? null;
         try {
-            render(scene({ beginHoldToTalk: controller.beginHoldToTalk }));
+            const start = adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
+            await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalled());
+            browser.peer.channel.open();
+            await start;
+            expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, status: 'connected', canHoldToTalk: true });
+            await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true });
+            const firstHeldFrame = browser.peer.channel.sent.length;
+            render(scene({ beginHoldToTalk }));
             await act(async () => { control().props.onLongPress(); });
-            expect(captureOpen).toBe(true);
+            expect(browser.micTrack.enabled).toBe(true);
             const gesture = tree!.root.findAll((node) => typeof node.type === 'string'
                 && node.props.testID === 'session-composer-voice-gesture')[0]!;
             if (outcome === 'background') await act(async () => {
-                update(scene({ beginHoldToTalk: controller.beginHoldToTalk, isActivelyFocused: false }));
+                update(scene({ beginHoldToTalk, isActivelyFocused: false }));
             });
             await act(async () => {
                 if (outcome === 'jitter') gesture.props.onTouchMove?.();
@@ -191,13 +263,25 @@ describe('VoiceComposerPlanet', () => {
                 gesture.props.onTouchEnd();
                 gesture.props.onPointerUp();
             });
-            expect(captureOpen).toBe(false);
+            expect(browser.micTrack.enabled).toBe(false);
+            // The same channel also carries the initial tool/session envelope;
+            // assert the held turn's wire contract after that real preparation.
+            const sent = browser.peer.channel.sent.slice(firstHeldFrame).map(value => JSON.parse(value) as unknown);
             expect(sent).toEqual(outcome === 'release' || outcome === 'jitter' ? [
                 { type: 'input_audio_buffer.clear' }, { type: 'input_audio_buffer.commit' }, { type: 'response.create' },
             ] : [{ type: 'input_audio_buffer.clear' }, { type: 'input_audio_buffer.clear' }]);
             expect(onPress).not.toHaveBeenCalled();
         } finally {
-            await controller.stop();
+            await adapter.stop({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+            expect(voiceConversationRuntimeMachine.getSnapshot().state).toBe('disconnected');
+            await scope.unwind();
+            hostLease.revoke();
+            voiceSessionBindingStore.getState().unbind('composer-hold-history');
+            if (previousBinding) voiceSessionBindingStore.getState().bind(previousBinding);
+            await account.dispose();
+            storage.setState(initialStorage, true);
+            browser.restore();
+            voiceConversationRuntimeMachine.reset();
         }
     });
 });

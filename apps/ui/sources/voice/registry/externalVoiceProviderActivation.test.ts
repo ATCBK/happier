@@ -1,9 +1,12 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import * as React from 'react';
 import {
   PluginContributesV2Schema,
+  VoiceProviderContributionSchema,
   createRecipientContractDigestV1,
   createVoiceProviderRecipientContractFromCredentialsV1,
   type VoiceProviderContribution,
+  AgentSessionRealtimeInspectResultV1Schema,
 } from '@happier-dev/protocol';
 
 import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
@@ -40,10 +43,22 @@ import {
   subscribeExternalVoiceProviderRegistrations,
 } from './externalVoiceProviderRegistrations';
 import { storage } from '@/sync/domains/state/storage';
+import { createSessionFixture, renderScreen } from '@/dev/testkit';
+import { ModalProvider } from '@/modal/ModalProvider';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@/voice/persistence/voiceTranscriptHistorySession';
+import { readVoiceProviderConversationMetadata, writeVoiceProviderConversationMetadata } from '@/voice/persistence/voiceProviderConversationMetadata';
 import {
   createBundledConversationRuntimeHostLease,
   getCurrentBundledConversationRuntimeHost,
 } from './bundledConversationRuntimeHost';
+
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
 function requireConversationDeclaration(
   declaration: VoiceProviderContribution,
@@ -116,6 +131,34 @@ function createProviderLeaf(input?: Readonly<{ setInputMuted?(muted: boolean): P
     microphoneMode: 'provider_managed' as const,
     setInputMuted: input?.setInputMuted ?? (() => {}),
   };
+}
+
+async function installAgentBindingAccount() {
+  const inspected: Array<Readonly<{ method: string; payload: unknown }>> = [];
+  let reply = AgentSessionRealtimeInspectResultV1Schema.parse({ ok: true, status: 'available', transport: 'webrtc' });
+  installDisconnectedServerSocketBoundary(socket => {
+    socket.connected = true;
+    socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
+      if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
+      if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string'
+        || !('params' in payload)) throw new Error('Malformed Socket RPC boundary input');
+      inspected.push({ method: payload.method, payload: payload.params });
+      return { ok: true, result: reply };
+    });
+  });
+  const account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
+  onTestFinished(account.dispose);
+  onTestFinished(() => installDisconnectedServerSocketBoundary());
+  const session = createSessionFixture({ id: 'visible-codex-session', serverId: account.scope.serverId, active: true,
+    metadata: { path: '/project', host: 'voice.test', flavor: 'codex' },
+  });
+  const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [session.id]: session }));
+  const request = account.request.getMockImplementation();
+  if (!request) throw new Error('Account HTTP boundary missing');
+  account.request.mockImplementation(async (input, init) => sessionHttp.handle(input, init) ?? request(input, init));
+  storage.setState({ sessions: { [session.id]: session } });
+  return { account, session, inspected, setReply(next: unknown) { reply = AgentSessionRealtimeInspectResultV1Schema.parse(next); } };
 }
 
 describe('external Voice provider activation', () => {
@@ -306,29 +349,32 @@ describe('external Voice provider activation', () => {
   });
 
   it('binds generic settings actions to settings-phase credentials, questions, and canonical currentness', async () => {
-    const tools = Object.freeze([Object.freeze({
-      name: 'hostListMachines',
-      description: 'Host-normalized machine inventory',
-      parameters: Object.freeze({ type: 'object', additionalProperties: false }),
-      execute: async () => Object.freeze({ ok: true }),
-    })]);
-    const askQuestions = vi.fn(async () => Object.freeze({
-      requestId: 'questions-1',
-      kind: 'questions' as const,
-      status: 'answered' as const,
-      answers: Object.freeze({
-        decision: Object.freeze({
-          kind: 'singleChoice' as const,
-          answer: Object.freeze({ kind: 'choice' as const, choiceId: 'continue' }),
-        }),
-      }),
-    }));
+    const account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
+    const hostLease = createBundledConversationRuntimeHostLease();
+    const actionDeclaration = requireConversationDeclaration(PluginContributesV2Schema.parse({
+      voiceProviders: [{ ...declaration, settings: {
+        schemaVersion: 1,
+        fields: [{ id: 'agentId', title: 'Agent ID', schema: { type: 'string', maxLength: 256 }, default: '',
+          presentation: { control: 'text' } }],
+        actions: [{ id: 'create-agent', title: 'Create Agent', patchFieldIds: ['agentId'],
+          placement: { kind: 'contributionFooter' }, confirmation: { kind: 'none' } }],
+      } }],
+    }).voiceProviders[0]!);
+    const scope = createExternalVoiceProviderActivationScope({
+      pluginId: identity.pluginId, occurrenceId: 'settings-actions-real-context', declarations: [actionDeclaration],
+      hostPlatform: 'web', runtimeHost: hostLease.host,
+      isRuntimeHostCurrent: () => getCurrentBundledConversationRuntimeHost() === hostLease.host,
+    });
+    let mountedScreen: Awaited<ReturnType<typeof renderScreen>> | null = null;
+    onTestFinished(async () => { await scope.unwind(); await mountedScreen?.unmount(); hostLease.revoke(); await account.dispose(); });
+    const screen = await renderScreen(React.createElement(ModalProvider, { children: null }));
+    mountedScreen = screen;
     const execute = vi.fn(async (_input, context): Promise<{
       patch: Readonly<Record<string, string | boolean>>;
     }> => {
       expect(context.credentials.phase).toBe('settings');
       expect(Object.keys(context).sort()).toEqual(['credentials', 'interactions', 'signal', 'tools']);
-      expect(context.tools).toBe(tools);
+      expect(context.tools.map((tool) => tool.name)).toContain('getActionSpec');
       expect(Reflect.get(context, 'disabledActionIds')).toBeUndefined();
       expect(Reflect.get(context, 'extraSystemAppendBlocks')).toBeUndefined();
       await expect(context.interactions.askQuestions({
@@ -346,31 +392,37 @@ describe('external Voice provider activation', () => {
         signal: context.signal,
       })).resolves.toMatchObject({
         status: 'answered',
+        answers: { decision: { kind: 'singleChoice', answer: { kind: 'choice', choiceId: 'continue' } } },
       });
       context.signal.throwIfAborted();
       return { patch: { agentId: 'agent_1' } };
     });
-    const actions = bindVoiceProviderSettingsActions({
-      actions: { execute },
-      declaredActions: [{ id: 'create-agent', patchFieldIds: ['agentId'] }],
-      createCredentials: () => ({ phase: 'settings', mediated: null, raw: null }),
-      createInteractions: () => ({ askQuestions }),
-      getRealtimeClientToolDefinitions: () => tools,
-      isCurrent: () => true,
+    scope.api.voiceProviders.register(actionDeclaration.id, {
+      ...createProviderLeaf(), settingsActions: { execute },
     });
-    const result = await actions.execute({
-      actionId: 'create-agent',
-      settings: { mode: 'byo' },
-      signal: new AbortController().signal,
+    await scope.commit();
+    const actions = listExternalVoiceProviderRegistrations().find(entry => entry.pluginId === identity.pluginId
+      && entry.localId === actionDeclaration.id)?.settingsActions;
+    if (!actions) throw new Error('Actual activation settings actions unavailable');
+    let running!: ReturnType<typeof actions.execute>;
+    await React.act(async () => {
+      running = actions.execute({ actionId: 'create-agent', settings: { mode: 'byo' }, signal: new AbortController().signal });
+      await Promise.resolve();
     });
+    await vi.waitFor(() => expect(screen.findByTestId('app-shell-question-decision-choice-continue')).not.toBeNull());
+    await screen.pressByTestIdAsync('app-shell-question-decision-choice-continue');
+    await screen.pressByTestIdAsync('app-shell-question-submit');
+    const result = await running;
     expect(result).toEqual({ patch: { agentId: 'agent_1' } });
     await expect(actions.execute({
       actionId: 'undeclared',
       settings: {},
       signal: new AbortController().signal,
     })).rejects.toThrow(/undeclared_voice_provider_settings_action/u);
+    await scope.unwind();
+    await expect(actions.execute({ actionId: 'create-agent', settings: {}, signal: new AbortController().signal }))
+      .rejects.toMatchObject({ code: 'voice_account_operation_cancelled' });
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(askQuestions).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when the host has no canonical present-user interaction adapter', () => {
@@ -383,301 +435,93 @@ describe('external Voice provider activation', () => {
     })).toThrow(/voice_settings_interaction_host_required/u);
   });
 
-  it('installs exact direct/global Agent-session binding from the public declaration', async () => {
-    const agent = Object.freeze({
-      pluginId: 'happier.agent.codex',
-      localId: 'codex',
-    });
+  it('installs exact direct Agent binding and rejects malformed global account selections from the public declaration', async () => {
+    const fixture = await installAgentBindingAccount();
+    const agent = Object.freeze({ pluginId: 'happier.agent.codex', localId: 'codex' });
     const agentRealtimeDeclaration = requireConversationDeclaration(PluginContributesV2Schema.parse({
       voiceProviders: [{
-        ...declaration,
-        id: 'agent-realtime',
-        execution: {
-          kind: 'experimental_agent_session_realtime',
-          agent,
-          supportedRuntimeVersions: ['1.2.3'],
-        },
-        settings: {
-          schemaVersion: 2,
-          fields: [],
-          connectedServicesBinding: {
-            id: 'globalConnectedServices',
-            title: 'Codex account',
-            agent,
-            serviceIds: ['openai-codex'],
-          },
-        },
+        ...declaration, id: 'agent-realtime',
+        execution: { kind: 'experimental_agent_session_realtime', agent, supportedRuntimeVersions: ['1.2.3'] },
+        settings: { schemaVersion: 2, fields: [], connectedServicesBinding: {
+          id: 'globalConnectedServices', title: 'Codex account', agent, serviceIds: ['openai-codex'],
+        } },
       }],
     }).voiceProviders[0]!);
     const hostLease = createBundledConversationRuntimeHostLease();
-    const resolveAgentBinding = vi.fn(async (
-      input: Parameters<NonNullable<
-        typeof hostLease.host.resolveAgentRealtimeVoiceConversationBinding
-      >>[0],
-    ): Promise<Readonly<{
-      conversationSessionAddress: Readonly<{ serverId: string; sessionId: string }>;
-      transcriptMode: 'native_session';
-      targetSessionAddress: Readonly<{ serverId: string; sessionId: string }> | null;
-    }> | null> => Object.freeze({
-      conversationSessionAddress: {
-        serverId: 'server-a',
-        sessionId: input.controlSessionId === hostLease.host.globalVoiceSessionId
-          ? 'hidden-codex'
-          : input.controlSessionId,
-      },
-      transcriptMode: 'native_session' as const,
-      targetSessionAddress: input.requestedTargetSessionAddress,
-    }));
-    const host = Object.freeze({
-      ...hostLease.host,
-      resolveAgentRealtimeVoiceConversationBinding: resolveAgentBinding,
-    });
-    const providerId = 'acme.synthetic-voice/agent-realtime';
-    const providerRef = Object.freeze({
-      pluginId: identity.pluginId,
-      localId: agentRealtimeDeclaration.id,
-    });
+    const providerRef = Object.freeze({ pluginId: identity.pluginId, localId: agentRealtimeDeclaration.id });
+    const providerId = `${providerRef.pluginId}/${providerRef.localId}`;
     const contribution = createExternalVoiceProviderRuntimeContribution({
-      host,
-      platform: 'web',
-      providerId,
-      providerRef,
-      declaration: agentRealtimeDeclaration,
-      runtime: createProviderLeaf(),
+      host: hostLease.host, platform: 'web', providerId, providerRef,
+      declaration: agentRealtimeDeclaration, runtime: createProviderLeaf(),
     });
-    onTestFinished(async () => {
-      await contribution.dispose();
-      hostLease.revoke();
-    });
-
-    expect(contribution.adapter.resolveSurfaceCapabilities?.({
-      voice: {
-        providerId,
-        providers: {
-          [providerId]: {
-            schemaVersion: 2,
-            config: {
-              globalConnectedServices: {
-                v: 1,
-                bindingsByServiceId: {
-                  'happier.agent.codex/openai-codex': {
-                    source: 'connected',
-                    selection: 'profile',
-                    profileId: 'codex-account-a',
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    })).toMatchObject({
-      agentRuntime: agent,
-    });
-
+    onTestFinished(async () => { await contribution.dispose(); hostLease.revoke(); });
+    const connectedServices = { v: 1, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'codex-account-a' },
+    } };
+    const settingsWith = (globalConnectedServices: unknown) => ({ voice: voiceSettingsParse({
+      providerId, providers: { [providerId]: { schemaVersion: 2, config: { globalConnectedServices } } },
+    }) });
+    const settings = settingsWith(connectedServices);
+    expect(contribution.adapter.resolveSurfaceCapabilities?.(settings)).toMatchObject({ agentRuntime: agent });
+    const address = { serverId: fixture.account.scope.serverId, sessionId: fixture.session.id };
     await expect(contribution.adapter.resolveConversationBinding?.({
-      controlSessionId: 'visible-codex-session',
-      requestedTargetSessionAddress: { serverId: 'server-a', sessionId: 'ignored-direct-target' },
-      settings: {
-        voice: {
-          providerId,
-          providers: {
-            [providerId]: {
-              schemaVersion: 2,
-              config: {
-                globalConnectedServices: {
-                  v: 1,
-                  bindingsByServiceId: {
-                    'happier.agent.codex/openai-codex': {
-                      source: 'connected',
-                      selection: 'profile',
-                      profileId: 'must-be-ignored-by-direct',
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    })).resolves.toMatchObject({
-      conversationSessionAddress: { serverId: 'server-a', sessionId: 'visible-codex-session' },
-      transcriptMode: 'native_session',
+      controlSessionId: fixture.session.id, requestedTargetSessionAddress: address, settings,
+    })).resolves.toEqual({
+      conversationSessionAddress: address, transcriptMode: 'native_session', targetSessionAddress: address,
     });
-    expect(resolveAgentBinding).toHaveBeenLastCalledWith(expect.objectContaining({
-      provider: providerRef,
-      agent,
-      controlSessionId: 'visible-codex-session',
-    }));
-    expect(resolveAgentBinding.mock.lastCall?.[0]).not.toHaveProperty('connectedServices');
-
-    resolveAgentBinding.mockClear();
-    resolveAgentBinding.mockResolvedValueOnce(null);
+    expect(fixture.inspected).toEqual([{ method: `${fixture.session.id}:session.agentRealtime.inspect`,
+      payload: { v: 1, provider: providerRef },
+    }]);
     await expect(contribution.adapter.resolveConversationBinding?.({
-      controlSessionId: 'mismatched-direct-session',
-      requestedTargetSessionAddress: null,
-      settings: {
-        voice: {
-          providerId,
-          providers: {},
-        },
-      },
+      controlSessionId: fixture.session.id,
+      requestedTargetSessionAddress: { ...address, sessionId: 'different-session' }, settings,
+    })).rejects.toMatchObject({ code: 'session_unavailable' });
+    for (const reason of ['session_unavailable', 'update_required']) {
+      fixture.setReply({ ok: false, status: 'unavailable', code: reason, message: 'Unavailable', reason });
+      await expect(contribution.adapter.resolveConversationBinding?.({
+        controlSessionId: fixture.session.id, requestedTargetSessionAddress: address, settings,
+      })).rejects.toMatchObject({ code: reason });
+    }
+    fixture.setReply({ ok: false, status: 'unavailable', code: 'unclassified', message: 'Unclassified decline' });
+    await expect(contribution.adapter.resolveConversationBinding?.({
+      controlSessionId: fixture.session.id, requestedTargetSessionAddress: address, settings,
     })).resolves.toBeNull();
-    expect(resolveAgentBinding).toHaveBeenCalledWith(expect.objectContaining({
-      controlSessionId: 'mismatched-direct-session',
-      provider: providerRef,
-      agent,
-    }));
-    expect(resolveAgentBinding.mock.lastCall?.[0]).not.toHaveProperty('connectedServices');
-
-    resolveAgentBinding.mockClear();
-    await expect(contribution.adapter.resolveConversationBinding?.({
-      controlSessionId: hostLease.host.globalVoiceSessionId,
-      requestedTargetSessionAddress: null,
-      settings: {
-        voice: {
-          providerId,
-          providers: {
-            [providerId]: {
-              schemaVersion: 2,
-              config: { globalConnectedServices: null },
-            },
-          },
-        },
-      },
-    })).resolves.toBeNull();
-    expect(resolveAgentBinding).not.toHaveBeenCalled();
-
-    await expect(contribution.adapter.resolveConversationBinding?.({
-      controlSessionId: hostLease.host.globalVoiceSessionId,
-      requestedTargetSessionAddress: null,
-      settings: {
-        voice: {
-          providerId,
-          providers: {
-            [providerId]: {
-              schemaVersion: 2,
-              config: {
-                globalConnectedServices: {
-                  v: 1,
-                  bindingsByServiceId: {
-                    'happier.agent.codex/openai-codex': {
-                      source: 'connected',
-                      selection: 'profile',
-                      profileId: 'codex-account-a',
-                    },
-                    github: {
-                      source: 'connected',
-                      selection: 'profile',
-                      profileId: 'must-not-be-admitted',
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    })).resolves.toBeNull();
-    expect(resolveAgentBinding).not.toHaveBeenCalled();
-
-    const connectedServicesInput = Object.freeze({
-      v: 1 as const,
-      bindingsByServiceId: Object.freeze({
-        'happier.agent.codex/openai-codex': Object.freeze({
-          source: 'connected' as const,
-          selection: 'profile' as const,
-          profileId: 'codex-account-a',
-        }),
-      }),
-    });
-    await expect(contribution.adapter.resolveConversationBinding?.({
-      controlSessionId: hostLease.host.globalVoiceSessionId,
-      requestedTargetSessionAddress: null,
-      settings: {
-        voice: {
-          providerId,
-          providers: {
-            [providerId]: {
-              schemaVersion: 2,
-              config: { globalConnectedServices: connectedServicesInput },
-            },
-          },
-        },
-      },
-    })).resolves.toMatchObject({
-      conversationSessionAddress: { serverId: 'server-a', sessionId: 'hidden-codex' },
-    });
-    expect(resolveAgentBinding).toHaveBeenLastCalledWith(expect.objectContaining({
-      provider: providerRef,
-      agent,
-      connectedServices: {
-        v: 2,
-        bindingsByServiceId: connectedServicesInput.bindingsByServiceId,
-      },
-    }));
+    const admittedDirectRequests = [...fixture.inspected];
+    for (const globalConnectedServices of [null, { ...connectedServices, bindingsByServiceId: {
+      ...connectedServices.bindingsByServiceId, github: { source: 'connected', selection: 'profile', profileId: 'must-not-be-admitted' },
+    } }]) {
+      await expect(contribution.adapter.resolveConversationBinding?.({
+        controlSessionId: hostLease.host.globalVoiceSessionId, requestedTargetSessionAddress: null,
+        settings: settingsWith(globalConnectedServices),
+      })).resolves.toBeNull();
+    }
+    expect(fixture.inspected).toEqual(admittedDirectRequests);
   });
 
-  it('admits binding-free Agent-session realtime declarations for direct session binding', async () => {
-    const agent = Object.freeze({
-      pluginId: 'happier.agent.codex',
-      localId: 'codex',
-    });
+  it('admits binding-free Agent-session realtime declarations for the exact direct session', async () => {
+    const fixture = await installAgentBindingAccount();
+    const agent = Object.freeze({ pluginId: 'happier.agent.codex', localId: 'codex' });
     const agentRealtimeDeclaration = requireConversationDeclaration(PluginContributesV2Schema.parse({
-      voiceProviders: [{
-        ...declaration,
-        id: 'agent-realtime-without-connected-services',
-        execution: {
-          kind: 'experimental_agent_session_realtime',
-          agent,
-          supportedRuntimeVersions: ['1.2.3'],
-        },
+      voiceProviders: [{ ...declaration, id: 'agent-realtime-without-connected-services',
+        execution: { kind: 'experimental_agent_session_realtime', agent, supportedRuntimeVersions: ['1.2.3'] },
       }],
     }).voiceProviders[0]!);
     const hostLease = createBundledConversationRuntimeHostLease();
-    const resolveAgentBinding = vi.fn(async (
-      input: Parameters<NonNullable<
-        typeof hostLease.host.resolveAgentRealtimeVoiceConversationBinding
-      >>[0],
-    ) => Object.freeze({
-      conversationSessionAddress: { serverId: 'server-a', sessionId: input.controlSessionId },
-      transcriptMode: 'native_session' as const,
-      targetSessionAddress: input.requestedTargetSessionAddress,
-    }));
-    const providerRef = Object.freeze({
-      pluginId: identity.pluginId,
-      localId: agentRealtimeDeclaration.id,
-    });
+    const providerRef = Object.freeze({ pluginId: identity.pluginId, localId: agentRealtimeDeclaration.id });
     const contribution = createExternalVoiceProviderRuntimeContribution({
-      host: Object.freeze({
-        ...hostLease.host,
-        resolveAgentRealtimeVoiceConversationBinding: resolveAgentBinding,
-      }),
-      platform: 'web',
-      providerId: `${providerRef.pluginId}/${providerRef.localId}`,
-      providerRef,
-      declaration: agentRealtimeDeclaration,
-      runtime: createProviderLeaf(),
+      host: hostLease.host, platform: 'web', providerId: `${providerRef.pluginId}/${providerRef.localId}`,
+      providerRef, declaration: agentRealtimeDeclaration, runtime: createProviderLeaf(),
     });
-    onTestFinished(async () => {
-      await contribution.dispose();
-      hostLease.revoke();
-    });
-
+    onTestFinished(async () => { await contribution.dispose(); hostLease.revoke(); });
+    const address = { serverId: fixture.account.scope.serverId, sessionId: fixture.session.id };
     await expect(contribution.adapter.resolveConversationBinding?.({
-      controlSessionId: 'visible-codex-session',
-      requestedTargetSessionAddress: { serverId: 'server-a', sessionId: 'requested-target' },
-      settings: {},
-    })).resolves.toMatchObject({
-      conversationSessionAddress: { serverId: 'server-a', sessionId: 'visible-codex-session' },
-      targetSessionAddress: { serverId: 'server-a', sessionId: 'requested-target' },
+      controlSessionId: fixture.session.id, requestedTargetSessionAddress: address, settings: {},
+    })).resolves.toEqual({
+      conversationSessionAddress: address, transcriptMode: 'native_session', targetSessionAddress: address,
     });
-    expect(resolveAgentBinding).toHaveBeenCalledWith(expect.objectContaining({
-      provider: providerRef,
-      agent,
-      controlSessionId: 'visible-codex-session',
-    }));
-    expect(resolveAgentBinding.mock.lastCall?.[0]).not.toHaveProperty('connectedServices');
+    expect(fixture.inspected).toEqual([{ method: `${fixture.session.id}:session.agentRealtime.inspect`,
+      payload: { v: 1, provider: providerRef },
+    }]);
   });
 
   it('does not project an Agent recovery target for direct-media execution', () => {
@@ -1011,12 +855,13 @@ describe('external Voice provider activation', () => {
     });
   });
 
-  it('names an external conversation service by its declared title and never shows its plugin id as a description', async () => {
+  it.each([undefined, { key: 'voice.service.description', fallback: 'Talk with the installed service.' }])(
+    'preserves an external service description without substituting plugin identity or billing (%j)', async (description) => {
     const hostLease = createBundledConversationRuntimeHostLease();
     const scope = createExternalVoiceProviderActivationScope({
       pluginId: identity.pluginId,
       occurrenceId: 'acme-synthetic-voice-presentation-occurrence',
-      declarations: [declaration],
+      declarations: [requireConversationDeclaration(VoiceProviderContributionSchema.parse({ ...declaration, ...(description ? { description } : {}) }))],
       hostPlatform: 'web',
     });
     onTestFinished(async () => {
@@ -1027,9 +872,11 @@ describe('external Voice provider activation', () => {
     await scope.commit();
 
     const descriptor = createDefaultVoiceProviderRegistry().get(`${identity.pluginId}/${declaration.id}`)!;
+    if (descriptor.kind !== 'voice.conversation-provider.v1') throw new Error('Expected conversation service');
     const option = descriptor.selectionOptions?.[0];
     expect(option?.titleKey).toBe('Synthetic Conversation');
-    // The contribution declares no description; the gallery shows the title and readiness rather than an identifier.
+    expect(descriptor.description).toEqual(description);
+    // Service descriptions do not become billing-option subtitles or identifiers.
     expect(option?.subtitleKey).toBeUndefined();
   });
 
@@ -1369,6 +1216,31 @@ describe('external Voice provider activation', () => {
   });
 
   it('requires a current named activation before the central lifecycle can run and revokes it on disable', async () => {
+    const account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
+    onTestFinished(account.dispose);
+    const providerId = 'acme.synthetic-voice/conversation';
+    const history = createSessionFixture({ id: 'external-history', serverId: account.scope.serverId,
+      metadata: writeVoiceProviderConversationMetadata({ path: '/voice', host: 'voice.test',
+        ...buildVoiceTranscriptHistorySessionMetadata() }, {
+        providerId, state: { conversationId: 'retained-provider-thread' }, updatedAt: Date.now(),
+      }),
+    });
+    const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [history.id]: history }));
+    const request = account.request.getMockImplementation();
+    if (!request) throw new Error('Account HTTP boundary missing');
+    account.request.mockImplementation(async (input, init) => {
+      if (new URL(String(input)).pathname === '/v2/sessions/lookup-by-tags') {
+        const { SessionLookupByTagsRequestV2Schema } = await import('@happier-dev/protocol');
+        expect(SessionLookupByTagsRequestV2Schema.parse(JSON.parse(String(init?.body))).tags)
+          .toEqual([VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG]);
+        const detail = sessionHttp.handle(new URL(`/v2/sessions/${history.id}`, String(input)));
+        if (!detail) throw new Error('Missing History HTTP record');
+        const { SessionLookupByTagsResponseV2Schema } = await import('@happier-dev/protocol');
+        return Response.json(SessionLookupByTagsResponseV2Schema.parse({ sessions: [(await detail.json()).session] }));
+      }
+      return sessionHttp.handle(input, init) ?? request(input, init);
+    });
+    storage.setState({ sessions: { [history.id]: history } });
     registerVoiceAdapters([]);
     const hostLease = createBundledConversationRuntimeHostLease();
     const cache = createPluginReactNativeBundleCache();
@@ -1396,11 +1268,6 @@ describe('external Voice provider activation', () => {
     });
     const authority = Object.freeze({ serverId: 'server-1', machineId: 'machine-1' });
     await host.replaceAuthority(authority);
-    const forgetProviderConversationState = vi.fn(async () => {});
-    const runtimeHost = Object.freeze({
-      ...hostLease.host,
-      forgetProviderConversationState,
-    });
 
     const activationInput = {
       cache,
@@ -1416,7 +1283,7 @@ describe('external Voice provider activation', () => {
         occurrenceId: 'acme-synthetic-voice-activation-occurrence',
         declarations: [declaration],
         hostPlatform: 'web',
-        runtimeHost,
+        runtimeHost: hostLease.host,
         isRuntimeHostCurrent: () =>
           getCurrentBundledConversationRuntimeHost() === hostLease.host,
       }),
@@ -1424,7 +1291,6 @@ describe('external Voice provider activation', () => {
     await expect(host.activate(activationInput)).resolves.toEqual({ ok: true });
     expect(getCurrentBundledConversationRuntimeHost()).toBe(hostLease.host);
 
-    const providerId = 'acme.synthetic-voice/conversation';
     const adapter = getVoiceAdapterRegistry().get(providerId);
     expect(adapter?.id).toBe(providerId);
     if (!adapter) throw new Error('expected_external_voice_adapter');
@@ -1465,7 +1331,10 @@ describe('external Voice provider activation', () => {
     await expect(getVoiceAdapterRegistry().get(providerId)?.performRuntimeAction?.('forget_provider_conversation'))
       .resolves.toEqual({ status: 'completed' });
     expect(forgetProviderConversation).toHaveBeenCalledTimes(1);
-    expect(forgetProviderConversationState).toHaveBeenCalledWith({ providerId });
+    expect(readVoiceProviderConversationMetadata(
+      readSessionOwnerMetadataView(storage.getState().sessions[history.id]!), providerId,
+    )).toBeNull();
+    expect(sessionHttp.writes).toContain(history.id);
     await host.invalidatePlugin(identity.pluginId);
     expect(disposeProviderLeaf).toHaveBeenCalledTimes(1);
     expect(getCurrentBundledConversationRuntimeHost()).toBe(hostLease.host);

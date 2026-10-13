@@ -1,256 +1,233 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ExecutionRunTurnStreamStartRequestSchema, ExecutionRunTurnStreamStartV2RequestSchema,
+  ExecutionRunTurnStreamReadResponseSchema } from '@happier-dev/protocol/execution/runs/streaming';
+import { createDeferred, createSessionFixture, renderScreen } from '@/dev/testkit';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
+import type { VoiceCurrentUiToolPort } from '@/voice/tools/currentUiContextToolPort';
+import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
+import {
+  getStorage, loadLocalVoiceEngineWithCompatState, localVoiceAgentRpc,
+  localVoiceHomeId, localVoiceRouteState, registerLocalVoiceEngineHarnessHooks, sessionRpcWithServerScope, warmLocalVoiceEngineHarnessGraph,
+} from '@/voice/local/localVoiceEngine.testHarness';
 
-const toggleLocalVoiceTurn = vi.fn<(sessionId: string, currentUiContext?: unknown) => Promise<void>>(async () => {});
-const stopLocalVoiceSession = vi.fn(async () => {});
-const abortLocalVoiceTurn = vi.fn<(sessionId: string) => Promise<void>>(async (_sessionId: string) => {});
-const appendLocalVoiceAgentContextUpdate = vi.fn();
-const sendLocalVoiceAgentTextTurn = vi.fn<(params: {
-  controlSessionId: string;
-  text: string;
-  onAccepted?: () => Promise<void>;
-}) => Promise<void>>(async (params) => {
-  await params.onAccepted?.();
-});
-const setLocalVoiceMuted = vi.fn<(sessionId: string, muted: boolean) => Promise<void>>(async () => {});
-const sendAutomaticUiContextUpdate = vi.fn();
-const sendBoundTextUpdate = vi.fn(async () => {});
-const announceAssistantText = vi.fn();
+const restoreHarnessModuleLoader = await warmLocalVoiceEngineHarnessGraph();
+afterAll(() => restoreHarnessModuleLoader());
+const [
+  { InjectedAuthProvider }, { MainAppTabStateProvider }, { AppPaneProvider },
+  { CurrentUiContextProvider, usePublishCurrentUiContext }, { PluginSurfaceFocusEligibilityProvider },
+  { useCurrentUiContextVoiceToolPort }, { TokenStorage }, { getActiveServerSnapshot },
+] = await Promise.all([
+  import('@/auth/context/AuthContext'),
+  import('@/components/navigation/mobile/chrome/MainAppTabStateProvider'),
+  import('@/components/appShell/panes/AppPaneProvider'),
+  import('@/components/appShell/currentUiContext/CurrentUiContextProvider'),
+  import('@/components/ui/presentation/PluginSurfaceFocusEligibility'),
+  import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort'),
+  import('@/auth/storage/tokenStorage'),
+  import('@/sync/domains/server/serverRuntime'),
+]);
 
-const state: any = {
-  settings: {
-    voice: {
-      providerId: 'local_conversation',
-      providers: {
-        local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } },
-      },
-    },
-  },
-};
-
-function resetMockVoiceSettings(): void {
-  state.settings.voice.providerId = 'local_conversation';
-  state.settings.voice.providers.local_conversation.config = {
-    conversationMode: 'agent',
-  };
+function admittedProviderText() {
+  const request = [...localVoiceAgentRpc.requests].reverse().find(request =>
+    request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START
+    || request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2);
+  if (!request) throw new Error('No actual Agent turn was admitted');
+  return (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2
+    ? ExecutionRunTurnStreamStartV2RequestSchema : ExecutionRunTurnStreamStartRequestSchema).parse(request.input).message;
 }
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-    storage: { getState: () => state },
-});
-});
-
-vi.mock('@/voice/local/localVoiceRuntimeController', () => ({
-  localVoiceRuntimeController: {
-    toggleTurn: (sessionId: string, currentUiContext?: unknown) => toggleLocalVoiceTurn(sessionId, currentUiContext),
-    stopSession: () => stopLocalVoiceSession(),
-    abortTurn: (sessionId: string) => abortLocalVoiceTurn(sessionId),
-    appendAgentContextUpdate: (sessionId: string, update: string) => appendLocalVoiceAgentContextUpdate(sessionId, update),
-    sendAgentTextTurn: (params: {
-      controlSessionId: string;
-      text: string;
-      onAccepted?: () => Promise<void>;
-    }) => sendLocalVoiceAgentTextTurn(params),
-    setMuted: (sessionId: string, muted: boolean) => setLocalVoiceMuted(sessionId, muted),
-  },
-}));
-
-vi.mock('@/voice/context/resolveActiveLocalVoiceAgentBinding', () => ({
-  resolveActiveLocalVoiceAgentBinding: () => ({
-    binding: null,
-    operationalSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-    announcementSessionId: 'voice-conversation-1',
-    sendAutomaticUiContextUpdate,
-    sendTextUpdate: sendBoundTextUpdate,
-    announceAssistantText,
-  }),
-}));
-
 describe('local conversation voice adapter', () => {
+  registerLocalVoiceEngineHarnessHooks({ resetModulesBetweenTests: false });
+  let adapter: ReturnType<typeof import('./localConversationAdapter')['createLocalConversationVoiceAdapter']>;
   beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    resetMockVoiceSettings();
-    const { voiceConversationRuntimeMachine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
-    voiceConversationRuntimeMachine.reset();
-  });
-
-  afterAll(() => {
-    vi.resetModules();
-  });
-
-  it('delegates toggle to the local voice runtime controller', async () => {
+    await loadLocalVoiceEngineWithCompatState();
+    const storage = await getStorage();
+    const state = storage.getState();
+    const config = readLocalConversationVoiceSettings(state.settings.voice);
+    storage.__setState({ settings: { ...state.settings, voice: { ...state.settings.voice,
+      providerId: 'local_conversation', providers: { ...state.settings.voice.providers,
+        local_conversation: { schemaVersion: 1, config: { ...config, conversationMode: 'agent',
+          agent: { ...config.agent, prewarmOnConnect: false } } } } } } });
     const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
-    await adapter.toggle({ sessionId: 's1' });
-    expect(toggleLocalVoiceTurn).toHaveBeenCalledWith('s1', undefined);
+    adapter = createLocalConversationVoiceAdapter();
+    const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+    registerVoiceAdapters([adapter]);
   });
 
-  it('carries the provider-owned current UI port into the local attempt without a global reader', async () => {
-    const currentUiContext = {
-      readCurrentUiContext: () => ({
-        navigation: { area: 'app', screen: 'home' },
-        commands: [],
-      }),
-      resolveCurrentUiCommand: () => null,
-      subscribe: () => () => {},
-    };
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter({ currentUiContext });
+  async function send(text: string, localId: string, onAccepted?: () => Promise<void>) {
+    await adapter.sendTextTurn?.({ controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+      conversationSessionId: 'voice-home-session', text, localId, deliveryCommand: 'interrupt_and_send', onAccepted });
+  }
 
+  it('toggle starts actual capture for the global Agent conversation', async () => {
     await adapter.toggle({ sessionId: 's1' });
+    expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+      status: 'connected', mode: 'listening', canStop: true });
+    const { voiceConversationBindingResolver } = await import('@/voice/binding/VoiceConversationBindingResolver');
+    expect(voiceConversationBindingResolver.resolveByControlSessionId({ controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID }))
+      .toMatchObject({ conversationSessionId: 'voice-home-session' });
+  });
 
-    expect(toggleLocalVoiceTurn).toHaveBeenCalledWith('s1', currentUiContext);
+  it('carries the provider-owned current UI port into actual Agent turn input', async () => {
+    localVoiceRouteState.pathname = '/settings/voice';
+    localVoiceRouteState.segments = ['(app)', 'settings', 'voice'];
+    const credentials = await TokenStorage.getCredentialsForServerUrl(getActiveServerSnapshot().serverUrl);
+    if (!credentials) throw new Error('Mounted AppShell requires restored Account credentials');
+    const storage = await getStorage();
+    const state = storage.getState();
+    const config = readLocalConversationVoiceSettings(state.settings.voice);
+    storage.__setState({ settings: { ...state.settings, voice: { ...state.settings.voice,
+      privacy: { ...state.settings.voice.privacy, currentUiContextMode: 'automatic', shareSessionSummary: false },
+      providers: { ...state.settings.voice.providers, local_conversation: { schemaVersion: 1,
+        config: { ...config, agent: { ...config.agent, prewarmOnConnect: true } } } } } } });
+    const mountedPort: { current: VoiceCurrentUiToolPort | null } = { current: null };
+    const enrichment = { entity: { kind: 'adapter_ui', label: 'PRIVATE_UI_LABEL_SENTINEL' }, commands: [] };
+    function Publication() {
+      usePublishCurrentUiContext(enrichment);
+      mountedPort.current = useCurrentUiContextVoiceToolPort();
+      return null;
+    }
+    const tree = React.createElement(InjectedAuthProvider, { credentials, children:
+      React.createElement(MainAppTabStateProvider, { children: React.createElement(AppPaneProvider, { children:
+        React.createElement(CurrentUiContextProvider, { children: React.createElement(PluginSurfaceFocusEligibilityProvider,
+          { active: true, currentUiContextActive: true, children: React.createElement(Publication) }) }) }) }) });
+    const screen = await renderScreen(tree);
+    try {
+      const currentUiContext = mountedPort.current;
+      if (!currentUiContext) throw new Error('Actual mounted Current UI port unavailable');
+      const currentUi = currentUiContext.readCurrentUiContext();
+      expect(currentUi).toMatchObject({ navigation: { area: 'settings' }, entity: { label: 'PRIVATE_UI_LABEL_SENTINEL' } });
+      const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
+      adapter = createLocalConversationVoiceAdapter({ currentUiContext });
+      const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+      registerVoiceAdapters([adapter]);
+      await React.act(async () => {
+        await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+        const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
+        await vi.waitFor(() => expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID), 'Actual Agent prewarm').toBe(true));
+        await send('Read the current screen', 'provider-ui-turn');
+      });
+      expect(admittedProviderText()).toContain('CURRENT UI CONTEXT');
+      expect(admittedProviderText()).toContain('"area":"settings"');
+      expect(admittedProviderText()).toContain(`"screen":${JSON.stringify(currentUi?.navigation.screen)}`);
+      expect(admittedProviderText()).not.toContain('PRIVATE_UI_LABEL_SENTINEL');
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it('owns global surface semantics for configured agent mode and fails closed when unselected', async () => {
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
-    expect(adapter.resolveSurfaceCapabilities?.(state.settings.voice)).toEqual({
-      allowsGlobalStart: true,
-      controlSessionScope: 'global',
-      requiresVoiceAgentFeature: true,
-      bargeInEnabled: true,
-      cancelResponse: 'immediate',
-    });
-    expect(adapter.resolveSurfaceCapabilities?.({
-      ...state.settings.voice,
-      providerId: 'local_direct',
-    })).toBeNull();
+    const storage = await getStorage();
+    const selected = storage.getState().settings.voice;
+    expect(adapter.resolveSurfaceCapabilities?.(selected)).toEqual({ allowsGlobalStart: true,
+      controlSessionScope: 'global', requiresVoiceAgentFeature: true, bargeInEnabled: true, cancelResponse: 'immediate' });
+    expect(adapter.resolveSurfaceCapabilities?.({ ...selected, providerId: 'local_direct' })).toBeNull();
   });
 
-  it('keeps adapter toggle translation-only when another local session is already active', async () => {
-    const { transitionVoiceRuntimeToIdle } = await import('@/voice/runtime/machine/voiceConversationRuntimeHelpers');
-    transitionVoiceRuntimeToIdle({ controlSessionId: 's-active' });
-
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
+  it('another surface toggle finishes the active capture without retiring its global conversation', async () => {
+    const storage = await getStorage();
+    const current = storage.getState();
+    const firstSession = current.sessions.s1;
+    if (!firstSession) throw new Error('Missing canonical first Session fixture');
+    storage.__setState({ sessions: { ...current.sessions,
+      's-next': createSessionFixture({ ...firstSession, id: 's-next', serverId: localVoiceHomeId }) } });
     await adapter.toggle({ sessionId: 's1' });
-
-    expect(stopLocalVoiceSession).not.toHaveBeenCalled();
-    expect(toggleLocalVoiceTurn).toHaveBeenCalledWith('s1', undefined);
+    expect(adapter.getSnapshot(), JSON.stringify(adapter.getSnapshot())).toMatchObject({
+      sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, status: 'connected', mode: 'listening' });
+    await adapter.toggle({ sessionId: 's-next' });
+    expect(adapter.getSnapshot(), JSON.stringify(adapter.getSnapshot())).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+      status: 'connected', mode: 'idle', canStop: true });
   });
 
-  it('does not retain synchronized Session updates in a UI-owned buffer', async () => {
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
-    adapter.sendContextUpdate({ sessionId: 's1', update: 'context' });
-    expect(appendLocalVoiceAgentContextUpdate).not.toHaveBeenCalled();
+  it('does not retain synchronized Session updates in the actual Agent turn', async () => {
+    await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+    adapter.sendContextUpdate({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, update: 'SESSION_CONTEXT_SENTINEL' });
+    await send('User request', 'session-context-turn');
+    expect(admittedProviderText()).not.toContain('SESSION_CONTEXT_SENTINEL');
+    expect(admittedProviderText()).toContain('User request');
   });
 
-  it('keeps current-UI context attempt-local while ignoring synchronized Session context', async () => {
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-    const channel = adapter.resolveContextChannel?.(state.settings.voice);
-
+  it('admits only current-UI context through the active real Agent binding', async () => {
+    const storage = await getStorage();
+    const current = storage.getState();
+    storage.__setState({ settings: { ...current.settings, voice: { ...current.settings.voice,
+      privacy: { ...current.settings.voice.privacy, currentUiContextMode: 'automatic' } } } });
+    expect(adapter.resolveContextChannel?.(storage.getState().settings.voice)).toBeNull();
+    await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+    await send('Initialize the Agent', 'initial-agent-turn');
+    const channel = adapter.resolveContextChannel?.(storage.getState().settings.voice);
+    expect(channel).not.toBeNull();
     channel?.sendContextualUpdate('SESSION_CONTEXT_SENTINEL', 'session_context');
     channel?.sendContextualUpdate('CURRENT_UI_SENTINEL', 'current_ui');
-
-    expect(sendAutomaticUiContextUpdate).toHaveBeenCalledOnce();
-    expect(sendAutomaticUiContextUpdate).toHaveBeenCalledWith('CURRENT_UI_SENTINEL');
-    expect(appendLocalVoiceAgentContextUpdate).not.toHaveBeenCalled();
+    await send('Read context', 'current-ui-turn');
+    expect(admittedProviderText()).toContain('CURRENT_UI_SENTINEL');
+    expect(admittedProviderText()).not.toContain('SESSION_CONTEXT_SENTINEL');
+    await adapter.stop({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+    expect(adapter.resolveContextChannel?.(storage.getState().settings.voice)).toBeNull();
   });
 
-  it('projects a disconnected runtime snapshot as a disconnected local session snapshot', async () => {
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
-    expect(adapter.getSnapshot()).toMatchObject({
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
-    });
+  it('projects a disconnected runtime as an unavailable local session', () => {
+    expect(adapter.getSnapshot()).toMatchObject({ status: 'disconnected', mode: 'idle', canStop: false });
   });
 
-  it('projects an explicit connected runtime snapshot as a connected local session snapshot', async () => {
-    const { transitionVoiceRuntimeToIdle } = await import('@/voice/runtime/machine/voiceConversationRuntimeHelpers');
-    transitionVoiceRuntimeToIdle({ controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
-
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
-    expect(adapter.getSnapshot()).toMatchObject({
-      status: 'connected',
-      mode: 'idle',
-      sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-      canStop: true,
-    });
+  it('projects connected idle after actual capture finishes with no transcript', async () => {
+    await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+    await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+    expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+      status: 'connected', mode: 'idle', canStop: true });
   });
 
-  it('projects the machine micMuted flag through the local session snapshot', async () => {
-    const { voiceConversationRuntimeMachine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
-    voiceConversationRuntimeMachine.transitionToListening({
-      controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-      adapterId: null,
-      attemptId: null,
-    });
-    voiceConversationRuntimeMachine.setMuted({
-      controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-      adapterId: null,
-      attemptId: null,
-      micMuted: true,
-    });
-
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
-    expect(adapter.getSnapshot()).toMatchObject({
-      sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-      micMuted: true,
-    });
+  it('projects physical mute from the actual capture owner', async () => {
+    await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+    await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true });
+    expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, micMuted: true });
   });
 
-  it('interrupt aborts the current turn without hanging up the local voice session', async () => {
-    abortLocalVoiceTurn.mockClear();
-    stopLocalVoiceSession.mockClear();
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
-    await adapter.interrupt({ sessionId: 's1' });
-
-    expect(abortLocalVoiceTurn).toHaveBeenCalledWith('s1');
-    expect(stopLocalVoiceSession).not.toHaveBeenCalled();
+  it('interrupt settles a held actual Agent stream without hanging up', async () => {
+    await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+    const read = createDeferred<ReturnType<typeof ExecutionRunTurnStreamReadResponseSchema.parse>>();
+    const fallback = sessionRpcWithServerScope.getMockImplementation();
+    let reading = false;
+    sessionRpcWithServerScope.mockImplementation(async request => {
+      if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
+        reading = true;
+        return read.promise;
+      }
+      if (!fallback) throw new Error('Missing daemon transport responder');
+      return fallback(request);
+    });
+    const turn = send('A pending reply', 'interrupt-held-turn');
+    await vi.waitFor(() => expect(reading).toBe(true));
+    let interrupted = false;
+    const interruption = adapter.interrupt({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID }).then(() => { interrupted = true; });
+    try {
+      await vi.waitFor(() => expect(interrupted).toBe(true));
+      expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+        status: 'connected', mode: 'idle', canStop: true });
+      expect(localVoiceAgentRpc.readRetainedRun()?.status).toBe('running');
+    } finally {
+      read.resolve(ExecutionRunTurnStreamReadResponseSchema.parse({ streamId: 'stream-1', events: [], nextCursor: 0, done: true }));
+      await interruption;
+      await turn;
+    }
   });
 
-  it('routes typed sends through the local voice text turn path without adapter-level mode gating', async () => {
-    sendLocalVoiceAgentTextTurn.mockClear();
-    state.settings.voice.providers.local_conversation.config.conversationMode = 'direct_session';
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
-    const onAccepted = vi.fn(async () => {});
-    await adapter.sendTextTurn?.({
-      controlSessionId: 's1',
-      conversationSessionId: 'voice-home',
-      text: 'hello from composer',
-      localId: 'voice-local-1',
-      deliveryCommand: 'interrupt_and_send',
-      onAccepted,
-    });
-
-    expect(sendLocalVoiceAgentTextTurn).toHaveBeenCalledWith({
-      controlSessionId: 's1',
-      text: 'hello from composer',
-      durableDispatch: {
-        localId: 'voice-local-1',
-        deliveryCommand: 'interrupt_and_send',
-      },
-      onAccepted,
-    });
+  it('text turns preserve durable acceptance and reach the actual Agent', async () => {
+    await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+    let accepted = false;
+    await send('hello from composer', 'voice-local-1', async () => { accepted = true; });
+    expect(accepted).toBe(true);
+    expect(admittedProviderText()).toContain('hello from composer');
+    expect(localVoiceAgentRpc.readRetainedRun()?.status).toBe('running');
   });
 
-  it('forwards mute commands through the resolved conversation session id', async () => {
-    const { createLocalConversationVoiceAdapter } = await import('./localConversationAdapter');
-    const adapter = createLocalConversationVoiceAdapter();
-
+  it('mute is qualified by the resolved conversation control id', async () => {
+    await adapter.toggle({ sessionId: 's1' });
     await adapter.setMuted({ sessionId: 's1', muted: true });
-
-    expect(setLocalVoiceMuted).toHaveBeenCalledWith('s1', true);
+    expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, micMuted: true });
+    await adapter.setMuted({ sessionId: 'another-surface', muted: false });
+    expect(adapter.getSnapshot().micMuted).not.toBe(true);
   });
 });

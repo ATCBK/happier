@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 import { createRecipientContractDigestV1 } from '@happier-dev/protocol';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { EMPTY_PLUGIN_UI_PROJECTION, resolvePluginUiProjectionState } from '@/sync/domains/plugins/ui/projection';
+import { reconcileAppShellProjectedClientExecutables, unloadAppShellProjectedClientExecutables } from '@/components/appShell/plugins/appShellClientExecutableActivation';
+import { createPluginUiExecutableModuleHost } from '@/components/plugins/reactNative/executableModuleHost';
+import { createDefaultVoiceProviderRegistry } from './defaultRegistry';
+import { projectVoiceProviderSelectionRows } from './providerSelection';
 
 import { log } from '@/log';
 import { storage } from '@/sync/domains/state/storage';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import '@/sync/syncEngine';
-import { sync } from '@/sync/sync';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
@@ -172,10 +177,54 @@ describe('createBundledConversationRuntimes', () => {
     });
     await purposes.hydrate({ serverId: account.home.id, accountId: 'artifact-account' });
   });
-  afterEach(() => {
-    account?.dispose();
+  afterEach(async () => {
+    await account?.dispose();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('keeps activated bundled services when the daemon catalog settles, and removes withdrawn services', async () => {
+    const lease = createBundledConversationRuntimeHostLease();
+    const host = createPluginUiExecutableModuleHost();
+    const runtimes = createBundledConversationRuntimes({
+      bundledEntries: BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES,
+      host: lease.host,
+    });
+    const registry = createDefaultVoiceProviderRegistry();
+    const settings = voiceSettingsParse({ providerId: 'local_direct' });
+    const rows = () => projectVoiceProviderSelectionRows(settings, registry).map(({ entry, ...row }) => row);
+    const initialRows = rows();
+    expect(initialRows).toHaveLength(6);
+    const builtInRows = initialRows.filter(row => registry.get(row.providerId)?.source.kind === 'built_in');
+    const project = (withdrawn: boolean) => resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION,
+      PluginProjectionV2Schema.parse({
+        v: 2, generation: withdrawn ? 32 : 31,
+        installedPackagesById: {}, agentsById: {}, actionsById: {}, toolsById: {},
+        commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+        familiesById: { voiceProviders: { family: 'voiceProviders', entriesById: withdrawn ? {} : Object.fromEntries(
+          BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.map(entry => [entry.providerId, {
+            id: entry.providerId, pluginId: entry.pluginId, generation: 31,
+            occurrenceId: `daemon-${entry.providerId}`, contributionKey: entry.providerId,
+            definition: entry.declaration,
+          }]),
+        ) } },
+      }));
+    try {
+      await reconcileAppShellProjectedClientExecutables({ projection: null, platform: 'web',
+        voice: null, voiceProviderProjection: project(false), executableHost: host });
+      expect(rows()).toEqual(initialRows);
+      // Navigation/reconciliation uses the same admitted catalog; it must not retire the client bridge.
+      await reconcileAppShellProjectedClientExecutables({ projection: null, platform: 'web',
+        voice: null, voiceProviderProjection: project(false), executableHost: host });
+      expect(rows()).toEqual(initialRows);
+      await reconcileAppShellProjectedClientExecutables({ projection: null, platform: 'web',
+        voice: null, voiceProviderProjection: project(true), executableHost: host });
+      expect(rows()).toEqual(builtInRows);
+    } finally {
+      await unloadAppShellProjectedClientExecutables(host);
+      await Promise.all(runtimes.map(runtime => runtime.dispose()));
+      lease.revoke();
+    }
   });
 
   /**
@@ -196,7 +245,6 @@ describe('createBundledConversationRuntimes', () => {
     async (_approvalState, approvedRecipientContractDigest) => {
       const entry = createCredentialSettingsEntry();
       const settings = installCredentialSettings(approvedRecipientContractDigest);
-      const decryptSecretValue = vi.spyOn(sync, 'decryptSecretValue');
       const fetch = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
         expect(new Headers(init?.headers).get('authorization'))
           .toBe('Bearer bundled-account-secret');
@@ -221,7 +269,6 @@ describe('createBundledConversationRuntimes', () => {
           providerConfig: {},
           signal: new AbortController().signal,
         })).resolves.toEqual([{ id: 'first-party-voice', name: 'First party voice', metadata: {} }]);
-        expect(decryptSecretValue).toHaveBeenCalledTimes(1);
         expect(fetch).toHaveBeenCalledTimes(1);
       } finally {
         await Promise.all(runtimes.map((runtime) => runtime.dispose()));
@@ -241,7 +288,6 @@ describe('createBundledConversationRuntimes', () => {
     const settings = installCredentialSettings(
       createRecipientContractDigestV1(recipientContract),
     );
-    const decryptSecretValue = vi.spyOn(sync, 'decryptSecretValue');
     const fetch = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
       expect(new Headers(init?.headers).get('authorization'))
         .toBe('Bearer bundled-account-secret');
@@ -266,7 +312,6 @@ describe('createBundledConversationRuntimes', () => {
         providerConfig: {},
         signal: new AbortController().signal,
       })).resolves.toEqual([{ id: 'approved-voice', name: 'Approved voice', metadata: {} }]);
-      expect(decryptSecretValue).toHaveBeenCalledTimes(1);
       expect(fetch).toHaveBeenCalledTimes(1);
     } finally {
       await Promise.all(runtimes.map((runtime) => runtime.dispose()));

@@ -3,17 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { deriveLocalVoiceRuntimeProjection, deriveLocalVoiceSessionSnapshot } from './deriveLocalVoiceSessionSnapshot';
 import type { VoiceConversationRuntimeSnapshot } from './voiceConversationRuntimeTypes';
 import { createVoiceMachineError } from './voiceMachineError';
+import { DEFAULT_VOICE_CONVERSATION_RUNTIME_SNAPSHOT } from './voiceConversationRuntimeStore';
 
 function createRuntimeSnapshot(
     overrides: Partial<VoiceConversationRuntimeSnapshot> = {},
 ): VoiceConversationRuntimeSnapshot {
     return {
-        adapterId: null,
-        controlSessionId: null,
-        state: 'disconnected',
-        reconnecting: false,
-        micMuted: false,
-        error: null,
+        ...DEFAULT_VOICE_CONVERSATION_RUNTIME_SNAPSHOT,
         ...overrides,
     };
 }

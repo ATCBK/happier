@@ -1,6 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createWebMicSession } from './WebMicSession.web';
+import { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
+
+vi.mock('react-native', async () => (
+    await import('@/dev/testkit/mocks/reactNative')
+).createReactNativeNativeMock({ platformOS: 'ios' }));
+vi.mock('expo-audio', async () => (
+    await import('@/dev/testkit/mocks/expoAudio')
+).expoAudioModuleMock({ requestRecordingPermissionsAsync: async () => ({
+    granted: true, canAskAgain: true, expires: 'never',
+    // Expo's native permission enum is represented by its SDK wire value.
+    status: 'granted' as Awaited<ReturnType<typeof import('expo-audio')['AudioModule']['requestRecordingPermissionsAsync']>>['status'],
+}) }));
 
 describe('WebMicSession', () => {
     const trackStop = vi.fn();
@@ -69,17 +81,46 @@ describe('WebMicSession', () => {
         expect(trackStop).not.toHaveBeenCalled();
     });
 
-    it('stops active tracks on teardown', async () => {
-        const session = createWebMicSession({
-            getUserMedia,
-            mediaDevices: mediaDevices as unknown as MediaDevices,
-            document: documentLike as unknown as Document,
-        });
+    it('stops active tracks on teardown even when the SDK context close rejects, then permits fresh capture', async () => {
+        const contexts: TestVoiceAudioContext[] = [];
+        const browser = installVoiceWebRtcBrowserBoundary({ createAudioContext: () => {
+            const context = new TestVoiceAudioContext();
+            contexts.push(context);
+            return context as unknown as AudioContext;
+        } });
+        const session = browser.micSession;
+        const closing = createDeferred<void>();
+        try {
+            await session.ensureActive();
+            const firstStream = browser.micStream;
+            const firstTrack = browser.micTrack;
+            const firstContext = contexts[0]!;
+            // The physical SDK can reject its asynchronous close; it has no
+            // authority to keep the retired microphone owned by this session.
+            firstContext.close.mockImplementationOnce(() => closing.promise);
+            const teardown = session.teardown();
+            expect(firstTrack.stop).toHaveBeenCalledOnce();
+            expect(firstTrack.readyState).toBe('ended');
+            expect(session.getStream()).toBeNull();
+            expect(session.getAudioContext()).toBeNull();
+            closing.reject(new DOMException('The audio device is unavailable', 'InvalidStateError'));
+            await expect(teardown).resolves.toBeUndefined();
 
-        await session.ensureActive();
-        await session.teardown();
-
-        expect(trackStop).toHaveBeenCalledTimes(1);
+            await session.ensureActive();
+            expect(browser.micStream).not.toBe(firstStream);
+            expect(browser.micTrack).not.toBe(firstTrack);
+            expect(browser.micTrack.readyState).toBe('live');
+            expect(session.getAudioContext()).toBe(contexts[1]);
+            expect(contexts[1]).not.toBe(firstContext);
+            expect(contexts[1]!.close).not.toHaveBeenCalled();
+            await session.teardown();
+            expect(browser.micTrack.stop).toHaveBeenCalledOnce();
+            expect(contexts[1]!.close).toHaveBeenCalledOnce();
+        } finally {
+            closing.resolve();
+            await session.teardown();
+            browser.restore();
+        }
     });
 
     it('drives an audio level from the analyser RMS and stops the metering loop on teardown', async () => {
@@ -492,5 +533,60 @@ describe('WebMicSession', () => {
         expect(strandedTrack.stop).toHaveBeenCalledTimes(1);
         expect(restartTrack.stop).not.toHaveBeenCalled();
         expect(session.getStream()).toBe(restartStream);
+    });
+});
+
+describe('Voice mic platform source selection', () => {
+    it('uses the actual selected entry and its physical browser or native permission owner', async () => {
+        const browser = installVoiceWebRtcBrowserBoundary();
+        vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
+        vi.stubGlobal('window', { AudioContext: TestVoiceAudioContext });
+        const { createLiveMicSession } = await import('./createLiveMicSession');
+        const { createLiveMicSession: createWebLiveMicSession } = await import('./createLiveMicSession.web');
+        const { createRealtimeMicSession } = await import('./createRealtimeMicSession');
+        const { createRealtimeMicSession: createWebRealtimeMicSession } = await import('./createRealtimeMicSession.web');
+        const { AudioModule } = await import('expo-audio');
+        const permission = vi.mocked(AudioModule.requestRecordingPermissionsAsync);
+        permission.mockClear();
+        const mic = createLiveMicSession();
+        try {
+            const browserSelected = process.env.HAPPIER_UI_TEST_VOICE_MIC_PLATFORM === 'web';
+            expect(createLiveMicSession === createWebLiveMicSession).toBe(browserSelected);
+            expect(createRealtimeMicSession === createWebRealtimeMicSession).toBe(browserSelected);
+            await mic.ensureActive();
+            if (browserSelected) {
+                expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce();
+                expect(mic.getStream()).toBe(browser.micStream);
+                expect(permission).not.toHaveBeenCalled();
+            } else {
+                expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+                expect(permission).toHaveBeenCalledOnce();
+                expect(mic.getStream()).toBeNull();
+            }
+        } finally {
+            await mic.teardown();
+            browser.restore();
+        }
+    });
+
+    it('retains the real NativeMicSession fallback when the web entry has no getUserMedia capability', async () => {
+        const browser = installVoiceWebRtcBrowserBoundary();
+        Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: undefined });
+        const { createLiveMicSession } = await import('./createLiveMicSession.web');
+        const { AudioModule } = await import('expo-audio');
+        const permission = vi.mocked(AudioModule.requestRecordingPermissionsAsync);
+        permission.mockClear();
+        const mic = createLiveMicSession();
+        try {
+            await mic.ensureActive();
+            expect(permission).toHaveBeenCalledOnce();
+            expect(mic.getStream()).toBeNull();
+            expect(mic.isMuted()).toBe(false);
+            mic.setMuted(true);
+            expect(mic.isMuted()).toBe(true);
+        } finally {
+            await mic.teardown();
+            browser.restore();
+        }
     });
 });

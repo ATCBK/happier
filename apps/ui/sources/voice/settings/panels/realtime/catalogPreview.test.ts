@@ -1,45 +1,70 @@
-import { describe, expect, it, vi } from 'vitest';
-import { playRealtimeCatalogPreview, readRealtimeCatalogPreview, stopRealtimeCatalogPreview, type VoiceCatalogPreviewSynthesizer } from './catalogPreview';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { createDeferred } from '@/dev/testkit';
+import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 
 const audio = vi.hoisted(() => ({ play: vi.fn(), remove: vi.fn(), detach: vi.fn() }));
-vi.mock('react-native', async () => {
-  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-  return createReactNativeWebMock();
-});
 // Expo audio is the OS playback boundary. Audio-mode and preview lifecycle owners remain real.
 vi.mock('expo-audio', () => ({
   AudioModule: { setAudioModeAsync: async () => {} },
   createAudioPlayer: () => ({ play: audio.play, remove: audio.remove,
     addListener: () => ({ remove: audio.detach }) }),
 }));
+const boundary = createVoiceSpeechOutputBoundary({ getAccount: () => {
+  throw new Error('Installed device preview must not dispatch a daemon RPC');
+} });
+const { playRealtimeCatalogPreview, readRealtimeCatalogPreview, stopRealtimeCatalogPreview } = await import('./catalogPreview');
+const { speakKokoroText } = await import('@/voice/output/KokoroTtsController');
+const { t, setPreferredLanguageFromSettings } = await import('@/text');
+const packId = 'catalog-preview-kokoro';
+const providerId = 'happier.voice.builtin/local-neural';
+const synthesize: import('./catalogPreview').VoiceCatalogPreviewSynthesizer = async ({ row, registerPlaybackStopper }) => {
+  await speakKokoroText({ text: t('settingsVoice.local.testTtsSample'), assetSetId: packId, voiceId: row.id, speed: 1,
+    timeoutMs: 15_000, registerPlaybackStopper });
+};
+beforeEach(() => {
+  const { filesystem } = boundary.reset();
+  boundary.platform.value = 'ios';
+  setPreferredLanguageFromSettings('en');
+  const manifest = parseModelPackManifest({ packId, kind: 'tts_sherpa', model: 'kokoro', version: '1',
+    frontend: { lang: 'en' }, voices: [{ id: 'am_adam', title: 'Adam', sid: 0 }], defaultVoiceId: 'am_adam',
+    files: [{ path: 'model.onnx', url: 'https://example.test/model.onnx', sha256: 'a'.repeat(64), sizeBytes: 1 }] });
+  filesystem.files.set(`${filesystem.root}/${packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
+  boundary.nativeListVoices.mockResolvedValue([{ id: 'am_adam', title: 'Adam', sid: 0 }]);
+  audio.play.mockClear(); audio.remove.mockClear(); audio.detach.mockClear();
+});
+afterEach(() => {
+  const preview = readRealtimeCatalogPreview();
+  if (preview) stopRealtimeCatalogPreview(preview.providerId);
+  boundary.disposeNativeSdkBridge();
+});
+afterAll(async () => { await boundary.disposeAudioSession(); });
 
 describe('the shared catalog preview owner', () => {
   it('previews an installed voice without requiring a remote preview URL', async () => {
-    // Synthesis/playback is an external engine boundary; selection and preview custody remain real.
-    const synthesize = vi.fn(async () => {});
     const result = await playRealtimeCatalogPreview({ providerId: 'happier.voice.builtin/local-neural',
       row: { id: 'am_adam', name: 'Adam' }, isCurrent: () => true, synthesize });
     expect(result).toMatchObject({ status: 'completed' });
-    expect(synthesize).toHaveBeenCalledWith(expect.objectContaining({ row: { id: 'am_adam', name: 'Adam' } }));
+    expect(boundary.nativeSynthesize).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'am_adam' }));
+    expect(boundary.nativeSynthesize.mock.calls.map(([request]) => request.text).join(' ')).toBe(t('settingsVoice.local.testTtsSample'));
+    expect(boundary.encodedAudio.start).toHaveBeenCalled();
+    expect(boundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
     expect(readRealtimeCatalogPreview()).toBeNull();
   });
 
   it('interrupts pending synthesis and cannot publish its late completion', async () => {
-    let release!: () => void;
-    const engine = new Promise<void>(resolve => { release = resolve; });
-    const stopped = vi.fn();
-    const synthesize: VoiceCatalogPreviewSynthesizer = async ({ signal, registerPlaybackStopper }) => {
-      const unregister = registerPlaybackStopper(stopped);
-      try { await engine; expect(signal.aborted).toBe(true); } finally { unregister(); }
-    };
-    const providerId = 'happier.voice.builtin/local-neural';
+    const initialization = createDeferred<void>();
+    boundary.nativeInitialize.mockImplementationOnce(() => initialization.promise);
     const pending = playRealtimeCatalogPreview({ providerId, row: { id: 'am_adam', name: 'Adam' },
       isCurrent: () => true, synthesize });
     expect(readRealtimeCatalogPreview()).toEqual({ providerId, voiceId: 'am_adam' });
+    await vi.waitFor(() => expect(boundary.nativeInitialize).toHaveBeenCalledOnce());
     expect(stopRealtimeCatalogPreview(providerId)).toBe(true);
-    release();
+    initialization.resolve();
     expect(await pending).toMatchObject({ status: 'cancelled' });
-    expect(stopped).toHaveBeenCalled();
+    expect(boundary.nativeCancelInitialization).toHaveBeenCalledOnce();
+    expect(boundary.encodedAudio.start).not.toHaveBeenCalled();
+    expect(boundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
     expect(readRealtimeCatalogPreview()).toBeNull();
   });
 

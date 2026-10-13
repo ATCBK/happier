@@ -18,10 +18,6 @@ describe('kokoroAssetSets', () => {
         subtitle: 'Default local neural voice model.',
       },
     ]);
-  });
-
-  it('advertises the exact published q8 pack without exposing unavailable Kokoro neighbors', () => {
-    const options = getKokoroAssetSetOptions({});
     const ids = options.map((option) => option.id);
 
     expect(ids).toContain('kokoro-82m-v1.0-onnx-q8-wasm');

@@ -17,6 +17,11 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
 
+// Static settings imports reach Sync before collection-time boundary configuration.
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+
 // This third-party SDK export is unavailable on some workers and is never used by these settings rows.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
     splitStreamingRevealTextParts: () => { throw new Error('Unexpected streaming Markdown in Voice settings test'); },
@@ -348,6 +353,18 @@ describe('VoiceExecutionMachineSection', () => {
     }));
   });
 
+  it('labels the header chip with what it decides, beside the machine it names', async () => {
+    const voice = {
+      ...localVoice('local_conversation'),
+      executionMachine: { mode: 'fixed' as const, machineId: 'machine-1' },
+    };
+    const screen = await renderSettingsView(
+      <VoiceExecutionMachineSection voice={voice} setVoice={() => {}} intent="advanced" presentation="chip" />,
+    );
+
+    expect(screen.getTextContent()).toContain(t('settingsVoice.pages.conversations.runsOn'));
+  });
+
   it('keeps an unavailable fixed machine visible instead of presenting Automatic', async () => {
     const VoiceExecutionMachineSection = await loadSection();
     const voice = {
@@ -359,7 +376,8 @@ describe('VoiceExecutionMachineSection', () => {
     );
     const dropdown = screen.findAll((node) => node.type === DropdownMenu)[0];
 
-    expect(dropdown?.props.itemTrigger.detailFormatter()).toBe('missing-machine');
+    expect(dropdown?.props.itemTrigger.detailFormatter()).toBe(t('machine.unlistedMachine'));
+    expect(dropdown?.props.selectedId).toBe('missing-machine');
   });
 
   it('names the machine Automatic uses before any conversation has remembered one', async () => {

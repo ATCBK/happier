@@ -2,10 +2,15 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 vi.mock('socket.io-client', async importOriginal =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native', async () =>
+  (await import('@/dev/testkit/runtime/reactNativeRuntime')).createReactNativeNativeRuntime(
+    { platformOS: 'ios' }, { Alert: { alert: (...args: Parameters<typeof nativeAlert>) => nativeAlert(...args) } },
+  ));
 // Install Metro's lazy-loader bridge before storage can import its consumers.
 // The helper returns the actual Sync singleton, without replacing its methods.
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import {
+  FeaturesResponseSchema,
   MACHINE_PLAIN_DATA_KEY_MARKER,
   encodePlainMachineStoredContent,
   SessionCurrentProjectionRecordV1Schema,
@@ -13,12 +18,15 @@ import {
   SessionSpawnNewInputV2Schema,
   V2SessionListResponseSchema,
   type ExecutionRunPublicState,
+  ExecutionRunPublicStateSchema,
+  ExecutionRunEnsureOrStartRequestSchema,
 } from '@happier-dev/protocol';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { AccessibleMachineAccessV1Schema, MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 import { storage } from '@/sync/domains/state/storage';
+import { parseToken } from '@/utils/auth/parseToken';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
@@ -35,43 +43,38 @@ const committedSessionRecords = new Map<string, ReturnType<typeof sessionWireRec
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const start = vi.fn(async (params?: any) => ({ voiceAgentId: params?.existingRunId ?? 'run_1' }));
-const sendTurn = vi.fn(async () => ({ assistantText: 'ok', actions: [] }));
-const commit = vi.fn(async () => ({ commitText: 'commit' }));
-const welcome = vi.fn(async () => ({ assistantText: '' }));
+let daemonStreamSequence = 0;
+const daemonStart = vi.fn(async (params?: any) => ({ ok: true, runId: params?.runId ?? 'run_1', created: !params?.runId }));
+const daemonTurn = vi.fn(async () => ({ assistantText: 'ok', actions: [] }));
+const daemonCommit = vi.fn(async () => ({ commitText: 'commit' }));
+const daemonWelcome = vi.fn(async () => ({ assistantText: '' }));
 const readSessions = vi.fn(async () => {});
 const readMachines = vi.fn(async () => {});
 const spawnSession = vi.fn<(opts: unknown) => Promise<{ type: 'success'; sessionId: string }>>(async (_opts: unknown) => ({
   type: 'success' as const,
   sessionId: 'sys_voice_new',
 }));
-const modalConfirm = vi.fn<(title?: unknown, message?: unknown, options?: unknown) => Promise<boolean>>(async (
-  _title: unknown,
-  _message?: unknown,
-  _options?: unknown,
-) => false);
-const modalAlert = vi.fn((_: unknown, __: unknown, buttons?: unknown) => {
-  if (!Array.isArray(buttons) || buttons.length === 0) return;
-  const cancelButton = buttons.find((button) => button?.style === 'cancel') ?? buttons[buttons.length - 1];
-  if (typeof cancelButton?.onPress === 'function') {
-    cancelButton.onPress();
-  }
-});
-const ensureVoiceAgentInstallablesBackground = vi.fn(async (_args: unknown) => {});
-const resolveRuntimeFeatureDecision = vi.fn<(args: any) => Promise<any>>(async () => ({
-  featureId: 'voice.agent',
-  state: 'enabled',
-  blockedBy: null,
-  blockerCode: 'none',
-  diagnostics: [],
-  evaluatedAt: 1,
-  scope: { scopeKind: 'runtime' },
-}));
+const nativeConfirmationChoices: boolean[] = [];
+let nativeConfirmationCount = 0;
+// OS presentation is the boundary. The actual Modal owner builds the buttons
+// and settles its Promise after the simulated user presses a native control.
+const nativeAlert = vi.fn<(title: string, message?: string,
+  buttons?: ReadonlyArray<{ style?: string; onPress?: () => void }>, options?: { cancelable?: boolean }) => void>(
+  (_title, _message, buttons, options) => {
+    if (!buttons?.length) return;
+    const isConfirmation = options?.cancelable === false && buttons.length === 2;
+    if (isConfirmation) nativeConfirmationCount += 1;
+    const button = isConfirmation
+      ? buttons[nativeConfirmationChoices.shift() === true ? 1 : 0]
+      : buttons.find(candidate => candidate.style === 'cancel') ?? buttons.at(-1);
+    queueMicrotask(() => button?.onPress?.());
+  },
+);
 
 function buildExecutionRunPublicState(
   overrides: Partial<ExecutionRunPublicState> = {},
 ): ExecutionRunPublicState {
-  return {
+  return ExecutionRunPublicStateSchema.parse({
     runId: 'run_1',
     callId: 'call_1',
     sidechainId: 'sidechain_1',
@@ -84,33 +87,10 @@ function buildExecutionRunPublicState(
     status: 'running',
     startedAtMs: 1,
     ...overrides,
-  };
+  });
 }
 
-vi.mock('@/voice/agent/daemonVoiceAgentClient', () => ({
-  DaemonVoiceAgentClient: class {
-    start = start;
-    sendTurn = sendTurn;
-    commit = commit;
-    welcome = welcome;
-    startTurnStream = vi.fn();
-    readTurnStream = vi.fn();
-    cancelTurnStream = vi.fn();
-    stop = vi.fn();
-  },
-}));
 
-vi.mock('@/voice/context/buildVoiceInitialContext', () => ({
-  buildVoiceInitialContext: () => '',
-}));
-
-vi.mock('@/voice/agent/resolveDaemonVoiceAgentModels', () => ({
-  resolveDaemonVoiceAgentModelIds: () => ({ chatModelId: 'chat', commitModelId: 'commit' }),
-}));
-
-vi.mock('@/voice/agent/ensureVoiceAgentInstallablesBackground', () => ({
-  ensureVoiceAgentInstallablesBackground: (args: unknown) => ensureVoiceAgentInstallablesBackground(args),
-}));
 
 const createVoiceAgentPersistenceTestState = (): any => {
   const sessions = {
@@ -156,6 +136,8 @@ const createVoiceAgentPersistenceTestState = (): any => {
   return {
     settingsVersion: 1,
     settings: {
+      experiments: true,
+      featureToggles: { voice: true, 'voice.agent': true, 'execution.runs': true },
       voice: {
         providerId: 'local_conversation',
         providers: {
@@ -211,6 +193,7 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
   const json = (body: unknown) => new Response(JSON.stringify(body), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   });
+  if (path === '/v1/features' || path === '/v1/features/authenticated') return json(FeaturesResponseSchema.parse({ features: { voice: { enabled: true } }, capabilities: {} }));
   if (path === '/health') return json({});
   if (path === '/v2/cursor') return json({ cursor: 0, changesFloor: 0 });
   if (path === '/v2/changes') return json({ changes: [], nextCursor: 0 });
@@ -292,21 +275,50 @@ installDisconnectedServerSocketBoundary((socket) => {
   socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
     if (event === 'rpc-call') {
       const request = payload as { method: string; params: unknown };
-      return { ok: true, result: await dispatchMachineRpc(request.method.slice(request.method.indexOf(':') + 1), request.params) };
+      const separator = request.method.indexOf(':');
+      const targetId = request.method.slice(0, separator);
+      const method = request.method.slice(separator + 1);
+      const token = typeof socket.auth === 'object' ? socket.auth.token : null;
+      if (typeof token !== 'string') throw new Error('Expected authenticated daemon ACK');
+      const scope = { scope: { serverId: homeId, accountId: parseToken(token) } };
+      if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) return { ok: true, result: await daemonRunGet(targetId, request.params, scope) };
+      if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return { ok: true, result: await daemonRunList(targetId, request.params, scope) };
+      if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) return { ok: true, result: await daemonRunStop(targetId, request.params, scope) };
+      try {
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
+            || method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) {
+          const admission = ExecutionRunEnsureOrStartRequestSchema.parse(request.params);
+          // Record the daemon's actual admitted envelope and start fields, not
+          // a substituted client call. Session identity comes from Socket routing.
+          return { ok: true, result: await daemonStart({ ...admission.start, sessionId: targetId,
+            runId: admission.runId, resume: admission.resume }) };
+        }
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START) {
+          return { ok: true, result: { streamId: `turn-${++daemonStreamSequence}` } };
+        }
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
+          const reply = await daemonTurn();
+          const input = request.params as { streamId: string };
+          return { ok: true, result: { streamId: input.streamId,
+            events: [{ t: 'done', ...reply }], nextCursor: 1, done: true } };
+        }
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) return { ok: true, result: { ok: true } };
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ACTION) {
+          const input = request.params as { actionId: string };
+          const result = input.actionId === 'voice_agent.welcome' ? await daemonWelcome() : await daemonCommit();
+          return { ok: true, result: { ok: true, result } };
+        }
+      } catch (error) {
+        // Server-side failures cross the genuine boundary as an ACK error,
+        // leaving classification and recovery to the actual client/Run owner.
+        const failure = error as Error & { rpcErrorCode?: string };
+        return { ok: true, result: { ok: false, error: failure.message, errorCode: failure.rpcErrorCode } };
+      }
+      return { ok: true, result: await dispatchMachineRpc(method, request.params) };
     }
     if (event !== 'update-metadata') throw new Error(`Unexpected socket acknowledgement: ${event}`);
     return { result: 'success', version: payload.expectedVersion + 1, metadata: payload.metadata };
   });
-});
-
-vi.mock('@/modal', async () => {
-  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock({
-    spies: {
-      confirm: (title?: unknown, message?: unknown, options?: unknown) => modalConfirm(title, message, options),
-      alert: (...args: Parameters<typeof modalAlert>) => modalAlert(...args),
-    },
-  }).module;
 });
 
 // Fake the external daemon ACK, preserving real scoped RPC/Account routing.
@@ -330,9 +342,9 @@ async function dispatchMachineRpc(method: string, payload: unknown) {
     };
 }
 
-// Pre-existing adapters remain in unchanged Run-only cases. The retained-global
-// authority case below reloads their real owners and uses actual RPC transport.
-const sessionExecutionRunGet = vi.fn(async (..._args: any[]): Promise<any> => ({
+// Synthetic Run responses are emitted by the external daemon Socket ACK only.
+// Account scoping, access admission, response validation and activity publication stay real.
+const daemonRunGet = vi.fn(async (..._args: any[]): Promise<any> => ({
   run: buildExecutionRunPublicState({
     transcript: { persistenceMode: 'persistent', epoch: 1 },
     resumeHandle: {
@@ -342,29 +354,24 @@ const sessionExecutionRunGet = vi.fn(async (..._args: any[]): Promise<any> => ({
     },
   }),
 }));
-const sessionExecutionRunList = vi.fn(async (..._args: any[]): Promise<any> => ({
+const daemonRunList = vi.fn(async (..._args: any[]): Promise<any> => ({
   runs: [],
 }));
-const sessionExecutionRunStop = vi.fn(async (..._args: any[]): Promise<any> => ({
+const daemonRunStop = vi.fn(async (..._args: any[]): Promise<any> => ({
   ok: true,
 }));
 
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
-  sessionExecutionRunGet: (...args: unknown[]) => sessionExecutionRunGet(...args),
-  sessionExecutionRunList: (...args: unknown[]) => sessionExecutionRunList(...args),
-  sessionExecutionRunStop: (...args: unknown[]) => sessionExecutionRunStop(...args),
-}));
-
-vi.mock('@/sync/domains/features/featureDecisionInputs', () => ({
-  resolveRuntimeFeatureDecision: (args: any) => resolveRuntimeFeatureDecision(args),
-  isRuntimeFeatureEnabled: async (args: any) => (await resolveRuntimeFeatureDecision(args)).state === 'enabled',
-}));
 
 const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
 const restoreActionExecutorModuleLoader = await installRealActionExecutorModuleLoader();
 afterAll(() => restoreActionExecutorModuleLoader());
 
 async function loadVoiceAgentPersistenceHarness() {
+  // Durable Session reads carry no reachability observation. The test Home's
+  // live daemon independently publishes activity through the real receiver.
+  const onlineSessionIds = new Set(Object.entries(state.sessions)
+    .filter(([, session]) => (session as ReturnType<typeof createSessionFixture>).presence === 'online')
+    .map(([id]) => id));
   // These client rows are projections of the plain Home census, including its
   // access authority; an ad-hoc id/metadata object is not a spawn target.
   for (const [id, value] of Object.entries(state.machines) as Array<[string, Record<string, unknown>]>) {
@@ -399,7 +406,19 @@ async function loadVoiceAgentPersistenceHarness() {
   });
   storage.setState({ ...state, profileScope: { serverId: homeId, accountId: 'account-a' } });
   state = storage.getState();
-  unsubscribeStorage = storage.subscribe((current) => { state = current; });
+  const { flushActivityUpdates } = await import('@/sync/engine/socket/socket');
+  unsubscribeStorage = storage.subscribe((current) => {
+    state = current;
+    const updates = new Map([...onlineSessionIds].flatMap(id => {
+      const session = current.sessions[id];
+      const renderable = current.sessionListRowsByServerId[homeId]?.[id];
+      const observedAt = Math.max(Date.now(), (session?.activeAt ?? 0) + 1, (renderable?.activeAt ?? 0) + 1);
+      return session?.active === true && (session.presence !== 'online' || renderable?.presence !== 'online')
+        ? [[id, { type: 'activity' as const, id, active: true, activeAt: observedAt, thinking: false }] as const]
+        : [];
+    }));
+    if (updates.size) flushActivityUpdates({ updates, applySessions: current.applySessions, sourceServerId: homeId });
+  });
   const [{ useVoiceTargetStore }, { VOICE_AGENT_GLOBAL_SESSION_ID }, { createVoiceExecutionTransport }, { voiceSessionBindingStore }] = await Promise.all([
     import('@/voice/runtime/voiceTargetStore'),
     import('@/voice/agent/voiceAgentGlobalSessionId'),
@@ -432,35 +451,25 @@ describe('VoiceExecutionTransport (persistence)', () => {
     vi.useRealTimers();
     await loadSyncSingletonForTests();
     committedSessionRecords.clear();
-    start.mockReset();
-    start.mockImplementation(async (params?: any) => ({ voiceAgentId: params?.existingRunId ?? 'run_1' }));
-    sendTurn.mockReset();
-    sendTurn.mockImplementation(async () => ({ assistantText: 'ok', actions: [] }));
-    commit.mockReset();
-    commit.mockImplementation(async () => ({ commitText: 'commit' }));
-    welcome.mockReset();
-    welcome.mockImplementation(async () => ({ assistantText: '' }));
-    sessionExecutionRunGet.mockClear();
-    sessionExecutionRunList.mockClear();
-    sessionExecutionRunStop.mockClear();
+    daemonStreamSequence = 0;
+    daemonStart.mockReset();
+    daemonStart.mockImplementation(async (params?: any) => ({ ok: true, runId: params?.runId ?? 'run_1', created: !params?.runId }));
+    daemonTurn.mockReset();
+    daemonTurn.mockImplementation(async () => ({ assistantText: 'ok', actions: [] }));
+    daemonCommit.mockReset();
+    daemonCommit.mockImplementation(async () => ({ commitText: 'commit' }));
+    daemonWelcome.mockReset();
+    daemonWelcome.mockImplementation(async () => ({ assistantText: '' }));
+    daemonRunGet.mockClear();
+    daemonRunList.mockClear();
+    daemonRunStop.mockClear();
     readSessions.mockReset();
     readMachines.mockReset();
     spawnSession.mockReset();
     spawnSession.mockImplementation(async () => ({ type: 'success', sessionId: 'sys_voice_new' }));
-    modalConfirm.mockReset();
-    modalConfirm.mockImplementation(async () => false);
-    ensureVoiceAgentInstallablesBackground.mockReset();
-    ensureVoiceAgentInstallablesBackground.mockImplementation(async () => {});
-    resolveRuntimeFeatureDecision.mockReset();
-    resolveRuntimeFeatureDecision.mockResolvedValue({
-      featureId: 'voice.agent',
-      state: 'enabled',
-      blockedBy: null,
-      blockerCode: 'none',
-      diagnostics: [],
-      evaluatedAt: 1,
-      scope: { scopeKind: 'runtime' },
-    });
+    nativeAlert.mockClear();
+    nativeConfirmationChoices.length = 0;
+    nativeConfirmationCount = 0;
 
     homeId = (await upsertAndActivateServer({ serverUrl: 'https://voice-persistence.example.test', name: 'Test Home' })).id;
     state = createVoiceAgentPersistenceTestState();
@@ -479,7 +488,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(sessionExecutionRunGet).toHaveBeenCalledWith('sys_voice', expect.objectContaining({ runId: 'run_1' }), { scope: { serverId: homeId, accountId: 'account-a' } });
+    expect(daemonRunGet).toHaveBeenCalledWith('sys_voice', expect.objectContaining({ runId: 'run_1' }), { scope: { serverId: homeId, accountId: 'account-a' } });
     expect(readSessionOwnerMetadataView(state.sessions.sys_voice)?.voiceAgentRunV1).toMatchObject({
       v: 1,
       runId: 'run_1',
@@ -508,20 +517,12 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'active_voice' }));
-    expect(start).not.toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'active_voice' }));
+    expect(daemonStart).not.toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
   });
 
   it('fails fast with a clear error when daemon voice agent runtime support is disabled', async () => {
-    resolveRuntimeFeatureDecision.mockResolvedValueOnce({
-      featureId: 'voice.agent',
-      state: 'disabled',
-      blockedBy: 'local_policy',
-      blockerCode: 'flag_disabled',
-      diagnostics: [],
-      evaluatedAt: 1,
-      scope: { scopeKind: 'runtime' },
-    });
+    state.settings.featureToggles['voice.agent'] = false;
 
     const { createVoiceExecutionTransport } = await loadVoiceAgentPersistenceHarness();
     const controller = createVoiceExecutionTransport();
@@ -536,8 +537,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       }),
     });
 
-    expect(resolveRuntimeFeatureDecision).toHaveBeenCalledWith(expect.objectContaining({ featureId: 'voice.agent' }));
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('persists run metadata even when transcript persistence is ephemeral so active runs can be reattached after reload', async () => {
@@ -548,7 +548,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(sessionExecutionRunGet).toHaveBeenCalledWith('sys_voice', expect.objectContaining({ runId: 'run_1' }), { scope: { serverId: homeId, accountId: 'account-a' } });
+    expect(daemonRunGet).toHaveBeenCalledWith('sys_voice', expect.objectContaining({ runId: 'run_1' }), { scope: { serverId: homeId, accountId: 'account-a' } });
     expect(readSessionOwnerMetadataView(state.sessions.sys_voice)?.voiceAgentRunV1).toMatchObject({
       v: 1,
       runId: 'run_1',
@@ -567,7 +567,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       resumeHandle: { kind: 'provider_session.v1', backendId: 'claude', providerSessionId: 'vs_legacy' },
       updatedAtMs: 1,
     };
-    sessionExecutionRunList.mockResolvedValueOnce({
+    daemonRunList.mockResolvedValueOnce({
       runs: [
         buildExecutionRunPublicState({
           runId: 'run_legacy',
@@ -586,7 +586,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       },
     });
     // Both reconciliation and the post-start read address the same retained Run.
-    sessionExecutionRunGet
+    daemonRunGet
       .mockResolvedValueOnce({ run: retainedRun })
       .mockResolvedValueOnce({ run: retainedRun });
 
@@ -595,11 +595,11 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(sessionExecutionRunStop).not.toHaveBeenCalled();
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonRunStop).not.toHaveBeenCalled();
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: 'run_legacy',
+        runId: 'run_legacy',
       }),
     );
   });
@@ -618,9 +618,9 @@ describe('VoiceExecutionTransport (persistence)', () => {
       transcriptContractVersion: 2,
     });
 
-    start.mockClear();
-    sendTurn.mockClear();
-    sessionExecutionRunList.mockResolvedValueOnce({
+    daemonStart.mockClear();
+    daemonTurn.mockClear();
+    daemonRunList.mockResolvedValueOnce({
       runs: [
         buildExecutionRunPublicState({
           runId: 'run_1',
@@ -628,7 +628,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
         }),
       ],
     });
-    sessionExecutionRunGet.mockResolvedValueOnce({
+    daemonRunGet.mockResolvedValueOnce({
       run: buildExecutionRunPublicState({
         transcript: { persistenceMode: 'persistent', epoch: 1 },
         resumeHandle: {
@@ -646,10 +646,10 @@ describe('VoiceExecutionTransport (persistence)', () => {
     expect(readSessionOwnerMetadataView(state.sessions.s1)?.flavor).toBe('claude');
     await secondController.sendTurn('s1', 'hello again');
 
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 's1',
-        existingRunId: 'run_1',
+        runId: 'run_1',
       }),
     );
     expect(readSessionOwnerMetadataView(state.sessions.s1)?.voiceAgentRunV1).toMatchObject({
@@ -675,7 +675,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.stop('s1');
 
-    expect(sessionExecutionRunStop).toHaveBeenCalledWith('s1', { runId: 'run_prev' }, { scope: { serverId: homeId, accountId: 'account-a' } });
+    expect(daemonRunStop).toHaveBeenCalledWith('s1', { runId: 'run_prev' }, { scope: { serverId: homeId, accountId: 'account-a' } });
     expect(readSessionOwnerMetadataView(state.sessions.s1)?.voiceAgentRunV1).toBeUndefined();
   });
 
@@ -687,7 +687,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       resumeHandle: { kind: 'provider_session.v1', backendId: 'claude', providerSessionId: 'vs_prev' },
       updatedAtMs: 1,
     };
-    sessionExecutionRunList.mockResolvedValueOnce({
+    daemonRunList.mockResolvedValueOnce({
       runs: [
         buildExecutionRunPublicState({
           runId: 'run_prev',
@@ -710,14 +710,14 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.stop('s1');
 
-    expect(sessionExecutionRunStop).toHaveBeenCalledWith('s1', { runId: 'run_prev' }, { scope: { serverId: homeId, accountId: 'account-a' } });
-    expect(sessionExecutionRunStop).toHaveBeenCalledWith('s1', { runId: 'run_stale' }, { scope: { serverId: homeId, accountId: 'account-a' } });
-    expect(sessionExecutionRunStop).not.toHaveBeenCalledWith('s1', { runId: 'run_other_backend' }, { scope: { serverId: homeId, accountId: 'account-a' } });
+    expect(daemonRunStop).toHaveBeenCalledWith('s1', { runId: 'run_prev' }, { scope: { serverId: homeId, accountId: 'account-a' } });
+    expect(daemonRunStop).toHaveBeenCalledWith('s1', { runId: 'run_stale' }, { scope: { serverId: homeId, accountId: 'account-a' } });
+    expect(daemonRunStop).not.toHaveBeenCalledWith('s1', { runId: 'run_other_backend' }, { scope: { serverId: homeId, accountId: 'account-a' } });
     expect(readSessionOwnerMetadataView(state.sessions.s1)?.voiceAgentRunV1).toBeUndefined();
   });
 
   it('reconciles duplicate running session-scoped voice runs by reattaching the newest match and stopping the extras', async () => {
-    sessionExecutionRunList.mockResolvedValueOnce({
+    daemonRunList.mockResolvedValueOnce({
       runs: [
         buildExecutionRunPublicState({
           runId: 'run_old',
@@ -735,7 +735,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
         }),
       ],
     });
-    sessionExecutionRunGet
+    daemonRunGet
       .mockResolvedValueOnce({
         run: buildExecutionRunPublicState({
           runId: 'run_new',
@@ -762,12 +762,12 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.sendTurn('s1', 'hello');
 
-    expect(sessionExecutionRunList).toHaveBeenCalledWith('s1', {}, { scope: { serverId: homeId, accountId: 'account-a' } });
-    expect(sessionExecutionRunStop).toHaveBeenCalledWith('s1', { runId: 'run_old' }, { scope: { serverId: homeId, accountId: 'account-a' } });
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonRunList).toHaveBeenCalledWith('s1', {}, { scope: { serverId: homeId, accountId: 'account-a' } });
+    expect(daemonRunStop).toHaveBeenCalledWith('s1', { runId: 'run_old' }, { scope: { serverId: homeId, accountId: 'account-a' } });
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 's1',
-        existingRunId: 'run_new',
+        runId: 'run_new',
       }),
     );
     expect(readSessionOwnerMetadataView(state.sessions.s1)?.voiceAgentRunV1).toMatchObject({
@@ -790,16 +790,16 @@ describe('VoiceExecutionTransport (persistence)', () => {
       backendId: 'claude',
     });
 
-    start.mockClear();
-    sendTurn.mockClear();
+    daemonStart.mockClear();
+    daemonTurn.mockClear();
 
     const secondController = createVoiceExecutionTransport();
     await secondController.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello again');
 
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: 'run_1',
+        runId: 'run_1',
       }),
     );
   });
@@ -807,9 +807,9 @@ describe('VoiceExecutionTransport (persistence)', () => {
   it('uses the hidden voice conversation session as the only global daemon RPC anchor', async () => {
     state.sessions.s2 = { id: 's2', updatedAt: 2, modelMode: 'default', metadata: { flavor: 'claude' } };
 
-    start
+    daemonStart
       .mockRejectedValueOnce(Object.assign(new Error('RPC method not available'), { rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' }))
-      .mockResolvedValueOnce({ voiceAgentId: 'run_2' });
+      .mockResolvedValueOnce({ ok: true, runId: 'run_2', created: true });
 
     const { VOICE_AGENT_GLOBAL_SESSION_ID, createVoiceExecutionTransport } = await loadVoiceAgentPersistenceHarness();
     const controller = createVoiceExecutionTransport();
@@ -818,14 +818,14 @@ describe('VoiceExecutionTransport (persistence)', () => {
       assistantText: 'ok',
     });
 
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenCalledTimes(2);
+    expect(daemonStart).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         sessionId: 'sys_voice',
       }),
     );
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         sessionId: 'sys_voice',
@@ -834,9 +834,9 @@ describe('VoiceExecutionTransport (persistence)', () => {
   });
 
   it('retries session-scoped daemon start when the first attempt returns RPC method not available', async () => {
-    start
+    daemonStart
       .mockRejectedValueOnce(Object.assign(new Error('RPC method not available'), { rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' }))
-      .mockResolvedValueOnce({ voiceAgentId: 'run_2' });
+      .mockResolvedValueOnce({ ok: true, runId: 'run_2', created: true });
 
     const { createVoiceExecutionTransport } = await loadVoiceAgentPersistenceHarness();
     const controller = createVoiceExecutionTransport();
@@ -845,14 +845,14 @@ describe('VoiceExecutionTransport (persistence)', () => {
       assistantText: 'ok',
     });
 
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenCalledTimes(2);
+    expect(daemonStart).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         sessionId: 's1',
       }),
     );
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         sessionId: 's1',
@@ -871,9 +871,9 @@ describe('VoiceExecutionTransport (persistence)', () => {
       transcriptContractVersion: 2,
     };
 
-    start.mockRejectedValueOnce(Object.assign(new Error('Not running'), { rpcErrorCode: 'execution_run_not_allowed' }));
-    start.mockResolvedValueOnce({ voiceAgentId: 'run_2' });
-    sessionExecutionRunGet
+    daemonStart.mockRejectedValueOnce(Object.assign(new Error('Not running'), { rpcErrorCode: 'execution_run_not_allowed' }));
+    daemonStart.mockResolvedValueOnce({ ok: true, runId: 'run_2', created: true });
+    daemonRunGet
       .mockResolvedValueOnce({
         run: buildExecutionRunPublicState({
           runId: 'run_prev',
@@ -902,18 +902,18 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: 'run_prev',
+        runId: 'run_prev',
       }),
     );
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: null,
+        runId: null,
       }),
     );
   });
@@ -928,8 +928,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
       transcriptContractVersion: 2,
     };
 
-    start.mockResolvedValueOnce({ voiceAgentId: 'run_2' });
-    sessionExecutionRunGet.mockResolvedValueOnce({
+    daemonStart.mockResolvedValueOnce({ ok: true, runId: 'run_2', created: true });
+    daemonRunGet.mockResolvedValueOnce({
       run: buildExecutionRunPublicState({
         runId: 'run_2',
         transcript: { persistenceMode: 'persistent', epoch: 1 },
@@ -946,13 +946,13 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenCalledTimes(1);
+    expect(daemonStart).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: null,
-        resumeWhenInactive: false,
+        runId: null,
+        resume: false,
       }),
     );
     expect(readSessionOwnerMetadataView(state.sessions.sys_voice)?.voiceAgentRunV1).toMatchObject({
@@ -971,20 +971,20 @@ describe('VoiceExecutionTransport (persistence)', () => {
       transcriptContractVersion: 2,
     };
 
-    start.mockRejectedValueOnce(Object.assign(new Error('Not found'), { rpcErrorCode: 'execution_run_not_found' }));
-    start.mockResolvedValueOnce({ voiceAgentId: 'run_3' });
+    daemonStart.mockRejectedValueOnce(Object.assign(new Error('Not found'), { rpcErrorCode: 'execution_run_not_found' }));
+    daemonStart.mockResolvedValueOnce({ ok: true, runId: 'run_3', created: true });
 
     const { VOICE_AGENT_GLOBAL_SESSION_ID, createVoiceExecutionTransport } = await loadVoiceAgentPersistenceHarness();
     const controller = createVoiceExecutionTransport();
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: null,
-        resumeWhenInactive: true,
+        runId: null,
+        resume: true,
         resumeHandle: expect.objectContaining({ kind: 'provider_session.v1', providerSessionId: 'vs_prev' }),
       }),
     );
@@ -1006,19 +1006,19 @@ describe('VoiceExecutionTransport (persistence)', () => {
       transcriptContractVersion: 2,
     };
 
-    start.mockRejectedValueOnce(Object.assign(new Error('Not found'), { rpcErrorCode: 'execution_run_not_found' }));
-    start.mockResolvedValueOnce({ voiceAgentId: 'run_fresh' });
+    daemonStart.mockRejectedValueOnce(Object.assign(new Error('Not found'), { rpcErrorCode: 'execution_run_not_found' }));
+    daemonStart.mockResolvedValueOnce({ ok: true, runId: 'run_fresh', created: true });
 
     const { VOICE_AGENT_GLOBAL_SESSION_ID, createVoiceExecutionTransport } = await loadVoiceAgentPersistenceHarness();
     const controller = createVoiceExecutionTransport();
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: null,
-        resumeWhenInactive: true,
+        runId: null,
+        resume: true,
         resumeHandle: {
           kind: 'voice_agent_sessions.v1',
           backendId: 'claude',
@@ -1051,19 +1051,15 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: 'sys_voice',
-        existingRunId: null,
-        resumeWhenInactive: false,
-        resumeHandle: null,
-      }),
+    expect(daemonStart).toHaveBeenCalledTimes(1);
+    expect(daemonStart).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'sys_voice', runId: null, resume: false }),
     );
+    expect(daemonStart.mock.calls[0]?.[0]).not.toHaveProperty('resumeHandle');
   });
 
   it('retries when daemon sendTurn fails with the plain Voice agent not found message', async () => {
-    sendTurn
+    daemonTurn
       .mockRejectedValueOnce(new Error('Voice agent not found'))
       .mockResolvedValueOnce({ assistantText: 'recovered', actions: [] });
 
@@ -1075,8 +1071,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
       actions: [],
     });
 
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(sendTurn).toHaveBeenCalledTimes(2);
+    expect(daemonStart).toHaveBeenCalledTimes(2);
+    expect(daemonTurn).toHaveBeenCalledTimes(2);
   });
 
   it('clears a stale cached handle when immediate welcome fails with the plain Voice agent not found message', async () => {
@@ -1085,8 +1081,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
       mode: 'immediate',
       templateId: null,
     };
-    welcome.mockRejectedValueOnce(new Error('Voice agent not found'));
-    sendTurn.mockResolvedValueOnce({ assistantText: 'recovered', actions: [] });
+    daemonWelcome.mockRejectedValueOnce(new Error('Voice agent not found'));
+    daemonTurn.mockResolvedValueOnce({ assistantText: 'recovered', actions: [] });
 
     const { VOICE_AGENT_GLOBAL_SESSION_ID, createVoiceExecutionTransport } = await loadVoiceAgentPersistenceHarness();
     const controller = createVoiceExecutionTransport();
@@ -1097,9 +1093,9 @@ describe('VoiceExecutionTransport (persistence)', () => {
       actions: [],
     });
 
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(welcome).toHaveBeenCalledTimes(1);
-    expect(sendTurn).toHaveBeenCalledTimes(1);
+    expect(daemonStart).toHaveBeenCalledTimes(2);
+    expect(daemonWelcome).toHaveBeenCalledTimes(1);
+    expect(daemonTurn).toHaveBeenCalledTimes(1);
   });
 
   it('persists welcomedEpoch after an immediate welcome and suppresses duplicate welcome after controller recreation', async () => {
@@ -1108,7 +1104,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       mode: 'immediate',
       templateId: null,
     };
-    welcome.mockResolvedValue({ assistantText: 'Welcome!' });
+    daemonWelcome.mockResolvedValue({ assistantText: 'Welcome!' });
 
     const { VOICE_AGENT_GLOBAL_SESSION_ID, createVoiceExecutionTransport } = await loadVoiceAgentPersistenceHarness();
 
@@ -1119,12 +1115,12 @@ describe('VoiceExecutionTransport (persistence)', () => {
       transcriptContractVersion: 2,
       welcomedEpoch: 1,
     });
-    expect(welcome).toHaveBeenCalledTimes(1);
+    expect(daemonWelcome).toHaveBeenCalledTimes(1);
 
     const secondController = createVoiceExecutionTransport();
     await expect(secondController.ensureRunningAndMaybeWelcome(VOICE_AGENT_GLOBAL_SESSION_ID)).resolves.toBeNull();
 
-    expect(welcome).toHaveBeenCalledTimes(1);
+    expect(daemonWelcome).toHaveBeenCalledTimes(1);
     expect(readSessionOwnerMetadataView(state.sessions.sys_voice)?.voiceAgentRunV1).toMatchObject({
       transcriptContractVersion: 2,
       welcomedEpoch: 1,
@@ -1142,9 +1138,9 @@ describe('VoiceExecutionTransport (persistence)', () => {
       transcriptContractVersion: 2,
     };
 
-    start.mockRejectedValueOnce(Object.assign(new Error('Not resumable'), { rpcErrorCode: 'execution_run_not_allowed' }));
-    start.mockResolvedValueOnce({ voiceAgentId: 'run_4' });
-    sessionExecutionRunGet.mockResolvedValueOnce({
+    daemonStart.mockRejectedValueOnce(Object.assign(new Error('Not resumable'), { rpcErrorCode: 'execution_run_not_allowed' }));
+    daemonStart.mockResolvedValueOnce({ ok: true, runId: 'run_4', created: true });
+    daemonRunGet.mockResolvedValueOnce({
       run: buildExecutionRunPublicState({
         runId: 'run_4',
         transcript: { persistenceMode: 'persistent', epoch: 1 },
@@ -1161,20 +1157,20 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.ensureRunning('sys_voice');
 
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: 'run_prev',
-        resumeWhenInactive: true,
+        runId: 'run_prev',
+        resume: true,
       }),
     );
-    expect(start).toHaveBeenNthCalledWith(
+    expect(daemonStart).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: null,
-        resumeWhenInactive: true,
+        runId: null,
+        resume: true,
         resumeHandle: expect.objectContaining({ kind: 'provider_session.v1', providerSessionId: 'vs_prev' }),
       }),
     );
@@ -1185,8 +1181,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
   });
 
   it('persists an updated resumeHandle into carrier metadata after commit (e.g. commit session ids)', async () => {
-    sessionExecutionRunGet.mockImplementation(async () => ({
-      run: commit.mock.calls.length === 0
+    daemonRunGet.mockImplementation(async () => ({
+      run: daemonCommit.mock.calls.length === 0
         ? buildExecutionRunPublicState({
             resumeHandle: {
               kind: 'provider_session.v1',
@@ -1214,8 +1210,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.commit(VOICE_AGENT_GLOBAL_SESSION_ID);
 
-    expect(commit).toHaveBeenCalledTimes(1);
-    expect(sessionExecutionRunGet.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(daemonCommit).toHaveBeenCalledTimes(1);
+    expect(daemonRunGet.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(readSessionOwnerMetadataView(state.sessions.sys_voice)?.voiceAgentRunV1).toMatchObject({
       runId: 'run_1',
       backendId: 'claude',
@@ -1227,10 +1223,10 @@ describe('VoiceExecutionTransport (persistence)', () => {
   });
 
   it('drops a stale cached handle and retries when daemon send returns RPC method not available', async () => {
-    start
-      .mockResolvedValueOnce({ voiceAgentId: 'run_1' })
-      .mockResolvedValueOnce({ voiceAgentId: 'run_2' });
-    sendTurn
+    daemonStart
+      .mockResolvedValueOnce({ ok: true, runId: 'run_1', created: true })
+      .mockResolvedValueOnce({ ok: true, runId: 'run_2', created: true });
+    daemonTurn
       .mockRejectedValueOnce(Object.assign(new Error('RPC method not available'), { rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' }))
       .mockResolvedValueOnce({ assistantText: 'recovered', actions: [] });
 
@@ -1241,8 +1237,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
       assistantText: 'recovered',
     });
 
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(sendTurn).toHaveBeenCalledTimes(2);
+    expect(daemonStart).toHaveBeenCalledTimes(2);
+    expect(daemonTurn).toHaveBeenCalledTimes(2);
   });
 
   it('clears stale persisted daemon run metadata before retrying after RPC method not available', async () => {
@@ -1253,11 +1249,11 @@ describe('VoiceExecutionTransport (persistence)', () => {
       resumeHandle: { kind: 'provider_session.v1', backendId: 'claude', providerSessionId: 'vs_stale' },
       updatedAtMs: 1,
     };
-    start.mockImplementation(async (params?: any) => ({ voiceAgentId: params?.existingRunId ?? 'run_fresh' }));
-    sendTurn
+    daemonStart.mockImplementation(async (params?: any) => ({ ok: true, runId: params?.runId ?? 'run_fresh', created: !params?.runId }));
+    daemonTurn
       .mockRejectedValueOnce(Object.assign(new Error('RPC method not available'), { rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' }))
       .mockResolvedValueOnce({ assistantText: 'recovered', actions: [] });
-    sessionExecutionRunGet.mockImplementation(async (_sessionId: string, params: { runId: string }) => ({
+    daemonRunGet.mockImplementation(async (_sessionId: string, params: { runId: string }) => ({
       run: buildExecutionRunPublicState({
         runId: params.runId,
         transcript: { persistenceMode: 'persistent', epoch: 1 },
@@ -1276,8 +1272,9 @@ describe('VoiceExecutionTransport (persistence)', () => {
       assistantText: 'recovered',
     });
 
-    expect(start).toHaveBeenNthCalledWith(1, expect.objectContaining({ existingRunId: null }));
-    expect(start).toHaveBeenNthCalledWith(2, expect.objectContaining({ existingRunId: null, resumeHandle: null }));
+    expect(daemonStart).toHaveBeenNthCalledWith(1, expect.objectContaining({ runId: null }));
+    expect(daemonStart).toHaveBeenNthCalledWith(2, expect.objectContaining({ runId: null }));
+    expect(daemonStart.mock.calls[1]?.[0]).not.toHaveProperty('resumeHandle');
     expect(readSessionOwnerMetadataView(state.sessions.sys_voice)?.voiceAgentRunV1).toMatchObject({
       runId: 'run_fresh',
       backendId: 'claude',
@@ -1312,7 +1309,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       code: 'VOICE_AGENT_TARGET_SESSION_INACTIVE',
     });
 
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('fails fast when a global hidden voice binding points at an offline target session', async () => {
@@ -1343,7 +1340,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       code: 'VOICE_AGENT_TARGET_SESSION_OFFLINE',
     });
 
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('fails fast when a global hidden voice binding points at a target whose machine daemon is offline', async () => {
@@ -1388,7 +1385,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE',
     });
 
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('fails fast when a global hidden voice binding points at a target flavor without local control support', async () => {
@@ -1419,7 +1416,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED',
     });
 
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('prefers visible lookup target session metadata when raw target metadata is stale', async () => {
@@ -1494,7 +1491,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       assistantText: 'ok',
     });
 
-    expect(start).toHaveBeenCalled();
+    expect(daemonStart).toHaveBeenCalled();
   });
 
   it('switches away from a sticky global voice machine before starting when its daemon is unavailable', async () => {
@@ -1577,10 +1574,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
     };
     state.settings.recentMachinePaths = [];
     useVoiceTargetStore.getState().rememberAutoTargetMachine({ serverId: homeId, accountId: 'account-a' }, 'm_old');
-	    start.mockResolvedValueOnce({ voiceAgentId: 'run_new' });
-		    modalConfirm
-		      .mockResolvedValueOnce(true)
-		      .mockResolvedValueOnce(true);
+    daemonStart.mockResolvedValueOnce({ ok: true, runId: 'run_new', created: true });
+    nativeConfirmationChoices.push(true, true);
     readSessions.mockImplementation(async () => {
       const sysVoiceNew = {
         id: 'sys_voice_new',
@@ -1628,13 +1623,13 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello after switch');
 
-    expect(modalConfirm).toHaveBeenCalledTimes(2);
+    expect(nativeConfirmationCount).toBe(2);
     expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
       machineId: 'm_new',
       directory: '/new/.happier/voice-agent',
     }));
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({
+    expect(daemonStart).toHaveBeenCalledTimes(1);
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'sys_voice_new',
       replay: expect.objectContaining({
         kind: 'voice_session.v1',
@@ -1718,12 +1713,10 @@ describe('VoiceExecutionTransport (persistence)', () => {
       'active-server': [state.machines.m_old],
     };
     useVoiceTargetStore.getState().rememberAutoTargetMachine({ serverId: homeId, accountId: 'account-a' }, 'm_old');
-    start
+    daemonStart
       .mockRejectedValueOnce(Object.assign(new Error('RPC method not available'), { rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' }))
-      .mockResolvedValueOnce({ voiceAgentId: 'run_new' });
-    modalConfirm
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(true);
+      .mockResolvedValueOnce({ ok: true, runId: 'run_new', created: true });
+    nativeConfirmationChoices.push(true, true);
     readMachines.mockImplementation(async () => {
       const nextMachines = {
         ...(state.machines ?? {}),
@@ -1799,7 +1792,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello after refresh');
 
     expect(readMachines).toHaveBeenCalled();
-    expect(modalConfirm).toHaveBeenCalledTimes(2);
+    expect(nativeConfirmationCount).toBe(2);
     expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
       machineId: 'm_new',
       directory: '/new/.happier/voice-agent',
@@ -1811,15 +1804,6 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
 describe('retained global Voice Run authority', () => {
   it('reattaches the retained global Run without stopping it and reads its policy through real RPC', async () => {
-    // This changed authority case uses real owners; untouched family mocks remain P2.
-    const internalModules = [
-      '@/voice/agent/daemonVoiceAgentClient', '@/voice/context/buildVoiceInitialContext',
-      '@/voice/agent/resolveDaemonVoiceAgentModels', '@/voice/agent/ensureVoiceAgentInstallablesBackground',
-      '@/sync/ops/sessionExecutionRuns', '@/sync/domains/features/featureDecisionInputs',
-      '@/modal',
-    ] as const;
-    const incumbentMocks = await Promise.all(internalModules.map(async (id) => [id, await vi.importMock(id)] as const));
-    for (const id of internalModules) vi.doUnmock(id);
     vi.resetModules();
     let harness: Awaited<ReturnType<typeof import('@/dev/testkit/harness/standaloneVoicePolicyHarness')['createStandaloneVoicePolicyHarness']>> | undefined;
     try {
@@ -1857,7 +1841,6 @@ describe('retained global Voice Run authority', () => {
       expect(dispatch.mock.calls.some(([method]) => method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toBe(false);
     } finally {
       await harness?.dispose();
-      for (const [id, module] of incumbentMocks) vi.doMock(id, () => module);
       vi.resetModules();
     }
   });

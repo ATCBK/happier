@@ -33,8 +33,8 @@ describe('Voice Machine access Action effect', () => {
         home: request.home, accountId: request.accountId, body: request.body,
       }))).toEqual([{ home: 'machine', accountId: 'alice', body: { principal: input.principal, level: 'view' } }]);
     } finally {
+      await home.dispose();
       storage.setState({ settings: previousSettings });
-      home.dispose();
     }
   });
 });

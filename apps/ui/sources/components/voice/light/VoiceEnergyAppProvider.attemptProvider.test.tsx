@@ -2,11 +2,15 @@ import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { standardCleanup } from '@/dev/testkit';
+import { getStorage } from '@/sync/domains/state/storage';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
+import { resetVoiceSessionStoreForTests, setVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
+
 import {
     readReanimatedFrameCallbacks,
     resetReanimatedFrameCallbacks,
 } from '@/dev/testkit/mocks/reanimated';
-import type { VoiceSessionSnapshot } from '@/voice/session/types';
 import { voiceRuntimeLevelStore, type VoiceRuntimeLevelWriter } from '@/voice/runtime/levels/voiceRuntimeLevelStore';
 
 import { useVoiceEnergyPresence } from './useVoiceEnergy';
@@ -14,38 +18,33 @@ import { VoiceEnergyAppProvider } from './VoiceEnergyAppProvider';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const runtime = vi.hoisted(() => ({
-    voice: { providerId: null } as unknown,
-    snapshot: {
-        adapterId: null,
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-    } as VoiceSessionSnapshot,
-}));
+const initialStorageState = getStorage().getState();
+const hostPresence = { focused: true };
+const hostListeners = new Map<string, Set<() => void>>();
 
-const hostPresence = vi.hoisted(() => ({
-    activelyViewed: true,
-    activelyFocused: true,
-}));
+// Only browser/desktop globals are substituted; real host-presence hooks sample
+// and subscribe to the same focus events used by the desktop renderer.
+function installHostBoundary(): void {
+    vi.stubGlobal('__TAURI_INTERNALS__', { invoke: () => undefined });
+    vi.stubGlobal('document', {
+        visibilityState: 'visible',
+        hasFocus: () => hostPresence.focused,
+        addEventListener: () => undefined,
+    });
+    vi.stubGlobal('addEventListener', (event: string, listener: () => void) => {
+        const listeners = hostListeners.get(event) ?? new Set();
+        listeners.add(listener);
+        hostListeners.set(event, listeners);
+    });
+    for (const listener of hostListeners.get('focus') ?? []) listener();
+}
 
-vi.mock('@/sync/domains/state/storage', () => ({
-    useSetting: () => runtime.voice,
-}));
-
-vi.mock('@/voice/session/voiceSession', () => ({
-    useVoiceSessionSnapshot: () => runtime.snapshot,
-}));
-
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => false,
-}));
-
-vi.mock('@/utils/runtime/useHostActivelyViewed', () => ({
-    useHostActivelyViewed: () => hostPresence.activelyViewed,
-    useHostActivelyFocused: () => hostPresence.activelyFocused,
-}));
+function selectProvider(providerId: string): void {
+    getStorage().setState((state) => ({ settings: {
+        ...state.settings,
+        voice: { ...state.settings.voice, providerId },
+    } }));
+}
 
 /** A mounted Voice surface: the energy clock only runs while one is present. */
 function VisibleConsumer(): null {
@@ -75,22 +74,22 @@ describe('VoiceEnergyAppProvider attempt provider', () => {
 
     beforeEach(() => {
         resetReanimatedFrameCallbacks();
-        runtime.voice = { providerId: null };
-        runtime.snapshot = {
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        };
-        hostPresence.activelyViewed = true;
-        hostPresence.activelyFocused = true;
+        getStorage().setState(initialStorageState, true);
+        resetVoiceSessionStoreForTests();
+        setReducedMotionPreferenceOverride(false);
+        hostPresence.focused = true;
+        installHostBoundary();
     });
 
     afterEach(() => {
         act(() => { tree?.unmount(); input?.close(); });
         tree = null;
         input = null;
+        standardCleanup();
+        resetVoiceSessionStoreForTests();
+        getStorage().setState(initialStorageState, true);
+        setReducedMotionPreferenceOverride(null);
+        vi.unstubAllGlobals();
     });
 
     async function renderProvider(): Promise<void> {
@@ -104,14 +103,14 @@ describe('VoiceEnergyAppProvider attempt provider', () => {
     }
 
     it('keeps the energy clock running for a live attempt after the selection changes to Off', async () => {
-        runtime.voice = { providerId: 'off' };
-        runtime.snapshot = {
+        selectProvider('off');
+        setVoiceSessionSnapshot({
             adapterId: 'local_conversation',
             sessionId: 'voice-attempt',
             status: 'connected',
             mode: 'listening',
             canStop: true,
-        };
+        });
 
         input = voiceRuntimeLevelStore.open({ channel: 'input', sourceId: 'attempt-provider-test' });
 
@@ -122,7 +121,7 @@ describe('VoiceEnergyAppProvider attempt provider', () => {
     });
 
     it('leaves the clock idle when nothing is running and nothing is selected', async () => {
-        runtime.voice = { providerId: 'off' };
+        selectProvider('off');
 
         await renderProvider();
 
@@ -130,18 +129,20 @@ describe('VoiceEnergyAppProvider attempt provider', () => {
     });
 
     it('stays still when a desktop window remains visible but loses focus', async () => {
-        runtime.voice = { providerId: 'local_conversation' };
-        runtime.snapshot = {
+        selectProvider('local_conversation');
+        setVoiceSessionSnapshot({
             adapterId: 'local_conversation',
             sessionId: 'voice-attempt',
             status: 'connected',
             mode: 'listening',
             canStop: true,
-        };
+        });
         // Context and other visible-window consumers still receive this fact. The
         // energy clock is the narrower focus projection, so it must stop here.
-        hostPresence.activelyViewed = true;
-        hostPresence.activelyFocused = false;
+        hostPresence.focused = false;
+        act(() => {
+            for (const listener of hostListeners.get('blur') ?? []) listener();
+        });
 
         await renderProvider();
 

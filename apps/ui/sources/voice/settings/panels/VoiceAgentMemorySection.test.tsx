@@ -1,7 +1,14 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storage';
 import {
   readLocalConversationVoiceSettings,
   voiceSettingsDefaults,
@@ -9,17 +16,19 @@ import {
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-  Switch: (props: any) => React.createElement('Switch', props),
-}));
-// The persisted-memory reset reaches the daemon and stored transcripts: a system boundary.
-vi.mock('@/voice/agent/resetGlobalVoiceAgentPersistence', () => ({
-  resetGlobalVoiceAgentPersistence: vi.fn(),
-}));
-const featureEnabledState: Record<string, boolean> = { 'voice.agent': true };
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-  useFeatureEnabled: (featureId: string) => featureEnabledState[featureId] === true,
-}));
+const initialStorage = storage.getState();
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
+beforeEach(async () => {
+  account = await createVoiceSettingsAccountTestHarness(settingsParse({
+    experiments: true, featureToggles: { 'voice.agent': true, 'execution.runs': true },
+  }));
+});
+afterEach(async () => {
+  standardCleanup();
+  vi.useRealTimers();
+  await account?.dispose();
+  storage.setState(initialStorage, true);
+});
 
 type Agent = ReturnType<typeof readLocalConversationVoiceSettings>['agent'];
 
@@ -30,7 +39,11 @@ function voiceWithAgent(patch: Partial<Agent>): VoiceSettings {
 
 async function render(voice: VoiceSettings, setVoice = vi.fn()) {
   const { VoiceAgentMemorySection } = await import('./VoiceAgentMemorySection');
-  return renderScreen(React.createElement(VoiceAgentMemorySection, { voice, setVoice }));
+  vi.useFakeTimers();
+  const screen = await renderScreen(React.createElement(VoiceAgentMemorySection, { voice, setVoice }));
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  vi.useRealTimers();
+  return screen;
 }
 
 describe('VoiceAgentMemorySection', () => {
@@ -66,14 +79,12 @@ describe('VoiceAgentMemorySection', () => {
   });
 
   it('says why resuming is unavailable when the Voice agent is off for this server', async () => {
-    featureEnabledState['voice.agent'] = false;
-    try {
+    account.replaceSettings(settingsParse({ ...account.settings,
+      featureToggles: { ...account.settings.featureToggles, 'voice.agent': false },
+    }));
       const screen = await render(voiceWithAgent({ transcript: { persistenceMode: 'persistent', epoch: 0 } }));
       const restore = screen.findAll((node) => node.props?.testIDPrefix === 'settings.voice.memory.restore')[0];
       const resume = restore?.props.options.find((option: { id: string }) => option.id === 'provider_resume');
       expect(typeof resume?.unavailableReason).toBe('string');
-    } finally {
-      featureEnabledState['voice.agent'] = true;
-    }
   });
 });

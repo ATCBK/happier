@@ -1,41 +1,47 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import { waitForVoiceQaLifecycleController } from './waitForVoiceQaLifecycleController';
 
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+let controller: ReturnType<typeof createVoiceSessionLifecycleController> | undefined;
+afterEach(async () => {
+    await controller?.dispose();
+    controller = undefined;
+});
+
 describe('waitForVoiceQaLifecycleController', () => {
     it('waits for the production lifecycle owner instead of treating startup order as an idle session', async () => {
-        const controller = { toggle: vi.fn(async () => {}) };
-        const getController = vi
-            .fn<() => typeof controller | null>()
-            .mockReturnValueOnce(null)
-            .mockReturnValue(controller);
+        const lifecycle = createVoiceSessionLifecycleController();
+        controller = lifecycle;
+        let published: typeof lifecycle | null = null;
 
         const resolved = await waitForVoiceQaLifecycleController({
-            getController,
+            getController: () => published,
             timeoutMs: 100,
-            wait: async () => {},
+            wait: async () => { published = lifecycle; },
         });
 
         expect(resolved).toBe(controller);
-        expect(getController).toHaveBeenCalledTimes(2);
     });
 
     it('waits until the production owner has consumed the configured provider', async () => {
-        const controller = { configuredProviderId: null as string | null };
-        let waits = 0;
+        controller = createVoiceSessionLifecycleController();
 
         const resolved = await waitForVoiceQaLifecycleController({
-            getController: () => controller,
-            isReady: (candidate) => candidate.configuredProviderId === 'local_conversation',
+            getController: () => controller ?? null,
+            isReady: (candidate) => candidate.getConfiguredProviderId() === 'local_conversation',
             timeoutMs: 100,
             wait: async () => {
-                waits += 1;
-                controller.configuredProviderId = 'local_conversation';
+                controller?.setConfiguredProviderId('local_conversation');
             },
         });
 
         expect(resolved).toBe(controller);
-        expect(waits).toBe(1);
+        expect(resolved.getConfiguredProviderId()).toBe('local_conversation');
     });
 
     it('fails explicitly when the production lifecycle owner never becomes ready', async () => {

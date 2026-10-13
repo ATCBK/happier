@@ -10,11 +10,13 @@ import { storage } from '@/sync/domains/state/storage';
 import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema,
   DaemonVoiceClientRawCredentialAuthorizationRequestV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createHash } from 'node:crypto';
+import { flushHookEffects, registerStandardCleanupTarget } from '@/dev/testkit';
+import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
 
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
 
 import { installVoiceSettingsPanelCommonModuleMocks } from '@/voice/settings/panels/voiceSettingsPanelTestHelpers';
-import type { LocalSttProviderSettingsProps } from '@/voice/settings/panels/localStt/providers/_types';
 import {
   commitExternalVoiceProviderRegistration,
   removeExternalVoiceProviderRegistration,
@@ -27,8 +29,11 @@ import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegi
 const storageBoundary = vi.hoisted(() => ({
   platformOs: 'ios',
 }));
-const nativeModelReadiness = vi.hoisted(() => ({
-  read: vi.fn(),
+let dictationFs = createMemFs();
+vi.mock('expo-file-system', () => ({
+  get Directory() { return dictationFs.fs.Directory; },
+  get File() { return dictationFs.fs.File; },
+  Paths: { document: 'file:///docs/' },
 }));
 const providerFocus = vi.hoisted(() => vi.fn());
 const daemonResponse = vi.hoisted(() => vi.fn<(method: string, payload: unknown) => Promise<unknown>>());
@@ -51,63 +56,26 @@ installVoiceSettingsPanelCommonModuleMocks({
       },
       View: (props: any) => React.createElement('View', props, props.children),
       Pressable: createFocusablePressableMock(providerFocus),
+      useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }),
     });
   },
   icons: async () => ({
     Ionicons: (props: any) => React.createElement('Ionicons', props),
   }),
   storage: async () => await vi.importActual('@/sync/domains/state/storage'),
+  text: async () => await vi.importActual('@/text'),
+  // These cases select/edit inline fields and inspect passive readiness; none
+  // invokes a dialog. Keep the real manager/provider graph without a fake host.
+  modal: async () => await vi.importActual('@/modal'),
 });
 
-vi.mock('@/text', () => ({
-  t: (key: string) => key,
-  tLoose: (key: string) => key,
-}));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-  const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
-  return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
-});
 vi.mock('expo-clipboard', () => ({
   setStringAsync: vi.fn(),
 }));
-vi.mock('@/components/ui/popover', async (importOriginal) => {
-  const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
-  return createInlinePopoverModuleMock(importOriginal);
-});
-vi.mock('@/voice/dictation/voiceDictationNativeModelReadiness', () => ({
-  readVoiceDictationNativeModelReadiness: (...args: unknown[]) => nativeModelReadiness.read(...args),
-}));
-vi.mock('@/voice/settings/panels/localStt/providers/registry', () => {
-  const ProviderSettings = (props: LocalSttProviderSettingsProps) => React.createElement('ProviderSettings', props);
-  const specs = [
-    {
-      id: 'device',
-      title: 'Device',
-      subtitle: 'Device speech',
-      iconName: 'microphone',
-      Settings: ProviderSettings,
-    },
-    {
-      id: 'happier.voice.openai-compat/stt',
-      title: 'OpenAI compatible',
-      subtitle: 'Recorded audio',
-      iconName: 'cloud',
-      Settings: ProviderSettings,
-    },
-    {
-      id: 'acme.dictation/stt',
-      title: 'Acme Dictation',
-      subtitle: 'Configurable external speech',
-      iconName: 'cloud',
-      Settings: ProviderSettings,
-    },
-  ];
-  return {
-    useLocalSttProviderSpecs: () => specs,
-    getLocalSttProviderSpec: (id: string) => specs.find((spec) => spec.id === id) ?? null,
-  };
-});
+// Vitest uses web-shaped module resolution. Select the real native entrypoint
+// for this iOS render fixture without replacing its installer or readiness logic.
+vi.mock('@/voice/dictation/voiceDictationNativeModelReadiness', async () =>
+  await vi.importActual('@/voice/dictation/voiceDictationNativeModelReadiness.native'));
 
 import {
   readLocalConversationVoiceSettings,
@@ -231,6 +199,7 @@ describe('DictationSettingsSection', () => {
         executionMachineId={null}
         localAvailability={localAvailability}
       />);
+      registerStandardCleanupTarget(tree);
     });
 
     await act(async () => {
@@ -274,6 +243,7 @@ describe('DictationSettingsSection', () => {
         executionMachineId={null}
         localAvailability={localAvailability}
       />);
+      registerStandardCleanupTarget(tree);
     });
 
     await act(async () => {
@@ -286,6 +256,12 @@ describe('DictationSettingsSection', () => {
 
   it('edits the selected Local Voice adapter STT settings when Dictation follows Local Voice', async () => {
     const { DictationSettingsSection } = await import('./DictationSettingsSection');
+    const { OverlayPortalHost, OverlayPortalProvider, Popover } = await import('@/components/ui/popover');
+    // React Native supplies physical view geometry; the actual Popover decides
+    // positioning, native portal placement, opening, selection and closing.
+    const measureInWindow = vi.fn((callback: (x: number, y: number, width: number, height: number) => void) => {
+      callback(100, 120, 280, 48);
+    });
     const localDirect = readLocalDirectVoiceSettings(voiceSettingsDefaults);
     const localConversation = readLocalConversationVoiceSettings(voiceSettingsDefaults);
     const voice = writeLocalConversationVoiceSettings(writeLocalDirectVoiceSettings({
@@ -295,7 +271,8 @@ describe('DictationSettingsSection', () => {
       ...localDirect,
       stt: {
         ...localDirect.stt,
-        provider: 'device',
+        provider: 'local_neural',
+        localNeural: { ...localDirect.stt.localNeural, language: 'en' },
       },
     }), {
       ...localConversation,
@@ -314,27 +291,45 @@ describe('DictationSettingsSection', () => {
     const setVoice = vi.fn();
     let tree!: ReturnType<typeof create>;
     await act(async () => {
-      tree = create(<DictationSettingsSection
+      tree = create(<OverlayPortalProvider><DictationSettingsSection
         voice={dictationVoice}
         setVoice={setVoice}
         executionMachineId={null}
         localAvailability={localAvailability}
-      />);
+      /><OverlayPortalHost /></OverlayPortalProvider>, {
+        createNodeMock: (node) => typeof node.type === 'string' ? { measureInWindow } : null,
+      });
+      registerStandardCleanupTarget(tree);
     });
 
     expect(findRenderedItem(tree, 'settings.voice.dictation.engine.same_as_local').props.selected).toBe(true);
-    const providerSettings = tree.root.findAllByType('ProviderSettings' as any);
-    expect(providerSettings).toHaveLength(1);
+    const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+    const recognitionLanguage = tree.root.findAllByType(DropdownMenu).filter(node =>
+      Array.isArray(node.props.items) && node.props.items.some((item: { id: string }) => item.id === '__custom__'));
+    expect(recognitionLanguage).toHaveLength(1);
+    const languageTriggers = recognitionLanguage[0]!.findAll((node) => node.type === 'Pressable'
+      && node.props.accessibilityState?.expanded === false);
+    expect(languageTriggers).toHaveLength(1);
     await act(async () => {
-      providerSettings[0]!.props.setStt({
-        ...providerSettings[0]!.props.cfgStt,
-        provider: 'happier.voice.openai-compat/stt',
-      });
+      languageTriggers[0]!.props.onPress();
     });
-    expect(readLocalDirectVoiceSettings(setVoice.mock.calls[0]![0]).stt.provider)
-      .toBe('happier.voice.openai-compat/stt');
+    await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
+    expect(tree.root.findByType(Popover).props.open).toBe(true);
+    expect(measureInWindow).toHaveBeenCalled();
+    const portalHost = tree.root.findByType(OverlayPortalHost);
+    const frenchChoice = portalHost.findAll((node) => node.type === 'Pressable' && node.props.testID === 'dropdown-option-fr'
+      && typeof node.props.onPress === 'function')[0];
+    if (!frenchChoice) throw new Error('Missing French choice in native portal');
+    await act(async () => {
+      frenchChoice.props.onPress();
+    });
+    await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
+    expect(tree.root.findAllByType(Popover)).toHaveLength(0);
+    await vi.waitFor(() => expect(setVoice).toHaveBeenCalledOnce());
+    expect(readLocalDirectVoiceSettings(setVoice.mock.calls[0]![0]).stt.localNeural.language).toBe('fr');
     expect(readLocalConversationVoiceSettings(setVoice.mock.calls[0]![0]).stt.provider)
       .toBe('happier.voice.openai-compat/stt');
+    expect(readLocalConversationVoiceSettings(setVoice.mock.calls[0]![0])).toEqual(readLocalConversationVoiceSettings(dictationVoice));
   });
 
   it('renders only the explicitly selected provider details and checks readiness passively', async () => {
@@ -359,12 +354,22 @@ describe('DictationSettingsSection', () => {
         executionMachineId={null}
         localAvailability={localAvailability}
       />);
+      registerStandardCleanupTarget(tree);
     });
 
-    const providerSettings = tree.root.findAllByType('ProviderSettings' as any);
+    expect(findRenderedItem(tree, 'settings.voice.dictation.engine.device').props.selected).toBe(true);
+    const { getLocalSttProviderSpec } = await import('@/voice/settings/panels/localStt/providers/registry');
+    const device = getLocalSttProviderSpec('device');
+    const neural = getLocalSttProviderSpec('local_neural');
+    if (!device || !neural) throw new Error('expected built-in speech engines');
+    const providerSettings = tree.root.findAllByType(device.Settings);
     expect(providerSettings).toHaveLength(1);
     expect(providerSettings[0]?.props.voice).toBe(voice);
     expect(providerSettings[0]?.props.setVoice).toBe(setVoice);
+    expect(tree.root.findAllByType(neural.Settings)).toHaveLength(0);
+    // Device speech has no engine fields; unselected neural/endpoint detail is absent.
+    expect(tree.root.findAll(node => node.props.fieldTestID === 'settings.voice.localNeuralStt.language.custom.field'
+      || (typeof node.props.testID === 'string' && node.props.testID.startsWith('voice-speech-setting:')))).toHaveLength(0);
     await act(async () => {
     });
     expect(dictationCardReadiness(tree)?.status).toBe('ready');
@@ -390,6 +395,7 @@ describe('DictationSettingsSection', () => {
         executionMachineId={null}
         localAvailability={localAvailability}
       />);
+      registerStandardCleanupTarget(tree);
     });
     const needs = (id: string) => tree.root.findAll((node) => typeof node.type === 'string'
       && node.props.testID === `settings.voice.dictation.engine.${encodeURIComponent(id)}.needs`);
@@ -397,7 +403,12 @@ describe('DictationSettingsSection', () => {
     expect(needs('happier.voice.openai-compat/stt')).toHaveLength(1);
     const needsText = needs('happier.voice.openai-compat/stt')[0]!
       .findAll((node) => typeof node.props.children === 'string').map((node) => node.props.children).join(' ');
-    expect(needsText).toContain('voice.readiness.');
+    const { t } = await import('@/text');
+    const { getLocalSttProviderSpec } = await import('@/voice/settings/panels/localStt/providers/registry');
+    const endpoint = getLocalSttProviderSpec('happier.voice.openai-compat/stt');
+    if (!endpoint) throw new Error('expected OpenAI-compatible speech engine');
+    expect(needsText).toContain(t('voice.readiness.settings_missing_required_setting', { service: endpoint.title }));
+    expect(needsText).not.toContain('voice.readiness.');
     expect(needs('device')).toHaveLength(0);
   });
 
@@ -432,15 +443,27 @@ describe('DictationSettingsSection', () => {
         },
       },
     });
-    let settleModelReadiness!: (value: 'ready') => void;
-    const pendingModelReadiness = new Promise<'ready'>((resolve) => {
-      settleModelReadiness = resolve;
+    dictationFs = createMemFs();
+    const bytes = new Uint8Array([1]);
+    const manifest = { packId: 'selected-direct-pack', kind: 'stt_sherpa', model: 'zipformer', version: 'v1',
+      files: [{ path: 'model.onnx', url: 'https://example.com/model.onnx', sizeBytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex') }] };
+    const fetchImpl: typeof fetch = async input => new URL(String(input)).pathname.endsWith('manifest.json')
+      ? Response.json(manifest) : new Response(bytes);
+    const { ensureModelPackInstalled } = await import('@/voice/modelPacks/installer.native');
+    await ensureModelPackInstalled({ packId: manifest.packId, mode: 'download_if_missing',
+      manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: new AbortController().signal },
+      { fs: dictationFs.fs, fetch: fetchImpl, download: createMemNativeDownload(dictationFs.fs, fetchImpl) });
+    let settleModelReadiness!: () => void;
+    const pendingModelReadiness = new Promise<void>(resolve => { settleModelReadiness = resolve; });
+    const readMetadata = dictationFs.fs.File.prototype.text;
+    const metadataReads: string[] = [];
+    const readBoundary = vi.spyOn(dictationFs.fs.File.prototype, 'text').mockImplementation(async function (this: { uri: string }) {
+      metadataReads.push(this.uri);
+      await pendingModelReadiness;
+      return readMetadata.call(this);
     });
-    nativeModelReadiness.read.mockReset();
-    nativeModelReadiness.read.mockReturnValue(pendingModelReadiness);
-    onTestFinished(() => {
-      nativeModelReadiness.read.mockReset();
-    });
+    onTestFinished(() => { readBoundary.mockRestore(); });
     const setVoice = vi.fn();
     let tree!: ReturnType<typeof create>;
     await act(async () => {
@@ -456,12 +479,12 @@ describe('DictationSettingsSection', () => {
         executionMachineId={null}
         localAvailability={localAvailability}
       />);
+      registerStandardCleanupTarget(tree);
     });
 
     // Always-on card readiness: opening the page runs the passive check; there is no "Check setup" row.
     expect(tree.root.findAll((node) => node.props.testID === 'settings.voice.dictation.checkSetup')).toHaveLength(0);
-    expect(nativeModelReadiness.read).toHaveBeenCalledTimes(1);
-    expect(nativeModelReadiness.read).toHaveBeenCalledWith('selected-direct-pack');
+    expect(metadataReads).toEqual(['file:///docs/happier/voice/modelPacks/selected-direct-pack/pack.json']);
     // A re-render while it is pending shares the check in flight.
     await act(async () => {
       tree.update(<DictationSettingsSection
@@ -471,10 +494,10 @@ describe('DictationSettingsSection', () => {
         localAvailability={localAvailability}
       />);
     });
-    expect(nativeModelReadiness.read).toHaveBeenCalledTimes(1);
+    expect(metadataReads).toEqual(['file:///docs/happier/voice/modelPacks/selected-direct-pack/pack.json']);
 
     await act(async () => {
-      settleModelReadiness('ready');
+      settleModelReadiness();
       await Promise.resolve();
     });
 
@@ -516,6 +539,7 @@ describe('DictationSettingsSection', () => {
         }}
         onRecoveryAction={onRecoveryAction}
       />);
+      registerStandardCleanupTarget(tree);
     });
 
     await act(async () => {
@@ -581,6 +605,7 @@ describe('DictationSettingsSection', () => {
         onRecoveryAction={onRecoveryAction}
       />, { createNodeMock: (node) => node.props.testID === 'settings.voice.dictation.engine.device'
         ? { focus: providerFocus } : null });
+      registerStandardCleanupTarget(tree);
     });
     await act(async () => {
     });
@@ -632,6 +657,7 @@ describe('DictationSettingsSection', () => {
           },
         }}
       />);
+      registerStandardCleanupTarget(tree);
     });
 
     await act(async () => {
@@ -723,6 +749,7 @@ describe('DictationSettingsSection', () => {
     let tree!: ReturnType<typeof create>;
     await act(async () => {
       tree = create(render(account.settings.voice));
+      registerStandardCleanupTarget(tree);
     });
     await act(async () => {
     });

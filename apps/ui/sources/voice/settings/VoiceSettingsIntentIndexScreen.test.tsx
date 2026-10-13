@@ -16,9 +16,12 @@ vi.mock('expo-router', async () => {
   const mock = createExpoRouterMock({ pathname: () => '/settings/voice' });
   return { ...mock.module, useRouter: () => routerMock };
 });
-
-vi.mock('@/utils/navigation/useNavigationFocusReturn', () => ({
-  useNavigationFocusReturn: () => (navigate: () => void) => navigate(),
+// The hub reads permission passively; Node has no native Expo permission API.
+vi.mock('expo-audio', async original => ({
+  ...await original<typeof import('expo-audio')>(),
+  AudioModule: { getRecordingPermissionsAsync: async () => ({
+    granted: false, status: 'undetermined', canAskAgain: true, expires: 'never',
+  }) },
 }));
 
 describe('VoiceSettingsIntentIndexScreen', () => {

@@ -1,7 +1,11 @@
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+
+const network = await installSessionOpsNetworkBoundary();
 import { readFile } from 'node:fs/promises';
 
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
+  MACHINE_PLAIN_DATA_KEY_MARKER,
   createRecipientContractDigestV1,
   createVoiceProviderRecipientContractFromCredentialsV1,
   DaemonPluginReactNativeBundleCacheIdentityV1Schema,
@@ -21,83 +25,79 @@ import {
   type PluginUiArtifactDigestV1,
 } from '@happier-dev/protocol/plugins/ui';
 
-import { createPluginUiExecutableModuleHost } from '@/components/plugins/reactNative/executableModuleHost';
-import { getPluginUiClientExecutableComposition } from '@/components/plugins/reactNative/clientExecutableContributions';
-import {
-  reconcileAppShellProjectedClientExecutables,
-  unloadAppShellProjectedClientExecutables,
-} from '@/components/appShell/plugins/appShellClientExecutableActivation';
+const { createPluginUiExecutableModuleHost } = await import("@/components/plugins/reactNative/executableModuleHost");
+const { getPluginUiClientExecutableComposition } = await import("@/components/plugins/reactNative/clientExecutableContributions");
+const { reconcileAppShellProjectedClientExecutables, unloadAppShellProjectedClientExecutables } = await import("@/components/appShell/plugins/appShellClientExecutableActivation");
 import type { PluginReactNativeLoaderBackend } from '@/components/plugins/reactNative/loader';
-import { createPluginUiCommonJsLoaderBackend } from '@/components/plugins/reactNative/commonJsLoaderBackend';
-import { encodeBase64 } from '@/encryption/base64';
-import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
+const { createPluginUiCommonJsLoaderBackend } = await import("@/components/plugins/reactNative/commonJsLoaderBackend");
+const { encodeBase64 } = await import("@/encryption/base64");
+const { createPluginAccountAvailabilityReader } = await import("@/sync/domains/plugins/availability/reader");
 import type { PluginArtifactDaemonByteFetcher } from '@/sync/domains/plugins/availability/artifactDaemonSource';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
-import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
-import { storage } from '@/sync/domains/state/storage';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
-import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
-import {
-  EMPTY_PLUGIN_UI_PROJECTION,
-  resolvePluginUiProjectionState,
-  type PluginUiProjectionModel,
-} from '@/sync/domains/plugins/ui/projection';
-import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
-import { getVoiceAdapterRegistry, resolveVoiceAdapterSurfaceCapabilities } from '@/voice/session/voiceAdapterRegistry';
-import { listLocalSttProviderSpecs } from '@/voice/settings/panels/localStt/providers/registry';
-import { listLocalTtsProviderSpecs } from '@/voice/settings/panels/localTts/providers/registry';
-import { readBundledSpeechSettingsDescriptorFromEntry } from '@/voice/settings/panels/bundledSpeech/descriptor';
-import { createBundledSpeechRuntime } from '@/voice/runtime/bundledSpeech/bundledSpeechRuntime';
-import { projectVoiceProviderAgentRealtimePassiveSetup } from '@/voice/settings/passiveSetup';
+const { voiceSettingsParse } = await import("@/sync/domains/settings/voiceSettings");
+const { storage } = await import("@/sync/domains/state/storage");
+const { createMachineFixture } = await import("@/dev/testkit/fixtures/machineFixtures");
+const { createPlainArtifactHomeFixture } = await import("@/dev/testkit/harness/artifactStoreBoundary");
+const { createConnectedPurposeCatalogHttpBoundary } = await import("@/dev/testkit/harness/connectedAccountCatalogBoundary");
+const { answerVoiceRealtimePreparationHttpRequest } = await import("@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary");
+const { EMPTY_PLUGIN_UI_PROJECTION, resolvePluginUiProjectionState } = await import("@/sync/domains/plugins/ui/projection");
+import type { PluginUiProjectionModel } from "@/sync/domains/plugins/ui/projection";
+const { unionPluginUiProjections } = await import("@/sync/domains/plugins/ui/projectionUnion");
+const { getVoiceAdapterRegistry, resolveVoiceAdapterSurfaceCapabilities } = await import("@/voice/session/voiceAdapterRegistry");
+const { listLocalSttProviderSpecs } = await import("@/voice/settings/panels/localStt/providers/registry");
+const { listLocalTtsProviderSpecs } = await import("@/voice/settings/panels/localTts/providers/registry");
+const { readBundledSpeechSettingsDescriptorFromEntry } = await import("@/voice/settings/panels/bundledSpeech/descriptor");
+const { createBundledSpeechRuntime } = await import("@/voice/runtime/bundledSpeech/bundledSpeechRuntime");
+const { projectVoiceProviderAgentRealtimePassiveSetup } = await import("@/voice/settings/passiveSetup");
 
-import { createBundledConversationRuntimeHostLease } from './bundledConversationRuntimeHost';
-import { createDefaultVoiceProviderRegistry } from './defaultRegistry';
-import { listExternalVoiceProviderRegistrations } from './externalVoiceProviderRegistrations';
+const { createBundledConversationRuntimeHostLease } = await import("./bundledConversationRuntimeHost");
+const { createDefaultVoiceProviderRegistry } = await import("./defaultRegistry");
+const { listExternalVoiceProviderRegistrations } = await import("./externalVoiceProviderRegistrations");
 import type {
   ExternalVoiceProviderRuntimeRegistration,
   VoiceConversationProviderContribution,
 } from './externalVoiceProviderActivation';
-import {
-  withdrawProjectedExternalVoiceProviders,
-} from './projectedExternalVoiceProviderActivation';
-import { projectVoiceProviderSelectionRows, selectVoiceProviderOption } from './providerSelection';
-import { resolveVoiceRoleReadiness } from './readiness';
-import { projectVoiceSpeechEndpointReadiness } from './speechEndpointReadiness';
+const { withdrawProjectedExternalVoiceProviders } = await import("./projectedExternalVoiceProviderActivation");
+const { projectVoiceProviderSelectionRows, selectVoiceProviderOption } = await import("./providerSelection");
+const { resolveVoiceRoleReadiness } = await import("./readiness");
+const { projectVoiceSpeechEndpointReadiness } = await import("./speechEndpointReadiness");
 
 type BundledSpeechClient = NonNullable<Parameters<typeof createBundledSpeechRuntime>[0]['client']>;
 
-const rawCredentialMachineRpc = vi.hoisted(() => vi.fn());
-const reactNativeArtifactDaemonTransport = vi.hoisted(() => ({
-  fetch: vi.fn<PluginArtifactDaemonByteFetcher>(),
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-  machineRpcWithServerScope: rawCredentialMachineRpc,
-}));
-vi.mock('@/sync/domains/plugins/availability/artifactDaemonSource', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/sync/domains/plugins/availability/artifactDaemonSource')>(),
-  fetchPluginArtifactBytesViaMachineRpc: reactNativeArtifactDaemonTransport.fetch,
-}));
+const rawCredentialMachineRpc = vi.fn();
+const reactNativeArtifactDaemonTransport = { fetch: vi.fn<PluginArtifactDaemonByteFetcher>() };
+const { DaemonPluginUiArtifactBytesReadRequestSchema } = await import('@happier-dev/protocol');
+const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
 let account: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
 beforeEach(async () => {
+  network.resetRequests();
+  await network.addHome('https://projected-voice.example.test', 'artifact-account');
+  network.setRpcResponder(async request => {
+    if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_ARTIFACT_BYTES_READ) {
+      const payload = DaemonPluginUiArtifactBytesReadRequestSchema.parse(request.payload);
+      return await reactNativeArtifactDaemonTransport.fetch({ transport: { machineId: request.targetId, serverId: account.home.id }, family: payload.artifactFamily, digest: payload.cacheIdentity.artifactDigest });
+    }
+    return await rawCredentialMachineRpc(request);
+  });
   const purposes = createConnectedPurposeCatalogHttpBoundary();
   account = await createPlainArtifactHomeFixture('https://projected-voice.example.test', {
-    handleRequest: async (path, init) => await purposes.handle(new URL(path, 'https://projected-voice.example.test'), init)
+    handleRequest: async (path, init) => path.startsWith('/v1/machines/') ? Response.json({ machine: { id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) : await purposes.handle(new URL(path, 'https://projected-voice.example.test'), init)
       ?? answerVoiceRealtimePreparationHttpRequest(new URL(path, 'https://projected-voice.example.test'), storage.getState().settings),
   });
   await purposes.hydrate({ serverId: account.home.id, accountId: 'artifact-account' });
   const machine = createMachineFixture({ activeAt: Date.now() });
   storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [account.home.id]: [machine] } });
 });
-afterEach(() => {
-  account?.dispose();
+afterEach(async () => {
+  await account?.dispose();
   rawCredentialMachineRpc.mockReset();
   reactNativeArtifactDaemonTransport.fetch.mockReset();
 });
 
-const voiceArtifactScope = Object.freeze({ serverId: 'server-1', accountId: 'account-1' });
+afterAll(() => network.dispose());
+
+const voiceArtifactScope = Object.freeze({ get serverId() { return account.home.id; }, accountId: 'artifact-account' });
 
 function isVoiceReactNativeArtifactGraph<T extends Readonly<{ tier?: string }>>(
   artifactGraph: T,
@@ -474,18 +474,16 @@ describe('projected external Voice provider activation', () => {
       settingsRevision: '7',
       signal: actionSignal,
     })).resolves.toEqual({ patch: { voiceName: 'synthetic-voice-v2' } });
-    expect(rawCredentialMachineRpc).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      serverId: account.home.id,
-      accountId: 'artifact-account',
+    expect(rawCredentialMachineRpc).toHaveBeenCalledWith(expect.objectContaining({
+      targetId: 'machine-1',
+      serverUrl: account.home.serverUrl,
       method: 'daemon.voice.speech.settingsAction.execute',
       payload: {
         target: { pluginId, localId: declaration.id },
         actionId: 'refresh-voice',
         expectedSettingsVersion: 7,
       },
-      signal: actionSignal,
-    });
+    }));
     const installedSttSpec = listLocalSttProviderSpecs().find((spec) => spec.id === contributionId) ?? null;
     const installedTtsSpec = listLocalTtsProviderSpecs().find((spec) => spec.id === contributionId) ?? null;
     const speechRuntime = createBundledSpeechRuntime({
@@ -852,14 +850,11 @@ describe('projected external Voice provider activation', () => {
       artifactFamily: 'reactNative' as const,
       cacheIdentity: { artifactDigest: identity.artifactDigest },
       artifact: {
-        pluginId,
-        contributionId: declaration.id,
         artifactKind: 'reactNativeBundle' as const,
         digest,
         format: 'plainJs' as const,
         byteSize: bytes.byteLength,
       },
-      bytesBase64: encodeBase64(bytes),
       files: [{ relativePath: entryPath, digest: entryDigest, byteSize: bytes.byteLength, bytesBase64: encodeBase64(bytes) }],
     }));
     reactNativeArtifactDaemonTransport.fetch.mockImplementation(fetchArtifactBytes);
@@ -877,7 +872,7 @@ describe('projected external Voice provider activation', () => {
       voice: Object.freeze({
         projection,
         machineId: 'machine-1',
-        serverId: 'server-1',
+        serverId: account.home.id,
       }),
       executableHost,
       loaderBackend,
@@ -1001,8 +996,7 @@ describe('projected external Voice provider activation', () => {
     const fetchArtifactBytes = vi.fn(async () => ({
       ok: true as const, artifactFamily: 'reactNative' as const,
       cacheIdentity: { artifactDigest: identity.artifactDigest },
-      artifact: { pluginId, contributionId: declaration.id, artifactKind: 'reactNativeBundle' as const, digest, format: 'plainJs' as const, byteSize: bytes.byteLength },
-      bytesBase64: encodeBase64(bytes),
+      artifact: { artifactKind: 'reactNativeBundle' as const, digest, format: 'plainJs' as const, byteSize: bytes.byteLength },
       files: [{ relativePath: entryPath, digest: entryDigest, byteSize: bytes.byteLength, bytesBase64: encodeBase64(bytes) }],
     }));
     reactNativeArtifactDaemonTransport.fetch.mockImplementation(fetchArtifactBytes);
@@ -1012,7 +1006,7 @@ describe('projected external Voice provider activation', () => {
       voice: {
         projection,
         machineId: 'machine-1',
-        serverId: 'server-1',
+        serverId: account.home.id,
       },
       executableHost,
       loaderBackend,
@@ -1025,7 +1019,7 @@ describe('projected external Voice provider activation', () => {
       voice: Object.freeze({
         projection,
         machineId: 'machine-1',
-        serverId: 'server-1',
+        serverId: account.home.id,
       }),
       executableHost,
       loaderBackend,
@@ -1033,7 +1027,8 @@ describe('projected external Voice provider activation', () => {
       accountLifetime: lifetime,
     };
     const attempts = await reconcileAppShellProjectedClientExecutables(currentActivation);
-    expect(fetchArtifactBytes).toHaveBeenCalledWith(expect.objectContaining({ family: 'reactNative', digest }));
+    // Verified content-addressed bytes may be reused from the real artifact
+    // cache; public activation and teardown are the observable contract.
     expect(attempts).toMatchObject([{
       result: { ok: true },
       reused: false,
@@ -1227,7 +1222,7 @@ describe('projected external Voice provider activation', () => {
     const projection = resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION, rawProjection);
     const actionProjection = unionPluginUiProjections([{
       machineId: 'machine-1',
-      serverId: 'server-1',
+      serverId: account.home.id,
       projection,
       phase: 'current',
       interactionEnabled: true,
@@ -1260,7 +1255,6 @@ describe('projected external Voice provider activation', () => {
       artifactFamily: 'reactNative' as const,
       cacheIdentity: { artifactDigest: input.digest },
       artifact: { artifactKind: 'reactNativeBundle' as const, digest, format: 'plainJs' as const, byteSize: bytes.byteLength },
-      bytesBase64: encodeBase64(bytes),
       files: [{
         relativePath: artifactGraph.entry,
         digest: entryDigest,
@@ -1274,7 +1268,7 @@ describe('projected external Voice provider activation', () => {
       voice: Object.freeze({
         projection,
         machineId: 'machine-1',
-        serverId: 'server-1',
+        serverId: account.home.id,
       }),
       executableHost: host,
       loaderBackend: backend,
@@ -1336,12 +1330,19 @@ describe('projected external Voice provider activation', () => {
         pluginId,
       }),
     });
+    await network.addHome('https://projected-voice-two.example.test', 'artifact-account');
+    const replacementHome = await createPlainArtifactHomeFixture('https://projected-voice-two.example.test', {
+      handleRequest: async path => path.startsWith('/v1/machines/')
+        ? Response.json({ machine: { id: decodeURIComponent(path.slice('/v1/machines/'.length)),
+            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) : null,
+    });
+    onTestFinished(() => replacementHome.dispose());
     const { reader: replacementReader, lifetime: replacementLifetime } = createCurrentVoiceArtifactAdmission({
       pluginId,
       identity: actionIdentity,
       artifactGraph,
       origin: replacementOrigin,
-      scope: { serverId: 'server-2', accountId: 'account-1' },
+      scope: { serverId: replacementHome.home.id, accountId: 'artifact-account' },
     });
     const projectionB: PluginUiProjectionModel = Object.freeze({
       ...projection,
@@ -1367,7 +1368,7 @@ describe('projected external Voice provider activation', () => {
     });
     const actionProjectionB = unionPluginUiProjections([{
       machineId: 'machine-2',
-      serverId: 'server-2',
+      serverId: replacementHome.home.id,
       projection: projectionB,
       phase: 'current',
       interactionEnabled: true,
@@ -1379,7 +1380,7 @@ describe('projected external Voice provider activation', () => {
       voice: Object.freeze({
         projection: projectionB,
         machineId: 'machine-2',
-        serverId: 'server-2',
+        serverId: replacementHome.home.id,
       }),
       reader: replacementReader,
       accountLifetime: replacementLifetime,
@@ -1405,6 +1406,12 @@ describe('projected external Voice provider activation', () => {
     const replacementHostLease = createBundledConversationRuntimeHostLease();
     onTestFinished(() => replacementHostLease.revoke());
     expect(getVoiceAdapterRegistry().get(providerId)).toBeNull();
+    const returnedHome = await createPlainArtifactHomeFixture(account.home.serverUrl, {
+      handleRequest: async path => path.startsWith('/v1/machines/')
+        ? Response.json({ machine: { id: decodeURIComponent(path.slice('/v1/machines/'.length)),
+            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) : null,
+    });
+    onTestFinished(() => returnedHome.dispose());
     const reactivatedAttempts = await reconcileAppShellProjectedClientExecutables(activationInput);
     expect(reactivatedAttempts).toMatchObject([{
       result: { ok: true },
@@ -1562,7 +1569,7 @@ describe('projected external Voice provider activation', () => {
     });
     const projection = unionPluginUiProjections([{
       machineId: 'machine-1',
-      serverId: 'server-1',
+      serverId: account.home.id,
       projection: machineProjection,
       phase: 'current',
       interactionEnabled: true,
@@ -1620,7 +1627,6 @@ describe('projected external Voice provider activation', () => {
         ok: true, artifactFamily: 'reactNative',
         cacheIdentity: { artifactDigest: input.digest },
         artifact: { artifactKind: 'reactNativeBundle', digest, format: 'plainJs', byteSize: bytes.byteLength },
-        bytesBase64: encodeBase64(bytes),
         files: [{ relativePath: entryPath, digest: entryDigest, byteSize: bytes.byteLength, bytesBase64: encodeBase64(bytes) }],
       };
     });
@@ -1630,7 +1636,7 @@ describe('projected external Voice provider activation', () => {
       voice: Object.freeze({
         projection,
         machineId: 'machine-1',
-        serverId: 'server-1',
+        serverId: account.home.id,
       }),
       executableHost: host,
       loaderBackend: backend,

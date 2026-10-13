@@ -1,12 +1,18 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { JSDOM } from 'jsdom';
 
 import {
   createDeferred,
-  renderScreen,
+  renderScreen as renderHistoryScreen,
+  standardCleanup,
 } from '@/dev/testkit';
 import type { Message } from "@happier-dev/session-core/messages";
+import { buildRealtimeConversationTurnMeta } from '@/voice/transcript/VoiceTranscriptProjector';
+import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
+import { resolveVoiceHistoryProviderLabel } from './defaultVoiceHistoryConsumer';
+import { tLoose } from '@/text';
 
 import {
   createVoiceHistoryConsumer,
@@ -21,25 +27,29 @@ import {
 } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 import { planSessionTranscriptEviction } from '@/sync/engine/sessions/sessionTranscriptRetention';
 
-const { legendListMock, modalMock } = await vi.hoisted(async () => {
+const { legendListMock } = await vi.hoisted(async () => {
   const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
   return {
     legendListMock: createCapturingLegendListMock({ renderItems: true }),
-    modalMock: createModalModuleMock({ confirmResult: true }),
   };
 });
 
-// The canonical list testkit supplies the virtualized list boundary. Mocking
-// the app abstraction keeps Vitest from parsing Legend's native distribution.
-vi.mock('@/components/ui/lists/virtualized', () => ({
-  VirtualizedList: legendListMock.module.LegendList,
+// Exercise the web dialog at the React Native SDK boundary; Happier's modal
+// manager, provider, dialog and translation owners remain real.
+vi.mock('react-native', async () => (
+  await import('@/dev/testkit/mocks/reactNative')
+).createReactNativeWebMock());
+
+// Keep Happier's backend selection and prop normalization real; only the
+// third-party list renderer is replaced at the native library boundary.
+vi.mock('@legendapp/list/react-native', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@legendapp/list/react-native')>(),
+  ...legendListMock.module,
 }));
 vi.mock('@expo/vector-icons', async () => {
   const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
   return createExpoVectorIconsMock();
 });
-vi.mock('@/modal', () => modalMock.module);
 // The History page is a settings page: its header reads the current route.
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await vi.importActual<typeof import('@/dev/testkit/mocks/router')>(
@@ -56,6 +66,31 @@ const XAI_SOURCE = Object.freeze({
   pluginId: 'happier.voice.xai',
   contributionId: 'realtime-grok',
 });
+const providerRegistry = createDefaultVoiceProviderRegistry();
+const readProviderLabel = (source: VoiceHistoryProviderSource | null) =>
+  resolveVoiceHistoryProviderLabel(providerRegistry, source, tLoose) ?? source?.contributionId ?? 'Voice provider';
+
+async function renderScreen(...args: Parameters<typeof renderHistoryScreen>) {
+  const { ModalProvider } = await import('@/modal');
+  return await renderHistoryScreen(args[0], {
+    ...args[1],
+    wrapper: ({ children }) => <ModalProvider>{children}</ModalProvider>,
+  });
+}
+
+async function answerClearDialog(screen: Awaited<ReturnType<typeof renderScreen>>, confirm = true) {
+  const { WebAlertModal } = await import('@/modal/components/WebAlertModal');
+  await act(async () => {
+    screen.pressByTestId('voice-history-clear');
+    await Promise.resolve();
+  });
+  expect(screen.findByType(WebAlertModal).props.config)
+    .toMatchObject({ type: 'confirm', destructive: true });
+  expect(screen.findHostByTestId('web-modal-confirm')).not.toBeNull();
+  await screen.pressByTestIdAsync(confirm ? 'web-modal-confirm' : 'web-modal-cancel');
+  await flushAsyncState();
+  await vi.waitFor(() => expect(screen.findAllByType(WebAlertModal)).toHaveLength(0));
+}
 
 function voiceMessage(input: Readonly<{
   id: string;
@@ -69,18 +104,7 @@ function voiceMessage(input: Readonly<{
     localId: null,
     createdAt: input.createdAt,
     text: input.text,
-    meta: {
-      happier: {
-        kind: 'conversation_turn.v1' as const,
-        payload: { v: 1 },
-        conversationTurnOriginV1: {
-          v: 1 as const,
-          channel: 'realtime_conversation' as const,
-          modality: 'voice' as const,
-          source: input.source,
-        },
-      },
-    },
+    meta: buildRealtimeConversationTurnMeta(input.source),
   };
   return input.role === 'user'
     ? { ...common, kind: 'user-text' }
@@ -104,9 +128,7 @@ function createDeps(
     readMessages: () => messages,
     readMessagesRevision: () => 0,
     subscribeHistorySources: () => () => {},
-    resolveProviderLabel: (source) => (
-      source?.pluginId === XAI_SOURCE.pluginId ? 'Grok Realtime' : 'OpenAI Realtime'
-    ),
+    resolveProviderLabel: readProviderLabel,
     deleteSession: vi.fn(async () => ({ success: true })),
     retireLocalSession: vi.fn(),
     runCarrierOperation: async (operation) => await operation(),
@@ -123,12 +145,26 @@ async function flushAsyncState(): Promise<void> {
 }
 
 describe('VoiceHistoryScreen', () => {
-  beforeEach(() => {
+  let dom: JSDOM;
+  beforeEach(async () => {
+    dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://history.test' });
+    for (const key of ['window', 'document', 'HTMLElement', 'Node', 'CustomEvent', 'MutationObserver'] as const) {
+      vi.stubGlobal(key, key === 'window' ? dom.window : dom.window[key]);
+    }
+    const { requireReactDOM } = await import('@/utils/web/reactDomCjs');
+    const reactDom: typeof import('react-dom') = requireReactDOM();
+    // React Test Renderer cannot paint a React DOM portal. Only that third-party
+    // renderer boundary is adapted; the actual dialog and Radix SDK remain live.
+    vi.spyOn(reactDom, 'createPortal').mockImplementation(children =>
+      React.createElement(React.Fragment, null, children) as unknown as React.ReactPortal);
     clearMountedSessionRealtimeTranscriptConsumers();
     legendListMock.state.reset();
-    modalMock.spies.confirm.mockClear();
-    modalMock.spies.confirm.mockResolvedValue(true);
-    modalMock.spies.alert.mockClear();
+  });
+  afterEach(() => {
+    standardCleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    dom?.window.close();
   });
 
   it('routes and retains the discovered carrier only while History is mounted', async () => {
@@ -191,9 +227,7 @@ describe('VoiceHistoryScreen', () => {
       }));
       return { loaded: 1, hasMore: false, status: 'no_more' as const };
     });
-    const resolveProviderLabel = vi.fn((source: VoiceHistoryProviderSource | null) => (
-      source?.pluginId === XAI_SOURCE.pluginId ? 'Grok Realtime' : 'OpenAI Realtime'
-    ));
+    const resolveProviderLabel = vi.fn(readProviderLabel);
     const consumer = createVoiceHistoryConsumer(createDeps(messages, {
       discoverHistorySession: async () => await discovery.promise,
       loadOlderMessages,
@@ -215,12 +249,12 @@ describe('VoiceHistoryScreen', () => {
     expect(initialText.indexOf('A question about releases')).toBeLessThan(
       initialText.indexOf('A newer response'),
     );
-    expect(initialText).toContain('OpenAI Realtime');
-    expect(initialText).toContain('Grok Realtime');
+    expect(initialText).toContain(readProviderLabel(OPENAI_SOURCE));
+    expect(initialText).toContain(readProviderLabel(XAI_SOURCE));
     const newerRow = screen.findByTestId('voice-history-row-newer');
     expect(newerRow?.props.accessible).toBe(true);
     expect(newerRow?.props.accessibilityRole).toBe('text');
-    expect(newerRow?.props.accessibilityLabel).toContain('Grok Realtime');
+    expect(newerRow?.props.accessibilityLabel).toContain(readProviderLabel(XAI_SOURCE));
     expect(newerRow?.props.accessibilityLabel).toContain('A newer response');
     expect(screen.findByTestId('voice-history-search')?.props.accessibilityLabel)
       .toBe('Search voice history');
@@ -466,7 +500,7 @@ describe('VoiceHistoryScreen', () => {
       await Promise.resolve();
     });
     expect(saveExportArtifact).not.toHaveBeenCalled();
-    expect(modalMock.spies.confirm).not.toHaveBeenCalled();
+    expect(screen.findHostByTestId('web-modal-confirm')).toBeNull();
     expect(deleteSession).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -478,8 +512,6 @@ describe('VoiceHistoryScreen', () => {
     expect(screen.findByTestId('voice-history-export')?.props.disabled).toBe(false);
     expect(screen.findByTestId('voice-history-clear')?.props.disabled).toBe(false);
 
-    const confirmation = createDeferred<boolean>();
-    modalMock.spies.confirm.mockImplementationOnce(async () => await confirmation.promise);
     await act(async () => {
       screen.pressByTestId('voice-history-clear');
       await Promise.resolve();
@@ -487,17 +519,15 @@ describe('VoiceHistoryScreen', () => {
 
     expect(screen.findByTestId('voice-history-export')?.props.disabled).toBe(true);
     expect(screen.findByTestId('voice-history-clear')?.props.disabled).toBe(true);
+    expect(screen.findHostByTestId('web-modal-confirm')).not.toBeNull();
     await act(async () => {
       screen.pressByTestId('voice-history-export');
       await Promise.resolve();
     });
     expect(saveExportArtifact).not.toHaveBeenCalled();
 
-    await act(async () => {
-      confirmation.resolve(false);
-      await confirmation.promise;
-      await Promise.resolve();
-    });
+    await screen.pressByTestIdAsync('web-modal-cancel');
+    await flushAsyncState();
     expect(screen.findByTestId('voice-history-export')?.props.disabled).toBe(false);
     expect(screen.findByTestId('voice-history-clear')?.props.disabled).toBe(false);
     expect(deleteSession).not.toHaveBeenCalled();
@@ -532,18 +562,11 @@ describe('VoiceHistoryScreen', () => {
       rowCount: 1,
     }));
 
-    modalMock.spies.confirm.mockResolvedValueOnce(false);
-    await screen.pressByTestIdAsync('voice-history-clear');
+    await answerClearDialog(screen, false);
     expect(deleteSession).not.toHaveBeenCalled();
     expect(screen.findByTestId('voice-history-export')).not.toBeNull();
 
-    modalMock.spies.confirm.mockResolvedValueOnce(true);
-    await screen.pressByTestIdAsync('voice-history-clear');
-    expect(modalMock.spies.confirm).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(String),
-      expect.objectContaining({ destructive: true }),
-    );
+    await answerClearDialog(screen);
     expect(deleteSession).toHaveBeenCalledWith(
       'voice-history-session',
       { key: 'server-a/account-a' },
@@ -587,7 +610,7 @@ describe('VoiceHistoryScreen', () => {
     await act(async () => {
       screen.changeTextByTestId('voice-history-search', 'filtered');
     });
-    await screen.pressByTestIdAsync('voice-history-clear');
+    await answerClearDialog(screen);
 
     expect(consumer.clear).toHaveBeenCalledTimes(1);
     expect(screen.findByTestId('voice-history-search')?.props.value).toBe('filtered');
@@ -616,7 +639,7 @@ describe('VoiceHistoryScreen', () => {
       <VoiceHistoryScreen consumer={consumer} saveExportArtifact={vi.fn()} />,
     );
 
-    await screen.pressByTestIdAsync('voice-history-clear');
+    await answerClearDialog(screen);
 
     expect(screen.findByTestId('voice-history-action-message')?.props.children)
       .toBe('Voice history was cleared.');

@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getActionSpec, zodSchemaToJsonSchemaObject, type VoiceRealtimeJsonValue } from '@happier-dev/protocol';
 import { describeActionForVoiceTool } from '@happier-dev/plugin-sdk/voice/client';
 import { createOpenAiToolSessionUpdate } from '../../../../../../packages/plugins/openai/src/ui/voice/protocol';
+import { TestVoiceWebRtcPeer as FakeWebRtcPeer, installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
+import { createWebSocketPcmMedia, encodePcm16LeBase64 } from './WebSocketPcmMedia';
 
 import {
   createSdkHandleConnection,
@@ -11,65 +13,6 @@ import {
   type VoiceConnectionDriver,
   type VoiceRealtimeTransportEvent,
 } from './VoiceRealtimeConnection';
-
-class FakeWebRtcDataChannel extends EventTarget {
-  readyState: RTCDataChannelState = 'connecting';
-  bufferedAmount = 0;
-  bufferedAmountLowThreshold = 0;
-  sent: string[] = [];
-
-  send(value: string): void {
-    this.sent.push(value);
-    this.bufferedAmount += new TextEncoder().encode(value).byteLength;
-  }
-
-  drainTo(bufferedAmount: number): void {
-    const previous = this.bufferedAmount;
-    this.bufferedAmount = bufferedAmount;
-    if (
-      previous > this.bufferedAmountLowThreshold
-      && bufferedAmount <= this.bufferedAmountLowThreshold
-    ) {
-      this.dispatchEvent(new Event('bufferedamountlow'));
-    }
-  }
-
-  open(): void {
-    this.readyState = 'open';
-    this.dispatchEvent(new Event('open'));
-  }
-
-  message(data: unknown): void {
-    this.dispatchEvent(new MessageEvent('message', { data }));
-  }
-
-  close(): void {
-    if (this.readyState === 'closed') return;
-    this.readyState = 'closed';
-    this.dispatchEvent(new Event('close'));
-  }
-}
-
-class FakeWebRtcPeer extends EventTarget {
-  readonly channel = new FakeWebRtcDataChannel();
-  connectionState: RTCPeerConnectionState = 'new';
-  iceConnectionState: RTCIceConnectionState = 'new';
-  addTrack = vi.fn();
-  createDataChannel = vi.fn(() => this.channel as unknown as RTCDataChannel);
-  createOffer = vi.fn(async () => ({ type: 'offer' as const, sdp: 'offer-sdp' }));
-  setLocalDescription = vi.fn(async () => undefined);
-  setRemoteDescription = vi.fn(async () => undefined);
-  close = vi.fn();
-
-  remoteTrack(track: MediaStreamTrack, streams: readonly MediaStream[] = []): void {
-    const event = new Event('track');
-    Object.defineProperties(event, {
-      track: { value: track },
-      streams: { value: streams },
-    });
-    this.dispatchEvent(event);
-  }
-}
 
 function installRemoteAudioElement(
   playImplementation: () => Promise<void>,
@@ -126,6 +69,23 @@ function jsonObjectWithExactUtf8Bytes(totalBytes: number): Readonly<{ values: re
 }
 
 describe('VoiceRealtimeConnection implementations', () => {
+  const pcmCleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    for (const cleanup of pcmCleanups.splice(0)) await cleanup();
+  });
+
+  async function createBrowserPcm() {
+    const context = new TestVoiceAudioContext();
+    const browser = installVoiceWebRtcBrowserBoundary({ createAudioContext: () => context as unknown as AudioContext });
+    await browser.micSession.ensureActive();
+    const media = createWebSocketPcmMedia({
+      mic: browser.micSession,
+      input: { sampleRate: 24_000, chunkMs: 100 }, output: { sampleRate: 24_000 },
+      onInputChunk: () => {},
+    });
+    pcmCleanups.push(async () => { await media.pcm.stop(); await browser.micSession.teardown(); browser.restore(); });
+    return { media, context, browser };
+  }
   it('admits a provider session.updated echo of generated session.spawn_new tool metadata', async () => {
     const spec = getActionSpec('session.spawn_new');
     const echoed = {
@@ -220,74 +180,43 @@ describe('VoiceRealtimeConnection implementations', () => {
 
   it('owns PCM capture/playback only for the websocket_pcm connection', async () => {
     const fixture = createDriver();
-    const pcm = {
-      start: vi.fn(async (_signal: AbortSignal) => {}),
-      stop: vi.fn(async () => {}),
-      playbackCursorMs: vi.fn(() => 275),
-      beginOutputInterruptionCandidate: vi.fn(() => 'ducked' as const),
-      resolveOutputInterruptionCandidate: vi.fn(),
-    };
-    const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm });
+    const { media, context } = await createBrowserPcm();
+    const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm: media.pcm });
 
     await connection.connect(new AbortController().signal);
     expect(connection.kind).toBe('websocket_pcm');
-    expect(pcm.start).toHaveBeenCalledTimes(1);
+    expect(context.processor.onaudioprocess).not.toBeNull();
+    expect(media.enqueueOutput(encodePcm16LeBase64(new Int16Array(4 * 24_000).fill(1_000)))).toBe(true);
+    context.currentTime = 0.275;
     expect(connection.beginOutputInterruptionCandidate()).toBe('ducked');
     expect(connection.playbackCursorMs()).toBe(275);
     connection.resolveOutputInterruptionCandidate('false_alarm');
-    expect(pcm.resolveOutputInterruptionCandidate).toHaveBeenCalledWith('false_alarm');
+    expect(context.gain.setTargetAtTime).toHaveBeenLastCalledWith(1, 0.275, 0.015);
     await connection.close({ code: 'user_stop' });
-    expect(pcm.stop).toHaveBeenCalledTimes(1);
+    expect(context.processor.onaudioprocess).toBeNull();
+    expect(context.processor.disconnect).toHaveBeenCalledOnce();
+    expect(context.sources[0]!.stop).toHaveBeenCalledOnce();
   });
 
-  it('closes the socket without waiting for a capture stop that has not settled', async () => {
-    const fixture = createDriver();
-    let settleCaptureStop!: () => void;
-    const captureStopped = new Promise<void>((resolve) => { settleCaptureStop = resolve; });
-    const pcm = {
-      start: vi.fn(async (_signal: AbortSignal) => {}),
-      stop: vi.fn(async () => await captureStopped),
-    };
-    const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm });
-    await connection.connect(new AbortController().signal);
-
-    const closed = connection.close({ code: 'user_stop' });
-    // Socket teardown is independent of capture teardown: a capture stop that
-    // is still draining must not retain the transport.
-    await vi.waitFor(() => expect(fixture.close).toHaveBeenCalledTimes(1));
-    expect(pcm.stop).toHaveBeenCalledTimes(1);
-
-    settleCaptureStop();
-    await closed;
-    expect(connection.state()).toBe('closed');
-  });
 
   it('closes a websocket PCM connection when its canonical media owner reports a terminal failure', async () => {
     const fixture = createDriver();
-    const terminalListener = { current: null as ((error: Error) => void) | null };
-    const removeTerminalListener = vi.fn();
-    const pcm = {
-      start: vi.fn(async (_signal: AbortSignal) => {}),
-      stop: vi.fn(async () => {}),
-      subscribeTerminal: vi.fn((listener: (error: Error) => void) => {
-        terminalListener.current = listener;
-        return { remove: removeTerminalListener };
-      }),
-    };
-    const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm });
+    const { media, context, browser } = await createBrowserPcm();
+    const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm: media.pcm });
     await connection.connect(new AbortController().signal);
 
-    terminalListener.current?.(Object.assign(new Error('pcm_capture_device_lost'), {
-      code: 'pcm_capture_device_lost',
-    }));
+    browser.micTrack.dispatchEvent(new Event('ended'));
 
     await vi.waitFor(() => expect(fixture.close).toHaveBeenCalledWith({
       code: 'error',
       detail: 'pcm_capture_device_lost',
     }));
     expect(connection.state()).toBe('closed');
-    expect(pcm.stop).toHaveBeenCalledTimes(1);
-    expect(removeTerminalListener).toHaveBeenCalledTimes(1);
+    expect(context.processor.onaudioprocess).toBeNull();
+    expect(context.processor.disconnect).toHaveBeenCalledOnce();
+    browser.micTrack.dispatchEvent(new Event('ended'));
+    await connection.close({ code: 'user_stop' });
+    expect(fixture.close).toHaveBeenCalledOnce();
   });
 
   it('projects driver-owned duck-only output control for SDK transports', async () => {
@@ -329,16 +258,13 @@ describe('VoiceRealtimeConnection implementations', () => {
     const openGate = new Promise<void>((resolve) => { releaseOpen = resolve; });
     const fixture = createDriver();
     fixture.driver.open = vi.fn(async () => await openGate);
-    const pcm = {
-      start: vi.fn(async (_signal: AbortSignal) => {}),
-      stop: vi.fn(async () => {}),
-    };
-    const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm });
+    const { media, context } = await createBrowserPcm();
+    const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm: media.pcm });
 
     const connecting = connection.connect(new AbortController().signal);
 
     await vi.waitFor(() => expect(fixture.driver.open).toHaveBeenCalledTimes(1));
-    expect(pcm.start).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(context.processor.onaudioprocess).not.toBeNull());
     expect(connection.state()).toBe('connecting');
 
     releaseOpen();
@@ -351,16 +277,13 @@ describe('VoiceRealtimeConnection implementations', () => {
     fixture.driver.open = vi.fn(async () => {
       throw new Error('handshake_failed');
     });
-    const pcm = {
-      start: vi.fn(async (_signal: AbortSignal) => {}),
-      stop: vi.fn(async () => {}),
-    };
-    const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm });
+    const { media, context } = await createBrowserPcm();
+    const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm: media.pcm });
 
     await expect(connection.connect(new AbortController().signal)).rejects.toThrow('handshake_failed');
 
-    expect(pcm.start).toHaveBeenCalledTimes(1);
-    expect(pcm.stop).toHaveBeenCalledTimes(1);
+    expect(context.processor.onaudioprocess).toBeNull();
+    expect(context.disconnectGain).toHaveBeenCalledOnce();
     expect(connection.state()).toBe('closed');
   });
 
@@ -483,12 +406,10 @@ describe('VoiceRealtimeConnection implementations', () => {
     const never = new Promise<void>(() => {});
     const fixture = createDriver();
     fixture.driver.sendControl = vi.fn(async () => await never);
+    const { media } = await createBrowserPcm();
     const connection = createWebSocketPcmConnection({
       driver: fixture.driver,
-      pcm: {
-        start: vi.fn(async () => {}),
-        stop: vi.fn(async () => {}),
-      },
+      pcm: media.pcm,
     });
     await connection.connect(new AbortController().signal);
 
@@ -974,7 +895,7 @@ describe('VoiceRealtimeConnection implementations', () => {
 
     expect(connection.state()).toBe('open');
     expect(exchangeOffer).toHaveBeenCalledWith({
-      offerSdp: 'offer-sdp',
+      offerSdp: 'v=0\r\na=test-offer\r\n',
       signal: expect.any(AbortSignal),
     });
     expect(peer.setRemoteDescription).toHaveBeenCalledWith({

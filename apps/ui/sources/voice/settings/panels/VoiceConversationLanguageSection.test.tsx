@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 import { renderSettingsView } from '@/dev/testkit';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
@@ -10,9 +11,17 @@ import { PLUGIN_MANIFEST as OPENAI_MANIFEST } from '../../../../../../packages/p
 import { PLUGIN_MANIFEST as ELEVENLABS_MANIFEST } from '../../../../../../packages/plugins/elevenlabs/src/manifest';
 import { VOICE_PROVIDER_PRESENTATIONS as OPENAI_PRESENTATIONS } from '../../../../../../packages/plugins/openai/src/ui/voice/entries';
 import { VOICE_PROVIDER_PRESENTATIONS as ELEVENLABS_PRESENTATIONS } from '../../../../../../packages/plugins/elevenlabs/src/ui/voice/entries';
-import { installVoiceSettingsPanelCommonModuleMocks } from './voiceSettingsPanelTestHelpers';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
 
-installVoiceSettingsPanelCommonModuleMocks();
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+// This settings panel never starts the unavailable vendor conversation SDK.
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: () => { throw new Error('Unexpected ElevenLabs conversation start'); } } }));
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
   return createExpoRouterMock().module;
@@ -26,6 +35,14 @@ const registry = createVoiceProviderRegistry({
   bundledPresentations: [...OPENAI_PRESENTATIONS, ...ELEVENLABS_PRESENTATIONS],
 });
 const { VoiceConversationLanguageSection } = await import('./VoiceConversationLanguageSection');
+const { t, getPreferredLanguage, setPreferredLanguageFromSettings } = await import('@/text');
+const initialLanguage = getPreferredLanguage();
+beforeEach(async () => {
+  setPreferredLanguageFromSettings('en');
+  const account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
+  onTestFinished(account.dispose);
+});
+afterAll(() => { setPreferredLanguageFromSettings(initialLanguage); });
 
 describe('Contributed realtime conversation language controls', () => {
   it('retains an unsupported stored language as unavailable instead of claiming the service default', async () => {
@@ -42,12 +59,12 @@ describe('Contributed realtime conversation language controls', () => {
     const setVoice = vi.fn();
     const screen = await renderSettingsView(<VoiceConversationLanguageSection voice={voice} setVoice={setVoice} registry={registry} />);
     const menu = screen.tree.root.findByType(DropdownMenu);
-    expect(menu.props.itemTrigger?.title).toBe('settingsVoice.pages.conversations.iSpeakTitle');
+    expect(menu.props.itemTrigger?.title).toBe(t('settingsVoice.pages.conversations.iSpeakTitle'));
     const choices = menu.props.items;
     expect(choices.some((choice) => choice.id === 'he-IL')).toBe(false);
     expect(choices.some((choice) => choice.id === 'fr')).toBe(true);
     const reply = screen.tree.root.findAllByProps({ testID: 'settings.voice.language.replyIn' }).find((row) => typeof row.props.detail === 'string');
-    expect(reply?.props.detail).toBe('settingsVoice.pages.conversations.replySame');
+    expect(reply?.props.detail).toBe(t('settingsVoice.pages.conversations.replySame'));
     expect(reply?.props.onPress).toBeUndefined();
     await act(async () => menu.props.onSelect('fr'));
     expect(setVoice).toHaveBeenLastCalledWith({ ...voice, assistantLanguage: 'fr' });
@@ -57,9 +74,9 @@ describe('Contributed realtime conversation language controls', () => {
     const voice = voiceSettingsParse({ providerId: 'happier.voice.openai/realtime-openai', assistantLanguage: 'de-DE' });
     const screen = await renderSettingsView(<VoiceConversationLanguageSection voice={voice} setVoice={vi.fn()} registry={registry} />);
     const recognition = screen.tree.root.findAllByProps({ testID: 'settings.voice.language.iSpeak' }).find((row) => typeof row.props.detail === 'string');
-    expect(recognition?.props.detail).toBe('settingsVoice.pages.conversations.iSpeakAutomatic');
+    expect(recognition?.props.detail).toBe(t('settingsVoice.pages.conversations.iSpeakAutomatic'));
     expect(recognition?.props.onPress).toBeUndefined();
-    expect(screen.tree.root.findByType(DropdownMenu).props.itemTrigger?.title).toBe('settingsVoice.pages.conversations.replyInTitle');
+    expect(screen.tree.root.findByType(DropdownMenu).props.itemTrigger?.title).toBe(t('settingsVoice.pages.conversations.replyInTitle'));
   });
 
   it('does not advertise a mutable language for an unknown or opaque service', async () => {

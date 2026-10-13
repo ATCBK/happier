@@ -1,12 +1,31 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineFixture, createSessionFixture } from '@/dev/testkit';
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { serveAccountHomes, installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { writeVoiceConversationScopeMetadata } from '@/voice/persistence/voiceConversationScopeMetadata';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
+import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
+import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
-import { createLocalConversationVoiceAdapter } from '@/voice/adapters/localConversation/localConversationAdapter';
-import { voiceSessionBindingManager } from '@/voice/binding/voiceConversationBindingRuntime';
-import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
+import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ExecutionRunTurnStreamReadRequestSchema, ExecutionRunTurnStreamStartV2RequestSchema,
+  ExecutionRunTurnStreamStartResponseSchema, ExecutionRunTurnStreamReadResponseSchema,
+  ExecutionRunTurnStreamCancelResponseSchema, ExecutionRunUserTranscriptCommitResponseSchema,
+  type ExecutionRunTurnStreamEvent } from '@happier-dev/protocol/execution/runs/streaming';
+import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { readConversationTurnOriginV1FromMessageMeta } from '@happier-dev/protocol/messages/structured/conversationTurnOriginV1';
+import { RawRecordSchema } from '@happier-dev/session-core/raw';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
 import { voiceOutputStatusStore } from '@/voice/runtime/outputStatus/voiceOutputStatusStore';
-import { registerVoiceAdapters, resetVoiceAdapterRegistryForTests } from '@/voice/session/voiceAdapterRegistry';
-import { sendVoiceTextTurn } from './sendVoiceTextTurn';
+import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 
 /**
  * Convergence proof (RL-L4-1): the live streaming TTS path must route every
@@ -17,247 +36,157 @@ import { sendVoiceTextTurn } from './sendVoiceTextTurn';
  * plays (barge-in interrupt → queue abort preserved).
  */
 
-type SpeakAssistantTextParams = Readonly<{
-  text: string;
-  registerPlaybackStopper: (stopper: () => void) => () => void;
-}>;
+const speechBoundary = createVoiceSpeechOutputBoundary({ getAccount: async () => {
+  const home = account?.homes.voice;
+  if (!home) throw new Error('Streaming Account is not restored');
+  const credentials = await TokenStorage.getCredentialsForServerUrl(home.serverUrl);
+  if (!credentials) throw new Error('Streaming Account credentials are unavailable');
+  return { home, credentials };
+} });
+const { expoSpeechSpeak, expoSpeechStop, encodedAudio, speechSynthesizeRpc } = speechBoundary;
 
-const speakAssistantText = vi.fn<(params: SpeakAssistantTextParams) => Promise<void>>();
-const sendMessage = vi.fn();
-const enqueuePendingMessage = vi.fn();
-const markPendingDeliveryHandled = vi.fn();
-
-vi.mock('@/voice/transcript/voiceConversationTranscript', () => ({
-  appendVoiceConversationUserText: vi.fn(),
-  appendVoiceConversationAssistantText: vi.fn(),
-  appendVoiceConversationNoteText: vi.fn(),
-  buildRealtimeConversationTurnMeta: () => ({
-    happier: {
-      kind: 'conversation_turn.v1',
-      payload: { v: 1 },
-      conversationTurnOriginV1: {
-        v: 1,
-        channel: 'realtime_conversation',
-        modality: 'voice',
-      },
-    },
-  }),
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-  const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-  return createStorageModuleStub({
-    storage: {
-      getState: () => ({
-        settings: buildAccountSettings(),
-        sessions: {
-          s1: {
-            id: 's1',
-            serverId: 'server-a',
-            active: true,
-            metadata: { machineId: 'machine-1', path: '/workspace/s1' },
-          },
-          'carrier-s1': {
-            id: 'carrier-s1',
-            serverId: 'server-a',
-            active: true,
-            updatedAt: 1,
-            metadata: {
-              machineId: 'machine-1',
-              path: '/workspace/s1',
-              systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
-              voiceConversationScopeV1: { v: 1, kind: 'session_root', sessionRootId: 's1' },
-            },
-          },
-        },
-        machines: {
-          'machine-1': { id: 'machine-1', active: true, metadata: {} },
-        },
-        sessionMessages: {},
-      }),
-    },
-  });
+await loadSyncSingletonForTests();
+const restoreActionLoader = await installRealActionExecutorModuleLoader();
+afterAll(async () => {
+  try { await speechBoundary.disposeAudioSession(); }
+  finally { restoreActionLoader(); }
 });
+const [
+  { createLocalConversationVoiceAdapter },
+  { voiceSessionBindingManager },
+  { voiceSessionBindingStore },
+  { registerVoiceAdapters, resetVoiceAdapterRegistryForTests },
+  { storage },
+  { sendVoiceTextTurn },
+] = await Promise.all([
+  import('@/voice/adapters/localConversation/localConversationAdapter'),
+  import('@/voice/binding/voiceConversationBindingRuntime'),
+  import('@/voice/binding/voiceConversationBindingStore'),
+  import('@/voice/session/voiceAdapterRegistry'),
+  import('@/sync/domains/state/storage'),
+  import('./sendVoiceTextTurn'),
+]);
+let account: Awaited<ReturnType<typeof serveAccountHomes>> | null = null;
+let disconnect: (() => Promise<void>) | null = null;
+const sessionMetadata = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
 
-vi.mock('@/sync/sync', () => ({
-  sync: {
-    sendMessage: (...args: any[]) => sendMessage(...args),
-    enqueuePendingMessage: (...args: any[]) => enqueuePendingMessage(...args),
-    markPendingDeliveryHandled: (...args: any[]) => markPendingDeliveryHandled(...args),
-    ensureSessionVisibleForMessageRoute: vi.fn(async () => {}),
-    refreshSessionMessages: vi.fn(async () => {}),
-    patchSessionMetadataWithRetry: vi.fn(async () => {}),
-    encryption: { getSessionEncryption: vi.fn(() => ({})) },
-  },
-}));
+function readDeviceSpeech() { return expoSpeechSpeak.mock.calls.map(([text]) => text); }
+function readBundledSpeech() { return speechSynthesizeRpc.mock.calls.map(([input]) => input.input); }
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-  getActiveServerSnapshot: () => ({ serverId: 'server-a' }),
-  subscribeActiveServer: () => () => {},
-}));
-
-vi.mock('@/voice/output/speakAssistantText', () => ({
-  speakAssistantText: (params: SpeakAssistantTextParams) => speakAssistantText(params),
-}));
-
-// Drive the provider/session boundary with canonical output events; the real
-// runVoiceAgentTurnWithTools owner consumes this stream.
+// Only wire events are synthetic: the actual Agent initializer/client/read loop
+// derives accepted effects and handles transcript acceptance and terminal custody.
 const streamDeltas: { current: string[] } = { current: [] };
 const onInterruptDuringStream: { current: (() => void) | null } = { current: null };
+let retainedAgent: Awaited<ReturnType<typeof createRetainedVoiceAgentRpcBoundary>>;
+let turnIndex = 0;
+let streamMode: 'speech' | 'tool' | 'status' | 'cancelled' = 'speech';
+let playbackStarted: Promise<void> | undefined;
+const observedStatuses: unknown[] = [];
+const streamEvents = new Map<string, ExecutionRunTurnStreamEvent[]>();
+const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
+const voiceProviders = (await import('@/voice/registry/defaultRegistry')).createDefaultVoiceProviderRegistry();
 
-function makeStreamingVoiceAgentSessions() {
-  return {
-    sendTurn: async (_sessionId: string, _userText: string, opts?: {
-      onOutputEvent?: (output: any) => void | Promise<void>;
-      signal?: AbortSignal;
-      onUserTranscriptAccepted?: () => void | Promise<void>;
-    }) => {
-      await opts?.onUserTranscriptAccepted?.();
-      let seq = 0;
-      for (const [index, delta] of streamDeltas.current.entries()) {
-        if (opts?.signal?.aborted) break;
-        const event = {
-          v: 1 as const,
-          kind: 'speech_segment' as const,
-          turnId: 'stream-test',
-          seq: seq++,
-          segmentId: `stream-test:segment:${index}`,
-          text: delta,
-        };
-        await opts?.onOutputEvent?.({
-          event,
-          effects: [{ kind: 'speak', segmentId: event.segmentId, text: delta }],
-        });
-        onInterruptDuringStream.current?.();
-        onInterruptDuringStream.current = null;
-        await Promise.resolve();
-      }
-      const text = streamDeltas.current.join('');
-      await opts?.onOutputEvent?.({
-        event: {
-          v: 1,
-          kind: 'turn_final',
-          turnId: 'stream-test',
-          seq,
-          text,
-        },
-        effects: [{ kind: 'persist_final', text }],
-      });
-      return { assistantText: streamDeltas.current.join(''), actions: [] };
-    },
-  };
-}
-
-function makeCancelledStreamingVoiceAgentSessions() {
-  return {
-    sendTurn: async (_sessionId: string, _userText: string, opts?: {
-      onOutputEvent?: (output: any) => void | Promise<void>;
-      signal?: AbortSignal;
-      onUserTranscriptAccepted?: () => void | Promise<void>;
-    }) => {
-      await opts?.onUserTranscriptAccepted?.();
-      let seq = 0;
-      for (const [index, delta] of streamDeltas.current.entries()) {
-        const event = {
-          v: 1 as const,
-          kind: 'speech_segment' as const,
-          turnId: 'stream-test',
-          seq: seq++,
-          segmentId: `stream-test:segment:${index}`,
-          text: delta,
-        };
-        await opts?.onOutputEvent?.({
-          event,
-          effects: [{ kind: 'speak', segmentId: event.segmentId, text: delta }],
-        });
-      }
-      await opts?.onOutputEvent?.({
-        event: {
-          v: 1,
-          kind: 'turn_cancelled',
-          turnId: 'stream-test',
-          seq,
-        },
-        effects: [{ kind: 'cancel_turn' }],
-      });
-      throw Object.assign(new Error('stream_cancelled'), {
-        rpcErrorCode: 'cancelled',
-      });
-    },
-  };
-}
-
-function makeToolRoundStreamingVoiceAgentSessions() {
-  let turnIndex = 0;
-  return {
-    sendTurn: async (_sessionId: string, _userText: string, opts?: {
-      onOutputEvent?: (output: any) => void | Promise<void>;
-      onUserTranscriptAccepted?: () => void | Promise<void>;
-    }) => {
-      await opts?.onUserTranscriptAccepted?.();
-      const currentTurn = turnIndex++;
-      const turnId = `stream-tool-${currentTurn}`;
-      const text = currentTurn === 0 ? 'Checking sessions.' : 'Tool round complete.';
-      await opts?.onOutputEvent?.({
-        event: {
-          v: 1,
-          kind: 'speech_segment',
-          turnId,
-          seq: 0,
-          segmentId: `${turnId}:segment:0`,
-          text,
-        },
-        effects: [{ kind: 'speak', segmentId: `${turnId}:segment:0`, text }],
-      });
-      await opts?.onOutputEvent?.({
-        event: { v: 1, kind: 'turn_final', turnId, seq: 1, text },
-        effects: [{ kind: 'persist_final', text }],
-      });
-      return currentTurn === 0
-        ? { assistantText: text, actions: [{ t: 'listSessions', args: { limit: 1 } }] }
-        : { assistantText: text, actions: [] };
-    },
-  };
+async function answerVoiceAgentRpc(method: string, input: unknown): Promise<unknown> {
+  if (method === SESSION_RPC_METHODS.EXECUTION_RUN_USER_TRANSCRIPT_COMMIT_V1) {
+    return ExecutionRunUserTranscriptCommitResponseSchema.parse({ ok: true });
+  }
+  if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2) {
+    ExecutionRunTurnStreamStartV2RequestSchema.parse(input);
+    const currentTurn = turnIndex++;
+    const streamId = 'stream-test-' + currentTurn;
+    const text = streamMode === 'tool'
+      ? currentTurn === 0 ? 'Checking sessions.' : 'Tool round complete.'
+      : streamDeltas.current.join('');
+    const texts = streamMode === 'tool' ? [text] : streamDeltas.current;
+    const events: ExecutionRunTurnStreamEvent[] = texts.map((value, index) => ({ t: 'voice_output', output: {
+      v: 1, kind: 'speech_segment', turnId: streamId, seq: index, segmentId: streamId + ':segment:' + index, text: value,
+    } }));
+    if (streamMode === 'status') {
+      events.push({ t: 'voice_output', output: { v: 1, kind: 'display_status', turnId: streamId, seq: 0,
+        statusId: 'status-1', text: 'Checking safely' } });
+    }
+    if (streamMode === 'cancelled') events.push({ t: 'voice_output', output: {
+      v: 1, kind: 'turn_cancelled', turnId: streamId, seq: events.length,
+    } });
+    else {
+      if (streamMode === 'tool' && currentTurn === 0) events.push({ t: 'voice_output', output: {
+        v: 1, kind: 'side_effect', turnId: streamId, seq: events.length,
+        effectId: streamId + ':list-sessions', action: { t: 'listSessions', args: { limit: 1 } },
+      } });
+      events.push({ t: 'voice_output', output: { v: 1, kind: 'turn_final', turnId: streamId,
+        seq: events.length, text: streamMode === 'status' ? 'Done' : text,
+      } });
+    }
+    streamEvents.set(streamId, events);
+    return ExecutionRunTurnStreamStartResponseSchema.parse({ streamId });
+  }
+  if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
+    const request = ExecutionRunTurnStreamReadRequestSchema.parse(input);
+    if (request.cursor === 1) {
+      if (streamMode === 'cancelled') await playbackStarted;
+      if (streamMode === 'status') observedStatuses.push(voiceOutputStatusStore.getSnapshot());
+      onInterruptDuringStream.current?.();
+      onInterruptDuringStream.current = null;
+    }
+    const events = streamEvents.get(request.streamId);
+    if (!events) throw new Error('Requested unknown Voice stream');
+    const event = events[request.cursor];
+    return ExecutionRunTurnStreamReadResponseSchema.parse({ streamId: request.streamId,
+      events: event ? [event] : [], nextCursor: request.cursor + 1,
+      done: request.cursor >= events.length - 1,
+    });
+  }
+  if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) return ExecutionRunTurnStreamCancelResponseSchema.parse({ ok: true });
+  throw new Error('Unexpected Voice wire method: ' + method);
 }
 
 function makePlaybackController(onInterrupt?: () => void) {
-  let stopper: (() => void) | null = null;
-  let epoch = 1;
+  const controller = createVoicePlaybackController();
   return {
-    registerStopper: (s: () => void) => {
-      stopper = s;
-      return () => {
-        if (stopper === s) stopper = null;
-      };
-    },
+    ...controller,
     interrupt: () => {
       onInterrupt?.();
-      epoch += 1;
-      const s = stopper;
-      stopper = null;
-      s?.();
+      controller.interrupt();
     },
-    captureEpoch: () => 1,
-    isEpochCurrent: (e: number) => e === epoch,
   };
 }
 
 function buildAccountSettings(ttsProvider = 'device') {
-  return {
-    voice: {
-      providerId: 'local_conversation',
-      providers: {
-        local_conversation: {
-          schemaVersion: 1,
-          config: {
-            conversationMode: 'agent',
-            streaming: { enabled: true, ttsEnabled: true, ttsChunkChars: 120 },
-            tts: { autoSpeakReplies: true, provider: ttsProvider },
+  const providerSettings = voiceProviders.get(ttsProvider)?.providerSettings;
+  const providerConfig = providerSettings?.parseStoredConfig({
+    ...providerSettings.defaultConfig,
+    // The declared Google readiness contract requires a user-selected voice;
+    // its genuine empty default intentionally is not synthesis-ready.
+    ...(ttsProvider === 'happier.voice.google/google-cloud-tts'
+      ? { voiceName: 'en-US-Wavenet-D', languageCode: 'en-US' } : {}),
+  });
+  return settingsParse({
+    ...settingsDefaults,
+    ...normalizeVoiceSettingsLocalDelta({
+      experiments: true,
+      featureToggles: { ...settingsDefaults.featureToggles, voice: true, 'voice.agent': true, 'execution.runs': true },
+      voice: {
+        ...settingsDefaults.voice,
+        providerId: 'local_conversation',
+        executionMachine: { mode: 'fixed', machineId: 'machine-1' },
+        providers: {
+          ...settingsDefaults.voice.providers,
+          ...(providerSettings ? { [ttsProvider]: {
+            schemaVersion: providerSettings.schemaVersion, config: providerConfig,
+          } } : {}),
+          local_conversation: {
+            schemaVersion: 1,
+            config: {
+              conversationMode: 'agent',
+              agent: { agentSource: 'session', prewarmOnConnect: false },
+              streaming: { enabled: true, ttsEnabled: true, ttsChunkChars: 120 },
+              tts: { autoSpeakReplies: true, provider: ttsProvider },
+            },
           },
         },
       },
-    },
-  };
+    }),
+  });
 }
 
 async function establishProductionBinding() {
@@ -280,27 +209,109 @@ async function establishProductionBinding() {
     targetSessionAddress: { serverId: expect.any(String), sessionId: 's1' },
   });
   expect(binding?.conversationSessionAddress.serverId).toBe(binding?.targetSessionAddress?.serverId);
+  await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+  expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true);
 }
 
 describe('sendVoiceTextTurn streaming playback convergence', () => {
   beforeEach(async () => {
+    speechBoundary.reset();
+    retainedAgent = await createRetainedVoiceAgentRpcBoundary({ handleOtherRpc: answerVoiceAgentRpc });
+    const nativeSdkRpc = speechBoundary.machineRpc.getMockImplementation();
+    speechBoundary.machineRpc.mockImplementation(async request =>
+      request.method.startsWith('execution.run.')
+        ? retainedAgent.dispatch(request.method, request.payload)
+        : nativeSdkRpc?.(request));
+    turnIndex = 0;
+    streamMode = 'speech';
+    playbackStarted = undefined;
+    observedStatuses.length = 0;
+    streamEvents.clear();
+    account = await serveAccountHomes({ homes: [{ key: 'voice', serverUrl: 'https://streaming-voice.test',
+      accountId: 'account-a', settings: buildAccountSettings() }], route: async request => {
+        const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'machine-1', 'account-a');
+        if (machineReply) return machineReply;
+        const metadataReply = await sessionMetadata.handle(request.url.toString(), {
+          method: request.method, headers: request.headers, signal: request.signal,
+          ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}),
+        });
+        if (metadataReply) return metadataReply;
+        if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
+          features: { voice: { enabled: true, agent: { enabled: true } }, execution: { runs: { enabled: true } },
+            machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } } },
+          capabilities: { session: { pendingInput: { protocolVersion: 1 } }, machines: { liveStream: {
+            serverRouted: { disabledReason: null, caps: {
+              maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000,
+              maxDurationMs: 60_000, maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2,
+              maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1,
+            } },
+          } } },
+        }));
+        if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        if (request.method === 'GET' && /^\/v1\/sessions\/[^/]+\/messages$/.test(request.path)) {
+          return Response.json({ messages: [], hasMore: false });
+        }
+        if (request.path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({
+          status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
+        }));
+        if (request.method === 'POST' && /^\/v2\/sessions\/[^/]+\/pending$/.test(request.path)) {
+          const body = request.body;
+          if (!body || typeof body !== 'object' || !('localId' in body) || !('requestedAction' in body) || !('content' in body)) {
+            throw new Error('Expected the real pending input producer');
+          }
+          const content = StrictSessionStoredMessageContentEnvelopeSchema.parse(body.content);
+          if (content.t !== 'plain') throw new Error('Expected this plain Account fixture to write plain Voice input');
+          const record = RawRecordSchema.parse(content.v);
+          expect(readConversationTurnOriginV1FromMessageMeta(record.meta, 'input')).toMatchObject({
+            v: 1, channel: 'realtime_conversation', modality: 'voice',
+          });
+          return Response.json({ requestedAction: body.requestedAction,
+            pending: { localId: body.localId, deliveryStatus: { status: 'external_handoff' } } });
+        }
+        if (request.method === 'POST' && /\/delivery\/handled$/.test(request.path)) return Response.json({});
+        return undefined;
+      } });
+    disconnect = await account.restoreActiveConnection();
+    const { sync } = await import('@/sync/sync');
+    await sync.resumeSync('manual');
+    const serverId = account.homes.voice.id;
+    const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
+    const target = createSessionFixture({ id: 's1', serverId, active: true, presence: 'online',
+      metadata: { machineId: machine.id, path: '/workspace/s1', flavor: 'claude',
+        agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } });
+    const carrier = createSessionFixture({ id: 'carrier-s1', serverId, active: true, presence: 'online',
+      metadata: writeVoiceConversationScopeMetadata({ ...target.metadata,
+        ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+      }, { kind: 'session_root', sessionRootId: target.id }) });
+    storage.setState({ settings: buildAccountSettings(),
+      settingsScope: { serverId, accountId: 'account-a' },
+      sessions: { s1: target, 'carrier-s1': carrier }, machines: { [machine.id]: machine },
+      machineListByServerId: { [serverId]: [machine] }, sessionMessages: {},
+    });
+    sessionMetadata.replaceSession(target.id);
+    sessionMetadata.replaceSession(carrier.id);
+    sessionMetadata.writes.length = 0;
     voiceConversationRuntimeMachine.reset();
-    speakAssistantText.mockReset();
-    speakAssistantText.mockResolvedValue(undefined);
-    sendMessage.mockReset();
-    enqueuePendingMessage.mockReset();
-    enqueuePendingMessage.mockImplementation(async (_sessionId, _text, _displayText, _meta, options) => ({
-      localId: options.localId,
-      accepted: true,
-      externalHandoffClaimed: true,
-    }));
-    markPendingDeliveryHandled.mockReset();
-    markPendingDeliveryHandled.mockResolvedValue(undefined);
     streamDeltas.current = [];
     onInterruptDuringStream.current = null;
   });
 
+  afterEach(async () => {
+    await voiceAgentSessions.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+    speechBoundary.disposeNativeSdkBridge();
+    await disconnect?.();
+    disconnect = null;
+    await account?.dispose();
+    account = null;
+  });
+
   it('routes streamed chunks through the canonical queue and speaks them in contiguous order', async () => {
+    resetVoiceAdapterRegistryForTests();
+    await expect(voiceSessionBindingManager.ensureBound({
+      adapterId: 'local_conversation', controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+      requestedTargetSessionId: 's1',
+    })).resolves.toBeNull();
+    expect(account?.requests.filter(request => request.method === 'POST' && /\/pending$/.test(request.path))).toEqual([]);
     await establishProductionBinding();
     // Sentence-terminated deltas force discrete first/steady chunks.
     streamDeltas.current = ['First sentence. ', 'Second sentence. ', 'Third sentence.'];
@@ -310,10 +321,10 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
       settings: buildAccountSettings(),
       userText: 'go',
       playbackController: makePlaybackController(),
-      voiceAgentSessions: makeStreamingVoiceAgentSessions(),
+      voiceAgentSessions,
     });
 
-    const spoken = speakAssistantText.mock.calls.map((call) => call[0].text);
+    const spoken = readDeviceSpeech();
     // Every chunk reached the provider via the queue's playChunk (the empty
     // terminal sentinel is filtered out before speaking).
     expect(spoken.length).toBeGreaterThan(0);
@@ -333,25 +344,26 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
       settings: buildAccountSettings('happier.voice.google/google-cloud-tts'),
       userText: 'go',
       playbackController: makePlaybackController(),
-      voiceAgentSessions: makeStreamingVoiceAgentSessions(),
+      voiceAgentSessions,
     });
 
-    const spoken = speakAssistantText.mock.calls.map((call) => call[0].text);
+    const spoken = readBundledSpeech();
     expect(spoken.join(' ').replace(/\s+/g, ' ').trim()).toBe('Bundled first. Bundled second.');
   });
 
   it('plays accepted speech from every canonical tool round in order', async () => {
     await establishProductionBinding();
+    streamMode = 'tool';
 
     await sendVoiceTextTurn({
       sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
       settings: buildAccountSettings(),
       userText: 'check sessions',
       playbackController: makePlaybackController(),
-      voiceAgentSessions: makeToolRoundStreamingVoiceAgentSessions(),
+      voiceAgentSessions,
     });
 
-    expect(speakAssistantText.mock.calls.map((call) => call[0].text)).toEqual([
+    expect(readDeviceSpeech()).toEqual([
       'Checking sessions.',
       'Tool round complete.',
     ]);
@@ -360,35 +372,12 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
   it('projects accepted display status even when streaming TTS and auto-speak are disabled', async () => {
     await establishProductionBinding();
     const settings = buildAccountSettings();
-    settings.voice.providers.local_conversation.config.streaming.ttsEnabled = false;
-    settings.voice.providers.local_conversation.config.tts.autoSpeakReplies = false;
-    const observedStatuses: unknown[] = [];
-    const voiceAgentSessions = {
-      sendTurn: async (_sessionId: string, _userText: string, opts?: {
-        onOutputEvent?: (output: any) => void | Promise<void>;
-        onUserTranscriptAccepted?: () => void | Promise<void>;
-      }) => {
-        await opts?.onUserTranscriptAccepted?.();
-        await opts?.onOutputEvent?.({
-          event: {
-            v: 1,
-            kind: 'display_status',
-            turnId: 'stream-status',
-            seq: 0,
-            statusId: 'status-1',
-            text: 'Checking safely',
-          },
-          effects: [{ kind: 'display_status', statusId: 'status-1', text: 'Checking safely' }],
-        });
-        observedStatuses.push(voiceOutputStatusStore.getSnapshot());
-        await opts?.onOutputEvent?.({
-          event: { v: 1, kind: 'turn_final', turnId: 'stream-status', seq: 1, text: 'Done' },
-          effects: [{ kind: 'persist_final', text: 'Done' }],
-        });
-        return { assistantText: 'Done', actions: [] };
-      },
-    };
-
+    const config = readLocalConversationVoiceSettings(settings.voice);
+    settings.voice.providers.local_conversation = { schemaVersion: 1, config: { ...config,
+      streaming: { ...config.streaming, ttsEnabled: false },
+      tts: { ...config.tts, autoSpeakReplies: false },
+    } };
+    streamMode = 'status';
     await sendVoiceTextTurn({
       sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
       settings,
@@ -400,28 +389,26 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     expect(observedStatuses).toEqual([{
       scope: 'turn',
       sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-      turnId: 'stream-status',
+      turnId: 'stream-test-0',
       statusId: 'status-1',
       text: 'Checking safely',
     }]);
     expect(voiceOutputStatusStore.getSnapshot()).toBeNull();
-    expect(speakAssistantText).not.toHaveBeenCalled();
+    expect(expoSpeechSpeak).not.toHaveBeenCalled();
+    expect(speechSynthesizeRpc).not.toHaveBeenCalled();
   });
 
   it('terminates streamed playback on the first provider failure without retrying later chunks', async () => {
     await establishProductionBinding();
     streamDeltas.current = ['Unavailable first. ', 'Must not retry.'];
-    const providerError = Object.assign(new Error('voice_tts_provider_unavailable'), {
-      code: 'provider_unavailable',
-    });
-    speakAssistantText.mockRejectedValue(providerError);
+    speechBoundary.failNextSynthesis('provider_unavailable');
 
     const outcome = await sendVoiceTextTurn({
       sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
       settings: buildAccountSettings('happier.voice.google/google-cloud-tts'),
       userText: 'go',
       playbackController: makePlaybackController(),
-      voiceAgentSessions: makeStreamingVoiceAgentSessions(),
+      voiceAgentSessions,
       durableDispatch: {
         localId: 'tts-failure-turn',
         deliveryCommand: 'interrupt_and_send',
@@ -433,32 +420,27 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
 
     expect(outcome).toMatchObject({
       ok: false,
-      error: { code: 'provider_unavailable' },
+      error: { kind: 'tts_failed', reason: 'provider_unavailable' },
     });
-    expect(speakAssistantText).toHaveBeenCalledTimes(1);
+    expect(speechSynthesizeRpc).toHaveBeenCalledTimes(1);
+    expect(encodedAudio.start).not.toHaveBeenCalled();
     expect(voiceConversationRuntimeMachine.getSnapshot().error).toMatchObject({
       kind: 'tts_failed',
-      reason: 'voice_tts_provider_unavailable',
+      reason: expect.stringContaining('provider_unavailable'),
     });
   });
 
   it('aborts queued and active playback exactly once when the canonical turn is cancelled', async () => {
     await establishProductionBinding();
     streamDeltas.current = ['Active first. ', 'Queued second.'];
-    const releaseFirst = { current: null as (() => void) | null };
+    const releaseFirst = speechBoundary.holdNextPlayback('encoded');
+    streamMode = 'cancelled';
+    playbackStarted = releaseFirst.started;
     const events: string[] = [];
-    const stopActivePlayback = vi.fn(() => {
+    const stopNativePlayback = encodedAudio.stop.getMockImplementation();
+    encodedAudio.stop.mockImplementation(async () => {
       events.push('stop');
-      releaseFirst.current?.();
-    });
-    speakAssistantText.mockImplementation(async (params) => {
-      events.push(`speak:${params.text}`);
-      if (speakAssistantText.mock.calls.length !== 1) return;
-      const clearStopper = params.registerPlaybackStopper(stopActivePlayback);
-      await new Promise<void>((resolve) => {
-        releaseFirst.current = resolve;
-      });
-      clearStopper();
+      await stopNativePlayback?.();
     });
     const onInterrupt = vi.fn(() => {
       events.push('interrupt');
@@ -470,7 +452,7 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
       settings: buildAccountSettings('happier.voice.google/google-cloud-tts'),
       userText: 'go',
       playbackController: makePlaybackController(onInterrupt),
-      voiceAgentSessions: makeCancelledStreamingVoiceAgentSessions(),
+      voiceAgentSessions,
     }).catch(() => {}).finally(() => {
       turnSettled = true;
       events.push('turn:settled');
@@ -481,15 +463,16 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     } finally {
       // Always release a defective implementation's orphaned first playback so
       // the test itself cannot leave queue work behind after recording the result.
-      releaseFirst.current?.();
+      releaseFirst();
       await turn;
     }
     await Promise.resolve();
     await Promise.resolve();
 
     expect(onInterrupt).toHaveBeenCalledTimes(1);
-    expect(stopActivePlayback).toHaveBeenCalledTimes(1);
-    expect(speakAssistantText).toHaveBeenCalledTimes(1);
+    expect(encodedAudio.stop).toHaveBeenCalledTimes(1);
+    expect(encodedAudio.start).toHaveBeenCalledTimes(1);
+    expect(speechSynthesizeRpc).toHaveBeenCalledTimes(1);
     expect(events.indexOf('stop')).toBeLessThan(events.indexOf('turn:settled'));
     expect(voiceConversationRuntimeMachine.getSnapshot()).toMatchObject({
       state: 'connected',
@@ -503,21 +486,14 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     streamDeltas.current = ['Alpha sentence. ', 'Beta sentence. ', 'Gamma sentence.'];
 
     // Block the first chunk's playback, then interrupt while it is in flight.
-    let releaseFirst: (() => void) | null = null;
-    speakAssistantText.mockImplementation(async () => {
-      if (speakAssistantText.mock.calls.length === 1) {
-        await new Promise<void>((resolve) => {
-          releaseFirst = resolve;
-        });
-      }
-    });
+    const releaseFirst = speechBoundary.holdNextPlayback('device');
 
     // After the first delta is pushed, fire the interrupt (barge-in).
     onInterruptDuringStream.current = () => {
       // Wait for the first chunk to begin, then interrupt and release it.
-      void vi.waitFor(() => expect(speakAssistantText).toHaveBeenCalled()).then(() => {
+      void releaseFirst.started.then(() => {
         controller.interrupt();
-        releaseFirst?.();
+        releaseFirst();
       });
     };
 
@@ -526,14 +502,15 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
       settings: buildAccountSettings(),
       userText: 'go',
       playbackController: controller,
-      voiceAgentSessions: makeStreamingVoiceAgentSessions(),
+      voiceAgentSessions,
     });
 
-    const spoken = speakAssistantText.mock.calls.map((call) => call[0].text);
+    const spoken = readDeviceSpeech();
     // Only the first chunk should have actually been spoken; the epoch advanced
     // by interrupt() makes every later playChunk a no-op (stale epoch guard).
     expect(spoken.filter((t) => t.length > 0)).toEqual([spoken.find((t) => t.length > 0)]);
     expect(spoken.some((t) => t.includes('Gamma'))).toBe(false);
+    expect(expoSpeechStop).toHaveBeenCalledOnce();
   });
 
 });

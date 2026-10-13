@@ -1,40 +1,31 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol';
 
 import { composeCurrentUiContextSnapshot } from '@/components/appShell/currentUiContext/currentUiContextModel';
-import { storage } from '@/sync/domains/state/storage';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { Message } from "@happier-dev/session-core/messages";
 import { projectParameterFreeRoute } from '@/track/parameterFreeRouteProjection';
-import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 
-const { fakeSink, getVoiceContextSinkForSession } = vi.hoisted(() => {
-  const fakeSink = {
-    sendTextMessage: vi.fn(),
-    sendContextualUpdate: vi.fn(),
-  };
-  return {
-    fakeSink,
-    getVoiceContextSinkForSession: vi.fn(() => fakeSink),
-  };
-});
+vi.mock('socket.io-client', async (importOriginal) =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal),
+);
 
-vi.mock('@/voice/context/getVoiceContextSinkForSession', () => ({
-  getVoiceContextSinkForSession,
-}));
+installDisconnectedServerSocketBoundary();
 
-vi.mock('@/sync/domains/server/serverRuntime', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/sync/domains/server/serverRuntime')>()),
-  getActiveServerSnapshot: () => ({
-    serverId: 'server-a',
-    serverUrl: 'https://server-a.example.test',
-    generation: 1,
-  }),
-}));
+const { storage } = await import('@/sync/domains/state/storage');
+const { useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { registerVoiceAdapters, resetVoiceAdapterRegistryForTests } = await import('@/voice/session/voiceAdapterRegistry');
+const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+const { createCurrentUiContextAutomaticUpdateProjector, voiceHooks } = await import('./voiceHooks');
 
-import {
-  createCurrentUiContextAutomaticUpdateProjector,
-  voiceHooks,
-} from './voiceHooks';
+const TEST_SERVER_ID = getActiveServerSnapshot().serverId;
+const fakeSink = {
+  sendTextMessage: vi.fn<(text: string) => void>(),
+  sendContextualUpdate: vi.fn<(text: string, contextClass?: import('@/voice/session/types').HostAuthoredContextClass) => void>(),
+};
 
 const initialSettings = structuredClone(storage.getState().settings);
 
@@ -53,32 +44,45 @@ function seedSession(sessionId: string) {
     ...state,
     sessions: {
       ...state.sessions,
-      [sessionId]: {
+      [sessionId]: createSessionFixture({
         id: sessionId,
-        serverId: 'server-a',
+        serverId: TEST_SERVER_ID,
         // Readability is evidence: without a declared mode the awareness owner projects
         // `locked` and Voice withholds every detail these privacy cases assert on.
         encryptionMode: 'plain',
         metadata: { path: '/tmp/project', host: 'localhost', summary: { text: 'Summary', updatedAt: Date.now() } },
         presence: 'online',
-      },
+      }),
     },
     sessionMessages: {
       ...state.sessionMessages,
-      [sessionId]: {
-        messages: [],
-      },
+      [sessionId]: createSessionMessagesFixture(),
     },
   }));
 }
 
 describe('voiceHooks privacy settings (opt-out defaults)', () => {
+  afterEach(() => {
+    voiceHooks.onVoiceStopped();
+    resetVoiceAdapterRegistryForTests();
+    setVoiceSessionSnapshot({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+  });
   beforeEach(() => {
     // Reset attempt-local disclosure state through its public lifecycle owner.
     voiceHooks.onVoiceStopped();
     fakeSink.sendTextMessage.mockReset();
     fakeSink.sendContextualUpdate.mockReset();
-    getVoiceContextSinkForSession.mockClear();
+    resetVoiceAdapterRegistryForTests();
+    const snapshot = { adapterId: 'test.privacy', sessionId: 's1', status: 'connected' as const, mode: 'idle' as const, canStop: true };
+    // Observe the provider output boundary through the real adapter registry
+    // and context sink, rather than substituting the disclosure owner.
+    registerVoiceAdapters([{
+      id: snapshot.adapterId, engineKind: 'realtime', start: async () => {}, stop: async () => {},
+      toggle: async () => {}, interrupt: async () => {}, setMuted: async () => {}, sendContextUpdate: () => {},
+      getSnapshot: () => snapshot,
+      resolveContextChannel: () => ({ hostAuthoredContext: 'session_context', ...fakeSink }),
+    }]);
+    setVoiceSessionSnapshot(snapshot);
     storage.setState((s: any) => ({
       ...s,
       settings: structuredClone(initialSettings),
@@ -88,8 +92,8 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       concurrentSessionListCacheByServerId: {},
     }));
     seedSession('s1');
-    useVoiceTargetStore.getState().setPrimaryActionSessionAddress({ serverId: 'server-a', sessionId: 's1' });
-    useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([{ serverId: 'server-a', sessionId: 's1' }]);
+    useVoiceTargetStore.getState().setPrimaryActionSessionAddress({ serverId: TEST_SERVER_ID, sessionId: 's1' });
+    useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([{ serverId: TEST_SERVER_ID, sessionId: 's1' }]);
     // The local voice target must be re-established by each case, otherwise a
     // previous case's focus makes a target assertion pass without the code
     // under test ever running.
@@ -111,9 +115,9 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       },
     }));
 
-    (voiceHooks as any).onAgentRequest({ serverId: 'server-a', sessionId: 's1' }, 'r1', 'permission', 'rm', { path: '/tmp' });
-    expect(getVoiceContextSinkForSession).not.toHaveBeenCalled();
+    (voiceHooks as any).onAgentRequest({ serverId: TEST_SERVER_ID, sessionId: 's1' }, 'r1', 'permission', 'rm', { path: '/tmp' });
     expect(fakeSink.sendTextMessage).not.toHaveBeenCalled();
+    expect(fakeSink.sendContextualUpdate).not.toHaveBeenCalled();
   });
 
   it('keeps automatic session focus local instead of reporting stored session context', () => {
@@ -174,10 +178,10 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       },
     }));
 
-    voiceHooks.onSessionFocus({ serverId: 'server-a', sessionId: 's1' });
+    voiceHooks.onSessionFocus({ serverId: TEST_SERVER_ID, sessionId: 's1' });
 
     const providerBoundPayloads = fakeSink.sendContextualUpdate.mock.calls
-      .map((call) => String(call[1] ?? ''))
+      .map((call) => String(call[0] ?? ''))
       .join('\n');
     expect(providerBoundPayloads).toBe('');
     expect(providerBoundPayloads).not.toContain('SESSION_FOCUS_PATH_SENTINEL');
@@ -208,13 +212,13 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
         },
       }));
 
-      voiceHooks.onSessionFocus({ serverId: 'server-a', sessionId: 's1' }, { summary: { text: 'Summary' } });
+      voiceHooks.onSessionFocus({ serverId: TEST_SERVER_ID, sessionId: 's1' }, { summary: { text: 'Summary' } });
 
       // Focusing a session is an observation of this device's UI, so it always
       // updates the local voice target. The dedicated current-UI subscription
       // is the only automatic provider disclosure path.
       expect(useVoiceTargetStore.getState().lastFocusedSessionAddress).toEqual({
-        serverId: 'server-a',
+        serverId: TEST_SERVER_ID,
         sessionId: 's1',
       });
       expect(fakeSink.sendContextualUpdate).not.toHaveBeenCalled();
@@ -236,27 +240,24 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       },
     }));
 
-    voiceHooks.onSessionFocus({ serverId: 'server-a', sessionId: 's1' }, { summary: { text: 'Summary' } });
+    voiceHooks.onSessionFocus({ serverId: TEST_SERVER_ID, sessionId: 's1' }, { summary: { text: 'Summary' } });
 
     // Automatic current-UI mode does not turn a session-focus event into a
     // stored-session disclosure at any update level.
     expect(useVoiceTargetStore.getState().lastFocusedSessionAddress).toEqual({
-      serverId: 'server-a',
+      serverId: TEST_SERVER_ID,
       sessionId: 's1',
     });
     expect(fakeSink.sendContextualUpdate).not.toHaveBeenCalled();
   });
 
   it('redacts tool args in permission requests by default', () => {
-    (voiceHooks as any).onAgentRequest({ serverId: 'server-a', sessionId: 's1' }, 'r1', 'permission', 'execute', { secret: 'do_not_leak' });
-
-    expect(getVoiceContextSinkForSession).toHaveBeenCalledWith('s1');
+    (voiceHooks as any).onAgentRequest({ serverId: TEST_SERVER_ID, sessionId: 's1' }, 'r1', 'permission', 'execute', { secret: 'do_not_leak' });
     expect(fakeSink.sendTextMessage).toHaveBeenCalledWith(
-      's1',
       expect.stringContaining('<request_id>r1</request_id>'),
     );
-    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith('s1', expect.stringContaining('<tool_args_redacted>true</tool_args_redacted>'));
-    expect(fakeSink.sendTextMessage).not.toHaveBeenCalledWith('s1', expect.stringContaining('do_not_leak'));
+    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith(expect.stringContaining('<tool_args_redacted>true</tool_args_redacted>'));
+    expect(fakeSink.sendTextMessage).not.toHaveBeenCalledWith(expect.stringContaining('do_not_leak'));
   });
 
   it('still redacts tool args when a raw voice privacy blob tries to enable shareToolArgs', () => {
@@ -274,16 +275,14 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       },
     }));
 
-    (voiceHooks as any).onAgentRequest({ serverId: 'server-a', sessionId: 's1' }, 'r1', 'permission', 'execute', { secret: 'do_not_leak' });
-
-    expect(getVoiceContextSinkForSession).toHaveBeenCalledWith('s1');
-    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith('s1', expect.stringContaining('<tool_args_redacted>true</tool_args_redacted>'));
-    expect(fakeSink.sendTextMessage).not.toHaveBeenCalledWith('s1', expect.stringContaining('do_not_leak'));
+    (voiceHooks as any).onAgentRequest({ serverId: TEST_SERVER_ID, sessionId: 's1' }, 'r1', 'permission', 'execute', { secret: 'do_not_leak' });
+    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith(expect.stringContaining('<tool_args_redacted>true</tool_args_redacted>'));
+    expect(fakeSink.sendTextMessage).not.toHaveBeenCalledWith(expect.stringContaining('do_not_leak'));
   });
 
   it('forwards user-action requests with question details and answer guidance', () => {
     (voiceHooks as any).onAgentRequest(
-      { serverId: 'server-a', sessionId: 's1' },
+      { serverId: TEST_SERVER_ID, sessionId: 's1' },
       'req_question',
       'user_action',
       'AskUserQuestion',
@@ -298,28 +297,24 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
         ],
       },
     );
-
-    expect(getVoiceContextSinkForSession).toHaveBeenCalledWith('s1');
-    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith('s1', expect.stringContaining('<request_kind>user_action</request_kind>'));
-    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith('s1', expect.stringContaining('Continue with the deployment?'));
-    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith('s1', expect.stringContaining('answerUserActionRequest'));
-    expect(fakeSink.sendTextMessage).not.toHaveBeenCalledWith('s1', expect.stringContaining('processPermissionRequest'));
+    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith(expect.stringContaining('<request_kind>user_action</request_kind>'));
+    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith(expect.stringContaining('Continue with the deployment?'));
+    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith(expect.stringContaining('answerUserActionRequest'));
+    expect(fakeSink.sendTextMessage).not.toHaveBeenCalledWith(expect.stringContaining('processPermissionRequest'));
   });
 
   it('keeps non-AskUserQuestion user-action requests actionable when tool args are redacted', () => {
     (voiceHooks as any).onAgentRequest(
-      { serverId: 'server-a', sessionId: 's1' },
+      { serverId: TEST_SERVER_ID, sessionId: 's1' },
       'req_exit_plan',
       'user_action',
       'ExitPlanMode',
       { plan: 'Review changes under /Users/alice/SecretRepo before exiting plan mode.' },
     );
-
-    expect(getVoiceContextSinkForSession).toHaveBeenCalledWith('s1');
-    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith('s1', expect.stringContaining('<request_kind>user_action</request_kind>'));
-    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith('s1', expect.stringContaining('approve, reject, or request changes'));
-    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith('s1', expect.stringContaining('<request_payload_redacted>true</request_payload_redacted>'));
-    expect(fakeSink.sendTextMessage).not.toHaveBeenCalledWith('s1', expect.stringContaining('/Users/alice/SecretRepo'));
+    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith(expect.stringContaining('<request_kind>user_action</request_kind>'));
+    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith(expect.stringContaining('approve, reject, or request changes'));
+    expect(fakeSink.sendTextMessage).toHaveBeenCalledWith(expect.stringContaining('<request_payload_redacted>true</request_payload_redacted>'));
+    expect(fakeSink.sendTextMessage).not.toHaveBeenCalledWith(expect.stringContaining('/Users/alice/SecretRepo'));
   });
 
   it('still forwards activity-only message updates when shareRecentMessages is false (no transcript content)', () => {
@@ -337,10 +332,9 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       },
     }));
 
-    voiceHooks.onMessages({ serverId: 'server-a', sessionId: 's1' }, [createUserTextMessage('hi', 1)]);
-    expect(getVoiceContextSinkForSession).toHaveBeenCalledWith('s1');
+    voiceHooks.onMessages({ serverId: TEST_SERVER_ID, sessionId: 's1' }, [createUserTextMessage('hi', 1)]);
     expect(fakeSink.sendContextualUpdate).toHaveBeenCalled();
-    expect(fakeSink.sendContextualUpdate).not.toHaveBeenCalledWith('s1', expect.stringContaining('hi'));
+    expect(fakeSink.sendContextualUpdate).not.toHaveBeenCalledWith(expect.stringContaining('hi'));
   });
 
   it('returns a global boot prompt when voice starts without a session id', () => {
@@ -368,7 +362,7 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
         },
       },
       sessionListRowsByServerId: {
-        'server-a': {
+        [TEST_SERVER_ID]: {
           s1: {
             id: 's1',
             updatedAt: 99,
@@ -381,20 +375,20 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
         },
       },
       ordinarySessionListMembershipByServerId: {
-        'server-a': ['s1'],
+        [TEST_SERVER_ID]: ['s1'],
       },
       sessionListIndexByServerId: {
-        'server-a': [
+        [TEST_SERVER_ID]: [
           {
             type: 'session',
             sessionId: 's1',
-            serverId: 'server-a',
+            serverId: TEST_SERVER_ID,
             serverName: 'Active',
           },
         ],
       },
     }));
-    useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([{ serverId: 'server-a', sessionId: 's1' }]);
+    useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([{ serverId: TEST_SERVER_ID, sessionId: 's1' }]);
 
     const prompt = voiceHooks.onVoiceStarted('s1', 'session_context');
 
@@ -403,7 +397,7 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
   });
 
   it('contributes no host-authored startup item for a current-UI-only attempt', () => {
-    useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([{ serverId: 'server-a', sessionId: 's1' }]);
+    useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([{ serverId: TEST_SERVER_ID, sessionId: 's1' }]);
 
     // An Agent-session realtime attachment runs against a runtime that already
     // owns the authoritative startup prompt, so Happier must add nothing.
@@ -421,10 +415,9 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
     useVoiceTargetStore.getState().setPrimaryActionSessionAddress(null);
     useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([]);
 
-    voiceHooks.onReady({ serverId: 'server-a', sessionId: 's1' });
+    voiceHooks.onReady({ serverId: TEST_SERVER_ID, sessionId: 's1' });
     // activity-only sessions should not emit a full session context block.
     expect(fakeSink.sendContextualUpdate).not.toHaveBeenCalledWith(
-      's1',
       expect.stringContaining('# Session: Summary'),
       'session_context',
     );
@@ -443,9 +436,8 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
         }),
       },
     } }));
-    voiceHooks.onReady({ serverId: 'server-a', sessionId: 's1' });
+    voiceHooks.onReady({ serverId: TEST_SERVER_ID, sessionId: 's1' });
     expect(fakeSink.sendContextualUpdate).toHaveBeenCalledWith(
-      's1',
       expect.stringContaining('# Session: Summary'),
       'session_context',
     );
@@ -456,49 +448,44 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
     useVoiceTargetStore.getState().setPrimaryActionSessionAddress(null);
     useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([]);
 
-    voiceHooks.onReady({ serverId: 'server-a', sessionId: 's1' });
+    voiceHooks.onReady({ serverId: TEST_SERVER_ID, sessionId: 's1' });
     // activity-only sessions should not emit a full session context block.
     expect(fakeSink.sendContextualUpdate).not.toHaveBeenCalledWith(
-      's1',
       expect.stringContaining('# Session: Summary'),
       'session_context',
     );
 
     // Selecting this exact target grants the active policy, independently of the readback cache.
-    useVoiceTargetStore.getState().setPrimaryActionSessionAddress({ serverId: 'server-a', sessionId: 's1' });
-    voiceHooks.onReady({ serverId: 'server-a', sessionId: 's1' });
+    useVoiceTargetStore.getState().setPrimaryActionSessionAddress({ serverId: TEST_SERVER_ID, sessionId: 's1' });
+    voiceHooks.onReady({ serverId: TEST_SERVER_ID, sessionId: 's1' });
     expect(fakeSink.sendContextualUpdate).toHaveBeenCalledWith(
-      's1',
       expect.stringContaining('# Session: Summary'),
       'session_context',
     );
   });
 
   it('dedupes full session context within an attempt and clears it at both lifecycle boundaries', () => {
-    useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([{ serverId: 'server-a', sessionId: 's1' }]);
+    useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([{ serverId: TEST_SERVER_ID, sessionId: 's1' }]);
 
     expect(voiceHooks.onVoiceStarted('s1', 'session_context')).toContain('# Session: Summary');
-    voiceHooks.onReady({ serverId: 'server-a', sessionId: 's1' });
+    voiceHooks.onReady({ serverId: TEST_SERVER_ID, sessionId: 's1' });
     expect(fakeSink.sendContextualUpdate).not.toHaveBeenCalledWith(
-      's1',
       expect.stringContaining('# Session: Summary'),
       'session_context',
     );
 
     voiceHooks.onVoiceStopped();
-    voiceHooks.onReady({ serverId: 'server-a', sessionId: 's1' });
+    voiceHooks.onReady({ serverId: TEST_SERVER_ID, sessionId: 's1' });
     expect(fakeSink.sendContextualUpdate).toHaveBeenCalledTimes(1);
     expect(fakeSink.sendContextualUpdate).toHaveBeenLastCalledWith(
-      's1',
       expect.stringContaining('# Session: Summary'),
       'session_context',
     );
 
     voiceHooks.onVoiceStarted('s1', 'current_ui_only');
-    voiceHooks.onReady({ serverId: 'server-a', sessionId: 's1' });
+    voiceHooks.onReady({ serverId: TEST_SERVER_ID, sessionId: 's1' });
     expect(fakeSink.sendContextualUpdate).toHaveBeenCalledTimes(2);
     expect(fakeSink.sendContextualUpdate).toHaveBeenLastCalledWith(
-      's1',
       expect.stringContaining('# Session: Summary'),
       'session_context',
     );
@@ -537,13 +524,10 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
     }, automaticUpdateProjector);
 
     if (!shouldForward) {
-      expect(getVoiceContextSinkForSession).not.toHaveBeenCalled();
       expect(fakeSink.sendContextualUpdate).not.toHaveBeenCalled();
       return;
     }
-
-    expect(getVoiceContextSinkForSession).toHaveBeenCalledWith('s1');
-    const update = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[1] ?? '');
+    const update = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[0] ?? '');
     expect(update).toContain('"area":"session"');
     expect(update).toContain('"screen":"details"');
     expect(update).toContain('"presentation":"pane"');
@@ -578,7 +562,7 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       commands: [],
     }, createCurrentUiContextAutomaticUpdateProjector());
 
-    const update = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[1] ?? '');
+    const update = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[0] ?? '');
     expect(update).toContain('"area":"plugin"');
     expect(update).not.toContain('PLUGIN_LABEL_SENTINEL');
   });
@@ -608,7 +592,7 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       commands: [],
     }, createCurrentUiContextAutomaticUpdateProjector());
 
-    const update = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[1] ?? '');
+    const update = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[0] ?? '');
     expect(update).toContain('"area":"settings"');
     expect(update).toContain('"screen":"settings.plugin_page"');
     expect(update).not.toContain('PLUGIN_SETTINGS_LABEL_SENTINEL');
@@ -639,7 +623,7 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       commands: [],
     }, createCurrentUiContextAutomaticUpdateProjector());
 
-    const update = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[1] ?? '');
+    const update = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[0] ?? '');
     expect(update).toContain('"area":"settings"');
     expect(update).toContain('"screen":"settings_page"');
     expect(update).toContain('"presentation":"screen"');
@@ -682,7 +666,7 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
     } as never);
     (voiceHooks as any).onCurrentUiContextChanged('s1', sessionSnapshot, projector);
 
-    const sessionUpdate = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[1] ?? '');
+    const sessionUpdate = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[0] ?? '');
     expect(sessionUpdate).toContain(`"area":"${sessionSnapshot.navigation.area}"`);
     expect(sessionUpdate).toContain(`"screen":"${sessionSnapshot.navigation.screen}"`);
     expect(sessionUpdate).toContain(`"presentation":"${sessionSnapshot.navigation.presentation}"`);
@@ -705,7 +689,7 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
     } as never);
     (voiceHooks as any).onCurrentUiContextChanged('s1', machineSnapshot, projector);
 
-    const machineUpdate = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[1] ?? '');
+    const machineUpdate = String(fakeSink.sendContextualUpdate.mock.calls.at(-1)?.[0] ?? '');
     expect(machineUpdate).toContain(`"area":"${machineSnapshot.navigation.area}"`);
     expect(machineUpdate).toContain(`"screen":"${machineSnapshot.navigation.screen}"`);
     expect(machineUpdate).toContain(`"presentation":"${machineSnapshot.navigation.presentation}"`);
@@ -843,8 +827,8 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
     (voiceHooks as any).onCurrentUiContextChanged('s1', null, projector);
 
     expect(fakeSink.sendContextualUpdate.mock.calls).toEqual([
-      ['s1', navigationUpdate, 'current_ui'],
-      ['s1', retiredUpdate, 'current_ui'],
+      [navigationUpdate, 'current_ui'],
+      [retiredUpdate, 'current_ui'],
     ]);
     expect(retiredUpdate).not.toContain('PRIVATE ENTITY');
     expect(retiredUpdate).not.toContain('PRIVATE DETAIL');

@@ -1,13 +1,22 @@
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from 'vitest';
-import type { FeatureDecision } from '@happier-dev/protocol';
-import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
+vi.mock('socket.io-client', async importOriginal =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+import { FeaturesResponseSchema, ExecutionRunEnsureOrStartRequestSchema, ExecutionRunPublicStateSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { LlmTaskRunnerConfigV1Schema } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { attachAgentPluginSettings } from '@/agents/registry/agentUiSettingLookup';
 import { createDeferred, flushHookEffects } from '@/dev/testkit';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
-import { installVoiceAgentCommonModuleMocks } from '@/voice/agent/voiceAgentTestHelpers';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
 import { storage } from '@/sync/domains/state/storage';
+import { parseToken } from '@/utils/auth/parseToken';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
+import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -15,40 +24,20 @@ import { getRetainedLocalVoiceEffectOutcomes } from '@/voice/tools/localVoiceEff
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const start = vi.fn(async () => ({ voiceAgentId: 'm1' }));
-const startTurnStream = vi.fn(async (_args: unknown) => ({ streamId: 'stream-1' }));
-const readTurnStream = vi.fn();
-const cancelTurnStream = vi.fn(async () => ({ ok: true }));
-const sendTurn = vi.fn(async () => ({ assistantText: 'fallback', actions: [] }));
-const welcome = vi.fn(async () => ({ assistantText: 'Welcome!' }));
-const commit = vi.fn(async () => ({ commitText: 'commit' }));
-const stop = vi.fn(async () => ({ ok: true }));
-const isRuntimeFeatureEnabled = vi.fn<(args: any) => Promise<boolean>>(async () => true);
-const resolveRuntimeFeatureDecision = vi.fn<(args: any) => Promise<FeatureDecision>>(async (args: any) => ({
-  featureId: args?.featureId,
-  state: 'enabled',
-  blockedBy: null,
-  blockerCode: 'none',
-  diagnostics: [],
-  evaluatedAt: Date.now(),
-  scope: {
-    scopeKind: 'runtime',
-    ...(args?.serverId ? { serverId: String(args.serverId) } : {}),
-  },
-}));
-const ensureVoiceAgentInstallablesBackground = vi.fn(async (_args: unknown) => {});
-const sessionExecutionRunGet = vi.fn(async (..._args: any[]): Promise<any> => ({
+const daemonStart = vi.fn(async (_args: unknown) => ({ ok: true, runId: 'm1', created: true }));
+const daemonStreamStart = vi.fn(async (_args: unknown) => ({ streamId: 'stream-1' }));
+const daemonStreamRead = vi.fn();
+const daemonStreamCancel = vi.fn(async (_args: unknown) => ({ ok: true }));
+const daemonWelcome = vi.fn(async () => ({ assistantText: 'Welcome!' }));
+const daemonCommit = vi.fn(async () => ({ commitText: 'commit' }));
+const daemonRunGet = vi.fn(async (..._args: any[]): Promise<any> => ({
   ok: false,
   error: 'Execution run not found',
   errorCode: 'execution_run_not_found',
 }));
-const sessionExecutionRunList = vi.fn(async (..._args: any[]): Promise<any> => ({ runs: [] }));
-const sessionExecutionRunStop = vi.fn(async (..._args: any[]): Promise<any> => ({ ok: true }));
-const buildVoiceInitialContext = vi.fn((sessionId: string, options?: { targetSessionId?: string | null; targetSessionAddress?: { serverId: string; sessionId: string } | null }) => {
-  const targetSessionId = options?.targetSessionAddress?.sessionId ?? (typeof options?.targetSessionId === 'string' ? options.targetSessionId.trim() : '');
-  if (targetSessionId) return `TARGET_CONTEXT:${sessionId}->${targetSessionId}`;
-  return `ACTIVE_CONTEXT:${sessionId}`;
-});
+const daemonRunList = vi.fn(async (..._args: any[]): Promise<any> => ({ runs: [] }));
+const daemonRunStop = vi.fn(async (..._args: any[]): Promise<any> => ({ ok: true }));
+const retainedRuns = new Map<string, Awaited<ReturnType<typeof createRetainedVoiceAgentRpcBoundary>>>();
 
 type TurnStreamReadResult = {
   streamId: string;
@@ -179,65 +168,109 @@ function setVoiceControllerState(options?: Parameters<typeof createVoiceControll
   setControllerState(() => createVoiceControllerState(options));
 }
 
-vi.mock('@/voice/agent/daemonVoiceAgentClient', () => ({
-  DaemonVoiceAgentClient: class {
-    start = start;
-    startTurnStream = startTurnStream;
-    readTurnStream = readTurnStream;
-    cancelTurnStream = cancelTurnStream;
-    sendTurn = sendTurn;
-    welcome = welcome;
-    commit = commit;
-    stop = stop;
-  },
-}));
 
-vi.mock('@/voice/context/buildVoiceInitialContext', () => ({
-  buildVoiceInitialContext: (sessionId: string, options?: Parameters<typeof buildVoiceInitialContext>[1]) =>
-    buildVoiceInitialContext(sessionId, options),
-}));
-
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
-  sessionExecutionRunGet: (...args: unknown[]) => sessionExecutionRunGet(...args),
-  sessionExecutionRunList: (...args: unknown[]) => sessionExecutionRunList(...args),
-  sessionExecutionRunStop: (...args: unknown[]) => sessionExecutionRunStop(...args),
-}));
-
-vi.mock('@/voice/agent/ensureVoiceAgentInstallablesBackground', () => ({
-  ensureVoiceAgentInstallablesBackground: (args: any) => ensureVoiceAgentInstallablesBackground(args),
-}));
-
-vi.mock('@/voice/agent/resolveDaemonVoiceAgentModels', () => ({
-  resolveDaemonVoiceAgentModelIds: () => ({ chatModelId: 'chat', commitModelId: 'commit' }),
-}));
 
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 const requestedPaths: string[] = [];
 let hydratedTargetActive = true;
+let installerReply: ((method: string, payload: unknown) => Promise<unknown>) | null = null;
+const daemonEffects: string[] = [];
+let sessionHttp: ReturnType<typeof createSessionMetadataHttpBoundary>;
+
+function installSessionHttpSnapshot() {
+  sessionHttp = createSessionMetadataHttpBoundary(() => Object.fromEntries(
+    Object.entries(storage.getState().sessions).map(([id, session]) => [id, createSessionFixture({ ...session,
+      metadata: { path: '/test', host: 'test', ...readVoiceSessionOwnerMetadataFromState(storage.getState(), id) },
+      active: id === 's1' ? session.active && hydratedTargetActive : session.active,
+      updatedAt: session.updatedAt + 1, activeAt: session.activeAt + 1, seq: session.seq + 1,
+    })]),
+  ));
+}
 
 function setControllerState(read: () => any): void {
   const fixture = read();
   const sessions = Object.fromEntries(Object.entries(fixture.sessions ?? {}).map(([id, value]) => [
     id, createSessionFixture({ ...value as Parameters<typeof createSessionFixture>[0], id, serverId: connection.home.id }),
   ]));
-  storage.setState({ ...fixture, sessions });
+  storage.setState({ ...fixture, settings: { experiments: true,
+    featureToggles: { voice: true, 'voice.agent': true, 'execution.runs': true }, ...fixture.settings }, sessions });
+  installSessionHttpSnapshot();
 }
 
-installVoiceAgentCommonModuleMocks();
 installDisconnectedServerSocketBoundary((socket) => {
-  socket.connected = true;
-  vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, ...args: unknown[]) => {
+  vi.mocked(socket.connect).mockImplementation(() => {
+    socket.connected = true;
+    for (const listener of socket.listeners('connect')) listener();
+    return socket;
+  });
+  // This scoped pool can retain a Socket across cases. The external ACK
+  // replacement must survive per-case spy restoration, as the SDK owner does.
+  socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, ...args) => {
+    if (event === 'rpc-call') {
+      const request = args[0] as { method: string; params: unknown };
+      const separator = request.method.indexOf(':');
+      const targetId = request.method.slice(0, separator);
+      const method = request.method.slice(separator + 1);
+      const token = typeof socket.auth === 'object' ? socket.auth.token : null;
+      if (typeof token !== 'string') throw new Error('Expected authenticated daemon ACK');
+      const scope = { scope: { serverId: connection.home.id, accountId: parseToken(token) } };
+      if (installerReply && (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+          || method === RPC_METHODS.CAPABILITIES_DETECT || method === RPC_METHODS.CAPABILITIES_INVOKE)) {
+        return { ok: true, result: await installerReply(method, request.params) };
+      }
+      if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+        return { ok: true, result: { error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' } };
+      }
+      if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) return { ok: true, result: await daemonRunGet(targetId, request.params, scope) };
+      if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return { ok: true, result: await daemonRunList(targetId, request.params, scope) };
+      if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) return { ok: true, result: await daemonRunStop(targetId, request.params, scope) };
+      try {
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START || method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) {
+          const admission = ExecutionRunEnsureOrStartRequestSchema.parse(request.params);
+          daemonEffects.push('admit');
+          const result = await daemonStart({ ...admission.start, sessionId: targetId,
+            runId: admission.runId, resume: admission.resume });
+          if (result.ok) {
+            const key = `${targetId}:${result.runId}`;
+            const retained = retainedRuns.get(key) ?? await createRetainedVoiceAgentRpcBoundary({ runId: result.runId });
+            // The daemon retains policy from the accepted admission, never from
+            // whatever settings the UI happens to have during later recovery.
+            await retained.dispatch(method, admission);
+            retainedRuns.set(key, retained);
+          }
+          return { ok: true, result };
+        }
+        const input = request.params as Record<string, unknown>;
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START || method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2) {
+          return { ok: true, result: await daemonStreamStart({ ...input, sessionId: targetId }) };
+        }
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) return { ok: true, result: await daemonStreamRead({ ...input, sessionId: targetId }) };
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) return { ok: true, result: await daemonStreamCancel({ ...input, sessionId: targetId }) };
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ACTION) {
+          const result = input.actionId === 'voice_agent.welcome' ? await daemonWelcome() : await daemonCommit();
+          return { ok: true, result: { ok: true, result } };
+        }
+      } catch (error) {
+        const failure = error as Error & { rpcErrorCode?: string };
+        return { ok: true, result: { ok: false, error: failure.message, errorCode: failure.rpcErrorCode } };
+      }
+      throw new Error(`Unexpected daemon method: ${method}`);
+    }
     if (event !== 'update-metadata') throw new Error(`Unexpected socket event: ${event}`);
     const payload = args[0] as { metadata: string; expectedVersion: number };
     return { result: 'success', metadata: payload.metadata, version: payload.expectedVersion + 1 };
   });
 });
 
-vi.mock('@/sync/domains/features/featureDecisionInputs', () => ({
-  isRuntimeFeatureEnabled: (args: any) => isRuntimeFeatureEnabled(args),
-  resolveRuntimeFeatureDecision: (args: any) => resolveRuntimeFeatureDecision(args),
-}));
 await loadSyncSingletonForTests();
+const { buildVoiceInitialContext } = await import('@/voice/context/buildVoiceInitialContext');
+const targetInitialContext = () => {
+  const context = buildVoiceInitialContext(VOICE_AGENT_GLOBAL_SESSION_ID, {
+    targetSessionAddress: { serverId: connection.home.id, sessionId: 's1' },
+  });
+  if (!context) throw new Error('Expected real target Session context');
+  return context;
+};
 
 describe('VoiceExecutionTransport (streaming)', () => {
   let createVoiceExecutionTransport: () => any;
@@ -249,66 +282,68 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
   beforeEach(async () => {
     requestedPaths.length = 0;
+    daemonEffects.length = 0;
+    retainedRuns.clear();
+    installerReply = null;
     hydratedTargetActive = true;
+    installSessionHttpSnapshot();
     connection = await restoreServerAccountForTest({
       serverUrl: 'https://voice-streaming.example.test',
-      request: async (url) => {
+      request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         requestedPaths.push(path);
-        const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 });
+        const json = (value: unknown) => Response.json(value);
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return json(FeaturesResponseSchema.parse({ features: { voice: { enabled: true } }, capabilities: {} }));
+        if (path === '/health') return json({ status: 'ok' });
+        if (path === '/v2/cursor') return json({ cursor: 0, changesFloor: 0 });
+        if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
+        const machineDetail = /^\/v1\/machines\/([^/]+)(\/access)?$/.exec(path);
+        if (machineDetail) {
+          const machineId = decodeURIComponent(machineDetail[1]);
+          const machine = createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' });
+          return json(machineDetail[2] ? MachineAccessGrantsListResponseV1Schema.parse({ machineId,
+            custodian: machine.access.custodian, access: machine.access, canManage: true,
+            grants: [], ownDirectGrant: false, ownAccessSources: [],
+          }) : { machine });
+        }
         if (path.endsWith('/messages')) return json({ messages: [], hasMore: false });
         if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
-        const sessionId = path.startsWith('/v2/sessions/') ? decodeURIComponent(path.slice('/v2/sessions/'.length)) : null;
-        const session = sessionId ? storage.getState().sessions[sessionId] : null;
-        if (session) return json({ session: SessionCurrentProjectionRecordV1Schema.parse({
-          ...session, encryptionMode: 'plain', metadataLayoutVersion: 0,
-          effectiveAccess: { v: 1, level: session.access!.level, sources: [{ kind: 'owner' }], capabilities: session.access!.capabilities },
-          responsibleAccountId: session.responsibleAccountId ?? null,
-          responsibleAccount: session.responsibleAccount ?? null,
-          metadata: JSON.stringify({ path: '/test', host: 'test', ...session.metadata }),
-          active: session.id === 's1' ? session.active && hydratedTargetActive : session.active,
-          updatedAt: session.updatedAt + 1,
-          activeAt: session.activeAt + 1,
-          seq: session.seq + 1,
-          archivedAt: null, agentState: null, dataEncryptionKey: null,
-          pendingCount: 0, pendingVersion: 0,
-        }) });
+        const sessionResponse = sessionHttp.handle(url, init);
+        if (sessionResponse) return sessionResponse;
         return new Response('{}', { status: 404 });
       },
     });
     vi.useFakeTimers();
     setVoiceControllerState();
     useVoiceTargetStore.setState({ scope: 'global', primaryActionSessionAddress: null, voiceLiveContextSessionAddresses: [], lastFocusedSessionAddress: null } as any);
-    isRuntimeFeatureEnabled.mockReset();
-    isRuntimeFeatureEnabled.mockResolvedValue(true);
-    ensureVoiceAgentInstallablesBackground.mockReset();
-    sessionExecutionRunGet.mockReset();
-    sessionExecutionRunGet.mockResolvedValue({ run: null });
-    sessionExecutionRunList.mockReset();
-    sessionExecutionRunList.mockResolvedValue({ runs: [] });
-    sessionExecutionRunStop.mockReset();
-    buildVoiceInitialContext.mockClear();
+    daemonRunGet.mockReset();
+    daemonRunGet.mockImplementation(async (targetId: string, input: { runId: string }) =>
+      retainedRuns.get(`${targetId}:${input.runId}`)?.dispatch(SESSION_RPC_METHODS.EXECUTION_RUN_GET, input)
+        ?? { ok: false, error: 'Run not found', errorCode: 'execution_run_not_found' });
+    daemonRunList.mockReset();
+    daemonRunList.mockResolvedValue({ runs: [] });
+    daemonRunStop.mockReset();
     voiceSessionBindingStore.setState((state) => ({
       ...state,
       runtimeBindingsByConversationSessionId: {},
       persistedBindingsByConversationSessionId: {},
       bindingsByConversationSessionId: {},
     }));
-    start.mockReset();
-    start.mockImplementation(async () => ({ voiceAgentId: 'm1' }));
-    startTurnStream.mockClear();
-    readTurnStream.mockReset();
-    readTurnStream.mockImplementation(async () => ({
+    daemonStart.mockReset();
+    daemonStart.mockImplementation(async (_args: unknown) => ({ ok: true, runId: 'm1', created: true }));
+    daemonStreamStart.mockClear();
+    daemonStreamRead.mockReset();
+    daemonStreamRead.mockImplementation(async () => ({
       streamId: 'stream-1',
       events: [{ t: 'done', assistantText: 'ok', actions: [] }],
       nextCursor: 1,
       done: true,
     }));
-    cancelTurnStream.mockClear();
-    sendTurn.mockClear();
-    welcome.mockClear();
-    commit.mockClear();
-    stop.mockClear();
+    daemonStreamCancel.mockClear();
+
+    daemonWelcome.mockClear();
+    daemonCommit.mockClear();
+    daemonRunStop.mockResolvedValue({ ok: true });
   });
 
   afterEach(async () => {
@@ -322,7 +357,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn('s1', 'hello');
 
-    expect(readTurnStream).toHaveBeenCalledWith(
+    expect(daemonStreamRead).toHaveBeenCalledWith(
       expect.objectContaining({
         maxEvents: 7,
       }),
@@ -417,12 +452,12 @@ describe('VoiceExecutionTransport (streaming)', () => {
     });
 
     expect(requestedPaths).toContain('/v2/sessions/s1');
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('projects execution_run_busy without stopping or redispatching the turn', async () => {
-    start.mockResolvedValueOnce({ voiceAgentId: 'busy-run' });
-    startTurnStream.mockRejectedValueOnce(
+    daemonStart.mockResolvedValueOnce({ ok: true, runId: 'busy-run', created: true });
+    daemonStreamStart.mockRejectedValueOnce(
       Object.assign(new Error('Voice agent busy'), { rpcErrorCode: 'execution_run_busy' }),
     );
 
@@ -432,15 +467,15 @@ describe('VoiceExecutionTransport (streaming)', () => {
       message: 'Voice agent busy',
       rpcErrorCode: 'execution_run_busy',
     });
-    expect(stop).not.toHaveBeenCalled();
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(startTurnStream).toHaveBeenCalledTimes(1);
+    expect(daemonRunStop).not.toHaveBeenCalled();
+    expect(daemonStart).toHaveBeenCalledTimes(1);
+    expect(daemonStreamStart).toHaveBeenCalledTimes(1);
   });
 
   it('aborts and settles the active turn before clearing its retained effect outcomes on stop', async () => {
     const blockedRead = createDeferred<TurnStreamReadResult>();
-    startTurnStream.mockResolvedValueOnce({ streamId: 'stream-stop' });
-    readTurnStream.mockImplementationOnce(async () => await blockedRead.promise);
+    daemonStreamStart.mockResolvedValueOnce({ streamId: 'stream-stop' });
+    daemonStreamRead.mockImplementationOnce(async () => await blockedRead.promise);
     const outcomes = getRetainedLocalVoiceEffectOutcomes('s1');
     outcomes.set('effect-stop', {
       fingerprint: 'fingerprint-stop',
@@ -449,7 +484,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     const controller = createVoiceExecutionTransport();
     const activeTurn = trackPromise(controller.sendTurn('s1', 'hello'));
-    await vi.waitFor(() => expect(readTurnStream).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(daemonStreamRead).toHaveBeenCalledTimes(1));
 
     const stopping = trackPromise(controller.stop('s1'));
     await Promise.resolve();
@@ -460,29 +495,29 @@ describe('VoiceExecutionTransport (streaming)', () => {
     expect(turnResult.status).toBe('rejected');
     await expect(stopping.settled).resolves.toMatchObject({ status: 'resolved' });
     expect(getRetainedLocalVoiceEffectOutcomes('s1').size).toBe(0);
-    expect(cancelTurnStream).toHaveBeenCalledWith(expect.objectContaining({ streamId: 'stream-stop' }));
+    expect(daemonStreamCancel).toHaveBeenCalledWith(expect.objectContaining({ streamId: 'stream-stop' }));
   });
 
   it('forwards a concurrent turn to canonical admission instead of queueing it in Voice', async () => {
     const blockedRead = createDeferred<TurnStreamReadResult>();
-    startTurnStream.mockResolvedValueOnce({ streamId: 'stream-active' });
-    startTurnStream.mockRejectedValueOnce(
+    daemonStreamStart.mockResolvedValueOnce({ streamId: 'stream-active' });
+    daemonStreamStart.mockRejectedValueOnce(
       Object.assign(new Error('Voice agent busy'), { rpcErrorCode: 'execution_run_busy' }),
     );
-    readTurnStream.mockImplementationOnce(async () => await blockedRead.promise);
+    daemonStreamRead.mockImplementationOnce(async () => await blockedRead.promise);
 
     const controller = createVoiceExecutionTransport();
     const activeTurn = trackPromise(controller.sendTurn('s1', 'active turn'));
-    await vi.waitFor(() => expect(readTurnStream).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(daemonStreamRead).toHaveBeenCalledTimes(1));
 
     await expect(controller.sendTurn('s1', 'concurrent turn')).rejects.toMatchObject({
       rpcErrorCode: 'execution_run_busy',
     });
 
-    expect(startTurnStream).toHaveBeenCalledTimes(2);
-    expect(readTurnStream).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(stop).not.toHaveBeenCalled();
+    expect(daemonStreamStart).toHaveBeenCalledTimes(2);
+    expect(daemonStreamRead).toHaveBeenCalledTimes(1);
+    expect(daemonStart).toHaveBeenCalledTimes(1);
+    expect(daemonRunStop).not.toHaveBeenCalled();
 
     blockedRead.resolve({
       streamId: 'stream-active',
@@ -499,7 +534,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
   it('joins concurrent stops without retiring the first stop before daemon recovery', async () => {
     const stopStarted = createDeferred<void>();
     const releaseStop = createDeferred<void>();
-    stop.mockImplementationOnce(async () => {
+    daemonRunStop.mockImplementationOnce(async () => {
       stopStarted.resolve();
       await releaseStop.promise;
       return { ok: true };
@@ -513,14 +548,14 @@ describe('VoiceExecutionTransport (streaming)', () => {
     await stopStarted.promise;
     await flushHookEffects({ cycles: 2, turns: 2 });
 
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(daemonRunStop).toHaveBeenCalledTimes(1);
     expect(firstStop.isSettled()).toBe(false);
     expect(secondStop.isSettled()).toBe(false);
 
     releaseStop.resolve();
     await expect(firstStop.settled).resolves.toMatchObject({ status: 'resolved' });
     await expect(secondStop.settled).resolves.toMatchObject({ status: 'resolved' });
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(daemonRunStop).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces a clear error when starting local voice on an inactive target session', async () => {
@@ -536,7 +571,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
       message: 'Target session is inactive. Resume it before starting local voice.',
       code: 'VOICE_AGENT_TARGET_SESSION_INACTIVE',
     });
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('surfaces a clear error when starting local voice on an offline target session', async () => {
@@ -552,7 +587,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
       message: 'Target session is offline. Reconnect it before starting local voice.',
       code: 'VOICE_AGENT_TARGET_SESSION_OFFLINE',
     });
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('surfaces a clear error when starting local voice on a target flavor without local control support', async () => {
@@ -568,7 +603,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
       message: 'Target session provider does not support local voice control.',
       code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED',
     });
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('surfaces a clear error when starting local voice on an OpenCode ACP session without effective local control support', async () => {
@@ -593,7 +628,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
       message: 'Target session provider does not support local voice control.',
       code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED',
     });
-    expect(start).not.toHaveBeenCalled();
+    expect(daemonStart).not.toHaveBeenCalled();
   });
 
   it('always enables daemon transcript persistence for the hidden voice conversation session', async () => {
@@ -613,7 +648,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'sys_voice',
         transcript: { persistenceMode: 'persistent', epoch: 0 },
@@ -670,9 +705,9 @@ describe('VoiceExecutionTransport (streaming)', () => {
     const controller = createVoiceExecutionTransport();
     await controller.sendTurn('s1', 'hello');
 
-    expect(startTurnStream).toHaveBeenCalledWith(
+    expect(daemonStreamStart).toHaveBeenCalledWith(
       expect.objectContaining({
-        userText: 'hello',
+        message: 'hello',
       }),
     );
   });
@@ -682,29 +717,29 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTextUpdate('s1', 'Permission required for writing /tmp/file.txt. Ask whether to allow it.');
 
-    expect(startTurnStream).toHaveBeenCalledWith(
+    expect(daemonStreamStart).toHaveBeenCalledWith(
       expect.objectContaining({
-        userText: 'Permission required for writing /tmp/file.txt. Ask whether to allow it.',
+        message: 'Permission required for writing /tmp/file.txt. Ask whether to allow it.',
       }),
     );
   });
 
   it('projects a concurrent text update to canonical admission instead of queueing it in Voice', async () => {
     const blockedRead = createDeferred<TurnStreamReadResult>();
-    startTurnStream.mockResolvedValueOnce({ streamId: 'stream-1' });
-    startTurnStream.mockRejectedValueOnce(
+    daemonStreamStart.mockResolvedValueOnce({ streamId: 'stream-1' });
+    daemonStreamStart.mockRejectedValueOnce(
       Object.assign(new Error('Voice agent busy'), { rpcErrorCode: 'execution_run_busy' }),
     );
-    readTurnStream.mockImplementationOnce(async () => await blockedRead.promise);
+    daemonStreamRead.mockImplementationOnce(async () => await blockedRead.promise);
 
     const controller: any = createVoiceExecutionTransport();
     const firstTurn = controller.sendTurn('s1', 'hello');
-    await vi.waitFor(() => expect(readTurnStream).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(daemonStreamRead).toHaveBeenCalledTimes(1));
 
     await expect(
       controller.sendTextUpdate('s1', 'Permission required. Ask the human whether to allow it.'),
     ).rejects.toMatchObject({ rpcErrorCode: 'execution_run_busy' });
-    expect(startTurnStream).toHaveBeenCalledTimes(2);
+    expect(daemonStreamStart).toHaveBeenCalledTimes(2);
 
     blockedRead.resolve({
       streamId: 'stream-1',
@@ -753,10 +788,10 @@ describe('VoiceExecutionTransport (streaming)', () => {
     const controller = createVoiceExecutionTransport();
     const welcomed = await controller.ensureRunningAndMaybeWelcome('s1');
     expect(welcomed).toBe('Welcome!');
-    expect(welcome).toHaveBeenCalledTimes(1);
+    expect(daemonWelcome).toHaveBeenCalledTimes(1);
 
     await controller.sendTurn('s1', 'hello');
-    const payload = (startTurnStream.mock.calls[0]?.[0] as any)?.userText ?? '';
+    const payload = (daemonStreamStart.mock.calls[0]?.[0] as any)?.message ?? '';
     expect(String(payload)).not.toContain('greeting');
   });
 
@@ -803,7 +838,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
     const controller = createVoiceExecutionTransport();
     const welcomed = await controller.ensureRunningAndMaybeWelcome('s1');
     expect(welcomed).toBe('Welcome!');
-    expect(welcome).toHaveBeenCalledTimes(1);
+    expect(daemonWelcome).toHaveBeenCalledTimes(1);
   });
 
   it('does not use ready_handshake bootstrap when immediate welcome is enabled (welcome acts as the bootstrap prompt)', async () => {
@@ -846,8 +881,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
     const controller = createVoiceExecutionTransport();
     await controller.ensureRunningAndMaybeWelcome('s1');
 
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ bootstrapMode: 'none' }));
-    expect(welcome).toHaveBeenCalledTimes(1);
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ bootstrapMode: 'none' }));
+    expect(daemonWelcome).toHaveBeenCalledTimes(1);
   });
 
   it('uses ready_handshake bootstrap when prewarm is enabled but auto-speak is disabled (even if welcome immediate is enabled)', async () => {
@@ -889,7 +924,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
     const controller = createVoiceExecutionTransport();
     await controller.ensureRunning('s1');
 
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ bootstrapMode: 'ready_handshake', bootstrapTimeoutMs: 60_000 }));
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ bootstrapMode: 'ready_handshake', bootstrapTimeoutMs: 60_000 }));
   });
 
   it('prefetches relevant agent installables before starting a daemon voice agent session', async () => {
@@ -932,16 +967,39 @@ describe('VoiceExecutionTransport (streaming)', () => {
       sessionMessages: {},
     }));
 
+    // Feed the canonical scoped Account projection, not a catalog or policy stub.
+    storage.setState({ settings: attachAgentPluginSettings(storage.getState().settings,
+      { account: { codexBackendMode: 'acp' } }),
+      machines: { 'machine-1': createMachineFixture({ id: 'machine-1', activeAt: Date.now(),
+        access: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }).access }) },
+    });
+    const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {}, familiesById: {
+      managedDependencies: { family: 'managedDependencies', entriesById: { 'codex-acp': {
+        id: 'codex-acp', pluginId: 'acme', key: 'codex-acp', capabilityId: 'dep.codex-acp',
+        sourceKind: 'github_release_binary', display: { name: 'Codex ACP' },
+        defaultPolicy: { autoInstallWhenNeeded: true, autoUpdateMode: 'auto' }, experimental: true,
+      } } },
+    } });
+    let installed = false;
+    installerReply = async (method, payload) => {
+      if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
+      if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: { 'dep.codex-acp': {
+        ok: true, checkedAt: Date.now(), data: { installed, installDir: '/managed', binPath: null,
+          installedVersion: null, sourceKind: 'github_release_binary', lastInstallLogPath: null,
+          lastBackgroundUpdateCheckAtMs: null },
+      } } };
+      expect(payload).toMatchObject({ id: 'dep.codex-acp', method: 'install' });
+      installed = true;
+      daemonEffects.push('install');
+      return { ok: true, result: null };
+    };
     const controller = createVoiceExecutionTransport();
     await controller.ensureRunning('s1');
 
-    expect(ensureVoiceAgentInstallablesBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'codex',
-        sessionId: 's1',
-      }),
-    );
-    expect(start).toHaveBeenCalled();
+    expect(installed).toBe(true);
+    expect(daemonEffects).toEqual(['install', 'admit']);
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1',
+      backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } }));
   });
 
   it('passes the effective disabled voice action ids into daemon starts', async () => {
@@ -986,7 +1044,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
     const controller = createVoiceExecutionTransport();
     await controller.ensureRunning('s1');
 
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.objectContaining({
         disabledActionIds: expect.arrayContaining([
           'review.start',
@@ -1001,7 +1059,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
   });
 
   it('times out using configured turnStreamTimeoutMs (not a hard-coded poll count)', async () => {
-    readTurnStream.mockImplementation(async () => ({
+    daemonStreamRead.mockImplementation(async () => ({
       streamId: 'stream-1',
       events: [],
       nextCursor: 1,
@@ -1018,12 +1076,12 @@ describe('VoiceExecutionTransport (streaming)', () => {
       throw new Error(`Expected rejection outcome, received ${outcome.status}`);
     }
     expect(String(outcome.reason)).toContain('stream_timeout');
-    expect(cancelTurnStream).toHaveBeenCalledTimes(1);
+    expect(daemonStreamCancel).toHaveBeenCalledTimes(1);
   });
 
   it('does not fall back to networkTimeoutMs when turnStreamTimeoutMs is null', async () => {
     let readCount = 0;
-    readTurnStream.mockImplementation(async () => {
+    daemonStreamRead.mockImplementation(async () => {
       readCount += 1;
       if (readCount >= 8) {
         return {
@@ -1070,11 +1128,11 @@ describe('VoiceExecutionTransport (streaming)', () => {
       value: { assistantText: 'ok', actions: [] },
     });
     expect(readCount).toBeGreaterThanOrEqual(8);
-    expect(cancelTurnStream).toHaveBeenCalledTimes(0);
+    expect(daemonStreamCancel).toHaveBeenCalledTimes(0);
   });
 
   it('supports long streamed turns (does not clamp turnStreamTimeoutMs to 60s)', async () => {
-    readTurnStream.mockImplementation(async () => ({
+    daemonStreamRead.mockImplementation(async () => ({
       streamId: 'stream-1',
       events: [],
       nextCursor: 1,
@@ -1115,7 +1173,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
   it('aborts a streamed turn when the provided abort signal is aborted', async () => {
     try {
       const readTurnStarted = createDeferred<void>();
-      readTurnStream.mockImplementation(async () => {
+      daemonStreamRead.mockImplementation(async () => {
         readTurnStarted.resolve();
         return {
           streamId: 'stream-1',
@@ -1141,7 +1199,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
         throw new Error(`Expected rejected outcome, received ${outcome.status}`);
       }
       expect(String(outcome.reason)).toContain('turn_aborted');
-      expect(cancelTurnStream).toHaveBeenCalledTimes(1);
+      expect(daemonStreamCancel).toHaveBeenCalledTimes(1);
     } finally {
       // Ensure we don't leak the in-flight promise if abort isn't implemented yet.
       await flushHookEffects({ cycles: 1, advanceTimersMs: 10 });
@@ -1150,7 +1208,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
   });
 
   it('supports very long streamed turns (does not clamp turnStreamTimeoutMs to 10min)', async () => {
-    readTurnStream.mockImplementation(async () => ({
+    daemonStreamRead.mockImplementation(async () => ({
       streamId: 'stream-1',
       events: [],
       nextCursor: 1,
@@ -1189,7 +1247,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
       throw new Error(`Expected rejection outcome, received ${outcome.status}`);
     }
     expect(String(outcome.reason)).toContain('stream_timeout');
-    expect(cancelTurnStream).toHaveBeenCalledTimes(1);
+    expect(daemonStreamCancel).toHaveBeenCalledTimes(1);
   });
 
   it('ignores non-finite or invalid streaming config values (does not short-circuit the stream loop)', async () => {
@@ -1222,12 +1280,12 @@ describe('VoiceExecutionTransport (streaming)', () => {
     const controller = createVoiceExecutionTransport();
 
     await expect(controller.sendTurn('s1', 'hello')).resolves.toMatchObject({ assistantText: 'ok' });
-    expect(readTurnStream).toHaveBeenCalledWith(
+    expect(daemonStreamRead).toHaveBeenCalledWith(
       expect.objectContaining({
         maxEvents: localConversationDefaults.streaming.turnReadMaxEvents,
       }),
     );
-      expect(cancelTurnStream).toHaveBeenCalledTimes(0);
+      expect(daemonStreamCancel).toHaveBeenCalledTimes(0);
   });
 
   it('uses the hidden voice conversation session id when starting the daemon agent for the global agent session', async () => {
@@ -1237,9 +1295,9 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
-    expect(startTurnStream).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
-    expect(readTurnStream).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
+    expect(daemonStreamStart).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
+    expect(daemonStreamRead).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
   });
 
   it('queues the full target-session context into the first turn instead of the bootstrap prompt for hidden voice-home starts', async () => {
@@ -1257,17 +1315,17 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'sys_voice',
-        initialContext: 'ACTIVE_CONTEXT:__voice_agent__',
+        initialContext: buildVoiceInitialContext(VOICE_AGENT_GLOBAL_SESSION_ID),
       }),
     );
-    expect(startTurnStream).toHaveBeenCalledWith(
+    expect(daemonStreamStart).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'sys_voice',
-        userText: expect.stringContaining('TARGET_CONTEXT:__voice_agent__->s1'),
-        displayUserText: 'hello',
+        message: expect.stringContaining(targetInitialContext()),
+        displayMessage: 'hello',
       }),
     );
   });
@@ -1282,7 +1340,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
       targetSessionAddress: { serverId: connection.home.id, sessionId: 's1' },
       updatedAt: 1,
     });
-    commit.mockRejectedValueOnce(
+    daemonCommit.mockRejectedValueOnce(
       Object.assign(new Error('execution_run_not_found'), { rpcErrorCode: 'execution_run_not_found' }),
     );
 
@@ -1291,13 +1349,13 @@ describe('VoiceExecutionTransport (streaming)', () => {
     await controller.commit(VOICE_AGENT_GLOBAL_SESSION_ID);
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'first turn');
 
-    const firstPayload = String((startTurnStream.mock.calls[0]?.[0] as any)?.userText ?? '');
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(firstPayload.match(/TARGET_CONTEXT:__voice_agent__->s1/g)).toHaveLength(1);
+    const firstPayload = String((daemonStreamStart.mock.calls[0]?.[0] as any)?.message ?? '');
+    expect(daemonStart).toHaveBeenCalledTimes(2);
+    expect(firstPayload.split(targetInitialContext()).slice(1)).toHaveLength(1);
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'next turn');
-    const nextPayload = String((startTurnStream.mock.calls[1]?.[0] as any)?.userText ?? '');
-    expect(nextPayload).not.toContain('TARGET_CONTEXT:__voice_agent__->s1');
+    const nextPayload = String((daemonStreamStart.mock.calls[1]?.[0] as any)?.message ?? '');
+    expect(nextPayload).not.toContain(targetInitialContext());
   });
 
   it('does not requeue consumed target context when the first turn retries its handle', async () => {
@@ -1310,7 +1368,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
       targetSessionAddress: { serverId: connection.home.id, sessionId: 's1' },
       updatedAt: 1,
     });
-    startTurnStream.mockRejectedValueOnce(
+    daemonStreamStart.mockRejectedValueOnce(
       Object.assign(new Error('execution_run_not_found'), { rpcErrorCode: 'execution_run_not_found' }),
     );
 
@@ -1318,13 +1376,13 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'first turn');
 
-    const retriedPayload = String((startTurnStream.mock.calls[1]?.[0] as any)?.userText ?? '');
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(retriedPayload.match(/TARGET_CONTEXT:__voice_agent__->s1/g)).toHaveLength(1);
+    const retriedPayload = String((daemonStreamStart.mock.calls[1]?.[0] as any)?.message ?? '');
+    expect(daemonStart).toHaveBeenCalledTimes(2);
+    expect(retriedPayload.split(targetInitialContext()).slice(1)).toHaveLength(1);
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'next turn');
-    const nextPayload = String((startTurnStream.mock.calls[2]?.[0] as any)?.userText ?? '');
-    expect(nextPayload).not.toContain('TARGET_CONTEXT:__voice_agent__->s1');
+    const nextPayload = String((daemonStreamStart.mock.calls[2]?.[0] as any)?.message ?? '');
+    expect(nextPayload).not.toContain(targetInitialContext());
   });
 
   it('keeps explicit attempt context without the retired eight-update Follow cap', async () => {
@@ -1346,15 +1404,15 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'first turn');
 
-    const firstPayload = String((startTurnStream.mock.calls[0]?.[0] as any)?.userText ?? '');
-    expect(firstPayload.match(/TARGET_CONTEXT:__voice_agent__->s1/g)).toHaveLength(1);
+    const firstPayload = String((daemonStreamStart.mock.calls[0]?.[0] as any)?.message ?? '');
+    expect(firstPayload.split(targetInitialContext()).slice(1)).toHaveLength(1);
     for (let index = 0; index < 9; index += 1) {
       expect(firstPayload).toContain(`ORDINARY_CONTEXT_${index}`);
     }
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'next turn');
-    const nextPayload = String((startTurnStream.mock.calls[1]?.[0] as any)?.userText ?? '');
-    expect(nextPayload).not.toContain('TARGET_CONTEXT:__voice_agent__->s1');
+    const nextPayload = String((daemonStreamStart.mock.calls[1]?.[0] as any)?.message ?? '');
+    expect(nextPayload).not.toContain(targetInitialContext());
   });
 
   it('passes the clean user turn separately from wrapped context updates when streaming a daemon voice turn', async () => {
@@ -1365,11 +1423,11 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'Create the file.');
 
-    expect(startTurnStream).toHaveBeenCalledWith(
+    expect(daemonStreamStart).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'sys_voice',
-        userText: expect.stringContaining('Context updates since your last voice turn'),
-        displayUserText: 'Create the file.',
+        message: expect.stringContaining('Context updates since your last voice turn'),
+        displayMessage: 'Create the file.',
       }),
     );
   });
@@ -1410,7 +1468,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
       },
     };
     setControllerState(() => sessionState);
-    readTurnStream.mockImplementation(async () => {
+    daemonStreamRead.mockImplementation(async () => {
       sessionState.sessionMessages.sys_voice.messages = [
         {
           kind: 'agent-text',
@@ -1491,8 +1549,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
-    expect(startTurnStream).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
+    expect(daemonStreamStart).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
   });
 
   it('does not retry global daemon start on another session when the hidden voice conversation session rejects the payload', async () => {
@@ -1529,11 +1587,11 @@ describe('VoiceExecutionTransport (streaming)', () => {
       },
       sessionMessages: {},
     }));
-    start.mockImplementation((async (params: any) => {
+    daemonStart.mockImplementation((async (params: any) => {
       if (params.sessionId === 'sys_voice') {
         throw Object.assign(new Error('Invalid params'), { rpcErrorCode: 'execution_run_invalid_action_input' });
       }
-      return { voiceAgentId: 'm1' };
+      return { ok: true, runId: 'm1', created: true };
     }) as any);
 
     const controller = createVoiceExecutionTransport();
@@ -1542,14 +1600,17 @@ describe('VoiceExecutionTransport (streaming)', () => {
       rpcErrorCode: 'execution_run_invalid_action_input',
     });
 
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
-    expect(startTurnStream).not.toHaveBeenCalled();
+    expect(daemonStart).toHaveBeenCalledTimes(1);
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
+    expect(daemonStreamStart).not.toHaveBeenCalled();
   });
 
   it('seeds initialContext with persisted agent transcript turns when persistence is enabled', async () => {
     // Carrier session transcript should be used to seed voice agent context across restarts.
     useVoiceTargetStore.getState().setPrimaryActionSessionAddress({ serverId: connection.home.id, sessionId: 's1' });
+    const summaryRunner = LlmTaskRunnerConfigV1Schema.parse({ v: 1,
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, modelId: 'default', permissionMode: 'no_tools',
+    });
 
     setControllerState(() => ({
       settings: {
@@ -1572,12 +1633,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
             } },
           },
         },
-        sessionReplaySummaryRunnerV1: {
-          v: 1,
-          backendTarget: { kind: 'backend', backendId: 'claude' },
-          modelId: 'default',
-          permissionMode: 'no_tools',
-        },
+        sessionReplaySummaryRunnerV1: summaryRunner,
       },
       sessions: {
         sys_voice: {
@@ -1628,10 +1684,10 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'sys_voice',
-        existingRunId: null,
+        runId: null,
         retentionPolicy: 'resumable',
         replay: expect.objectContaining({
           kind: 'voice_session.v1',
@@ -1642,16 +1698,14 @@ describe('VoiceExecutionTransport (streaming)', () => {
         }),
       }),
     );
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.objectContaining({
         replay: expect.objectContaining({
-          summaryRunner: expect.objectContaining({
-            backendTarget: { kind: 'backend', backendId: 'claude' },
-          }),
+          summaryRunner,
         }),
       }),
     );
-    expect(start).toHaveBeenCalledWith(
+    expect(daemonStart).toHaveBeenCalledWith(
       expect.not.objectContaining({
         initialContext: expect.stringContaining('USER'),
       }),
@@ -1710,7 +1764,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(startTurnStream).toHaveBeenCalledWith(expect.objectContaining({ resume: true }));
+    expect(daemonStreamStart).toHaveBeenCalledWith(expect.objectContaining({ resume: true }));
   });
 
   it('fails closed and does not pass resume=true to stream_start when runtime publication does not expose transcriptSource', async () => {
@@ -1750,7 +1804,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(startTurnStream).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }));
+    expect(daemonStreamStart).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }));
   });
 
   it('fails closed to a fresh daemon start when provider-resume is configured but runtime publication does not expose transcriptSource for a reconciled run', async () => {
@@ -1784,35 +1838,40 @@ describe('VoiceExecutionTransport (streaming)', () => {
       },
       sessionMessages: {},
     }));
-    sessionExecutionRunList.mockResolvedValueOnce({
+    daemonRunList.mockResolvedValueOnce({
       runs: [
-        {
+        ExecutionRunPublicStateSchema.parse({
           runId: 'run_reconciled',
+          callId: 'call_reconciled', sidechainId: 'sidechain_reconciled',
           intent: 'voice_agent',
           status: 'running',
-          backendId: 'claude',
+          backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+          permissionMode: 'read-only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
           startedAtMs: 20,
-        },
+        }),
       ],
     });
-    sessionExecutionRunGet.mockResolvedValueOnce({
-      run: {
+    daemonRunGet.mockResolvedValueOnce({
+      run: ExecutionRunPublicStateSchema.parse({
         runId: 'run_reconciled',
-        backendId: 'claude',
+        callId: 'call_reconciled', sidechainId: 'sidechain_reconciled',
+        intent: 'voice_agent', status: 'running', startedAtMs: 20,
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        permissionMode: 'read-only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
         transcript: { persistenceMode: 'persistent', epoch: 0 },
         resumeHandle: { kind: 'provider_session.v1', backendId: 'claude', providerSessionId: 'vs_reconciled' },
-      },
+      }),
     });
 
     const controller = createVoiceExecutionTransport();
 
     await controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello');
 
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'sys_voice',
-      existingRunId: null,
-      resumeWhenInactive: false,
-      resumeHandle: null,
+      runId: null,
+      resume: false,
     }));
+    expect(daemonStart.mock.calls.at(-1)?.[0]).not.toHaveProperty('resumeHandle');
   });
 });

@@ -1,41 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+import { createVoiceEncodedAudioNativeBoundary } from '@/dev/testkit/harness/voiceEncodedAudioNativeBoundary';
+import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
 
 const fileDelete = vi.fn(async () => undefined);
-const { playbackLeaseRelease, acquirePlaybackLease } = vi.hoisted(() => {
-  const release = vi.fn(async () => undefined);
-  return {
-    playbackLeaseRelease: release,
-    acquirePlaybackLease: vi.fn(async () => Object.freeze({ release })),
-  };
+const audioSession = createNativeVoicePcmCaptureHarness();
+const native = createVoiceEncodedAudioNativeBoundary();
+const nativeSdk = native.nativeModule(audioSession.nativeModule);
+vi.mock('expo-modules-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('expo-modules-core')>();
+  return { ...actual, requireOptionalNativeModule: (name: string) =>
+    name === 'HappierAudioStreamNative' ? nativeSdk : actual.requireOptionalNativeModule(name) };
 });
-const native = vi.hoisted(() => {
-  type Event = { status: 'started' | 'finished' | 'failed' | 'replaced'; reason?: string };
-  let listener: ((event: Event) => void) | null = null;
-  const start = vi.fn(async () => undefined);
-  const stop = vi.fn(async () => undefined);
-  const setPaused = vi.fn(async () => undefined);
-  return {
-    start,
-    stop,
-    setPaused,
-    create: vi.fn(() => ({
-      start,
-      stop,
-      setPaused,
-      subscribe: (next: (event: Event) => void) => {
-        listener = next;
-        return () => { listener = null; };
-      },
-    })),
-    emit: (event: Event) => listener?.(event),
-    reset: () => { listener = null; },
-  };
-});
-
-vi.mock('@/voice/runtime/voiceAudioMode', () => ({ acquireVoicePlaybackAudioMode: acquirePlaybackLease }));
-vi.mock('@happier-dev/audio-stream-native', () => ({
-  createVoiceEncodedAudioPlayback: native.create,
-}));
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock({ Platform: { OS: 'ios' } });
@@ -59,9 +35,9 @@ import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePla
 describe('playAudioBytesWithStopper (native iOS)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    native.reset();
     fileDelete.mockResolvedValue(undefined);
   });
+  afterAll(async () => { await getSharedVoiceAudioSessionCoordinator()?.dispose(); await audioSession.coordinator.dispose(); });
 
   it('does not start native audio when a stale attempt is rejected during registration', async () => {
     const controller = createVoicePlaybackController();
@@ -87,13 +63,15 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
     });
     await vi.waitFor(() => expect(native.start).toHaveBeenCalledOnce());
     expect(native.start).toHaveBeenCalledWith(expect.stringMatching(/^file:\/\/\/tmp\/happier-voice-\d+\.mp3$/));
+    expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot()).toMatchObject({ leaseCount: 1,
+      configuration: { mode: 'playback', input: false, output: true } });
 
     native.emit({ status: 'started' });
     expect(onPlaybackStarted).toHaveBeenCalledOnce();
     native.emit({ status: 'finished' });
     await promise;
 
-    expect(playbackLeaseRelease).toHaveBeenCalledOnce();
+    expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot().leaseCount).toBe(0);
     expect(fileDelete).toHaveBeenCalledOnce();
   });
 
@@ -124,7 +102,7 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
     native.emit({ status: 'failed', reason: 'encoded_audio_decode_failed' });
 
     await expect(promise).rejects.toThrow('encoded_audio_decode_failed');
-    expect(playbackLeaseRelease).toHaveBeenCalledOnce();
+    expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot().leaseCount).toBe(0);
     expect(fileDelete).toHaveBeenCalledOnce();
   });
 
@@ -136,12 +114,14 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
       registerPlaybackStopper: () => () => {},
     })).rejects.toThrow('native_playback_start_failed');
 
-    expect(native.stop).toHaveBeenCalledOnce();
+    expect(native.stop).not.toHaveBeenCalled();
     expect(fileDelete).toHaveBeenCalledOnce();
-    expect(playbackLeaseRelease).toHaveBeenCalledOnce();
+    expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot().leaseCount).toBe(0);
   });
 
   it('does not let temp-file deletion hold the coordinator lease', async () => {
+    let finishDeletion!: () => void;
+    fileDelete.mockImplementationOnce(() => new Promise<void>(resolve => { finishDeletion = resolve; }));
     const promise = playAudioBytesWithStopper({
       bytes: new Uint8Array([1, 2, 3]).buffer,
       format: 'mp3',
@@ -151,8 +131,9 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
     native.emit({ status: 'finished' });
 
     await promise;
-    expect(playbackLeaseRelease).toHaveBeenCalledOnce();
+    expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot().leaseCount).toBe(0);
     expect(fileDelete).toHaveBeenCalledOnce();
+    finishDeletion();
   });
 
   it('stops promptly and ignores a late native completion', async () => {
@@ -168,7 +149,7 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
     native.emit({ status: 'finished' });
 
     expect(native.stop).toHaveBeenCalledOnce();
-    expect(playbackLeaseRelease).toHaveBeenCalledOnce();
+    expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot().leaseCount).toBe(0);
   });
 
   it('settles replacement as cancellation and releases its file and audio lease once', async () => {
@@ -183,8 +164,8 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
     await promise;
     native.emit({ status: 'finished' });
 
-    expect(native.stop).toHaveBeenCalledOnce();
+    expect(native.stop).not.toHaveBeenCalled();
     expect(fileDelete).toHaveBeenCalledOnce();
-    expect(playbackLeaseRelease).toHaveBeenCalledOnce();
+    expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot().leaseCount).toBe(0);
   });
 });

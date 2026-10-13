@@ -1,7 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit';
 
 import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
+import { voiceConversationBindingResolver } from '@/voice/binding/VoiceConversationBindingResolver';
+import { resetVoiceQaStoreForTests, useVoiceQaStore } from './voiceQaStore';
 
 import {
   assertLocalVoiceAgentSupportedForQa,
@@ -14,33 +19,31 @@ import {
 // The hydrated `sessions` entry is the active Home's entity, so its canonical row must live
 // under the same Home; a bare session id resolves through that address.
 const activeServerId = getActiveServerSnapshot().serverId;
+const initialStorage = storage.getState();
+const initialTarget = useVoiceTargetStore.getState();
 
 describe('voiceQaSessionResolution', () => {
   beforeEach(() => {
     storage.setState((current) => ({
       ...current,
       sessions: {
-        s1: {
+        s1: createSessionFixture({
           id: 's1',
-          metadata: {
+          metadata: { ...createSessionFixture().metadata,
             path: '/tmp/project-a',
           },
-        },
+        }),
       },
       sessionListRowsByServerId: {
         [activeServerId]: {
-          s1: {
+          s1: createSessionListRenderableSessionFixture({
             id: 's1',
             updatedAt: 0,
-            metadata: {
+            metadata: { ...createSessionListRenderableSessionFixture().metadata,
               path: '/tmp/project-a',
-              systemSessionV1: {
-                v: 1,
-                key: 'voice_conversation',
-                hidden: true,
-              },
+              ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
             },
-          },
+          }),
         },
       },
       ordinarySessionListMembershipByServerId: { [activeServerId]: ['s1'] },
@@ -50,7 +53,14 @@ describe('voiceQaSessionResolution', () => {
         ],
       },
       concurrentSessionListCacheByServerId: {},
-    } as any));
+    }));
+    resetVoiceQaStoreForTests();
+  });
+
+  afterEach(() => {
+    storage.setState(initialStorage, true);
+    useVoiceTargetStore.setState(initialTarget, true);
+    resetVoiceQaStoreForTests();
   });
 
   it('prefers visible lookup hidden-session metadata over stale raw session metadata', () => {
@@ -58,29 +68,25 @@ describe('voiceQaSessionResolution', () => {
   });
 
   it('normalizes the control session id before syncing latest QA resolution state', () => {
-    const calls: Array<Readonly<{ targetSessionAddress: { serverId: string; sessionId: string } | null; runtimeSessionId: string | null }>> = [];
+    const targetSessionAddress = { serverId: 'server-b', sessionId: 'target-1' };
+    useVoiceTargetStore.setState({ primaryActionSessionAddress: targetSessionAddress, lastFocusedSessionAddress: null });
     syncLatestLocalVoiceQaResolvedSessions(
       {
-        getVoiceTargetState: () => ({ primaryActionSessionAddress: { serverId: 'server-b', sessionId: 'target-1' }, lastFocusedSessionAddress: null }),
-        getLocalBinding: () => null,
-        qaStore: {
-          getState: () => ({
-            setResolvedSessions: (params: Readonly<{ targetSessionAddress: { serverId: string; sessionId: string } | null; runtimeSessionId: string | null }>) => {
-              calls.push(params);
-            },
-          }),
-        },
+        getVoiceTargetState: useVoiceTargetStore.getState,
+        getLocalBinding: (controlSessionId) => voiceConversationBindingResolver.resolveByControlSessionId({
+          controlSessionId,
+          adapterId: 'local_conversation',
+        }),
+        qaStore: useVoiceQaStore,
       },
       ' __voice_agent__ ',
       null,
     );
 
-    expect(calls).toEqual([
-      {
-        targetSessionAddress: { serverId: 'server-b', sessionId: 'target-1' },
+    expect(useVoiceQaStore.getState()).toMatchObject({
+        targetSessionAddress,
         runtimeSessionId: '__voice_agent__',
-      },
-    ]);
+    });
   });
 
   it('rejects an ambiguous bare target without changing the QA store', () => {
@@ -88,10 +94,12 @@ describe('voiceQaSessionResolution', () => {
       a: [{ type: 'session', sessionId: 'same', serverId: 'a', serverName: 'A' }],
       b: [{ type: 'session', sessionId: 'same', serverId: 'b', serverName: 'B' }],
     } });
-    expect(() => resolveEffectiveVoiceQaSessionAddress('same', () => ({
+    useVoiceTargetStore.setState({
       primaryActionSessionAddress: { serverId: 'a', sessionId: 'same' },
       lastFocusedSessionAddress: null,
-    }))).toThrow('voice_qa_target_session_unresolved');
+    });
+    expect(() => resolveEffectiveVoiceQaSessionAddress('same', useVoiceTargetStore.getState))
+      .toThrow('voice_qa_target_session_unresolved');
   });
 
   it('reads local conversation agent mode from the canonical provider envelope only', () => {

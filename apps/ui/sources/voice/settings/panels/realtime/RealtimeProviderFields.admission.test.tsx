@@ -1,8 +1,14 @@
 import * as React from 'react';
+import { Alert } from 'react-native';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+
+import { renderScreen as renderAppScreen } from '@/dev/testkit/render/renderScreen';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
@@ -14,7 +20,8 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
 import { Slider } from '@/components/ui/forms/Slider';
 import { Switch } from '@/components/ui/forms/Switch';
-import { Modal } from '@/modal';
+import { ModalProvider } from '@/modal';
+import { setPreferredLanguageFromSettings, tLoose } from '@/text';
 import { VoiceGreetingItem } from '../VoiceGreetingItem';
 import { resolveVoiceWelcomeSelection } from '@/voice/settings/welcome';
 import { useVoiceSettingsMutable } from '@/voice/settings/useVoiceSettingsMutable';
@@ -22,21 +29,32 @@ import { useBundledConversationProviderSettings } from './useBundledConversation
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { RealtimeProviderFields } from './RealtimeProviderFields';
 
-vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+const platform = vi.hoisted(() => ({ value: 'ios' }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
+    { platformOS: 'ios' }, { Platform: { get OS() { return platform.value; } } },
+));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
-    return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
-});
 installDisconnectedServerSocketBoundary();
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 const originalState = storage.getState();
+const nativeAlert = vi.spyOn(Alert, 'alert');
+afterAll(() => nativeAlert.mockRestore());
+let modalHostActive = true;
+function AdmissionProviders({ children }: React.PropsWithChildren) {
+    return <ModalProvider active={modalHostActive}>{children}</ModalProvider>;
+}
+function renderScreen(element: Parameters<typeof renderAppScreen>[0]) {
+    return renderAppScreen(element, { wrapper: AdmissionProviders });
+}
+beforeEach(() => {
+    modalHostActive = true;
+    platform.value = 'ios';
+    nativeAlert.mockReset();
+    setPreferredLanguageFromSettings('en');
+});
 afterEach(() => { standardCleanup(); storage.setState(originalState, true); });
 
 const provider = createDefaultVoiceProviderRegistry().list().find(entry => 'declaration' in entry && entry.declaration?.id === 'realtime-openai');
@@ -68,18 +86,22 @@ function LocalGreeting() {
 }
 
 describe('declared Voice field Action admission', () => {
-    it('applies one declared provider field against the current Account settings', async () => {
+    it.each([
+        { entry: provider, path: 'voice', config: { ...descriptor.defaultConfig, voice: 'alloy' }, expected: { voice: 'sage' } },
+        { entry: elevenlabs, path: 'tts.voiceId', config: { ...elevenlabs.providerSettings!.defaultConfig, billingMode: 'byo' }, expected: { tts: { voiceId: 'sage' } } },
+    ])('persists the declared $path selection against the current Account settings', async ({ entry, path, config, expected }) => {
+        const id = entry.providerId;
+        const settings = entry.providerSettings!;
         const account = await createVoiceSettingsAccountTestHarness(settingsParse({
-            voice: { providerId, providers: { [providerId]: { schemaVersion: descriptor.schemaVersion,
-                config: { ...descriptor.defaultConfig, voice: 'alloy' } } } },
+            voice: { providerId: id, providers: { [id]: { schemaVersion: settings.schemaVersion, config } } },
         }));
         try {
-            const screen = await renderScreen(<VoiceFields />);
-            const picker = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'voice-realtime-field-voice');
+            const screen = await renderScreen(<VoiceFields paths={[path]} />);
+            const picker = screen.findAllByType(DropdownMenu).find(node => node.props.testID === `voice-realtime-field-${path.replaceAll('.', '-')}`);
             if (!picker) throw new Error('Voice field missing');
             act(() => account.replaceVoice({ ...account.settings.voice, assistantLanguage: 'fr' }));
             await act(async () => picker.props.onSelect('sage'));
-            await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)?.voice).toBe('sage'));
+            await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)).toMatchObject(expected));
             expect(account.persistedSettings.voice.assistantLanguage).toBe('fr');
         } finally { standardCleanup(); await account.dispose(); }
     });
@@ -121,26 +143,30 @@ describe('declared Voice field Action admission', () => {
                 .toMatchObject({ instructions: 'Be concise', voice: 'sage', model: { id: 'gpt-realtime-custom' } }));
         } finally { standardCleanup(); await account.dispose(); }
     });
-    it('admits a declared nested range, rejects off-step input, and restores its nullable service default', async () => {
+    it.each([
+        { key: 'speed', value: 1.1, offStep: 1.15 },
+        { key: 'similarityBoost', value: 0.65, offStep: 0.655 },
+    ])('persists $key, rejects off-step input, and restores its nullable service default', async ({ key, value, offStep }) => {
         const id = elevenlabs.providerId;
         const settings = elevenlabs.providerSettings!;
         const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: id,
-            providers: { [id]: { schemaVersion: settings.schemaVersion, config: settings.defaultConfig } } } }));
+            providers: { [id]: { schemaVersion: settings.schemaVersion, config: { ...settings.defaultConfig, billingMode: 'byo' } } } } }));
         try {
-            const screen = await renderScreen(<VoiceFields paths={['tts.voiceSettings.speed']} />);
+            const screen = await renderScreen(<VoiceFields paths={[`tts.voiceSettings.${key}`, 'tts.voiceSettings.useSpeakerBoost']} />);
+            expect(screen.findByTestId('voice-realtime-field-tts-voiceSettings-useSpeakerBoost')).toBeNull();
             const slider = screen.findAllByType(Slider)[0];
-            if (!slider) throw new Error('Speed field missing');
-            await act(async () => { slider.props.onValueChange(1.1); });
+            if (!slider) throw new Error('Declared Voice range missing');
+            await act(async () => { slider.props.onValueChange(value); });
             await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
-                .toMatchObject({ tts: { voiceSettings: { speed: 1.1 } } }));
+                .toMatchObject({ tts: { voiceSettings: { [key]: value } } }));
             const writes = account.writes.length;
-            await act(async () => { slider.props.onValueChange(1.15); });
+            await act(async () => { slider.props.onValueChange(offStep); });
             expect(account.writes).toHaveLength(writes);
-            const reset = screen.findByTestId('voice-realtime-field-tts-voiceSettings-speed.default');
+            const reset = screen.findByTestId(`voice-realtime-field-tts-voiceSettings-${key}.default`);
             if (!reset) throw new Error('Service default control missing');
             await act(async () => { reset.props.onPress(); });
             await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
-                .toMatchObject({ tts: { voiceSettings: { speed: null } } }));
+                .toMatchObject({ tts: { voiceSettings: { [key]: null } } }));
         } finally { standardCleanup(); await account.dispose(); }
     });
     it.each([
@@ -195,10 +221,13 @@ describe('declared Voice field Action admission', () => {
         const settings = xai.providerSettings!;
         const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: id,
             providers: { [id]: { schemaVersion: settings.schemaVersion, config: settings.defaultConfig } } } }));
-        vi.mocked(Modal.alert).mockClear();
-        vi.mocked(Modal.confirm).mockClear();
-        if (consent === 'unavailable') vi.mocked(Modal.confirm).mockRejectedValueOnce(new Error('modal unavailable'));
-        else vi.mocked(Modal.confirm).mockResolvedValueOnce(consent === 'approved');
+        modalHostActive = consent !== 'unavailable';
+        // The unavailable case exercises the web host's actual absence; native
+        // availability cases exercise the OS-presented decision buttons.
+        platform.value = consent === 'unavailable' ? 'web' : 'ios';
+        // Keep the real absence diagnostic: no fabricated confirm rejection or
+        // modal state. The inactive canonical host cannot approve this write.
+        const unavailableErrors = consent === 'unavailable' ? vi.spyOn(console, 'error') : null;
         try {
             const screen = await renderScreen(<VoiceFields paths={['resumptionEnabled']} />);
             const toggle = screen.findAllByType(Switch)[0];
@@ -206,13 +235,24 @@ describe('declared Voice field Action admission', () => {
             let eventResult: unknown;
             await act(async () => { eventResult = toggle.props.onValueChange(true); });
             expect(eventResult).toBeUndefined();
-            await vi.waitFor(() => expect(Modal.confirm).toHaveBeenCalledTimes(1));
+            if (consent === 'unavailable') {
+                await vi.waitFor(() => expect(unavailableErrors).toHaveBeenCalledWith(expect.stringContaining('ModalManager not initialized')));
+                // After this actual host refusal, the remaining path consists
+                // of promise continuations and the synchronous failure alert.
+                await flushHookEffects();
+            } else {
+                await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[2]?.some(button => button.style === 'cancel')).toBe(true));
+                const buttons = nativeAlert.mock.calls.at(-1)?.[2];
+                await act(async () => buttons?.find(button => (button.style === 'cancel') === (consent === 'rejected'))?.onPress?.());
+            }
             if (consent === 'approved') await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.resumptionEnabled).toBe(true));
             else {
-                await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalled());
+                if (consent === 'rejected') {
+                    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[1]).toBe(tLoose('settingsVoice.realtimeProviders.operationFailed')));
+                }
                 expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.resumptionEnabled).toBe(false);
                 expect(account.writes).toEqual([]);
             }
-        } finally { standardCleanup(); await account.dispose(); }
+        } finally { standardCleanup(); await account.dispose(); unavailableErrors?.mockRestore(); }
     });
 });

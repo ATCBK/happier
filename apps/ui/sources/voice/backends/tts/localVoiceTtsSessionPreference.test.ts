@@ -1,47 +1,90 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, createMachineFixture } from '@/dev/testkit';
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { DaemonVoiceInferenceModelsStatusResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
 import type { BundledSpeechPreparation } from '@/voice/runtime/bundledSpeech/bundledSpeechRuntime';
-import type { DaemonVoiceInferenceModelStatus } from '@happier-dev/protocol/daemon/voiceInference';
 import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
-import { playRealtimeCatalogPreview, readRealtimeCatalogPreview, stopRealtimeCatalogPreview } from '@/voice/settings/panels/realtime/catalogPreview';
-import { previewLocalNeuralTts } from '@/voice/settings/panels/localTts/providers/localNeural/previewLocalNeuralTts';
-import { voiceSettingsParse, readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
-import { storage } from '@/sync/domains/state/storage';
-import { createDefaultLocalVoiceTtsProviderControllers, type LocalVoiceTtsRequest } from './localVoiceTtsProviderControllers';
+import type { LocalVoiceTtsRequest } from './localVoiceTtsProviderControllers';
 
-const boundary = vi.hoisted(() => ({ synthesize: vi.fn(), status: vi.fn(), playback: vi.fn() }));
-// Daemon RPC and audio playback are genuine network/OS boundaries. The selection,
-// execution policy, model catalog projection and playback controller remain real.
-vi.mock('@/voice/runtime/daemonInference/DaemonVoiceInferenceClient', () => ({
-  DaemonVoiceInferenceClient: class {
-    getModelsStatus = boundary.status;
-    synthesizeText = boundary.synthesize;
-  },
-}));
-vi.mock('@/voice/output/playAudioBytesWithStopper', () => ({ playAudioBytesWithStopper: boundary.playback }));
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', async importOriginal => ({
-  ...await importOriginal<typeof import('@/sync/api/capabilities/serverFeaturesClient')>(),
-  getServerFeaturesSnapshot: async () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {
-    voice: { enabled: true }, execution: { runs: { enabled: true } },
-  } }) }),
-}));
+let account: Awaited<ReturnType<typeof serveAccountHomes>>;
+let disconnect: (() => Promise<void>) | undefined;
+const speechBoundary = createVoiceSpeechOutputBoundary({ getAccount: async () => {
+  const home = account.homes.voice!;
+  const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+  const credentials = await TokenStorage.getCredentialsForServerUrl(home.serverUrl);
+  if (!credentials) throw new Error('TTS preference Account credentials unavailable');
+  return { home, credentials };
+} });
+const { machineRpc, encodedAudio, daemonStreamStartRpc } = speechBoundary;
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { sync } = await import('@/sync/sync');
+const { createDefaultLocalVoiceTtsProviderControllers } = await import('./localVoiceTtsProviderControllers');
+const { playRealtimeCatalogPreview, readRealtimeCatalogPreview, stopRealtimeCatalogPreview } = await import('@/voice/settings/panels/realtime/catalogPreview');
+const { previewLocalNeuralTts } = await import('@/voice/settings/panels/localTts/providers/localNeural/previewLocalNeuralTts');
+const { voiceSettingsParse, readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const initialSettings = storage.getState().settings;
+const initialMachines = storage.getState().machines;
+const initialMachineLists = storage.getState().machineListByServerId;
+const statusReply = DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [{
+  kind: 'tts_sherpa', packId: 'kokoro-82m-v1.0-onnx-q8-wasm', model: 'kokoro', version: '1',
+  executionSupport: ['daemon'], runtimeFamily: 'sherpa_kokoro_offline', runtimeSupported: true,
+  installState: 'installed', progress: null, lastError: null, updatedAtMs: 1,
+  voices: [{ id: 'af_heart', title: 'Heart' }, { id: 'am_adam', title: 'Adam' }], defaultVoiceId: 'af_heart',
+}] });
+const serverFeatures = FeaturesResponseSchema.parse({ features: {
+  voice: { enabled: true }, execution: { runs: { enabled: true } },
+  machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+}, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+  maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000,
+  maxDurationMs: 60_000, maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2,
+  maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1,
+} } } } } });
+let answerStatus: () => Promise<unknown>;
+afterAll(() => speechBoundary.disposeAudioSession());
 
 describe('local model Session voice consumption', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    storage.setState(state => ({ settings: { ...state.settings, experiments: true,
-      featureToggles: { ...state.settings.featureToggles, voice: true, 'voice.agent': true,
-        'execution.runs': true, 'voice.daemonInference': true } } }));
-    const status = { kind: 'tts_sherpa', packId: 'kokoro-82m-v1.0-onnx-q8-wasm', model: 'kokoro', version: '1',
-      executionSupport: ['daemon'], runtimeFamily: 'sherpa_kokoro_offline', runtimeSupported: true,
-      installState: 'installed', progress: null, lastError: null, updatedAtMs: 1,
-      voices: [{ id: 'af_heart', title: 'Heart' }, { id: 'am_adam', title: 'Adam' }], defaultVoiceId: 'af_heart',
-    } satisfies DaemonVoiceInferenceModelStatus;
-    boundary.status.mockResolvedValue([status]);
-    boundary.synthesize.mockResolvedValue({ bytes: new Uint8Array([1]), output: { codec: 'wav', mimeType: 'audio/wav' } });
+  beforeEach(async () => {
+    speechBoundary.reset();
+    answerStatus = async () => statusReply;
+    const speechRpc = machineRpc.getMockImplementation();
+    machineRpc.mockImplementation(async request => request.method === 'daemon.voiceInference.models.status'
+      ? answerStatus() : speechRpc?.(request));
+    account = await serveAccountHomes({ homes: [{ key: 'voice', serverUrl: 'https://tts-preference.test', accountId: 'tts-account' }],
+      route: async request => {
+        const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'tts-machine', 'tts-account');
+        if (machineReply) return machineReply;
+        if (request.path === '/v1/features') return Response.json(serverFeatures);
+        if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        return undefined;
+      } });
+    disconnect = await account.restoreActiveConnection();
+    await sync.resumeSync('manual');
+    const machine = createMachineFixture({ id: 'tts-machine', activeAt: Date.now() });
+    storage.setState({ machines: { ...initialMachines, [machine.id]: machine },
+      machineListByServerId: { ...initialMachineLists, [account.homes.voice!.id]: [machine] } });
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ experiments: true, featureToggles: {
+      voice: true, 'execution.runs': true, 'voice.agent': true, 'voice.daemonInference': true,
+    }, voice: { ...storage.getState().settings.voice,
+      executionMachine: { mode: 'fixed', machineId: machine.id, autoMachineId: null } } }, storage.getState().settings));
   });
 
-  async function speak(value: string, current: () => boolean = () => true, speed: number | null = 1.2) {
+  afterEach(async () => {
+    stopRealtimeCatalogPreview('happier.voice.builtin/local-neural');
+    await disconnect?.();
+    disconnect = undefined;
+    await account?.dispose();
+    speechBoundary.disposeNativeSdkBridge();
+    storage.setState({ settings: initialSettings, machines: initialMachines, machineListByServerId: initialMachineLists });
+    resetServerFeaturesClientForTests();
+  });
+  function beginSpeak(value: string, current: () => boolean = () => true, speed: number | null = 1.2) {
     const voice = voiceSettingsParse({ providerId: 'local_conversation' });
     const cfg = readLocalConversationVoiceSettings(voice);
     const applied = vi.fn();
@@ -58,20 +101,32 @@ describe('local model Session voice consumption', () => {
       registerPlaybackStopper: () => () => {}, onSpeaking: speaking, onTtsFailed: failed,
       preparation,
     };
-    boundary.playback.mockImplementation(async (options: { onPlaybackStarted?: () => void }) => {
-      expect(applied).not.toHaveBeenCalled();
-      options.onPlaybackStarted?.();
-    });
-    await createDefaultLocalVoiceTtsProviderControllers().get('local_neural')!.speak(request);
-    return { applied, failed, speaking, request };
+    const pending = createDefaultLocalVoiceTtsProviderControllers().get('local_neural')!.speak(request);
+    return { applied, failed, speaking, request, pending };
+  }
+
+  async function speak(value: string, current: () => boolean = () => true, speed: number | null = 1.2) {
+    const result = beginSpeak(value, current, speed);
+    await result.pending;
+    return result;
   }
 
   it('uses the chosen installed voice without changing model/speed and publishes it only after audio starts', async () => {
-    const result = await speak('am_adam');
-    expect(result.failed).not.toHaveBeenCalled();
-    expect(boundary.synthesize).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'am_adam', speed: 1.2,
+    let startPhysicalAudio!: () => void;
+    encodedAudio.start.mockImplementationOnce(async () => {
+      startPhysicalAudio = () => { encodedAudio.emit('started'); encodedAudio.emit('finished'); };
+    });
+    const result = beginSpeak('am_adam');
+    await vi.waitFor(() => expect(startPhysicalAudio).toBeTypeOf('function'));
+    expect(result.applied).not.toHaveBeenCalled();
+    expect(result.speaking).not.toHaveBeenCalled();
+    expect(daemonStreamStartRpc).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'am_adam', speed: 1.2,
       packId: 'kokoro-82m-v1.0-onnx-q8-wasm' }));
+    startPhysicalAudio();
+    await result.pending;
+    expect(result.failed).not.toHaveBeenCalled();
     expect(result.applied).toHaveBeenCalledWith(expect.objectContaining({ value: 'am_adam', displayName: 'Adam' }));
+    expect(result.speaking).toHaveBeenCalledOnce();
     expect(result.request.tts.localNeural.voiceId).toBe('af_heart');
   });
 
@@ -83,41 +138,46 @@ describe('local model Session voice consumption', () => {
   ])('previews the same effective speed as runtime for $speed without rewriting stored options', async ({ speed, expected }) => {
     const { request, failed } = await speak('am_adam', () => true, speed);
     expect(failed).not.toHaveBeenCalled();
-    expect(boundary.synthesize).toHaveBeenLastCalledWith(expect.objectContaining({ speed: expected }));
-
-    boundary.playback.mockImplementation(async () => {});
+    expect(daemonStreamStartRpc).toHaveBeenLastCalledWith(expect.objectContaining({ speed: expected }));
     await previewLocalNeuralTts({ config: { ...request.tts.localNeural, voiceId: 'am_adam' },
       sample: 'preview', timeoutMs: request.networkTimeoutMs,
       registerPlaybackStopper: () => () => {} });
-    expect(boundary.synthesize).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'preview', speed: expected }));
+    expect(daemonStreamStartRpc).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'preview', speed: expected }));
     expect(request.tts.localNeural.speed).toBe(speed);
   });
 
   it('refuses a removed voice rather than playing the account default', async () => {
     const result = await speak('removed');
     expect(result.failed).toHaveBeenCalledWith(expect.objectContaining({ kind: 'tts_failed', reason: 'voice_missing' }));
-    expect(boundary.synthesize).not.toHaveBeenCalled();
+    expect(daemonStreamStartRpc).not.toHaveBeenCalled();
+    expect(encodedAudio.start).not.toHaveBeenCalled();
     expect(result.applied).not.toHaveBeenCalled();
   });
 
   it('does not synthesize or publish when the captured attempt is no longer current', async () => {
     const result = await speak('am_adam', () => false);
-    expect(boundary.synthesize).not.toHaveBeenCalled();
+    expect(daemonStreamStartRpc).not.toHaveBeenCalled();
+    expect(encodedAudio.start).not.toHaveBeenCalled();
     expect(result.applied).not.toHaveBeenCalled();
   });
 
   it('retires an awaited catalog result before synthesis when its attempt changes', async () => {
     let current = true;
-    boundary.status.mockImplementationOnce(async () => { current = false; return []; });
-    const result = await speak('am_adam', () => current);
+    const catalog = createDeferred<unknown>();
+    answerStatus = () => catalog.promise;
+    const result = beginSpeak('am_adam', () => current);
+    await vi.waitFor(() => expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.voiceInference.models.status' })));
+    current = false;
+    catalog.resolve(statusReply);
+    await result.pending;
     expect(result.failed).not.toHaveBeenCalled();
-    expect(boundary.synthesize).not.toHaveBeenCalled();
+    expect(daemonStreamStartRpc).not.toHaveBeenCalled();
+    expect(encodedAudio.start).not.toHaveBeenCalled();
     expect(result.applied).not.toHaveBeenCalled();
   });
 
   it('previews a catalog-only local voice through the shared preview owner and real local speech path', async () => {
     const cfg = readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' }));
-    boundary.playback.mockImplementation(async () => {});
     const synthesize = async (input: { registerPlaybackStopper: VoicePlaybackStopperRegistrar; signal: AbortSignal; isCurrent: () => boolean }) => {
       await previewLocalNeuralTts({ config: { ...cfg.tts.localNeural, execution: 'daemon', voiceId: 'am_adam' },
         sample: 'preview', timeoutMs: cfg.networkTimeoutMs, ...input });
@@ -125,16 +185,17 @@ describe('local model Session voice consumption', () => {
     const result = await playRealtimeCatalogPreview({ providerId: 'happier.voice.builtin/local-neural',
       row: { id: 'am_adam', name: 'Adam' }, isCurrent: () => true, synthesize });
     expect(result).toMatchObject({ status: 'completed' });
-    expect(boundary.synthesize).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'am_adam', text: 'preview' }));
+    expect(daemonStreamStartRpc).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'am_adam', text: 'preview' }));
+    expect(encodedAudio.start).toHaveBeenCalledOnce();
     expect(readRealtimeCatalogPreview()).toBeNull();
   });
 
   it('stops a local preview while synthesis is pending without starting late audio', async () => {
     const cfg = readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' }));
     let releaseSynthesis!: () => void;
-    boundary.synthesize.mockImplementationOnce(() => new Promise(resolve => {
-      releaseSynthesis = () => resolve({ bytes: new Uint8Array([1]), output: { codec: 'wav', mimeType: 'audio/wav' } });
-    }));
+    const synthesis = createDeferred<void>();
+    daemonStreamStartRpc.mockReturnValueOnce(synthesis.promise);
+    releaseSynthesis = () => synthesis.resolve();
     const synthesize = async (input: { registerPlaybackStopper: VoicePlaybackStopperRegistrar; signal: AbortSignal; isCurrent: () => boolean }) => {
       await previewLocalNeuralTts({ config: { ...cfg.tts.localNeural, execution: 'daemon', voiceId: 'am_adam' },
         sample: 'preview', timeoutMs: cfg.networkTimeoutMs, ...input });
@@ -142,11 +203,11 @@ describe('local model Session voice consumption', () => {
     const providerId = 'happier.voice.builtin/local-neural';
     const pending = playRealtimeCatalogPreview({ providerId, row: { id: 'am_adam', name: 'Adam' },
       isCurrent: () => true, synthesize });
-    await vi.waitFor(() => expect(boundary.synthesize).toHaveBeenCalled());
+    await vi.waitFor(() => expect(daemonStreamStartRpc).toHaveBeenCalled());
     expect(stopRealtimeCatalogPreview(providerId)).toBe(true);
     releaseSynthesis();
     expect(await pending).toMatchObject({ status: 'cancelled' });
-    expect(boundary.playback).not.toHaveBeenCalled();
+    expect(encodedAudio.start).not.toHaveBeenCalled();
     expect(readRealtimeCatalogPreview()).toBeNull();
   });
 });

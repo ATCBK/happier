@@ -1,222 +1,152 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+import { createDeferred } from '@/dev/testkit';
 
-const nativeBoundary = vi.hoisted(() => ({
-  capture: null as unknown,
-  playback: null as unknown,
-}));
+const native = createNativeVoicePcmCaptureHarness();
+vi.mock('expo-modules-core', async (importOriginal) => {
+  const original = await importOriginal<typeof import('expo-modules-core')>();
+  return { ...original, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative'
+    ? native.nativeModule : original.requireOptionalNativeModule(name) };
+});
 
-function createDeferred<Value>() {
-  let resolve!: (value: Value) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+// The package registry resolves its native SDK once for this JavaScript runtime.
+// Keep that physical module identity stable; retire media through its real owner.
+const { createWebSocketPcmMedia } = await import('./WebSocketPcmMedia.native');
+const { createNativeMicSession } = await import('@/voice/runtime/mic/NativeMicSession');
+const { createWebSocketPcmConnection } = await import('./VoiceRealtimeConnection');
+const { getSharedVoicePcmCapture, getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
+const activeMedia = new Set<ReturnType<typeof createWebSocketPcmMedia>>();
 
-vi.mock('@happier-dev/audio-stream-native', () => ({
-  getSharedVoicePcmCapture: () => nativeBoundary.capture,
-  getSharedVoicePcmPlayback: () => nativeBoundary.playback,
-}));
-
-import { createWebSocketPcmMedia } from './WebSocketPcmMedia.native';
+beforeEach(() => vi.clearAllMocks());
+afterEach(async () => {
+  await Promise.all([...activeMedia].map(media => media.pcm.stop()));
+  activeMedia.clear();
+});
+afterAll(() => {
+  getSharedVoiceAudioSessionCoordinator()?.dispose();
+  native.coordinator.dispose();
+});
 
 describe('native WebSocketPcmMedia', () => {
-  it('uses the one shared native capture/player lifecycle with a stream-scoped output lease', async () => {
-    const callbacks: {
-      onFrame: ((frame: Readonly<{ pcm16leBase64: string }>) => void) | null;
-      onPlaybackError: ((error: Error) => void) | null;
-    } = { onFrame: null, onPlaybackError: null };
-    const releaseCapture = vi.fn(async () => {});
-    const releasePlayback = vi.fn(async () => {});
-    const enqueue = vi.fn(() => true);
-    const clear = vi.fn();
-    const setGain = vi.fn(() => true);
-    const waitForDrain = vi.fn(async () => {});
-    const playbackCursorMs = vi.fn(() => 325);
+  async function createMedia() {
     const onInputChunk = vi.fn();
     const onOutputLevel = vi.fn();
-    const ensureActive = vi.fn(async () => {});
-    nativeBoundary.capture = {
-      acquire: vi.fn(async (input: { onFrame: typeof callbacks.onFrame }) => {
-        callbacks.onFrame = input.onFrame;
-        return {
-          id: 'native-capture',
-          streamId: 'stream-1',
-          generation: 3,
-          waitForDrain: async () => {},
-          release: releaseCapture,
-        };
-      }),
-    };
-    nativeBoundary.playback = {
-      open: vi.fn(async (input: { onError?: (error: Error) => void }) => {
-        callbacks.onPlaybackError = input.onError ?? null;
-        return {
-          streamId: 'stream-1',
-          generation: 3,
-          enqueue,
-          clear,
-          setGain,
-          waitForDrain,
-          playbackCursorMs,
-          release: releasePlayback,
-        };
-      }),
-    };
-
+    const mic = createNativeMicSession();
+    const ensureActive = vi.spyOn(mic, 'ensureActive');
     const media = createWebSocketPcmMedia({
-      mic: {
-        ensureActive,
-        isMuted: () => false,
-        getStream: () => null,
-      },
-      input: { sampleRate: 24_000, chunkMs: 100 },
-      output: { sampleRate: 24_000 },
-      onInputChunk,
-      onOutputLevel,
+      mic, input: { sampleRate: 24_000, chunkMs: 100 }, output: { sampleRate: 24_000 },
+      onInputChunk, onOutputLevel,
     });
+    activeMedia.add(media);
+    return { media, onInputChunk, onOutputLevel, ensureActive };
+  }
+
+  it('uses the one shared native capture/player lifecycle with a stream-scoped output lease', async () => {
+    const { media, onInputChunk, onOutputLevel, ensureActive } = await createMedia();
     const terminal = vi.fn();
     media.pcm.subscribeTerminal?.(terminal);
-
     await media.pcm.start(new AbortController().signal);
 
     expect(ensureActive).not.toHaveBeenCalled();
+    expect(native.nativeModule.start).toHaveBeenCalledWith(expect.objectContaining({ sampleRate: 24_000, channels: 1, frameMs: 100 }));
+    const capture = getSharedVoicePcmCapture()!.getSnapshot();
+    const identity = { streamId: capture.streamId!, generation: capture.generation };
+    expect(getSharedVoiceAudioSessionCoordinator()?.getSnapshot()).toMatchObject({
+      leaseCount: 1, configuration: { mode: 'conversation', input: true, output: true, aec: 'required' },
+    });
+    expect(native.nativeModule.startPlayback).toHaveBeenCalledWith({ ...identity, sampleRate: 24_000, channels: 1 });
 
-    expect((nativeBoundary.capture as { acquire: ReturnType<typeof vi.fn> }).acquire).toHaveBeenCalledWith(expect.objectContaining({
-      format: { sampleRate: 24_000, channels: 1, frameMs: 100 },
-      audioSession: { mode: 'conversation', input: true, output: true, aec: 'required' },
-    }));
-    expect((nativeBoundary.playback as { open: ReturnType<typeof vi.fn> }).open).toHaveBeenCalledWith(expect.objectContaining({
-      capture: { streamId: 'stream-1', generation: 3 },
-      format: { sampleRate: 24_000, channels: 1 },
-    }));
-
-    callbacks.onFrame?.({ pcm16leBase64: 'AQACAA==' });
-    expect(onInputChunk).toHaveBeenCalledWith('AQACAA==');
+    native.emitEvent('audioFrame', { streamId: identity.streamId, pcm16leBase64: 'AQACAA==', sampleRate: 24_000, channels: 1 });
+    await vi.waitFor(() => expect(onInputChunk).toHaveBeenCalledWith('AQACAA=='));
     expect(media.inputLevel()).toBeGreaterThan(0);
     expect(media.enqueueOutput('AQACAA==')).toBe(true);
-    expect(enqueue).toHaveBeenCalledWith('AQACAA==');
+    expect(native.nativeModule.enqueuePlayback).toHaveBeenCalledWith({ ...identity, pcm16leBase64: 'AQACAA==' });
     expect(media.pcm.playbackCursorMs()).toBe(325);
     expect(media.playbackCursorMs()).toBe(325);
-    expect(playbackCursorMs).toHaveBeenCalledTimes(2);
 
+    const expectGain = (gain: number) => expect(native.nativeModule.setPlaybackGain).toHaveBeenLastCalledWith({ ...identity, gain });
     expect(media.beginOutputInterruptionCandidate()).toBe('ducked');
-    expect(setGain).toHaveBeenCalledWith(0.18);
+    expectGain(0.18);
     media.resolveOutputInterruptionCandidate('false_alarm');
-    expect(setGain).toHaveBeenLastCalledWith(1);
+    expectGain(1);
     expect(media.pcm.setOutputFocusState?.('suspended')).toBe('applied');
-    expect(setGain).toHaveBeenLastCalledWith(0);
+    expectGain(0);
     expect(media.beginOutputInterruptionCandidate()).toBe('ducked');
-    expect(setGain).toHaveBeenLastCalledWith(0);
+    expectGain(0);
     media.resolveOutputInterruptionCandidate('false_alarm');
-    expect(setGain).toHaveBeenLastCalledWith(0);
+    expectGain(0);
     expect(media.pcm.setOutputFocusState?.('ducked')).toBe('applied');
-    expect(setGain).toHaveBeenLastCalledWith(0.18);
+    expectGain(0.18);
     expect(media.pcm.setOutputFocusState?.('active')).toBe('applied');
-    expect(setGain).toHaveBeenLastCalledWith(1);
+    expectGain(1);
     expect(media.beginOutputInterruptionCandidate()).toBe('ducked');
     media.resolveOutputInterruptionCandidate('confirmed');
-    expect(clear).toHaveBeenCalledTimes(1);
+    expect(native.nativeModule.clearPlayback).toHaveBeenCalledWith(identity);
     await media.waitForOutputDrain(new AbortController().signal);
-    expect(waitForDrain).toHaveBeenCalledTimes(1);
-
-    callbacks.onPlaybackError?.(Object.assign(new Error('pcm_playback_write_error'), {
-      code: 'pcm_playback_write_error',
-    }));
-    expect(terminal).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'pcm_playback_write_error',
-    }));
+    native.emitEvent('playbackTerminal', { ...identity, reason: 'write_error' });
+    expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ code: 'native_playback_write_error' }));
 
     await media.pcm.stop();
     await media.pcm.stop();
-    expect(releasePlayback).toHaveBeenCalledTimes(1);
-    expect(releaseCapture).toHaveBeenCalledTimes(1);
+    expect(native.nativeModule.stopPlayback).toHaveBeenCalledOnce();
+    expect(native.nativeModule.stop).toHaveBeenCalledOnce();
+    expect(getSharedVoicePcmCapture()?.getSnapshot().streamId).toBeNull();
+    expect(getSharedVoiceAudioSessionCoordinator()?.getSnapshot().leaseCount).toBe(0);
     expect(onOutputLevel).toHaveBeenLastCalledWith(0);
   });
 
-  it('fences a pending capture acquisition when stopped so late capture cannot open playback', async () => {
-    const acquired = createDeferred<{
-      id: string;
-      streamId: string;
-      generation: number;
-      waitForDrain: () => Promise<void>;
-      release: () => Promise<void>;
-    }>();
-    const releaseCapture = vi.fn(async () => {});
-    const releasePlayback = vi.fn(async () => {});
-    const openPlayback = vi.fn(async () => ({
-      streamId: 'stream-1',
-      generation: 3,
-      enqueue: () => true,
-      clear: () => {},
-      setGain: () => true,
-      waitForDrain: async () => {},
-      playbackCursorMs: () => 0,
-      release: releasePlayback,
-    }));
-    nativeBoundary.capture = { acquire: vi.fn(() => acquired.promise) };
-    nativeBoundary.playback = { open: openPlayback };
-
-    const media = createWebSocketPcmMedia({
-      mic: { getStream: () => null },
-      input: { sampleRate: 24_000, chunkMs: 100 },
-      output: { sampleRate: 24_000 },
-      onInputChunk: () => {},
+  it.each(['stop', 'abort'] as const)('releases a late native capture when its start receives %s', async (outcome) => {
+    const started = createDeferred<{ streamId: string }>();
+    native.nativeModule.start.mockImplementationOnce(async () => {
+      const stream = await started.promise;
+      const request = native.nativeModule.configureAudioSession.mock.calls.at(-1)?.[0];
+      if (!request) throw new Error('Expected an admitted native audio session');
+      native.emitEvent('voiceAudioSessionEvent', {
+        generation: request.generation, kind: 'capabilities_changed', aecAvailable: true, aecActive: true,
+      });
+      return stream;
     });
-    const starting = media.pcm.start(new AbortController().signal);
-    await Promise.resolve();
-    await media.pcm.stop();
-
-    acquired.resolve({
-      id: 'native-capture',
-      streamId: 'stream-1',
-      generation: 3,
-      waitForDrain: async () => {},
-      release: releaseCapture,
-    });
-
+    const { media } = await createMedia();
+    const controller = new AbortController();
+    const starting = media.pcm.start(controller.signal);
+    await vi.waitFor(() => expect(native.nativeModule.start).toHaveBeenCalledOnce());
+    if (outcome === 'stop') await media.pcm.stop();
+    else controller.abort();
+    started.resolve({ streamId: 'native-stream' });
     await expect(starting).rejects.toMatchObject({ name: 'AbortError' });
-    expect(releaseCapture).toHaveBeenCalledTimes(1);
-    expect(openPlayback).not.toHaveBeenCalled();
-    expect(releasePlayback).not.toHaveBeenCalled();
+    expect(native.nativeModule.stop).toHaveBeenCalledOnce();
+    expect(native.nativeModule.startPlayback).not.toHaveBeenCalled();
+    expect(native.nativeModule.stopPlayback).not.toHaveBeenCalled();
     expect(media.enqueueOutput('AQACAA==')).toBe(false);
+    expect(getSharedVoicePcmCapture()?.getSnapshot().streamId).toBeNull();
+    expect(getSharedVoiceAudioSessionCoordinator()?.getSnapshot().leaseCount).toBe(0);
   });
 
-  it('releases a late capture acquisition when its start signal aborts', async () => {
-    const acquired = createDeferred<{
-      id: string;
-      streamId: string;
-      generation: number;
-      waitForDrain: () => Promise<void>;
-      release: () => Promise<void>;
-    }>();
-    const releaseCapture = vi.fn(async () => {});
-    const openPlayback = vi.fn();
-    nativeBoundary.capture = { acquire: vi.fn(() => acquired.promise) };
-    nativeBoundary.playback = { open: openPlayback };
-
-    const controller = new AbortController();
-    const media = createWebSocketPcmMedia({
-      mic: { getStream: () => null },
-      input: { sampleRate: 24_000, chunkMs: 100 },
-      output: { sampleRate: 24_000 },
-      onInputChunk: () => {},
+  it('closes the transport independently while the actual native capture stop is still pending', async () => {
+    const stopped = createDeferred<void>();
+    native.nativeModule.stop.mockImplementationOnce(async () => await stopped.promise);
+    const { media } = await createMedia();
+    const closeTransport = vi.fn(async () => {});
+    const connection = createWebSocketPcmConnection({
+      driver: { open: async () => {}, sendControl: async () => {}, close: closeTransport },
+      pcm: media.pcm,
     });
-    const starting = media.pcm.start(controller.signal);
-    await Promise.resolve();
-    controller.abort();
-    acquired.resolve({
-      id: 'native-capture',
-      streamId: 'stream-1',
-      generation: 3,
-      waitForDrain: async () => {},
-      release: releaseCapture,
-    });
-
-    await expect(starting).rejects.toMatchObject({ name: 'AbortError' });
-    expect(releaseCapture).toHaveBeenCalledTimes(1);
-    expect(openPlayback).not.toHaveBeenCalled();
+    await connection.connect(new AbortController().signal);
+    expect(media.enqueueOutput('AQACAA==')).toBe(true);
+    let settled = false;
+    const closing = connection.close({ code: 'user_stop' }).then(() => { settled = true; });
+    try {
+      await vi.waitFor(() => expect(native.nativeModule.stop).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(closeTransport).toHaveBeenCalledOnce());
+      expect(settled).toBe(false);
+      expect(connection.state()).toBe('closed');
+      expect(media.enqueueOutput('AQACAA==')).toBe(false);
+      expect(native.nativeModule.stopPlayback).toHaveBeenCalledOnce();
+    } finally {
+      stopped.resolve();
+      await closing;
+      await media.pcm.stop();
+    }
+    expect(getSharedVoiceAudioSessionCoordinator()?.getSnapshot().leaseCount).toBe(0);
   });
 });

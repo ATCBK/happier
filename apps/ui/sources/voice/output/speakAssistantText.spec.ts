@@ -1,69 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDeferred, createSessionFixture } from '@/dev/testkit';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, createSessionFixture, createMachineFixture } from '@/dev/testkit';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { DaemonVoiceSpeechSynthesizeRequestSchema } from '@happier-dev/protocol/daemon/voiceSpeech';
 import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
-const platformOsMock = vi.hoisted(() => ({ value: 'ios' }));
-
-vi.mock('react-native', async () => {
-  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-  return createReactNativeWebMock({
-    Platform: {
-      get OS() {
-        return platformOsMock.value;
-      },
-    },
-  });
-});
-
-const speakDeviceTextSpy = vi.fn().mockResolvedValue(undefined);
-const stopDeviceSpeechSpy = vi.fn();
-vi.mock('@/voice/local/speakDeviceText', () => ({
-  speakDeviceText: (...args: any[]) => speakDeviceTextSpy(...args),
-  stopDeviceSpeech: (..._args: any[]) => stopDeviceSpeechSpy(..._args),
-}));
-
-const speakKokoroTextSpy = vi.fn().mockResolvedValue(undefined);
-vi.mock('@/voice/output/KokoroTtsController', () => ({
-  speakKokoroText: (...args: any[]) => speakKokoroTextSpy(...args),
-}));
-
-const synthesizeBundledSpeechSpy = vi.fn().mockResolvedValue({ bytes: new Uint8Array([1]), mimeType: 'audio/mpeg' });
-vi.mock('@/voice/credentials/bundledSpeechClient', () => ({
-  bundledSpeechDaemonClient: {
-    transcribe: vi.fn(),
-    synthesize: (...args: any[]) => synthesizeBundledSpeechSpy(...args),
-  },
-}));
-const playAudioBytesWithStopperSpy = vi.fn().mockResolvedValue(undefined);
-vi.mock('@/voice/output/playAudioBytesWithStopper', () => ({
-  playAudioBytesWithStopper: (...args: any[]) => playAudioBytesWithStopperSpy(...args),
-}));
-
-const daemonTtsControllerSpeakSpy = vi.fn().mockResolvedValue(undefined);
-vi.mock('@/voice/runtime/daemonInference/DaemonTtsController', () => ({
-  DaemonTtsController: vi.fn().mockImplementation(() => ({
-    speak: (...args: any[]) => daemonTtsControllerSpeakSpy(...args),
-  })),
-}));
-const resolveDaemonVoiceInferenceExecutionSpy = vi.hoisted(() => vi.fn());
-vi.mock('@/voice/runtime/daemonInference/daemonVoiceInferencePolicy', () => ({
-  resolveLocalNeuralExecutionPolicy: (params: { requestedExecution?: string | null }) => {
-    const requestedExecution = params.requestedExecution ?? 'auto';
-    const selectableExecution = requestedExecution;
-    return {
-      allowDeviceSelection: platformOsMock.value !== 'web',
-      preferredExecution: selectableExecution === 'auto'
-        ? platformOsMock.value === 'web'
-          ? 'daemon'
-          : 'device'
-        : selectableExecution,
-      requestedExecution,
-      selectableExecution,
-    };
-  },
-  resolveDaemonVoiceInferenceExecution: (params: { requestedExecution?: string | null }) =>
-    resolveDaemonVoiceInferenceExecutionSpy(params),
-}));
+const speechBoundary = createVoiceSpeechOutputBoundary({ getAccount: () => account });
+afterAll(() => speechBoundary.disposeAudioSession());
+const { platform: platformOsMock, encodedAudio, machineRpc, expoSpeechSpeak, expoSpeechStop,
+  nativeInitialize, nativeSynthesize, speechSynthesizeRpc, daemonStreamStartRpc } = speechBoundary;
+let filesystem: ReturnType<typeof speechBoundary.reset>['filesystem'];
 
 import { speakAssistantText } from '@/voice/output/speakAssistantText';
 import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
@@ -71,32 +21,60 @@ import { storage } from '@/sync/domains/state/storage';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
+const initialSettings = storage.getState().settings;
+const initialMachines = storage.getState().machines;
+const initialMachineLists = storage.getState().machineListByServerId;
+let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+const speechServerFeatures = FeaturesResponseSchema.parse({ features: {
+  voice: { enabled: true }, execution: { runs: { enabled: true } },
+  machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+}, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+  maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000,
+  maxDurationMs: 60_000, maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2,
+  maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1,
+} } } } } });
 
 describe('speakAssistantText', () => {
-  beforeEach(() => {
-    speakDeviceTextSpy.mockReset();
-    speakDeviceTextSpy.mockResolvedValue(undefined);
-    speakKokoroTextSpy.mockReset();
-    speakKokoroTextSpy.mockResolvedValue(undefined);
-    daemonTtsControllerSpeakSpy.mockReset();
-    daemonTtsControllerSpeakSpy.mockResolvedValue(undefined);
-    synthesizeBundledSpeechSpy.mockClear();
-    playAudioBytesWithStopperSpy.mockReset();
-    playAudioBytesWithStopperSpy.mockResolvedValue(undefined);
-    resolveDaemonVoiceInferenceExecutionSpy.mockReset();
-    resolveDaemonVoiceInferenceExecutionSpy.mockImplementation(async (params: { requestedExecution?: string | null }) => {
-      const requestedExecution = params.requestedExecution ?? 'auto';
-      if (requestedExecution !== 'auto') return requestedExecution;
-      return platformOsMock.value === 'web' ? 'daemon' : 'device';
-    });
+  beforeEach(async () => {
+    filesystem = speechBoundary.reset().filesystem;
+    account = await restoreServerAccountForTest({ serverUrl: 'https://speech-output.example.test',
+      accountId: 'speech-account', credentialScope: 'restored-home', request: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/health') return Response.json({ status: 'ok' });
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        const machineResponse = speechBoundary.answerMachineHttpRequest(url, 'speech-machine', 'speech-account');
+        if (machineResponse) return machineResponse;
+        if (path === '/v1/features') return Response.json(speechServerFeatures);
+        return null;
+      } });
+    const manifest = parseModelPackManifest({ packId: 'kokoro-output-contract', kind: 'tts_sherpa', model: 'kokoro', version: '1',
+      frontend: { lang: 'en' }, voices: [{ id: 'af_heart', title: 'Heart', sid: 0 }], defaultVoiceId: 'af_heart',
+      files: [{ path: 'model.onnx', url: 'https://example.test/model.onnx', sha256: 'a'.repeat(64), sizeBytes: 1 }] });
+    filesystem.files.set(`${filesystem.root}/kokoro-output-contract/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
+    storage.getState().applySettingsLocal({ experiments: true, featureToggles: {
+      voice: true, 'execution.runs': true, 'voice.agent': true, 'voice.daemonInference': true,
+    } });
+    primeServerFeaturesSnapshot({ serverId: getActiveServerSnapshot().serverId, snapshot: {
+      status: 'ready', features: speechServerFeatures,
+    } });
+    const machine = createMachineFixture({ id: 'speech-machine', activeAt: Date.now() });
+    storage.setState({ machines: { ...initialMachines, [machine.id]: machine },
+      machineListByServerId: { ...initialMachineLists, [account.home.id]: [machine] } });
+    storage.getState().applySettingsLocal({ voice: { ...storage.getState().settings.voice,
+      executionMachine: { ...storage.getState().settings.voice.executionMachine, mode: 'fixed', machineId: machine.id } } });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    speechBoundary.disposeNativeSdkBridge();
+    await account?.dispose();
+    storage.setState({ settings: initialSettings, machines: initialMachines, machineListByServerId: initialMachineLists });
+    resetServerFeaturesClientForTests();
     platformOsMock.value = 'ios';
   });
 
   it('trims the voice provider id before selecting the TTS adapter', async () => {
-    speakDeviceTextSpy.mockClear();
+    expoSpeechSpeak.mockClear();
 
     const onSpeaking = vi.fn();
     const registerPlaybackStopper = (_s: () => void) => () => {};
@@ -131,11 +109,11 @@ describe('speakAssistantText', () => {
       onSpeaking,
     });
 
-    expect(speakDeviceTextSpy).toHaveBeenCalledWith(
+    expect(expoSpeechSpeak).toHaveBeenCalledWith(
       'hello',
-      onSpeaking,
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ onStart: expect.any(Function), onDone: expect.any(Function) }),
     );
+    expect(onSpeaking).toHaveBeenCalledOnce();
   });
 
   it('routes device TTS provider to expo speech', async () => {
@@ -168,11 +146,11 @@ describe('speakAssistantText', () => {
       onSpeaking,
     });
 
-    expect(speakDeviceTextSpy).toHaveBeenCalledWith(
+    expect(expoSpeechSpeak).toHaveBeenCalledWith(
       'hello',
-      onSpeaking,
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ onStart: expect.any(Function), onDone: expect.any(Function) }),
     );
+    expect(onSpeaking).toHaveBeenCalledOnce();
     expect(typeof stopper).toBe('function');
   });
 
@@ -189,7 +167,7 @@ describe('speakAssistantText', () => {
             local_direct: { schemaVersion: 1, config: {
               tts: {
                 provider: 'local_neural',
-                localNeural: { model: 'kokoro', assetId: 'kokoro-82m', voiceId: 'af_heart', speed: 1, execution: 'device' },
+                localNeural: { model: 'kokoro', assetId: 'kokoro-output-contract', voiceId: 'af_heart', speed: 1, execution: 'device' },
                 autoSpeakReplies: true,
                 bargeInEnabled: true,
               },
@@ -202,7 +180,7 @@ describe('speakAssistantText', () => {
       onSpeaking,
     });
 
-    expect(speakKokoroTextSpy).toHaveBeenCalledWith(
+    expect(nativeSynthesize).toHaveBeenCalledWith(
       expect.objectContaining({
         text: 'hello',
         voiceId: 'af_heart',
@@ -211,24 +189,13 @@ describe('speakAssistantText', () => {
   });
 
   it('rejects delayed local-neural playback from a stopped attempt without poisoning restarted playback', async () => {
-    const execution = createDeferred<'device' | 'daemon'>();
-    resolveDaemonVoiceInferenceExecutionSpy.mockReturnValueOnce(execution.promise);
+    const execution = createDeferred<void>();
+    nativeInitialize.mockReturnValueOnce(execution.promise);
     const controller = createVoicePlaybackController();
     const staleOnSpeaking = vi.fn();
     const restartedOnSpeaking = vi.fn();
-    speakKokoroTextSpy.mockImplementationOnce(async (params: Readonly<{
-      registerPlaybackStopper: VoicePlaybackStopperRegistrar;
-      onPlaybackStarted?: () => void;
-    }>) => {
-      let stopped = false;
-      const clearStopper = params.registerPlaybackStopper(() => {
-        stopped = true;
-      });
-      if (!stopped) params.onPlaybackStarted?.();
-      clearStopper();
-    });
-    speakDeviceTextSpy.mockImplementationOnce(async (_text: string, onStart?: () => void, opts?: { signal?: AbortSignal }) => {
-      if (!opts?.signal?.aborted) onStart?.();
+    expoSpeechSpeak.mockImplementationOnce((_text, options) => {
+      options.onStart?.(); options.onDone?.();
     });
 
     const staleAttempt = speakAssistantText({
@@ -240,7 +207,7 @@ describe('speakAssistantText', () => {
             local_direct: { schemaVersion: 1, config: {
               tts: {
                 provider: 'local_neural',
-                localNeural: { model: 'kokoro', assetId: 'kokoro-82m', voiceId: 'af_heart', speed: 1, execution: 'auto' },
+                localNeural: { model: 'kokoro', assetId: 'kokoro-output-contract', voiceId: 'af_heart', speed: 1, execution: 'device' },
                 autoSpeakReplies: true,
                 bargeInEnabled: true,
               },
@@ -252,7 +219,7 @@ describe('speakAssistantText', () => {
       registerPlaybackStopper: controller.registerStopper,
       onSpeaking: staleOnSpeaking,
     });
-    await vi.waitFor(() => expect(resolveDaemonVoiceInferenceExecutionSpy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(nativeInitialize).toHaveBeenCalledTimes(1));
 
     controller.interrupt();
     await speakAssistantText({
@@ -276,7 +243,7 @@ describe('speakAssistantText', () => {
       registerPlaybackStopper: controller.registerStopper,
       onSpeaking: restartedOnSpeaking,
     });
-    execution.resolve('device');
+    execution.resolve();
     await staleAttempt;
 
     expect(restartedOnSpeaking).toHaveBeenCalledTimes(1);
@@ -284,8 +251,8 @@ describe('speakAssistantText', () => {
   });
 
   it('routes local_neural daemon execution to the daemon TTS controller', async () => {
-    daemonTtsControllerSpeakSpy.mockClear();
-    speakKokoroTextSpy.mockClear();
+    daemonStreamStartRpc.mockClear();
+    nativeSynthesize.mockClear();
 
     const onSpeaking = vi.fn();
     const registerPlaybackStopper = (_s: () => void) => () => {};
@@ -319,19 +286,20 @@ describe('speakAssistantText', () => {
       onSpeaking,
     });
 
-    expect(daemonTtsControllerSpeakSpy).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'session-1',
+    expect(daemonStreamStartRpc).toHaveBeenCalledWith(expect.objectContaining({
       text: 'hello from daemon',
       packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
       voiceId: 'af_heart',
     }));
-    expect(speakKokoroTextSpy).not.toHaveBeenCalled();
+    expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'speech-machine',
+      method: 'daemon.voiceInference.tts.stream.start' }));
+    expect(nativeSynthesize).not.toHaveBeenCalled();
   });
 
   it('reports selected daemon local_neural synthesis failure without changing execution or provider', async () => {
-    daemonTtsControllerSpeakSpy.mockRejectedValueOnce(new Error('daemon unavailable'));
-    speakDeviceTextSpy.mockClear();
-    speakKokoroTextSpy.mockClear();
+    daemonStreamStartRpc.mockRejectedValueOnce(new Error('daemon unavailable'));
+    expoSpeechSpeak.mockClear();
+    nativeSynthesize.mockClear();
 
     const onSpeaking = vi.fn();
     const registerPlaybackStopper = (_s: () => void) => () => {};
@@ -368,20 +336,20 @@ describe('speakAssistantText', () => {
       reason: 'daemon unavailable',
     });
 
-    expect(speakKokoroTextSpy).not.toHaveBeenCalled();
-    expect(speakDeviceTextSpy).not.toHaveBeenCalled();
+    expect(nativeSynthesize).not.toHaveBeenCalled();
+    expect(expoSpeechSpeak).not.toHaveBeenCalled();
   });
 
   it('keeps explicit web local_neural device execution instead of changing it to daemon', async () => {
     platformOsMock.value = 'web';
-    speakDeviceTextSpy.mockClear();
-    speakKokoroTextSpy.mockClear();
-    daemonTtsControllerSpeakSpy.mockClear();
+    expoSpeechSpeak.mockClear();
+    nativeSynthesize.mockClear();
+    daemonStreamStartRpc.mockClear();
 
     const onSpeaking = vi.fn();
     const registerPlaybackStopper = (_s: () => void) => () => {};
 
-    await speakAssistantText({
+    await expect(speakAssistantText({
       text: 'hello from web clamp',
       settings: {
         voice: {
@@ -407,20 +375,17 @@ describe('speakAssistantText', () => {
       networkTimeoutMs: 15000,
       registerPlaybackStopper,
       onSpeaking,
-    });
+    })).rejects.toMatchObject({ kind: 'tts_failed', reason: 'kokoro_runtime_unsupported' });
 
-    expect(speakKokoroTextSpy).toHaveBeenCalledWith(expect.objectContaining({
-      text: 'hello from web clamp',
-    }));
-    expect(speakDeviceTextSpy).not.toHaveBeenCalled();
-    expect(daemonTtsControllerSpeakSpy).not.toHaveBeenCalled();
+    expect(nativeSynthesize).not.toHaveBeenCalled();
+    expect(expoSpeechSpeak).not.toHaveBeenCalled();
+    expect(daemonStreamStartRpc).not.toHaveBeenCalled();
   });
 
   it('reports explicit web local_neural device failure without daemon or OS speech substitution', async () => {
     platformOsMock.value = 'web';
-    speakKokoroTextSpy.mockRejectedValueOnce(new Error('kokoro_runtime_unsupported'));
-    speakDeviceTextSpy.mockClear();
-    speakKokoroTextSpy.mockClear();
+    expoSpeechSpeak.mockClear();
+    nativeSynthesize.mockClear();
 
     const onSpeaking = vi.fn();
     const onTtsFailed = vi.fn();
@@ -456,9 +421,9 @@ describe('speakAssistantText', () => {
       onTtsFailed,
     });
 
-    expect(daemonTtsControllerSpeakSpy).not.toHaveBeenCalled();
-    expect(speakKokoroTextSpy).toHaveBeenCalledTimes(1);
-    expect(speakDeviceTextSpy).not.toHaveBeenCalled();
+    expect(daemonStreamStartRpc).not.toHaveBeenCalled();
+    expect(nativeSynthesize).not.toHaveBeenCalled();
+    expect(expoSpeechSpeak).not.toHaveBeenCalled();
     expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'tts_failed',
       reason: 'kokoro_runtime_unsupported',
@@ -484,14 +449,12 @@ describe('speakAssistantText', () => {
     const onSpeaking = vi.fn();
     const registerPlaybackStopper = (_s: () => void) => () => {};
     let notifyPlaybackStarted!: () => void;
-    playAudioBytesWithStopperSpy.mockImplementationOnce(async (params: unknown) => {
-      const callback = (params as Readonly<{ onPlaybackStarted?: () => void }>).onPlaybackStarted;
-      if (!callback) throw new Error('Expected playback-start callback');
-      notifyPlaybackStarted = callback;
+    encodedAudio.start.mockImplementationOnce(async () => {
+      notifyPlaybackStarted = () => { encodedAudio.emit('started'); encodedAudio.emit('finished'); };
     });
 
     try {
-    await speakAssistantText({
+    const playback = speakAssistantText({
       sessionId: 'control-c',
       text: 'hello',
       settings: {
@@ -523,17 +486,19 @@ describe('speakAssistantText', () => {
       registerPlaybackStopper,
       onSpeaking,
     });
+    await vi.waitFor(() => expect(notifyPlaybackStarted).toBeTypeOf('function'));
 
-    expect(synthesizeBundledSpeechSpy).toHaveBeenCalledTimes(1);
-    const synthesizeInput = synthesizeBundledSpeechSpy.mock.calls[0]?.[0] as any;
-    expect(synthesizeInput.entry?.providerId).toBe('happier.voice.google/google-cloud-tts');
+    expect(speechSynthesizeRpc).toHaveBeenCalledTimes(1);
+    const synthesizeInput = DaemonVoiceSpeechSynthesizeRequestSchema.parse(speechSynthesizeRpc.mock.calls[0]?.[0]);
+    expect(synthesizeInput.target).toEqual({ pluginId: 'happier.voice.google', localId: 'google-cloud-tts' });
     expect(synthesizeInput.input).toBe('hello');
     expect(synthesizeInput.voicePreference).toEqual(preference);
-    expect(synthesizeBundledSpeechSpy).not.toHaveBeenCalledWith(
+    expect(speechSynthesizeRpc).not.toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: expect.anything(), androidCertSha1: expect.anything() }),
     );
     expect(onSpeaking).not.toHaveBeenCalled();
     notifyPlaybackStarted();
+    await playback;
     expect(onSpeaking).toHaveBeenCalledTimes(1);
     } finally {
       storage.setState({ sessions: originalSessions });
@@ -570,10 +535,10 @@ describe('speakAssistantText', () => {
         networkTimeoutMs: 15000, registerPlaybackStopper: () => () => {}, onSpeaking, onTtsFailed });
       expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({ kind: 'tts_failed', reason: selection.reason }));
       expect(onSpeaking).not.toHaveBeenCalled();
-      expect(speakDeviceTextSpy).not.toHaveBeenCalled();
-      expect(speakKokoroTextSpy).not.toHaveBeenCalled();
-      expect(daemonTtsControllerSpeakSpy).not.toHaveBeenCalled();
-      expect(synthesizeBundledSpeechSpy).not.toHaveBeenCalled();
+      expect(expoSpeechSpeak).not.toHaveBeenCalled();
+      expect(nativeSynthesize).not.toHaveBeenCalled();
+      expect(daemonStreamStartRpc).not.toHaveBeenCalled();
+      expect(speechSynthesizeRpc).not.toHaveBeenCalled();
     } finally {
       storage.setState({ sessions: originalSessions });
       voiceSessionBindingStore.getState().unbind('native-history');
@@ -599,16 +564,20 @@ describe('speakAssistantText', () => {
     voiceConversationRuntimeMachine.transitionToSpeaking({ controlSessionId: controlId });
     voiceConversationRuntimeMachine.setInUseVoice({ controlSessionId: controlId, inUseVoice: previousVoice });
     let started!: () => void;
-    speakDeviceTextSpy.mockImplementationOnce(async (_text: string, onStarted: () => void) => { started = onStarted; });
+    expoSpeechSpeak.mockImplementationOnce((_text, options) => {
+      started = () => { options.onStart?.(); options.onDone?.(); };
+    });
     const onSpeaking = vi.fn();
     try {
-      await speakAssistantText({ sessionId: controlId, text: 'hello',
+      const playback = speakAssistantText({ sessionId: controlId, text: 'hello',
         settings: { voice: { providerId: 'local_direct', providers: { local_direct: { schemaVersion: 1,
           config: { tts: { provider: 'device' } } } } } },
         networkTimeoutMs: 15000, registerPlaybackStopper: () => () => {}, onSpeaking });
+      await vi.waitFor(() => expect(started).toBeTypeOf('function'));
       expect(voiceConversationRuntimeMachine.getSnapshot().inUseVoice).toEqual(previousVoice);
       expect(onSpeaking).not.toHaveBeenCalled();
       started();
+      await playback;
       expect(voiceConversationRuntimeMachine.getSnapshot().inUseVoice).toBeUndefined();
       expect(onSpeaking).toHaveBeenCalledOnce();
     } finally {
@@ -620,23 +589,12 @@ describe('speakAssistantText', () => {
 
   it('rejects delayed bundled playback from a stopped attempt without poisoning restarted playback', async () => {
     const synthesis = createDeferred<{ bytes: Uint8Array; mimeType: string }>();
-    synthesizeBundledSpeechSpy.mockReturnValueOnce(synthesis.promise);
+    speechSynthesizeRpc.mockReturnValueOnce(synthesis.promise);
     const controller = createVoicePlaybackController();
     const staleOnSpeaking = vi.fn();
     const restartedOnSpeaking = vi.fn();
-    playAudioBytesWithStopperSpy.mockImplementationOnce(async (params: Readonly<{
-      registerPlaybackStopper: VoicePlaybackStopperRegistrar;
-      onPlaybackStarted?: () => void;
-    }>) => {
-      let stopped = false;
-      const clearStopper = params.registerPlaybackStopper(() => {
-        stopped = true;
-      });
-      if (!stopped) params.onPlaybackStarted?.();
-      clearStopper();
-    });
-    speakDeviceTextSpy.mockImplementationOnce(async (_text: string, onStart?: () => void, opts?: { signal?: AbortSignal }) => {
-      if (!opts?.signal?.aborted) onStart?.();
+    expoSpeechSpeak.mockImplementationOnce((_text, options) => {
+      options.onStart?.(); options.onDone?.();
     });
 
     const staleAttempt = speakAssistantText({
@@ -670,7 +628,7 @@ describe('speakAssistantText', () => {
       registerPlaybackStopper: controller.registerStopper,
       onSpeaking: staleOnSpeaking,
     });
-    await vi.waitFor(() => expect(synthesizeBundledSpeechSpy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(speechSynthesizeRpc).toHaveBeenCalledTimes(1));
 
     controller.interrupt();
     await speakAssistantText({
@@ -702,8 +660,8 @@ describe('speakAssistantText', () => {
   });
 
   it('reports selected local_neural device failure without substituting device TTS', async () => {
-    speakKokoroTextSpy.mockRejectedValueOnce(new Error('kokoro_runtime_unavailable'));
-    speakDeviceTextSpy.mockClear();
+    nativeSynthesize.mockRejectedValueOnce(new Error('kokoro_runtime_unavailable'));
+    expoSpeechSpeak.mockClear();
 
     const onSpeaking = vi.fn();
     const onTtsFailed = vi.fn();
@@ -718,7 +676,7 @@ describe('speakAssistantText', () => {
             local_direct: { schemaVersion: 1, config: {
               tts: {
                 provider: 'local_neural',
-                localNeural: { model: 'kokoro', assetId: 'kokoro-82m', voiceId: 'af_heart', speed: 1 },
+                localNeural: { model: 'kokoro', assetId: 'kokoro-output-contract', voiceId: 'af_heart', speed: 1 },
                 autoSpeakReplies: true,
                 bargeInEnabled: true,
               },
@@ -732,8 +690,8 @@ describe('speakAssistantText', () => {
       onTtsFailed,
     });
 
-    expect(speakDeviceTextSpy).not.toHaveBeenCalled();
-    expect(speakKokoroTextSpy).toHaveBeenCalledTimes(1);
+    expect(expoSpeechSpeak).not.toHaveBeenCalled();
+    expect(nativeSynthesize).toHaveBeenCalledTimes(1);
     expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'tts_failed',
       reason: 'kokoro_runtime_unavailable',

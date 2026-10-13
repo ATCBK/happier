@@ -36,6 +36,7 @@ export async function listMachinesForVoiceTool(params: Readonly<{ serverId?: str
       machineId: normalizeNonEmptyString(m?.id),
       label: names?.get(m.id) ?? resolveVoiceMachineLabel(m),
       ...(params.purpose === 'input' ? { presence: isMachineReachable(scope, m) ? 'online' : 'offline',
+        platform: normalizeNonEmptyString(m?.metadata?.platform), arch: normalizeNonEmptyString(m?.metadata?.arch),
         revokedAt: m.revokedAt, replacedByMachineId: m.replacedByMachineId } : {}),
       ...(normalizeNonEmptyString(m?.metadata?.host) ? { host: normalizeNonEmptyString(m?.metadata?.host) } : {}),
       ...(m.access ? { access: m.access } : {}),

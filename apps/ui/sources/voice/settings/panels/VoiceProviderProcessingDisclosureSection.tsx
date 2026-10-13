@@ -95,8 +95,9 @@ const styles = StyleSheet.create((theme) => ({
   serviceTitle: { ...Typography.default('semiBold'), ...happierPageTextMetrics('rowTitle'), color: theme.colors.text.primary },
   facts: { gap: PAGE_LIST_METRICS.groupHeadingGapPx },
   fact: { flexDirection: 'row', alignItems: 'flex-start', columnGap: PAGE_LIST_METRICS.rowLeadingGapPx },
-  factLabel: { ...Typography.default('medium'), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.primary, flex: 1 },
-  factValue: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.secondary, flex: 3 },
+  // Lab P: a quiet label column and the fact itself in ink, so the three facts read as one compact table.
+  factLabel: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.secondary, flex: 1 },
+  factValue: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.primary, flex: 3 },
   factStacked: { flexDirection: 'column', rowGap: 0 },
   factStackedText: { flex: 0 },
 }));

@@ -1,215 +1,220 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import {
+    ExecutionRunTurnStreamStartRequestSchema,
+    ExecutionRunTurnStreamStartV2RequestSchema,
+    ExecutionRunTurnStreamReadResponseSchema,
+} from '@happier-dev/protocol/execution/runs/streaming';
+import { createDeferred, createSessionFixture } from '@/dev/testkit';
+import {
+    createStandaloneVoicePolicyHarness,
+    prepareStandaloneVoicePolicyHarness,
+} from '@/dev/testkit/harness/standaloneVoicePolicyHarness';
+import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
+import { withGeneratedElevenLabsVoiceRuntime } from '@/dev/testkit/harness/elevenLabsVoiceRuntime';
+import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 
-const { storageModuleMock } = await vi.hoisted(async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return {
-        storageModuleMock: createStorageModuleStub({
-            storage: {
-                getState: () => ({
-                    settings: { voice: { providerId: 'plugin_voice' } },
-                }),
-            } as any,
-        }),
-    };
-});
-
-const {
-    adapterGet,
-    adapterSendTextTurn,
-    adapterStart,
-    appendVoiceConversationUserText,
-    contextSendContextualUpdate,
-    contextSendTextMessage,
-    enqueuePendingMessage,
-    markPendingDeliveryHandled,
-} = vi.hoisted(() => {
-    const adapterSendTextTurn = vi.fn(async (params: Readonly<{
-        localId: string;
-        onAccepted(): Promise<void>;
-    }>) => {
-        // Real realtime adapters acknowledge admission before returning; the QA
-        // stub mirrors that contract so the durable row settles.
-        await params.onAccepted();
-    });
-    const adapterStart = vi.fn(async () => {});
-    const adapterStop = vi.fn(async () => {});
-    return {
-        adapterSendTextTurn,
-        adapterStart,
-        appendVoiceConversationUserText: vi.fn(),
-        contextSendContextualUpdate: vi.fn(),
-        contextSendTextMessage: vi.fn(),
-        enqueuePendingMessage: vi.fn(async (_sessionId, _text, _displayText, _meta, options) => ({
-            localId: options.localId,
-            accepted: true,
-            externalHandoffClaimed: true,
-        })),
-        markPendingDeliveryHandled: vi.fn(async () => {}),
-        adapterGet: vi.fn((_adapterId: string) => ({
-            id: 'plugin_voice',
-            engineKind: 'realtime',
-            start: adapterStart,
-            stop: adapterStop,
-            getSnapshot: () => ({
-                adapterId: 'plugin_voice',
-                sessionId: 'target-session',
-                status: 'connected',
-                mode: 'idle',
-                canStop: true,
-            }),
-            sendContextText: vi.fn(),
-            sendContextUpdate: vi.fn(),
-            sendTextTurn: adapterSendTextTurn,
-        })),
-    };
-});
-vi.mock('@/sync/sync', () => ({
-    sync: { enqueuePendingMessage, markPendingDeliveryHandled },
+const sdk = vi.hoisted(() => ({
+    startSession: vi.fn(),
+    endSession: vi.fn(async () => {}),
+    sendUserMessage: vi.fn(),
+    sendContextualUpdate: vi.fn(),
 }));
-vi.mock('@/voice/session/voiceAdapterRegistry', () => ({
-    getVoiceAdapterRegistry: () => ({
-        get: (adapterId: string) => adapterGet(adapterId),
-    }),
-    resolveVoiceAdapterContextChannel: () => ({
-        sendTextMessage: contextSendTextMessage,
-        sendContextualUpdate: contextSendContextualUpdate,
-    }),
-}));
+vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: sdk.startSession } }));
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => {}) } }));
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
-vi.mock('@/voice/transcript/voiceConversationTranscript', () => ({
-    appendVoiceConversationUserText: (params: unknown) => appendVoiceConversationUserText(params),
-    buildRealtimeConversationTurnMeta: () => ({
-        happier: {
-            kind: 'conversation_turn.v1',
-            payload: { v: 1 },
-            conversationTurnOriginV1: {
-                v: 1,
-                channel: 'realtime_conversation',
-                modality: 'voice',
-            },
-        },
-    }),
-}));
-
-vi.mock('@/sync/domains/state/storage', () => storageModuleMock);
-
-import { createDefaultVoiceQaControllerDeps } from './voiceQaRuntimeDeps';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { voiceAgentSessions } from '@/voice/agent/voiceAgentSessions';
-
-const mountedAddress = (sessionId: string) => ({
-    serverId: getActiveServerSnapshot().serverId,
-    sessionId,
-});
+await prepareStandaloneVoicePolicyHarness();
+const { storage } = await import('@/sync/domains/state/storage');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { createDefaultVoiceQaControllerDeps } = await import('./voiceQaRuntimeDeps');
+const { createVoiceQaController } = await import('./voiceQaController');
+const { useVoiceQaStore } = await import('./voiceQaStore');
+const { getVoiceAdapterRegistry, registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+const previousStorage = storage.getState();
+const previousBindings = voiceSessionBindingStore.getState();
+const previousAdapters = getVoiceAdapterRegistry().list();
 
 describe('createDefaultVoiceQaControllerDeps', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
+        sdk.startSession.mockReset();
+        sdk.endSession.mockClear();
+        sdk.sendUserMessage.mockClear();
+        sdk.sendContextualUpdate.mockClear();
+    });
+    afterEach(() => {
+        registerVoiceAdapters(previousAdapters);
+        voiceSessionBindingStore.setState(previousBindings, true);
+        storage.setState(previousStorage, true);
+        vi.restoreAllMocks();
     });
 
-    it('refuses to start a realtime QA session for a target in an unmounted Home', async () => {
-        const deps = createDefaultVoiceQaControllerDeps();
-
-        await expect(deps.startRealtime({ serverId: 'other-home', sessionId: 'target-session' }))
-            .rejects.toThrow('voice_qa_target_home_not_mounted');
-        expect(adapterStart).not.toHaveBeenCalled();
+    it('refuses an unmounted Home before starting the generated realtime provider', async () => {
+        await expect(createDefaultVoiceQaControllerDeps().startRealtime({
+            serverId: 'other-home', sessionId: 'target-session',
+        })).rejects.toThrow('voice_qa_target_home_not_mounted');
+        expect(sdk.startSession).not.toHaveBeenCalled();
     });
 
-    it('forwards exact transcript-custody directives to the canonical voice session owner', async () => {
-        const sendTurn = vi.spyOn(voiceAgentSessions, 'sendTurn').mockResolvedValue({
-            assistantText: 'ok',
-            actions: [],
-        });
-        const deps = createDefaultVoiceQaControllerDeps();
-        const persist = {
-            userTranscript: { mode: 'persist', localId: ' durable-outer-id ' },
-        } as const;
-        const suppress = {
-            userTranscript: { mode: 'suppress' },
-        } as const;
-
-        await deps.sendLocalTurn('voice-hidden-s1', 'Outer prompt', persist);
-        await deps.sendLocalTurn('voice-hidden-s1', 'tool follow-up', suppress);
-
-        expect(sendTurn).toHaveBeenNthCalledWith(1, 'voice-hidden-s1', 'Outer prompt', persist);
-        expect(sendTurn).toHaveBeenNthCalledWith(2, 'voice-hidden-s1', 'tool follow-up', suppress);
-    });
-
-    it('routes realtime QA through the configured registry adapter without a provider-specific owner', async () => {
-        const deps = createDefaultVoiceQaControllerDeps();
-
-        await deps.startRealtime(mountedAddress('target-session'), 'context', { textOnly: true });
-
-        await deps.sendRealtimeTextTurn({
-            controlSessionId: 'voice-global',
-            conversationSessionId: 'carrier-s1',
-            text: 'hello',
-        });
-        const session = deps.getRealtimeSession?.();
-        session?.sendTextMessage('context text');
-        session?.sendContextualUpdate('context update');
-
-        expect(adapterGet).toHaveBeenCalledWith('plugin_voice');
-        expect(adapterStart).toHaveBeenCalledWith({
-            sessionId: 'target-session',
-            requestedTargetSessionAddress: mountedAddress('target-session'),
-            initialContext: 'context',
-            textOnly: true,
-        });
-        expect(adapterSendTextTurn).toHaveBeenCalledWith({
-            controlSessionId: 'voice-global',
-            conversationSessionId: 'carrier-s1',
-            text: 'hello',
-            localId: expect.any(String),
-            deliveryCommand: 'interrupt_and_send',
-            onAccepted: expect.any(Function),
-        });
-        const localId = adapterSendTextTurn.mock.calls[0]?.[0]?.localId;
-        expect(localId).toEqual(expect.any(String));
-        expect(enqueuePendingMessage).toHaveBeenCalledWith('carrier-s1', 'hello', undefined, {
-            happier: {
-                kind: 'conversation_turn.v1',
-                payload: { v: 1 },
-                conversationTurnOriginV1: {
-                    v: 1,
-                    channel: 'realtime_conversation',
-                    modality: 'voice',
-                },
+    it('preserves explicit transcript custody through real Voice activation and the scoped daemon client', async () => {
+        const daemon = await createRetainedVoiceAgentRpcBoundary({
+            handleOtherRpc: async (method, input) => {
+                if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START || method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2) {
+                    (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2
+                        ? ExecutionRunTurnStreamStartV2RequestSchema : ExecutionRunTurnStreamStartRequestSchema).parse(input);
+                    return { streamId: 'qa-stream' };
+                }
+                if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
+                    return ExecutionRunTurnStreamReadResponseSchema.parse({
+                        streamId: 'qa-stream', events: [{ t: 'done', assistantText: 'ok', actions: [] }],
+                        nextCursor: 1, done: true,
+                    });
+                }
+                throw new Error('Unexpected QA daemon operation: ' + method);
             },
-        }, {
-            localId,
-            deliveryMode: 'external_handoff',
-            requestedAction: { v: 1, kind: 'send_now' },
-            hostAdmissionOrigin: 'voice',
         });
-        expect(markPendingDeliveryHandled).toHaveBeenCalledExactlyOnceWith(
-            'carrier-s1',
-            localId,
-        );
-        expect(appendVoiceConversationUserText).not.toHaveBeenCalled();
-        expect(contextSendTextMessage).toHaveBeenCalledWith('context text');
-        expect(contextSendContextualUpdate).toHaveBeenCalledWith('context update', 'current_ui');
+        const fixture = await createStandaloneVoicePolicyHarness({
+            mode: 'off', initializeSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+            existingSession: createSessionFixture({ id: 'voice-hidden-s1', active: true, metadata: {
+                path: '/voice', host: 'voice.test', flavor: 'claude',
+                ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+                agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+            } }),
+            dispatch: daemon.dispatch,
+        });
+        let activation: Awaited<ReturnType<typeof fixture.activateLocalAgent>> | undefined;
+        try {
+            activation = await fixture.activateLocalAgent();
+            const deps = createDefaultVoiceQaControllerDeps();
+            await expect(deps.sendLocalTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'Outer prompt', {
+                userTranscript: { mode: 'persist', localId: ' durable-outer-id ' },
+            })).resolves.toMatchObject({ assistantText: 'ok' });
+            await expect(deps.sendLocalTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'tool follow-up', {
+                userTranscript: { mode: 'suppress' },
+            })).resolves.toMatchObject({ assistantText: 'ok' });
+            const streams = daemon.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2)
+                .map(request => ExecutionRunTurnStreamStartV2RequestSchema.parse(request.input));
+            expect(streams).toHaveLength(2);
+            expect(streams[0]).toMatchObject({ userTranscript: { mode: 'persist', localId: ' durable-outer-id ' } });
+            expect(streams[1]).toMatchObject({ userTranscript: { mode: 'suppress' } });
+        } finally {
+            await activation?.dispose();
+            await fixture.dispose();
+        }
     });
 
-    it('keeps QA generic while production composes ElevenLabs only from generated public entries', async () => {
-        const { readFile } = await import('node:fs/promises');
-        const qaSource = await readFile(
-            new URL('./voiceQaRuntimeDeps.ts', import.meta.url),
-            'utf8',
-        );
-        expect(qaSource).not.toContain('realtimeElevenLabs');
-        expect(qaSource).not.toContain('realtime_elevenlabs');
-        expect(qaSource).not.toContain('/adapters/realtimeElevenLabs/');
-        expect(qaSource).not.toContain('sendContextText');
+    const withGeneratedRealtimeQa = async (exercise: (scope: Readonly<{
+        controller: ReturnType<typeof createVoiceQaController>;
+        deps: ReturnType<typeof createDefaultVoiceQaControllerDeps>;
+        home: Awaited<ReturnType<typeof import('@/dev/testkit/harness/actionHomesHttpHarness').serveAccountHomes>>;
+        providerId: string;
+    }>) => Promise<void>) => {
+        // Preserve the original vendor web slice at its genuine SDK boundary.
+        const webSdkModuleId = '@elevenlabs/client/web';
+        vi.doMock(webSdkModuleId, () => ({ Conversation: { startSession: sdk.startSession } }));
+        sdk.startSession.mockResolvedValue({
+            endSession: sdk.endSession, setMicMuted() {}, setVolume() {},
+            sendUserMessage: sdk.sendUserMessage, sendContextualUpdate: sdk.sendContextualUpdate,
+            getId: () => 'qa-elevenlabs',
+        });
+        await withGeneratedElevenLabsVoiceRuntime(async ({ home, providerId }) => {
+            const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.qa!.serverUrl);
+            expect(await TokenStorage.getCredentials()).toEqual(credentials);
+            await exercise({
+                controller: createVoiceQaController(), deps: createDefaultVoiceQaControllerDeps(), home, providerId,
+            });
+        });
+    };
 
-        const compositionSource = await readFile(
-            new URL('../adapters/registerBuiltinVoiceAdapters.ts', import.meta.url),
-            'utf8',
-        );
-        expect(compositionSource).not.toContain('createRealtimeElevenLabsVoiceAdapter');
-        expect(compositionSource).not.toContain("entry.providerId !== 'realtime_elevenlabs'");
-        expect(compositionSource).toContain(
-            'input.bundledEntries ?? BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES',
-        );
+    it('sends a generated provider text turn only after real pending custody and settles its exact row', async () => {
+        await withGeneratedRealtimeQa(async ({ controller, deps, home, providerId }) => {
+        await controller.start({ initialContext: 'context' });
+        expect(sdk.startSession).toHaveBeenLastCalledWith(expect.objectContaining({ textOnly: true }));
+        expect(deps.isRealtimeStarted()).toBe(true);
+        expect(useVoiceQaStore.getState()).toMatchObject({ status: 'running', runtimeSessionId: 'qa-history' });
+        await controller.sendPrompt({ prompt: 'hello' });
+        expect(sdk.sendUserMessage).toHaveBeenCalledWith('hello');
+        expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'user' && entry.text === 'hello')).toBe(true);
+        const pending = home.requests.filter(request => request.method === 'POST' && /\/pending$/.test(request.path));
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.path).toBe('/v2/sessions/qa-history/pending');
+        expect(pending[0]?.body).toMatchObject({
+            deliveryMode: 'external_handoff', requestedAction: { v: 1, kind: 'send_now' },
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello' } } },
+        });
+        const handled = home.requests.filter(request => request.method === 'POST' && /\/delivery\/handled$/.test(request.path));
+        expect(handled).toHaveLength(1);
+        const body = pending[0]!.body;
+        if (!body || typeof body !== 'object' || !('localId' in body) || typeof body.localId !== 'string') throw new Error('Missing durable local id');
+        expect(handled[0]?.path).toContain(encodeURIComponent(body.localId));
+        await deps.stopMedia!(VOICE_AGENT_GLOBAL_SESSION_ID, providerId);
+        expect(deps.isRealtimeStarted()).toBe(false);
+        expect(deps.getMediaSnapshot!().status).toBe('disconnected');
+        await controller.stop();
+        expect(useVoiceQaStore.getState().status).toBe('idle');
+        });
     });
+
+    it('rejects a missing generated provider SDK identity and releases its SDK conversation', async () => {
+        await withGeneratedRealtimeQa(async ({ controller }) => {
+        sdk.startSession.mockResolvedValueOnce({
+            endSession: sdk.endSession, setMicMuted() {}, setVolume() {},
+            sendUserMessage: sdk.sendUserMessage, sendContextualUpdate: sdk.sendContextualUpdate,
+            getId: () => '',
+        });
+        await expect(controller.start({ initialContext: 'context' }))
+            .rejects.toThrow('voice_connection_failed');
+        expect(useVoiceQaStore.getState().status).toBe('error');
+        expect(sdk.endSession).toHaveBeenCalled();
+        expect(sdk.startSession).toHaveBeenCalled();
+        });
+    });
+
+    it('marks QA failed when actual adapter Stop aborts its pending generated provider connection', async () => {
+        await withGeneratedRealtimeQa(async ({ controller, deps }) => {
+            const lateConversation = {
+                endSession: sdk.endSession, setMicMuted() {}, setVolume() {},
+                sendUserMessage: sdk.sendUserMessage, sendContextualUpdate: sdk.sendContextualUpdate,
+                getId: () => 'qa-aborted-elevenlabs',
+            };
+            const negotiation = createDeferred<typeof lateConversation>();
+            sdk.startSession.mockImplementationOnce(() => negotiation.promise);
+            const starting = controller.start({ initialContext: 'context' })
+                .then(() => ({ error: null }), error => ({ error }));
+            await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalled());
+            const stopping = deps.stopRealtime();
+            negotiation.resolve(lateConversation);
+            await stopping;
+            expect((await starting).error).toMatchObject({ message: 'realtime_voice_session_not_started' });
+            expect(useVoiceQaStore.getState().status).toBe('error');
+        });
+    });
+
+    it('rejects QA Start when actual public Stop cancels a pending generated provider connection', async () => {
+        await withGeneratedRealtimeQa(async ({ controller }) => {
+        const lateConversation = {
+            endSession: sdk.endSession, setMicMuted() {}, setVolume() {},
+            sendUserMessage: sdk.sendUserMessage, sendContextualUpdate: sdk.sendContextualUpdate,
+            getId: () => 'qa-late-elevenlabs',
+        };
+        let finishNegotiation!: (conversation: typeof lateConversation) => void;
+        const negotiation = new Promise<typeof lateConversation>(resolve => { finishNegotiation = resolve; });
+        const startsBeforeCancellation = sdk.startSession.mock.calls.length;
+        sdk.startSession.mockImplementationOnce(() => negotiation);
+        const cancelledStart = controller.start({ initialContext: 'context' })
+            .then(() => ({ error: null }), error => ({ error }));
+        await vi.waitFor(() => expect(sdk.startSession.mock.calls.length).toBeGreaterThan(startsBeforeCancellation));
+        const stopping = controller.stop();
+        finishNegotiation(lateConversation);
+        await stopping;
+        expect((await cancelledStart).error).toMatchObject({ message: 'realtime_voice_session_not_started' });
+        expect(useVoiceQaStore.getState().status).toBe('idle');
+
+        });
+    });
+
 });

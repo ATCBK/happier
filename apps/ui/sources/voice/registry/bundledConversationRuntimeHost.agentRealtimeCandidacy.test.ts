@@ -11,8 +11,7 @@ const AGENT = Object.freeze({ pluginId: 'happier.agent.codex', localId: 'codex' 
 const SESSION_ID = 'agent-realtime-candidate-session';
 
 function installSession(overrides: Partial<Session>): void {
-  storage.setState((current) => ({
-    ...current,
+  storage.setState({
     sessions: {
       [SESSION_ID]: createSessionFixture({
         id: SESSION_ID,
@@ -21,7 +20,7 @@ function installSession(overrides: Partial<Session>): void {
         ...overrides,
       }),
     },
-  }) as never);
+  });
 }
 
 async function resolveAgentRealtimeBinding() {
@@ -41,7 +40,7 @@ async function resolveAgentRealtimeBinding() {
 
 describe('Agent-realtime session candidacy for an unreadable owner metadata view', () => {
   beforeEach(() => {
-    storage.setState((current) => ({ ...current, sessions: {} }) as never);
+    storage.setState({ sessions: {} });
   });
 
   it('keeps a layout-1 session whose owner projection has not landed on the retryable fallback', async () => {
@@ -50,7 +49,7 @@ describe('Agent-realtime session candidacy for an unreadable owner metadata view
     // must not settle as a never-retryable terminal decline.
     installSession({
       metadataLayoutVersion: 1,
-      metadata: { path: '/Users/tester/project', host: 'tester.local' } as Session['metadata'],
+      metadata: { path: '/Users/tester/project', host: 'tester.local' },
       ownerMetadataView: null,
     });
 
@@ -60,7 +59,7 @@ describe('Agent-realtime session candidacy for an unreadable owner metadata view
   it('declines a session metadata layout this build cannot read as update-required', async () => {
     installSession({
       metadataLayoutVersion: 2,
-      metadata: { path: '/Users/tester/project', host: 'tester.local' } as Session['metadata'],
+      metadata: { path: '/Users/tester/project', host: 'tester.local' },
       ownerMetadataView: null,
     });
 
@@ -72,11 +71,11 @@ describe('Agent-realtime session candidacy for an unreadable owner metadata view
   it('still declines a readable session that carries no Agent identity as feature-unavailable', async () => {
     installSession({
       metadataLayoutVersion: 1,
-      metadata: { path: '/Users/tester/project', host: 'tester.local' } as Session['metadata'],
+      metadata: { path: '/Users/tester/project', host: 'tester.local' },
       ownerMetadataView: {
         path: '/Users/tester/project',
         host: 'tester.local',
-      } as Session['metadata'],
+      },
     });
 
     await expect(resolveAgentRealtimeBinding()).rejects.toMatchObject({

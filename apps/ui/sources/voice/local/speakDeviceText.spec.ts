@@ -1,34 +1,42 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SpeechOptions } from 'expo-speech';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
 
-const speakSpy = vi.fn();
-const stopSpy = vi.fn();
-const { playbackLeaseRelease, acquirePlaybackLease } = vi.hoisted(() => {
-    const release = vi.fn(async () => undefined);
-    return {
-        playbackLeaseRelease: release,
-        acquirePlaybackLease: vi.fn(async () => Object.freeze({ release })),
-    };
+const speakSpy = vi.fn<(text: string, options: SpeechOptions) => void>();
+const stopSpy = vi.fn<() => Promise<void>>();
+const audioSession = createNativeVoicePcmCaptureHarness();
+
+vi.mock('expo-modules-core', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('expo-modules-core')>();
+    return { ...actual, requireOptionalNativeModule: (name: string) =>
+        name === 'HappierAudioStreamNative' ? audioSession.nativeModule : actual.requireOptionalNativeModule(name) };
+});
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ Platform: { OS: 'ios' } });
 });
 
-vi.mock('@/voice/runtime/voiceAudioMode', () => ({ acquireVoicePlaybackAudioMode: acquirePlaybackLease }));
-
 vi.mock('expo-speech', () => ({
-    speak: (text: string, opts: any) => speakSpy(text, opts),
+    speak: (text: string, opts: SpeechOptions) => speakSpy(text, opts),
     stop: () => stopSpy(),
 }));
 
-import { speakDeviceText, stopDeviceSpeech } from './speakDeviceText';
+import { speakDeviceText } from './speakDeviceText';
 
 describe('speakDeviceText', () => {
     beforeEach(() => {
-        acquirePlaybackLease.mockClear();
-        playbackLeaseRelease.mockClear();
+        vi.mocked(audioSession.nativeModule.configureAudioSession).mockClear();
+        speakSpy.mockReset();
+        stopSpy.mockReset();
+        stopSpy.mockResolvedValue(undefined);
     });
+    afterAll(async () => { await getSharedVoiceAudioSessionCoordinator()?.dispose(); await audioSession.coordinator.dispose(); });
     it('invokes onStart exactly once from the ExpoSpeech onStart event and resolves on onDone', async () => {
         speakSpy.mockReset();
         const onStart = vi.fn();
-        let speechOptions: any = null;
-        speakSpy.mockImplementationOnce((_text: string, opts: any) => {
+        let speechOptions: SpeechOptions | undefined;
+        speakSpy.mockImplementationOnce((_text: string, opts: SpeechOptions) => {
             speechOptions = opts;
         });
 
@@ -36,13 +44,14 @@ describe('speakDeviceText', () => {
         await vi.waitFor(() => expect(speakSpy).toHaveBeenCalledTimes(1));
         expect(onStart).not.toHaveBeenCalled();
 
-        speechOptions.onStart();
-        speechOptions.onStart();
+        expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot()).toMatchObject({ leaseCount: 1,
+            configuration: { mode: 'playback', input: false, output: true } });
+        speechOptions!.onStart?.();
+        speechOptions!.onStart?.();
         expect(onStart).toHaveBeenCalledTimes(1);
-        speechOptions.onDone();
+        speechOptions!.onDone?.();
         await expect(speaking).resolves.toBeUndefined();
-        expect(acquirePlaybackLease).toHaveBeenCalledTimes(1);
-        expect(playbackLeaseRelease).toHaveBeenCalledTimes(1);
+        expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot()).toMatchObject({ leaseCount: 0, configuration: null });
     });
 
     it('skips ExpoSpeech.speak when the abort signal is already aborted (pre-interrupt)', async () => {
@@ -64,29 +73,28 @@ describe('speakDeviceText', () => {
         speakSpy.mockReset();
         const onStart = vi.fn();
         const controller = new AbortController();
-        let resolveLease!: (lease: { release: typeof playbackLeaseRelease }) => void;
-        const pendingLease = new Promise<{ release: typeof playbackLeaseRelease }>((resolve) => {
-            resolveLease = resolve;
-        });
-        acquirePlaybackLease.mockReturnValueOnce(pendingLease);
-        speakSpy.mockImplementationOnce((_text: string, opts: any) => opts.onDone());
+        let resolveApply!: () => void;
+        vi.mocked(audioSession.nativeModule.configureAudioSession).mockImplementationOnce(request => new Promise(resolve => {
+            resolveApply = () => resolve({ generation: request.generation, aecAvailable: true, aecActive: false, route: 'speaker' });
+        }));
+        speakSpy.mockImplementationOnce((_text: string, opts: SpeechOptions) => opts.onDone?.());
 
         const speaking = speakDeviceText('hello', onStart, { signal: controller.signal });
-        await vi.waitFor(() => expect(acquirePlaybackLease).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(audioSession.nativeModule.configureAudioSession).toHaveBeenCalledTimes(1));
         controller.abort();
-        resolveLease({ release: playbackLeaseRelease });
+        resolveApply();
 
         await expect(speaking).resolves.toBeUndefined();
         expect(speakSpy).not.toHaveBeenCalled();
         expect(onStart).not.toHaveBeenCalled();
-        expect(playbackLeaseRelease).toHaveBeenCalledTimes(1);
+        expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot().leaseCount).toBe(0);
     });
 
     it('does not invoke onStart when ExpoSpeech fails before its onStart event', async () => {
         speakSpy.mockReset();
         const onStart = vi.fn();
-        speakSpy.mockImplementationOnce((_text: string, opts: any) => {
-            opts.onError(new Error('prestart_synth_failed'));
+        speakSpy.mockImplementationOnce((_text: string, opts: SpeechOptions) => {
+            opts.onError?.(new Error('prestart_synth_failed'));
         });
 
         await expect(
@@ -112,14 +120,9 @@ describe('speakDeviceText', () => {
 
     it('rejects when ExpoSpeech reports an error', async () => {
         speakSpy.mockReset();
-        speakSpy.mockImplementationOnce((_text: string, opts: any) => opts.onError(new Error('synth_boom')));
+        speakSpy.mockImplementationOnce((_text: string, opts: SpeechOptions) => opts.onError?.(new Error('synth_boom')));
         await expect(speakDeviceText('hi')).rejects.toThrow('synth_boom');
-        expect(playbackLeaseRelease).toHaveBeenCalledTimes(1);
+        expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot().leaseCount).toBe(0);
     });
 
-    it('stopDeviceSpeech calls ExpoSpeech.stop', () => {
-        stopSpy.mockReset();
-        stopDeviceSpeech();
-        expect(stopSpy).toHaveBeenCalledTimes(1);
-    });
 });

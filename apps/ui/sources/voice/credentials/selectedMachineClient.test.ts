@@ -1,140 +1,130 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { FeaturesResponseSchema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 
-import {
-  createSelectedVoiceMachineClient,
-  type VoiceCredentialMachineRpc,
-} from './selectedMachineClient';
-import { storage } from '@/sync/domains/state/storage';
-import {
-  getAppliedActiveServerSnapshot,
-  isAppliedActiveServerRuntimeAvailable,
-  publishAppliedActiveServerSnapshot,
-} from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+vi.mock('socket.io-client', async original => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(original));
+let daemonReply: () => Promise<unknown>;
+const requests = installSessionActionRpcBoundary(() => daemonReply());
+const { storage } = await import('@/sync/domains/state/storage');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const { resolveVoiceExecutionMachineId } = await import('@/voice/settings/executionMachine');
+const { persistVoiceAutoTargetMachineId } = await import('@/voice/persistence/voiceAutoTargetMachineSettings');
+const { createSelectedVoiceMachineClient } = await import('./selectedMachineClient');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { recordMachineRequestFailed, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
+let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+const features = createRootLayoutFeaturesResponse();
+if (!tryWriteServerEnabledBitInPlace(features, 'machines.liveStream.serverRouted', true)) throw new Error('Expected relay feature fixture');
+const relayFeatures = FeaturesResponseSchema.parse({ ...features,
+  capabilities: { ...features.capabilities, machines: { ...features.capabilities.machines,
+    liveStream: { serverRouted: { caps: {}, disabledReason: null } } } },
+});
+const machineIds = ['machine-a', 'machine-b', 'machine-origin', 'machine-replacement'];
 
-/**
- * Test double for the machine-RPC system boundary. The real transport is
- * generic over its response type, which a fixture cannot infer, so the
- * recorded reply is asserted as that type parameter here and nowhere else.
- */
-function createRecordingMachineRpc(reply: unknown): Readonly<{
-  machineRpc: VoiceCredentialMachineRpc;
-  dispatchedMachineIds: readonly string[];
-}> {
-  const dispatchedMachineIds: string[] = [];
-  const machineRpc = (async <R,>(
-    params: Readonly<{ machineId: string }>,
-  ): Promise<R> => {
-    dispatchedMachineIds.push(params.machineId);
-    return reply as R;
-  }) as VoiceCredentialMachineRpc;
-  return { machineRpc, dispatchedMachineIds };
+function selectMachine(machineId: string | null) {
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
+    voice: { ...storage.getState().settings.voice, executionMachine: { mode: 'fixed', machineId } },
+  }, storage.getState().settings));
 }
 
 describe('selected Voice machine client', () => {
-  it.each([
-    { serverId: 'home-b', accountId: 'account-b' },
-    { serverId: 'home-a', accountId: 'account-b' },
-  ])('captures the admitted Home and Account and refuses retired phases for $serverId/$accountId', async (replacement) => {
-    const originalHome = getAppliedActiveServerSnapshot();
-    const originalAvailable = isAppliedActiveServerRuntimeAvailable();
-    const originalScope = storage.getState().profileScope;
-    const dispatched: unknown[] = [];
-    const machineRpc: VoiceCredentialMachineRpc = async <R,>(request: Parameters<VoiceCredentialMachineRpc>[0]): Promise<R> => {
-      dispatched.push(request);
-      publishAppliedActiveServerSnapshot({ serverId: replacement.serverId, serverUrl: `https://${replacement.serverId}.test`, generation: 2 });
-      storage.setState({ profileScope: replacement });
-      // The only mock is the generic network transport response boundary.
-      return { ok: true } as R;
+  beforeEach(async () => {
+    clearMachineRequestReachabilityForTest();
+    requests.length = 0;
+    daemonReply = async () => ({ ok: true });
+    account = await restoreServerAccountForTest({
+      serverUrl: 'https://selected-voice.test', accountId: 'account-a', credentialScope: 'restored-home',
+      request: async input => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(relayFeatures);
+        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+        if (path === '/v1/machines') return Response.json(machineIds.map(id => createPlainMachineRowFixture({ id, accountId: 'account-a' })));
+        const machine = /^\/v1\/machines\/([^/]+)$/.exec(path);
+        if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: machine[1]!, accountId: 'account-a' }) });
+        return null;
+      },
+    });
+    storage.getState().applyMachines(machineIds.map(id => createMachineFixture({ id, activeAt: Date.now() })));
+    selectMachine('machine-a');
+  });
+  afterEach(async () => { await account?.dispose(); account = null; });
+
+  it.each(['home', 'account'] as const)('refuses remaining operation phases when the admitted %s retires during dispatch', async replacement => {
+    const admittedHome = account!.home;
+    const operation = createSelectedVoiceMachineClient().bindOperation();
+    daemonReply = async () => {
+      if (replacement === 'home') publishAppliedActiveServerSnapshot({
+        serverId: 'replacement-home', serverUrl: 'https://replacement-home.test', generation: 2,
+      });
+      else storage.setState({ profileScope: { serverId: admittedHome.id, accountId: 'replacement-account' } });
+      return { ok: true };
     };
-    try {
-      publishAppliedActiveServerSnapshot({ serverId: 'home-a', serverUrl: 'https://home-a.test', generation: 1 });
-      storage.setState({ profileScope: { serverId: 'home-a', accountId: 'account-a' } });
-      const operation = createSelectedVoiceMachineClient({ resolveMachineId: () => 'machine-a', machineRpc }).bindOperation();
-      await expect(operation.invoke('daemon.voice.speech.synthesize', {})).rejects.toMatchObject({ code: 'cancelled' });
-      await expect(operation.invoke('daemon.voice.speech.download.chunk', {})).rejects.toMatchObject({ code: 'cancelled' });
-      expect(dispatched).toEqual([expect.objectContaining({ serverId: 'home-a', accountId: 'account-a', machineId: 'machine-a' })]);
-    } finally {
-      storage.setState({ profileScope: originalScope });
-      publishAppliedActiveServerSnapshot(originalHome, originalAvailable);
+    await expect(operation.invoke('daemon.voice.speech.synthesize', {})).rejects.toMatchObject({ code: 'cancelled' });
+    await expect(operation.invoke('daemon.voice.speech.download.chunk', {})).rejects.toMatchObject({ code: 'cancelled' });
+    expect(requests).toEqual([{ method: 'machine-a:daemon.voice.speech.synthesize', params: {} }]);
+  });
+
+  it('fails closed before transport when no Voice execution machine is resolvable', async () => {
+    selectMachine(null);
+    await expect(createSelectedVoiceMachineClient().invoke('daemon.voice.probe', {}))
+      .rejects.toMatchObject({ code: 'machine_unavailable' });
+    expect(requests).toEqual([]);
+  });
+
+  it('retains the dispatched answer when automatic recent-machine ordering changes mid-call', async () => {
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
+      voice: { ...storage.getState().settings.voice, executionMachine: { mode: 'auto', machineId: null } },
+    }, storage.getState().settings));
+    persistVoiceAutoTargetMachineId(null, storage.getState().settingsScope);
+    storage.getState().applyAuthoringMemory({ recentMachinePaths: [{ machineId: 'machine-a', path: '/repo' }] });
+    expect(resolveVoiceExecutionMachineId()).toBe('machine-a');
+    daemonReply = async () => {
+      storage.getState().applyAuthoringMemory({ recentMachinePaths: [{ machineId: 'machine-b', path: '/repo' }] });
+      return { ok: true };
+    };
+    await expect(createSelectedVoiceMachineClient().invoke('daemon.voice.probe', { v: 1 }))
+      .resolves.toEqual({ ok: true });
+    expect(resolveVoiceExecutionMachineId()).toBe('machine-b');
+    expect(requests).toEqual([{ method: 'machine-a:daemon.voice.probe', params: { v: 1 } }]);
+  });
+
+  it('keeps every phase of one bound operation on its originating machine', async () => {
+    daemonReply = async () => { selectMachine('machine-b'); return { ok: true }; };
+    const operation = createSelectedVoiceMachineClient().bindOperation();
+    for (const method of ['transcribeUpload.init', 'transcribeUpload.chunk', 'transcribeUpload.finalize', 'transcribe']) {
+      await operation.invoke('daemon.voice.speech.' + method, {});
     }
-  });
-
-  it('fails closed when no Voice execution machine is resolvable', async () => {
-    const { machineRpc, dispatchedMachineIds } = createRecordingMachineRpc({ ok: true });
-    const client = createSelectedVoiceMachineClient({
-      resolveMachineId: () => null,
-      machineRpc,
-    });
-
-    await expect(client.invoke('daemon.voice.probe', {})).rejects.toMatchObject({
-      code: 'machine_unavailable',
-    });
-    expect(dispatchedMachineIds).toEqual([]);
-  });
-
-  it('keeps the answer from the machine it dispatched to when auto selection reorders mid-call', async () => {
-    // The automatic Voice target is re-derived from mutable ordering (recent
-    // machine paths, liveness) on every read, so with more than one online
-    // machine it can differ between two reads seconds apart with no user
-    // action. Re-resolving after the call threw away a credential the
-    // dispatched machine had already materialized, turning a local ordering
-    // change into `credential_unavailable` at the Voice surface.
-    const resolveMachineId = vi.fn<() => string | null>()
-      .mockReturnValueOnce('machine-a')
-      .mockReturnValue('machine-b');
-    const { machineRpc, dispatchedMachineIds } = createRecordingMachineRpc({ ok: true });
-    const client = createSelectedVoiceMachineClient({ resolveMachineId, machineRpc });
-
-    await expect(client.invoke('daemon.voice.probe', { v: 1 })).resolves.toEqual({ ok: true });
-    expect(dispatchedMachineIds).toEqual(['machine-a']);
-    expect(resolveMachineId).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps every phase of one bound operation on the machine it started on', async () => {
-    // A composite STT/TTS operation names daemon-side state (`uploadId`,
-    // `downloadId`) that only the initiating machine holds. Re-resolving the
-    // mutable automatic target between phases sends `chunk` to a machine that
-    // never saw `init` — `transfer_not_found` — and strands the real temporary
-    // state on the initiating machine until its TTL expires.
-    const resolveMachineId = vi.fn<(override?: unknown) => string | null>()
-      .mockReturnValueOnce('machine-a')
-      .mockReturnValue('machine-b');
-    const { machineRpc, dispatchedMachineIds } = createRecordingMachineRpc({ ok: true });
-    const client = createSelectedVoiceMachineClient({ resolveMachineId, machineRpc });
-
-    const operation = client.bindOperation();
-    await operation.invoke('daemon.voice.speech.transcribeUpload.init', {});
-    await operation.invoke('daemon.voice.speech.transcribeUpload.chunk', {});
-    await operation.invoke('daemon.voice.speech.transcribeUpload.finalize', {});
-    await operation.invoke('daemon.voice.speech.transcribe', {});
-
     expect(operation.machineId).toBe('machine-a');
-    expect(dispatchedMachineIds).toEqual(['machine-a', 'machine-a', 'machine-a', 'machine-a']);
-    expect(resolveMachineId).toHaveBeenCalledTimes(1);
+    expect(resolveVoiceExecutionMachineId()).toBe('machine-b');
+    expect(requests.map(request => request.method)).toEqual([
+      'machine-a:daemon.voice.speech.transcribeUpload.init', 'machine-a:daemon.voice.speech.transcribeUpload.chunk',
+      'machine-a:daemon.voice.speech.transcribeUpload.finalize', 'machine-a:daemon.voice.speech.transcribe',
+    ]);
   });
 
-  it('replays a captured origin machine through the resolver so replacement and reachability still decide', async () => {
-    // The dictation attempt captured its target when capture was admitted. The
-    // bound operation asks the same resolver for that origin rather than
-    // trusting the raw id, so a replaced machine is followed.
-    const resolveMachineId = vi.fn<(override?: unknown) => string | null>(() => 'machine-replacement');
-    const { machineRpc, dispatchedMachineIds } = createRecordingMachineRpc({ ok: true });
-    const client = createSelectedVoiceMachineClient({ resolveMachineId, machineRpc });
-
-    const operation = client.bindOperation('  machine-origin  ');
+  it('follows the real replacement owner for a captured origin rather than the current selection', async () => {
+    storage.getState().applyMachines(machineIds.map(id => createMachineFixture({ id, activeAt: Date.now(),
+      ...(id === 'machine-origin' ? { active: false, replacedByMachineId: 'machine-replacement' } : {}),
+    })));
+    const operation = createSelectedVoiceMachineClient().bindOperation('  machine-origin  ');
     await operation.invoke('daemon.voice.speech.transcribeUpload.init', {});
-
-    expect(resolveMachineId).toHaveBeenCalledWith({ machineId: 'machine-origin' });
-    expect(dispatchedMachineIds).toEqual(['machine-replacement']);
+    expect(resolveVoiceExecutionMachineId()).toBe('machine-a');
+    expect(requests).toEqual([{ method: 'machine-replacement:daemon.voice.speech.transcribeUpload.init', params: {} }]);
   });
 
-  it('fails closed before the operation starts when the captured origin is unreachable', async () => {
-    const { machineRpc, dispatchedMachineIds } = createRecordingMachineRpc({ ok: true });
-    const client = createSelectedVoiceMachineClient({ resolveMachineId: () => null, machineRpc });
-
-    expect(() => client.bindOperation('machine-origin')).toThrow(
-      expect.objectContaining({ code: 'machine_unavailable' }),
-    );
-    expect(dispatchedMachineIds).toEqual([]);
+  it('refuses an unreachable captured origin before any transport effect', () => {
+    storage.getState().applyMachines(machineIds.map(id => createMachineFixture({ id,
+      active: id !== 'machine-origin', activeAt: id === 'machine-origin' ? 1 : Date.now(),
+    })));
+    recordMachineRequestFailed({ serverId: account!.home.id, accountId: 'account-a', machineId: 'machine-origin' });
+    expect(() => createSelectedVoiceMachineClient().bindOperation('machine-origin'))
+      .toThrow(expect.objectContaining({ code: 'machine_unavailable' }));
+    expect(requests).toEqual([]);
   });
 });

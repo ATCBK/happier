@@ -66,6 +66,7 @@ type VoiceUiRuntimeContributionBase = Readonly<{
 export type VoiceUiRuntimeContribution =
   | (VoiceUiRuntimeContributionBase & Readonly<{
       kind: 'voice.conversation-provider.v1';
+      description?: Extract<VoiceProviderContribution, Readonly<{ kind: 'conversation' }>>['description'];
       declaration?: Extract<VoiceProviderContribution, Readonly<{ kind: 'conversation' }>>;
     }>)
   | (VoiceUiRuntimeContributionBase & Readonly<{
@@ -231,7 +232,10 @@ function normalizeBundledContribution(
     ? createExternalVoiceProviderSettingsDescriptor(declaration.settings)
     : null;
   const selectionOptions = declaration.kind === 'conversation'
-    ? deepFreeze([...(presentation.selectionOptions ?? [])])
+    ? deepFreeze((presentation.selectionOptions ?? []).map(option => ({
+        ...option,
+        subtitleKey: option.subtitleKey ?? '',
+      })))
     : Object.freeze([]);
   const declarationBase = projectVoiceProviderDeclarationRegistryBase({
     declaration,

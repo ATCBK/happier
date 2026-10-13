@@ -32,8 +32,7 @@ describe('readVoiceConversationBindingMetadata', () => {
   it('canonicalizes binding ids when writing metadata', async () => {
     const { writeVoiceConversationBindingMetadata } = await import('./voiceConversationBindingMetadata');
 
-    expect(
-      writeVoiceConversationBindingMetadata(
+    const written = writeVoiceConversationBindingMetadata(
         { systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
         {
           adapterId: ' local_conversation ',
@@ -44,8 +43,8 @@ describe('readVoiceConversationBindingMetadata', () => {
           targetSessionAddress: { serverId: ' server-b ', sessionId: ' s1 ' },
           updatedAt: 123,
         },
-      ),
-    ).toEqual({
+      );
+    expect(written).toEqual({
       systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
         voiceConversationBindingV1: {
           v: 1,
@@ -56,6 +55,13 @@ describe('readVoiceConversationBindingMetadata', () => {
           targetServerId: 'server-b',
           updatedAt: 123,
         },
+    });
+    expect(readVoiceConversationBindingMetadata(' carrier-s1 ', JSON.parse(JSON.stringify(written)), {
+      sourceServerId: ' server-a ',
+    })).toEqual({
+      adapterId: 'local_conversation', controlSessionId: 'voice-global', conversationSessionId: 'carrier-s1',
+      conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' }, transcriptMode: 'synthetic',
+      targetSessionAddress: { serverId: 'server-b', sessionId: 's1' }, updatedAt: 123,
     });
   });
 

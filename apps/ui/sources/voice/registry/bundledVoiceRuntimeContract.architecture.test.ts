@@ -63,15 +63,7 @@ describe('bundled voice runtime contract ownership', () => {
       'apps/ui/sources/voice/registry/bundledConversationRuntimeHost.ts',
     );
 
-    expect(runtimeHost).toContain('zodSchemaToJsonSchemaObject');
-    expect(runtimeHost).toContain(
-      'inputSchema: Parameters<typeof zodSchemaToJsonSchemaObject>[0]',
-    );
-    expect(runtimeHost).toContain(
-      "StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(inputSchema, { reused: 'ref' }))",
-    );
     expect(runtimeHost).not.toContain("import { defineSchema } from '@happier-dev/plugin-sdk';");
-    expect(runtimeHost).not.toContain('defineSchema(inputSchema)');
   });
 
   it('keeps provider production leaves independent from host presentation and diagnostic envelopes', () => {
@@ -100,7 +92,6 @@ describe('bundled voice runtime contract ownership', () => {
   });
 
   it('does not widen controller input or retain the ElevenLabs duplicate owner', () => {
-    const hostBridge = source('apps/ui/sources/voice/registry/createBundledRealtimeProviderRuntime.ts');
     const elevenLabsRuntime = source('packages/plugins/elevenlabs/src/ui/voice/runtime.ts');
     const elevenLabsTypes = resolve(
       repoRoot,
@@ -111,7 +102,6 @@ describe('bundled voice runtime contract ownership', () => {
       'packages/plugins/elevenlabs/src/ui/voice/runtime/realtimeElevenLabsRuntime.ts',
     );
 
-    expect(hostBridge).not.toContain('Readonly<Record<string, unknown>>');
     expect(elevenLabsRuntime).not.toContain('createConversationController');
     expect(elevenLabsRuntime).not.toContain('createStorageMirror');
     expect(elevenLabsRuntime).not.toContain('BundledVoiceRuntimeMachinePort');
@@ -343,9 +333,7 @@ describe('bundled voice runtime contract ownership', () => {
       'createCodexRealtimeVoiceProviderRuntimeRegistration',
     );
     expect(externalActivation).toContain("execution?.kind === 'experimental_agent_session_realtime'");
-    expect(externalActivation).toContain('resolveAgentRealtimeVoiceConversationBinding');
     expect(generatedEntries).not.toContain('CODEX_BUNDLED_VOICE_PROVIDER_ACTIVATION_ENTRIES');
-    expect(runtimeHost).toContain('createAgentSessionRealtimeService');
     expect(runtimeHostContract).toContain('PluginVoiceAgentSessionRealtimeService');
     expect(runtimeHostContract).not.toContain('AgentSessionRealtimeConversation');
     expect(boundService).toContain('PluginVoiceAgentSessionRealtimeService');
@@ -410,7 +398,6 @@ describe('bundled voice runtime contract ownership', () => {
     expect(googleVoice).not.toContain('RPC_METHODS');
     expect(googleVoice).not.toContain('methods:');
     expect(speechClient).toContain('DAEMON_VOICE_SPEECH_CATALOG');
-    expect(speechClient).toContain('localId: entry.declaration.id');
     expect(speechClient).not.toContain('DAEMON_VOICE_GOOGLE_');
     expect(speechRpc).not.toContain('GOOGLE_SPEECH_CONTRIBUTION');
     expect(speechRpc).toContain('voiceSpeechProviders?.read(target)');

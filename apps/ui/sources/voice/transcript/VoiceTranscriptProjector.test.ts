@@ -1,4 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { storage } from '@/sync/domains/state/storage';
+import { normalizeRawMessage } from '@happier-dev/session-core/raw';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { buildVoiceTranscriptNoteMeta } from './voiceTranscriptNoteMeta';
+import { readConversationTurnOriginV1FromMessageMeta } from '@happier-dev/protocol/messages/structured/conversationTurnOriginV1';
 
 import { persistSessionTranscriptMessage, readStoredSessionMessages, type PersistedSessionTranscriptMessage } from "@happier-dev/session-core/messages";
 import { createReducer, reducer } from '@happier-dev/session-core/reducer';
@@ -7,6 +13,28 @@ import { createVoiceContinuationProjection } from './voiceContinuationProjection
 import { selectVoiceTranscriptEntriesForConversationSession } from './voiceTranscriptSelectors';
 import type { VoiceSessionBinding } from '@/voice/binding/voiceConversationBindingTypes';
 import type { VoiceSessionSnapshot } from '@/voice/session/types';
+
+beforeEach(() => {
+    storage.setState({ sessions: Object.fromEntries(['carrier-s1', 'conversation'].map(id => [id, createSessionFixture({ id })])), sessionMessages: {} });
+});
+
+function seedOrderedTranscript() {
+    const normalized = [
+        normalizeRawMessage('m-user', 'm-user', 100, { role: 'user', content: { type: 'text', text: 'hello' } }),
+        ...[
+            ['m-note', 'Tool result: sendSessionMessage succeeded', 150, buildVoiceTranscriptNoteMeta()],
+            ['m-assistant', 'Done.', 200, undefined],
+        ].map(([id, text, createdAt, meta]) => normalizeRawMessage(String(id), String(id), Number(createdAt), {
+            role: 'agent', content: { type: 'output', data: { type: 'assistant', uuid: String(id),
+                message: { role: 'assistant', content: [{ type: 'text', text: String(text) }] } } },
+            ...(meta ? { meta } : {}),
+        })),
+    ];
+    const messages = normalized.filter(message => message !== null);
+    if (messages.length !== 3) throw new Error('Invalid canonical transcript wire fixtures');
+    storage.getState().applyMessagesLoaded('carrier-s1');
+    storage.getState().applyMessages('carrier-s1', messages);
+}
 
 describe('VoiceTranscriptProjector', () => {
     it('delivers one acknowledged visible continuation through the real writer and two independent transcript consumers', async () => {
@@ -25,7 +53,7 @@ describe('VoiceTranscriptProjector', () => {
         if (!provenance) throw new Error('Expected a connected continuation');
         let persisted: Promise<PersistedSessionTranscriptMessage> | undefined;
         const requests: unknown[] = [];
-        const projector = createVoiceTranscriptProjector({ getState: () => ({}), nowMs: () => 100,
+        const projector = createVoiceTranscriptProjector({ getState: storage.getState, nowMs: () => 100,
             persistFinal: (input) => {
                 persisted = persistSessionTranscriptMessage({ sessionEncryptionMode: 'plain',
                     // Network acknowledgement is the only substituted boundary; schemas, normalization and reducers are real.
@@ -60,29 +88,50 @@ describe('VoiceTranscriptProjector', () => {
         expect(hydrated.observe(conversation, reducer(createReducer(), [acknowledgement.message]).messages)).toBeNull();
     });
     it('persists a continuation as an ordinary note, without exposing an unacknowledged control note', async () => {
-        const persisted: import('@happier-dev/session-core/messages').PersistSessionTranscriptMessageInput[] = [];
-        const applied: unknown[] = [];
-        const projector = createVoiceTranscriptProjector({ getState: () => ({ applyMessages: (_id, messages) => { applied.push(...messages); } }),
-            nowMs: () => 100, persistFinal: (input) => { persisted.push(input); } });
+        const acknowledgement = createDeferred<Response>();
+        const requests: unknown[] = [];
+        let persisted: Promise<PersistedSessionTranscriptMessage> | undefined;
+        const projector = createVoiceTranscriptProjector({ getState: storage.getState,
+            nowMs: () => 100, persistFinal: input => {
+                persisted = persistSessionTranscriptMessage({ sessionEncryptionMode: 'plain', request: async (_path, init) => {
+                    requests.push(JSON.parse(String(init?.body)));
+                    return acknowledgement.promise;
+                } }, input).then(result => {
+                    storage.getState().applyMessages(input.sessionId, [result.message]);
+                    return result;
+                });
+                return persisted;
+            } });
         const input = { conversationSessionId: 'conversation', text: 'Continued on this device',
             continuation: { v: 1 as const, deviceId: 'device', conversation: { serverId: 'home', sessionId: 'conversation' } } };
         const note = projector.projectNoteText(input);
         expect(note?.meta).toMatchObject({ happier: { kind: 'voice_note.v1', payload: { v: 1, continuation: input.continuation } } });
-        expect(persisted).toHaveLength(1);
-        expect(persisted[0]).toMatchObject({ sessionId: 'conversation', messageRole: 'agent', rawRecord: {
+        expect(requests).toEqual([expect.objectContaining({ messageRole: 'agent', content: { t: 'plain', v: {
             role: 'agent', meta: note?.meta, content: { type: 'output', data: { type: 'assistant',
-                message: { content: [{ type: 'text', text: 'Voice continued.' }] },
+                uuid: expect.any(String), message: { role: 'assistant', content: [{ type: 'text', text: 'Voice continued.' }] },
             } },
-        } });
-        expect(applied).toHaveLength(0);
+        } } })]);
+        expect(readStoredSessionMessages(storage.getState(), 'conversation')).toEqual([]);
+        acknowledgement.resolve(Response.json({ didWrite: true, message: { id: 'ack-note', localId: note?.localId, seq: 1, createdAt: 100 } }));
+        await persisted;
+        expect(selectVoiceTranscriptEntriesForConversationSession(storage.getState(), 'conversation')).toEqual([
+            expect.objectContaining({ id: note?.localId, kind: 'note' }),
+        ]);
+        expect(readStoredSessionMessages(storage.getState(), 'conversation')).toEqual([
+            expect.objectContaining({ realID: 'ack-note', localId: note?.localId, text: 'Voice continued.', meta: note?.meta }),
+        ]);
     });
     it('keeps the exact realtime provider source on the canonical turn origin', async () => {
         const { buildRealtimeConversationTurnMeta } = await import('./VoiceTranscriptProjector');
 
-        expect(buildRealtimeConversationTurnMeta({
+        const produced = buildRealtimeConversationTurnMeta({
             pluginId: 'happier.agent.codex',
             contributionId: 'realtime-codex',
-        })).toEqual({
+        });
+        expect(readConversationTurnOriginV1FromMessageMeta(JSON.parse(JSON.stringify(produced)), 'input'))
+            .toEqual({ v: 1, channel: 'realtime_conversation', modality: 'voice',
+                source: { pluginId: 'happier.agent.codex', contributionId: 'realtime-codex' } });
+        expect(produced).toEqual({
             happier: {
                 kind: 'conversation_turn.v1',
                 payload: { v: 1 },
@@ -102,15 +151,7 @@ describe('VoiceTranscriptProjector', () => {
     it('uses deterministic ids when stable turn metadata is provided', async () => {
         const { createVoiceTranscriptProjector } = await import('./VoiceTranscriptProjector');
 
-        const applyMessagesLoaded = (_sessionId: string) => {};
-        const state = {
-            applyMessagesLoaded,
-            applyMessages: (_sessionId: string, _messages: unknown[]) => {},
-        };
-        const projector = createVoiceTranscriptProjector({
-            getState: () => state,
-            nowMs: () => 100,
-        });
+        const projector = createVoiceTranscriptProjector({ getState: storage.getState, nowMs: () => 100 });
 
         const first = projector.projectUserText({
             conversationSessionId: 'carrier-s1',
@@ -151,30 +192,7 @@ describe('VoiceTranscriptProjector', () => {
     it('upserts an existing deterministic optimistic turn instead of appending a duplicate', async () => {
         const { createVoiceTranscriptProjector } = await import('./VoiceTranscriptProjector');
 
-        let sessionMessagesState: Record<string, { messages: unknown[] }> = {
-            'carrier-s1': {
-                messages: [],
-            },
-        };
-        const applyMessages = (sessionId: string, messages: unknown[]) => {
-            sessionMessagesState = {
-                ...sessionMessagesState,
-                [sessionId]: {
-                    messages: [
-                        ...(sessionMessagesState[sessionId]?.messages ?? []),
-                        ...messages,
-                    ],
-                },
-            };
-        };
-        const projector = createVoiceTranscriptProjector({
-            getState: () => ({
-                sessionMessages: sessionMessagesState,
-                applyMessagesLoaded: (_sessionId: string) => {},
-                applyMessages,
-            }),
-            nowMs: () => 100,
-        });
+        const projector = createVoiceTranscriptProjector({ getState: storage.getState, nowMs: () => 100 });
 
         projector.projectAssistantText({
             conversationSessionId: 'carrier-s1',
@@ -197,37 +215,14 @@ describe('VoiceTranscriptProjector', () => {
             },
         });
 
-        const stored = readStoredSessionMessages({ sessionMessages: sessionMessagesState }, 'carrier-s1');
+        const stored = readStoredSessionMessages(storage.getState(), 'carrier-s1');
         expect(stored).toHaveLength(1);
     });
 
     it('appends repeated identical user utterances when no stable turn metadata exists', async () => {
         const { createVoiceTranscriptProjector } = await import('./VoiceTranscriptProjector');
 
-        let sessionMessagesState: Record<string, { messages: unknown[] }> = {
-            'carrier-s1': {
-                messages: [],
-            },
-        };
-        const applyMessages = (sessionId: string, messages: unknown[]) => {
-            sessionMessagesState = {
-                ...sessionMessagesState,
-                [sessionId]: {
-                    messages: [
-                        ...(sessionMessagesState[sessionId]?.messages ?? []),
-                        ...messages,
-                    ],
-                },
-            };
-        };
-        const projector = createVoiceTranscriptProjector({
-            getState: () => ({
-                sessionMessages: sessionMessagesState,
-                applyMessagesLoaded: (_sessionId: string) => {},
-                applyMessages,
-            }),
-            nowMs: () => 100,
-        });
+        const projector = createVoiceTranscriptProjector({ getState: storage.getState, nowMs: () => 100 });
 
         const first = projector.projectUserText({
             conversationSessionId: 'carrier-s1',
@@ -238,7 +233,7 @@ describe('VoiceTranscriptProjector', () => {
             text: 'repeat me',
         });
 
-        const stored = readStoredSessionMessages({ sessionMessages: sessionMessagesState }, 'carrier-s1');
+        const stored = readStoredSessionMessages(storage.getState(), 'carrier-s1');
         expect(stored).toHaveLength(2);
         expect(first?.id).not.toBe(second?.id);
     });
@@ -246,30 +241,7 @@ describe('VoiceTranscriptProjector', () => {
     it('reconciles a no-turn optimistic user projection into a later canonical turn without duplicating the row', async () => {
         const { createVoiceTranscriptProjector } = await import('./VoiceTranscriptProjector');
 
-        let sessionMessagesState: Record<string, { messages: unknown[] }> = {
-            'carrier-s1': {
-                messages: [],
-            },
-        };
-        const applyMessages = (sessionId: string, messages: unknown[]) => {
-            sessionMessagesState = {
-                ...sessionMessagesState,
-                [sessionId]: {
-                    messages: [
-                        ...(sessionMessagesState[sessionId]?.messages ?? []),
-                        ...messages,
-                    ],
-                },
-            };
-        };
-        const projector = createVoiceTranscriptProjector({
-            getState: () => ({
-                sessionMessages: sessionMessagesState,
-                applyMessagesLoaded: (_sessionId: string) => {},
-                applyMessages,
-            }),
-            nowMs: () => 100,
-        });
+        const projector = createVoiceTranscriptProjector({ getState: storage.getState, nowMs: () => 100 });
 
         const optimistic = projector.projectUserText({
             conversationSessionId: 'carrier-s1',
@@ -288,7 +260,7 @@ describe('VoiceTranscriptProjector', () => {
             },
         });
 
-        const stored = readStoredSessionMessages({ sessionMessages: sessionMessagesState }, 'carrier-s1');
+        const stored = readStoredSessionMessages(storage.getState(), 'carrier-s1');
         expect(optimistic?.id).toBe('voice-turn-provisional:carrier-s1:user:1');
         expect(stored).toHaveLength(1);
         expect(stored[0]).toMatchObject({
@@ -313,30 +285,7 @@ describe('VoiceTranscriptProjector', () => {
     it('appends repeated identical note entries when no stable turn metadata exists', async () => {
         const { createVoiceTranscriptProjector } = await import('./VoiceTranscriptProjector');
 
-        let sessionMessagesState: Record<string, { messages: unknown[] }> = {
-            'carrier-s1': {
-                messages: [],
-            },
-        };
-        const applyMessages = (sessionId: string, messages: unknown[]) => {
-            sessionMessagesState = {
-                ...sessionMessagesState,
-                [sessionId]: {
-                    messages: [
-                        ...(sessionMessagesState[sessionId]?.messages ?? []),
-                        ...messages,
-                    ],
-                },
-            };
-        };
-        const projector = createVoiceTranscriptProjector({
-            getState: () => ({
-                sessionMessages: sessionMessagesState,
-                applyMessagesLoaded: (_sessionId: string) => {},
-                applyMessages,
-            }),
-            nowMs: () => 100,
-        });
+        const projector = createVoiceTranscriptProjector({ getState: storage.getState, nowMs: () => 100 });
 
         const first = projector.projectNoteText({
             conversationSessionId: 'carrier-s1',
@@ -347,7 +296,7 @@ describe('VoiceTranscriptProjector', () => {
             text: 'Tool result: sendSessionMessage succeeded',
         });
 
-        const stored = readStoredSessionMessages({ sessionMessages: sessionMessagesState }, 'carrier-s1');
+        const stored = readStoredSessionMessages(storage.getState(), 'carrier-s1');
         expect(stored).toHaveLength(2);
         expect(first?.id).not.toBe(second?.id);
     });
@@ -355,10 +304,7 @@ describe('VoiceTranscriptProjector', () => {
     it('assigns monotonic timestamps to local projections created in the same millisecond', async () => {
         const { createVoiceTranscriptProjector } = await import('./VoiceTranscriptProjector');
         const projector = createVoiceTranscriptProjector({
-            getState: () => ({
-                applyMessagesLoaded: () => undefined,
-                applyMessages: () => undefined,
-            }),
+            getState: storage.getState,
             nowMs: () => 100,
         });
 
@@ -373,21 +319,7 @@ describe('VoiceTranscriptProjector', () => {
         const { createVoiceTranscriptProjector } = await import('./VoiceTranscriptProjector');
         const { VOICE_TRANSCRIPT_UNRECONCILED_EVENT_RING_MAX } = await import('./voiceTranscriptBounds');
 
-        let sessionMessagesState: Record<string, { messages: unknown[] }> = { 'carrier-s1': { messages: [] } };
-        const applyMessages = (sessionId: string, messages: unknown[]) => {
-            sessionMessagesState = {
-                ...sessionMessagesState,
-                [sessionId]: { messages: [...(sessionMessagesState[sessionId]?.messages ?? []), ...messages] },
-            };
-        };
-        const projector = createVoiceTranscriptProjector({
-            getState: () => ({
-                sessionMessages: sessionMessagesState,
-                applyMessagesLoaded: (_sessionId: string) => {},
-                applyMessages,
-            }),
-            nowMs: () => 100,
-        });
+        const projector = createVoiceTranscriptProjector({ getState: storage.getState, nowMs: () => 100 });
 
         // Push more distinct no-turn (unreconciled) projections than the ring cap.
         const overflow = VOICE_TRANSCRIPT_UNRECONCILED_EVENT_RING_MAX + 25;
@@ -409,47 +341,8 @@ describe('VoiceTranscriptProjector', () => {
     it('selects transcript entries from projected session messages in created order', async () => {
         const { selectVoiceTranscriptEntriesForConversationSession } = await import('./voiceTranscriptSelectors');
 
-        const entries = selectVoiceTranscriptEntriesForConversationSession(
-            {
-                sessionMessages: {
-                    'carrier-s1': {
-                        messages: [
-                            {
-                                id: 'm-user',
-                                localId: 'm-user',
-                                createdAt: 100,
-                                isSidechain: false,
-                                role: 'user',
-                                content: { type: 'text', text: 'hello' },
-                            },
-                            {
-                                id: 'm-note',
-                                localId: 'm-note',
-                                createdAt: 150,
-                                isSidechain: false,
-                                role: 'agent',
-                                meta: {
-                                    happier: {
-                                        kind: 'voice_note.v1',
-                                        payload: { v: 1 },
-                                    },
-                                },
-                                content: [{ type: 'text', text: 'Tool result: sendSessionMessage succeeded', uuid: 'u1', parentUUID: null }],
-                            },
-                            {
-                                id: 'm-assistant',
-                                localId: 'm-assistant',
-                                createdAt: 200,
-                                isSidechain: false,
-                                role: 'agent',
-                                content: [{ type: 'text', text: 'Done.', uuid: 'u2', parentUUID: null }],
-                            },
-                        ],
-                    },
-                },
-            },
-            'carrier-s1',
-        );
+        seedOrderedTranscript();
+        const entries = selectVoiceTranscriptEntriesForConversationSession(storage.getState(), 'carrier-s1');
 
     expect(entries).toEqual([
         { createdAt: 100, id: 'm-user', kind: 'user', text: 'hello' },
@@ -461,48 +354,8 @@ describe('VoiceTranscriptProjector', () => {
     it('prefers stable real ids when selecting transcript entries from reducer-backed stored message records', async () => {
         const { selectVoiceTranscriptEntriesForConversationSession } = await import('./voiceTranscriptSelectors');
 
-        const entries = selectVoiceTranscriptEntriesForConversationSession(
-            {
-                sessionMessages: {
-                    'carrier-s1': {
-                        messageIdsOldestFirst: ['internal-user', 'internal-note', 'internal-assistant'],
-                        messagesById: {
-                            'internal-user': {
-                                kind: 'user-text',
-                                id: 'internal-user',
-                                realID: 'm-user',
-                                localId: 'm-user',
-                                createdAt: 100,
-                                text: 'hello',
-                            },
-                            'internal-note': {
-                                kind: 'agent-text',
-                                id: 'internal-note',
-                                realID: 'm-note',
-                                localId: 'm-note',
-                                createdAt: 150,
-                                text: 'Tool result: sendSessionMessage succeeded',
-                                meta: {
-                                    happier: {
-                                        kind: 'voice_note.v1',
-                                        payload: { v: 1 },
-                                    },
-                                },
-                            },
-                            'internal-assistant': {
-                                kind: 'agent-text',
-                                id: 'internal-assistant',
-                                realID: 'm-assistant',
-                                localId: 'm-assistant',
-                                createdAt: 200,
-                                text: 'Done.',
-                            },
-                        },
-                    },
-                },
-            },
-            'carrier-s1',
-        );
+        seedOrderedTranscript();
+        const entries = selectVoiceTranscriptEntriesForConversationSession(storage.getState(), 'carrier-s1');
 
         expect(entries).toEqual([
             { createdAt: 100, id: 'm-user', kind: 'user', text: 'hello' },

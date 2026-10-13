@@ -8,10 +8,13 @@ import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { areSessionAddressesEqual } from '@/sync/domains/session/sessionAddress';
 import type { VoiceContinuationProvenance } from '@/voice/transcript/voiceTranscriptNoteMeta';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { VoiceConversationScopeMetadata } from '@/voice/persistence/voiceConversationScopeMetadata';
 
 type VoiceSessionConversationContext = Readonly<{
   accountScope: ServerAccountScope;
+  /** The admitted coding target exists even when there is no hidden conversation binding. */
+  targetSessionAddress?: SessionAddress | null;
   conversationScope: VoiceConversationScopeMetadata | null;
 }>;
 
@@ -117,7 +120,7 @@ function reconcileAttemptId(snapshot: VoiceSessionSnapshot, binding?: VoiceSessi
           endedAt: Date.now(),
           reason: requestedEndReason ?? ({ kind: 'disconnected' } satisfies VoiceSessionEndReason),
           conversationSessionAddress: activeAttemptBinding?.conversationSessionAddress ?? null,
-          targetSessionAddress: activeAttemptBinding?.targetSessionAddress ?? null,
+          targetSessionAddress: activeAttemptConversationContext?.targetSessionAddress ?? activeAttemptBinding?.targetSessionAddress ?? null,
           transcriptMode: activeAttemptBinding?.transcriptMode ?? null,
           ...(activeAttemptBinding?.lifetime ? { lifetime: activeAttemptBinding.lifetime } : {}),
           accountScope: activeAttemptConversationContext?.accountScope ?? null,
@@ -140,12 +143,21 @@ function reconcileAttemptId(snapshot: VoiceSessionSnapshot, binding?: VoiceSessi
       presentedAttemptId = `voice-attempt:${++attemptSequence}`;
     }
   }
-  if (active && binding?.adapterId === snapshot.adapterId && binding.controlSessionId === snapshot.sessionId) {
+  const admittedHome = activeAttemptConversationContext?.accountScope.serverId ?? context?.accountScope.serverId;
+  if (active && binding?.adapterId === snapshot.adapterId && binding.controlSessionId === snapshot.sessionId
+    && (!admittedHome || binding.conversationSessionAddress.serverId === admittedHome)) {
     if (!areSessionAddressesEqual(activeAttemptBinding?.conversationSessionAddress, binding.conversationSessionAddress)) {
-      activeAttemptConversationContext = null;
+      if (activeAttemptConversationContext) activeAttemptConversationContext = { ...activeAttemptConversationContext, conversationScope: null };
     }
     activeAttemptBinding = binding;
-    if (context?.accountScope.serverId === binding.conversationSessionAddress.serverId) activeAttemptConversationContext = context;
+  }
+  const contextHome = context?.targetSessionAddress?.serverId ?? activeAttemptBinding?.conversationSessionAddress.serverId;
+  if (active && context && context.accountScope.serverId === contextHome) {
+    // Admission owns target and Account; a later route/profile publication cannot relabel them.
+    if (!activeAttemptConversationContext) activeAttemptConversationContext = context;
+    else if (activeAttemptBinding && areServerAccountScopesEqual(activeAttemptConversationContext.accountScope, context.accountScope)) {
+      activeAttemptConversationContext = { ...activeAttemptConversationContext, conversationScope: context.conversationScope };
+    }
   }
   lastAttemptSnapshot = snapshot;
 }

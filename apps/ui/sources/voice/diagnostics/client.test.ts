@@ -1,81 +1,95 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { VoiceSpeechDiagnosticsConfigureRequestV1Schema, VoiceSpeechDiagnosticsSettingsV1Schema, VoiceSpeechDiagnosticsStatusResponseV1Schema,
+  resolveVoiceSpeechDiagnosticsStoragePolicy } from '@happier-dev/protocol/voice/diagnostics';
+
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+let invoke: (method: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>;
+const requests = installSessionActionRpcBoundary(request => {
+  if (request.method.endsWith('.configure')) VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params);
+  return invoke(request.method.slice(request.method.indexOf(':') + 1), request.params);
+});
+const { storage } = await import('@/sync/domains/state/storage');
+const { voiceSettingsParse } = await import('@/sync/domains/settings/voiceSettings');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
 
 import { createVoiceDiagnosticsClient } from './client';
 
+let home: Awaited<ReturnType<typeof serveAccountHomes>>;
+let disconnect: (() => Promise<void>) | undefined;
+const settings = VoiceSpeechDiagnosticsSettingsV1Schema.parse({ v: 1, enabled: false, consentVersion: null });
+beforeEach(async () => {
+  requests.length = 0;
+  home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics-client.test', accountId: 'account-a' }],
+    route: ({ path }) => path.startsWith('/v1/machines/')
+      ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
+      : undefined });
+  disconnect = await home.restoreActiveConnection();
+  const machine = createMachineFixture({ id: 'diagnostics-machine', activeAt: Date.now() });
+  storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [home.homes.diagnostics!.id]: [machine] } });
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceSettingsParse({ executionMachine: { mode: 'fixed', machineId: machine.id } }) }, storage.getState().settings));
+});
+afterEach(async () => { await disconnect?.(); await home?.dispose(); });
+
 describe('voice diagnostics client', () => {
   it('routes configure/status/delete through the selected voice machine and validates responses', async () => {
-    const invoke = vi.fn(async (method: string) => {
+    invoke = vi.fn(async (method: string) => {
       if (method.endsWith('.deleteAll')) return { ok: true };
-      return {
+      return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({
         ok: true,
         root: '/private/happier/voice/diagnostics/v1',
-        settings: {
-          v: 1,
-          enabled: false,
-          consentVersion: null,
-          captureSttInput: false,
-          captureTtsOutput: false,
-          maxAgeMs: 86_400_000,
-          maxFiles: 20,
-          maxBytes: 104_857_600,
-          maxDurationMs: 300_000,
-        },
+        settings,
         artifacts: [],
         health: {
           captureFailure: false,
           cleanup: { status: 'healthy', code: null, ownedEntryCount: 0 },
         },
-        backupPolicy: { status: 'best_effort', storage: 'private_cache', mechanism: 'cachedir_tag', automaticSync: 'not_implemented' },
-      };
+        backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop'),
+      });
     });
-    const client = createVoiceDiagnosticsClient({ invoke });
+    const client = createVoiceDiagnosticsClient();
 
     await expect(client.status()).resolves.toMatchObject({ root: expect.stringContaining('diagnostics') });
-    await expect(client.configure({
-      v: 1,
-      enabled: false,
-      consentVersion: null,
-      captureSttInput: false,
-      captureTtsOutput: false,
-      maxAgeMs: 86_400_000,
-      maxFiles: 20,
-      maxBytes: 104_857_600,
-      maxDurationMs: 300_000,
-    })).resolves.toMatchObject({ settings: { enabled: false } });
+    await expect(client.configure(settings)).resolves.toMatchObject({ settings: { enabled: false } });
     await expect(client.deleteAll()).resolves.toBeUndefined();
-    expect(invoke.mock.calls.map(([method]) => method)).toEqual([
-      'daemon.voiceDiagnostics.status',
-      'daemon.voiceDiagnostics.configure',
-      'daemon.voiceDiagnostics.deleteAll',
+    expect(requests.map(({ method }) => method)).toEqual([
+      'diagnostics-machine:daemon.voiceDiagnostics.status',
+      'diagnostics-machine:daemon.voiceDiagnostics.configure',
+      'diagnostics-machine:daemon.voiceDiagnostics.deleteAll',
     ]);
   });
 
   it('starts artifact export only with explicit confirmation intent and the selected artifact id', async () => {
-    const invoke = vi.fn(async (method: string) => {
+    invoke = vi.fn(async (method: string) => {
       if (method.endsWith('.init')) return { success: false, error: 'transfer_not_found', errorCode: 'transfer_not_found' };
       throw new Error(`unexpected ${method}`);
     });
     const destination = { writeBytes: vi.fn(), close: vi.fn(), cleanup: vi.fn() };
 
-    await expect(createVoiceDiagnosticsClient({ invoke }).downloadArtifact({
+    await expect(createVoiceDiagnosticsClient().downloadArtifact({
       artifactId: 'abcdef12-dead-beef',
       destination,
     })).resolves.toMatchObject({ ok: false, errorCode: 'transfer_not_found' });
-    expect(invoke).toHaveBeenCalledWith(
-      'daemon.voiceDiagnostics.artifact.download.init',
-      expect.objectContaining({
+    expect(requests).toEqual([expect.objectContaining({
+      method: 'diagnostics-machine:daemon.voiceDiagnostics.artifact.download.init',
+      params: expect.objectContaining({
         artifactId: 'abcdef12-dead-beef',
         intent: 'user_confirmed_export',
         recipientPublicKeyBase64: expect.any(String),
       }),
-      undefined,
-    );
+    })]);
   });
 
   it('fails closed on malformed or daemon-error responses', async () => {
-    await expect(createVoiceDiagnosticsClient({ invoke: async () => ({ ok: true, root: '/tmp' }) }).status())
+    invoke = async () => ({ ok: true, root: '/tmp' });
+    await expect(createVoiceDiagnosticsClient().status())
       .rejects.toMatchObject({ code: 'invalid_response' });
-    await expect(createVoiceDiagnosticsClient({ invoke: async () => ({ ok: false, errorCode: 'machine_unavailable' }) }).status())
+    invoke = async () => ({ ok: false, errorCode: 'machine_unavailable' });
+    await expect(createVoiceDiagnosticsClient().status())
       .rejects.toMatchObject({ code: 'machine_unavailable' });
   });
 });

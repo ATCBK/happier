@@ -952,7 +952,9 @@ export function useVoiceConversationsReadinessModel(props: {
       return {
         id: shown.providerId,
         title: resolveServiceTitle(serviceRows),
-        subtitle: serviceRows.length > 1 || !shown.subtitleKey ? undefined : tLoose(shown.subtitleKey),
+        subtitle: shown.entry.kind === 'voice.conversation-provider.v1' && shown.entry.description
+          ? localizePluginText(shown.entry.pluginId, shown.entry.description)
+          : serviceRows.length > 1 || !shown.subtitleKey ? undefined : tLoose(shown.subtitleKey),
         mark: identity ? <VoiceServiceMark identity={identity} /> : undefined,
         badge: badgeKey ? tLoose(badgeKey) : undefined,
         status: ready

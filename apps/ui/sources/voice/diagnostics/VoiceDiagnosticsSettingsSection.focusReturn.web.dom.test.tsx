@@ -7,11 +7,19 @@
  * successful per-session opt-out removes the action that had focus.
  */
 import * as React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
+import { createMachineFixture, createPlainMachineRowFixture, createDeferred } from '@/dev/testkit';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installBrowserStorageLockBoundary } from '@/dev/testkit/harness/browserStorageLockBoundary';
+import { VoiceSpeechDiagnosticsConfigureRequestV1Schema, VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema, VoiceSpeechDiagnosticsStatusResponseV1Schema, resolveVoiceSpeechDiagnosticsStoragePolicy } from '@happier-dev/protocol/voice/diagnostics';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { tLoose } from '@/text';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,16 +30,10 @@ const boundary = vi.hoisted(() => ({
 }));
 
 vi.mock('react-native', async () => {
-  const actual: Record<string, unknown> = await vi.importActual('react-native-web');
-  return {
-    ...actual,
-    Platform: {
-      ...(actual.Platform as object ?? {}),
-      OS: 'web',
-      select: (values: Record<string, unknown>) =>
-        values?.web ?? values?.default ?? values?.native ?? values?.ios ?? values?.android,
-    },
-  };
+  const { getVitestNodeBuiltin } = await import('@/dev/vitestNodeBuiltins');
+  const { createRequire } = getVitestNodeBuiltin<Pick<typeof import('node:module'), 'createRequire'>>('node:module');
+  const actual: Record<string, unknown> = await vi.importActual(createRequire(import.meta.url).resolve('react-native-web'));
+  return (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(actual);
 });
 
 vi.mock('react-native-unistyles', async () => {
@@ -39,56 +41,25 @@ vi.mock('react-native-unistyles', async () => {
   return createUnistylesMock();
 });
 
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({ translate: (key: string) => key });
-});
 
 vi.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 vi.mock('@hugeicons/react-native', () => ({ HugeiconsIcon: () => null }));
-vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  Icon: () => null,
-}));
-vi.mock('@/components/ui/icons/SafeIonicons', () => ({ SafeIonicons: () => null }));
-
-vi.mock('@/modal', () => ({
-  Modal: {
-    confirm: vi.fn(async () => true),
-    alert: vi.fn(async () => {}),
-  },
-}));
-
-vi.mock('@/sync/domains/state/storage', () => ({
-  useSetting: (key: string) => key === 'voice' ? boundary.voice : undefined,
-  useLocalSetting: (key: string) => key === 'uiFontScale' ? 1 : undefined,
-  storage: {
-    getState: () => ({ settings: { voice: boundary.voice } }),
-  },
-}));
-
-vi.mock('@/sync/store/hooks', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  useActiveServerAccountScope: () => null,
-  useLocalSetting: (key: string) => key === 'uiFontScale' ? 1 : undefined,
-}));
-
-vi.mock('@/voice/credentials/useExecutionMachinePresentation', () => ({
-  useVoiceExecutionMachinePresentation: () => ({ machineId: 'm1', machineLabel: 'm1' }),
-}));
-
-vi.mock('@/components/voice/attempt/useVoiceAttemptControl', () => ({
-  useVoiceAttemptControl: () => ({ sessionId: boundary.sessionId }),
-  VOICE_ATTEMPT_IDLE_TARGET_GLOBAL: { kind: 'global' },
-}));
-
-vi.mock('./artifactExportTarget', () => ({
-  createVoiceDiagnosticArtifactExportTarget: vi.fn(),
-}));
-
-vi.mock('./client', () => ({
-  createVoiceDiagnosticsClientForMachine: () => ({
-    status: async () => ({
+vi.mock('@/utils/web/radixCjs', async () => (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsRealModule());
+vi.mock('@/utils/web/reactDomCjs', async () => {
+  const actual = await vi.importActual<typeof import('react-dom')>('react-dom');
+  return { requireReactDOM: () => actual };
+});
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installSessionActionRpcBoundary(async request => {
+  if (request.method === `m1:${RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_REVOKE_CAPTURE}`) {
+    VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema.parse(request.params);
+    await boundary.revokeCaptureAuthorization();
+    return { ok: true };
+  }
+  if (request.method === `m1:${RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS}`) return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({
       ok: true as const,
       root: '/private/m1',
       settings: boundary.voice!.diagnostics,
@@ -97,23 +68,28 @@ vi.mock('./client', () => ({
         captureFailure: false,
         cleanup: { status: 'healthy' as const, code: null, ownedEntryCount: 0 },
       },
-      backupPolicy: {
-        status: 'best_effort' as const,
-        storage: 'private_cache' as const,
-        mechanism: 'cachedir_tag' as const,
-        automaticSync: 'not_implemented' as const,
-      },
-    }),
-    configure: vi.fn(),
-    deleteAll: vi.fn(),
-    downloadArtifact: vi.fn(),
-    revokeCaptureAuthorization: boundary.revokeCaptureAuthorization,
-  }),
-}));
+      backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop'),
+  });
+  if (request.method === `m1:${RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE}`) return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({
+    ok: true, root: '/private/m1', settings: VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params).settings, artifacts: [],
+    health: { captureFailure: false, cleanup: { status: 'healthy', code: null, ownedEntryCount: 0 } },
+    backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop'),
+  });
+  throw new Error(`Unexpected diagnostics RPC: ${request.method}`);
+});
+const { storage } = await import('@/sync/domains/state/storage');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const { setVoiceSessionSnapshot, resetVoiceSessionStoreForTests } = await import('@/voice/session/voiceSessionStore');
+let home: Awaited<ReturnType<typeof serveAccountHomes>>;
+let disconnect: (() => Promise<void>) | undefined;
+let restoreBrowserLocks: (() => void) | undefined;
 
 import { VoiceDiagnosticsSettingsSection } from './VoiceDiagnosticsSettingsSection';
+import { VoiceDiagnosticsIndicator } from './VoiceDiagnosticsIndicator';
+import { ModalProvider } from '@/modal';
 import {
   publishVoiceDiagnosticsRuntimeStatus,
+  beginVoiceDiagnosticsRevocationObligation,
   resetVoiceDiagnosticsRuntimeStatusForTests,
 } from './runtimeStatus';
 import { resetVoiceDiagnosticsRevocationForTests } from './runtimeRevocation';
@@ -144,37 +120,45 @@ async function flush(): Promise<void> {
   });
 }
 
-async function renderSettings(): Promise<void> {
+async function renderSettings(surface?: React.ReactNode): Promise<void> {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => {
     root!.render(
-      <VoiceDiagnosticsSettingsSection
+      <ModalProvider>{surface ?? <VoiceDiagnosticsSettingsSection
         voice={boundary.voice!}
-        setVoice={vi.fn()}
-      />,
+        setVoice={(voice) => storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice }, storage.getState().settings))}
+      />}</ModalProvider>,
     );
   });
   await flush();
 }
 
 describe('VoiceDiagnosticsSettingsSection web focus return', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    restoreBrowserLocks = installBrowserStorageLockBoundary();
+    home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics-focus.test', accountId: 'account-a' }],
+      route: ({ path }) => path.startsWith('/v1/machines/')
+        ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
+        : undefined });
+    disconnect = await home.restoreActiveConnection();
+    resetVoiceSessionStoreForTests();
     boundary.voice = voiceSettingsParse({
+      executionMachine: { mode: 'fixed', machineId: 'm1' },
       diagnostics: {
         v: 1,
         enabled: true,
         consentVersion: 1,
         captureSttInput: true,
         captureTtsOutput: false,
-        maxAgeMs: 86_400_000,
-        maxFiles: 20,
-        maxBytes: 104_857_600,
-        maxDurationMs: 300_000,
       },
     });
     boundary.sessionId = 'focused-diagnostics-session';
+    const machine = createMachineFixture({ id: 'm1', activeAt: Date.now() });
+    storage.setState({ machines: { m1: machine }, machineListByServerId: { [home.homes.diagnostics!.id]: [machine] } });
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: boundary.voice }, storage.getState().settings));
+    setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: boundary.sessionId, status: 'connected', mode: 'listening', canStop: true });
     boundary.revokeCaptureAuthorization.mockClear();
     resetVoiceDiagnosticsRuntimeStatusForTests();
     resetVoiceDiagnosticsRevocationForTests();
@@ -192,13 +176,16 @@ describe('VoiceDiagnosticsSettingsSection web focus return', () => {
     container?.remove();
     container = null;
     root = null;
+    await disconnect?.();
+    await home?.dispose();
+    restoreBrowserLocks?.();
   });
 
   it('returns focus to the persistent diagnostics-enabled Switch after session opt-out removes its focused action', async () => {
     await renderSettings();
 
-    const sessionOptOut = requireElement('[aria-label="settingsVoice.diagnostics.sessionOptOut"]');
-    const diagnosticsEnabledSwitch = requireElement('[aria-label="settingsVoice.diagnostics.enabled"]');
+    const sessionOptOut = requireElement(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`);
+    const diagnosticsEnabledSwitch = requireElement(`[aria-label="${tLoose('settingsVoice.diagnostics.enabled')}"]`);
     sessionOptOut.focus();
     expect(document.activeElement).toBe(sessionOptOut);
 
@@ -208,9 +195,67 @@ describe('VoiceDiagnosticsSettingsSection web focus return', () => {
       await Promise.resolve();
     });
     await flush();
+    const confirm = document.querySelector('[data-testid="web-modal-confirm"]');
+    if (!(confirm instanceof HTMLElement)) throw new Error('Missing real diagnostics confirmation control');
+    await act(async () => { pressWithPointer(confirm); });
+    await flush();
 
     expect(boundary.revokeCaptureAuthorization).toHaveBeenCalledTimes(1);
-    expect(container?.querySelector('[aria-label="settingsVoice.diagnostics.sessionOptOut"]')).toBeNull();
+    expect(container?.querySelector(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`)).toBeNull();
     expect(document.activeElement).toBe(diagnosticsEnabledSwitch);
+  });
+
+  it('returns focus to the stable indicator fallback after the real opt-out confirmation is pressed', async () => {
+    const fallback = React.createRef<HTMLButtonElement>();
+    await renderSettings(<>
+      <button ref={fallback}>Diagnostics status</button>
+      <VoiceDiagnosticsIndicator sessionId={boundary.sessionId} focusFallbackRef={fallback} />
+    </>);
+    const optOut = requireElement(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`);
+    optOut.focus();
+    await act(async () => { pressWithPointer(optOut); });
+    await flush();
+    const confirm = document.querySelector('[data-testid="web-modal-confirm"]');
+    if (!(confirm instanceof HTMLElement)) throw new Error('Missing real opt-out confirmation control');
+    await act(async () => { pressWithPointer(confirm); });
+    await vi.waitFor(() => expect(container?.querySelector(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`)).toBeNull());
+    expect(document.activeElement).toBe(fallback.current);
+  });
+
+  it('keeps user focus elsewhere when the acknowledged opt-out settles after navigation within the page', async () => {
+    const response = createDeferred<void>();
+    boundary.revokeCaptureAuthorization.mockImplementationOnce(async () => { await response.promise; });
+    const fallback = React.createRef<HTMLButtonElement>();
+    const elsewhere = React.createRef<HTMLButtonElement>();
+    await renderSettings(<>
+      <button ref={fallback}>Diagnostics status</button><button ref={elsewhere}>Other action</button>
+      <VoiceDiagnosticsIndicator sessionId={boundary.sessionId} focusFallbackRef={fallback} />
+    </>);
+    const optOut = requireElement(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`);
+    optOut.focus();
+    await act(async () => { pressWithPointer(optOut); });
+    await flush();
+    const confirm = document.querySelector('[data-testid="web-modal-confirm"]');
+    if (!(confirm instanceof HTMLElement)) throw new Error('Missing real opt-out confirmation control');
+    await act(async () => { pressWithPointer(confirm); });
+    await vi.waitFor(() => expect(boundary.revokeCaptureAuthorization).toHaveBeenCalledOnce());
+    elsewhere.current!.focus();
+    await act(async () => { response.resolve(); });
+    await vi.waitFor(() => expect(container?.querySelector(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`)).toBeNull());
+    expect(document.activeElement).toBe(elsewhere.current);
+  });
+
+  it('returns focus to the stable fallback after exact-machine shutdown removes its retry control', async () => {
+    beginVoiceDiagnosticsRevocationObligation({ kind: 'machine_policy', machineId: 'm1' }, 'failed');
+    const fallback = React.createRef<HTMLButtonElement>();
+    await renderSettings(<>
+      <button ref={fallback}>Diagnostics status</button>
+      <VoiceDiagnosticsIndicator focusFallbackRef={fallback} />
+    </>);
+    const retry = requireElement(`[aria-label="${tLoose('settingsVoice.diagnostics.retryShutdown')}"]`);
+    retry.focus();
+    await act(async () => { pressWithPointer(retry); });
+    await vi.waitFor(() => expect(container?.querySelector(`[aria-label="${tLoose('settingsVoice.diagnostics.retryShutdown')}"]`)).toBeNull());
+    expect(document.activeElement).toBe(fallback.current);
   });
 });

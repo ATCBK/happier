@@ -1,16 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { log } from '@/log';
 
 import {
   readSafeVoiceRuntimeFailureDiagnosticReason,
   recordVoiceRuntimeFailure,
 } from './voiceRuntimeFailureCode';
 
-const logSpy = vi.hoisted(() => vi.fn());
-vi.mock('@/log', () => ({ log: { log: logSpy } }));
-
 describe('voiceRuntimeFailureCode', () => {
   beforeEach(() => {
-    logSpy.mockClear();
+    log.clear();
   });
 
   it('distinguishes bounded metadata commit reasons without retaining arbitrary error data', () => {
@@ -41,7 +39,7 @@ describe('voiceRuntimeFailureCode', () => {
       );
     }
 
-    const records = logSpy.mock.calls.map(([line]) => String(line));
+    const records = log.getLogs();
     expect(records).toHaveLength(2);
     expect(records[0]).toContain('"diagnosticReason":"session_refresh_failed"');
     expect(records[1]).toContain('"diagnosticReason":"metadata_write_rejected"');
@@ -77,7 +75,7 @@ describe('voiceRuntimeFailureCode', () => {
       { privateReason: 'provider-secret-detail' },
     );
 
-    const record = String(logSpy.mock.calls[0]?.[0]);
+    const record = log.getLogs()[0];
     expect(record).toContain('"diagnosticReason":"unknown"');
     expect(record).not.toContain('provider-secret-detail');
   });

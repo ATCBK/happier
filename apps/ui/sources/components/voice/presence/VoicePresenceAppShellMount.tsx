@@ -11,6 +11,7 @@ import {
     useReportSessionCockpitFloatingBottomChromeHeight,
     useSessionCockpitViewerRect,
     useSessionCockpitPetRect,
+    useSessionCockpitActionRailRect,
     useReportSessionCockpitVoicePresenceRect,
 } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import {
@@ -69,7 +70,12 @@ function VoiceFloatingPresenceRuntime(props: Readonly<{ container: 'island' | 'o
     const viewport = useWindowDimensions();
     const viewerRect = useSessionCockpitViewerRect();
     const petRect = useSessionCockpitPetRect();
-    const avoidRects = React.useMemo(() => petRect ? [petRect] : undefined, [petRect]);
+    const actionRailRect = useSessionCockpitActionRailRect();
+    // The Orb rests clear of the pet and of the session's right tool rail.
+    const avoidRects = React.useMemo(() => {
+        const rects = [petRect, actionRailRect].filter((rect): rect is NonNullable<typeof rect> => rect !== null);
+        return rects.length > 0 ? rects : undefined;
+    }, [actionRailRect, petRect]);
     const petsCompanionSizeScale = useLocalSetting('petsCompanionSizeScale');
     const selectedPetPackage = useSelectedPetPackage();
     const anchorRef = React.useRef<View | null>(null);

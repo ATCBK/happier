@@ -1,6 +1,7 @@
 import React from 'react';
-import { act } from 'react-test-renderer';
-import { PluginContributesV2Schema } from '@happier-dev/protocol';
+import { act, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
+import 'fake-indexeddb/auto';
+import { PluginContributesV2Schema, PluginProjectionV2Schema, buildQualifiedPluginContributionKey, createPluginContributionIdentity, createRecipientContractDigestV1, type PluginProjectionV2, type VoiceProviderContribution } from '@happier-dev/protocol';
 import { vi } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import type {
@@ -14,18 +15,31 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
 import { PluginPermissionGrantListActionOutputV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 
-import { findTestInstanceByTypeWithProps, renderScreen as renderTestScreen } from '@/dev/testkit';
+import { findAllHostTestInstances, findTestInstanceByTypeWithProps, pressTestInstanceAsync, renderScreen as renderTestScreen } from '@/dev/testkit';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
-import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { getConnectedAccountAuthentication } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { AppShellPluginUiProjectionProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { BUNDLED_FIRST_PARTY_VOICE_CONTRIBUTIONS } from '@/voice/registry/generatedBundledVoiceEntries';
+import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
+import type { BundledConversationRuntimeHost } from '@/voice/registry/bundledConversationRuntimeHost';
 import { settingsDefaults, settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storageStore';
 import { profileDefaults, type Profile } from '@/sync/domains/profiles/profile';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
+import { ModalProvider } from '@/modal/ModalProvider';
+import { t, tLoose } from '@/text';
+import { VoiceServiceGallery, type VoiceServiceTile } from './VoiceServiceGallery';
+import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { VoiceGlobalConnectedServicesBindingField } from './realtime/VoiceGlobalConnectedServicesBindingField';
+import { useMachineCliDetectionTarget } from '@/sync/store/hooks';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import {
     ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
 } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
@@ -54,9 +68,11 @@ const storageBoundary = {
 async function renderScreen(...input: Parameters<typeof renderTestScreen>) {
     await refreshSavedSecretCatalog(accountFixture.scope);
     if (passiveSetupBoundary.state.status === 'loaded') await primeCapabilities();
-    return renderTestScreen(...input);
+    return renderTestScreen(input[0], { ...input[1], wrapper: ({ children }) => <ModalProvider>{children}</ModalProvider> });
 }
 beforeEach(async () => {
+    descriptorAvailable = false;
+    voiceProjectionEntries = {};
     accountFixture = await createVoiceSettingsAccountTestHarness(settingsDefaults);
     onTestFinished(accountFixture.dispose);
     passiveSetupBoundary.profile = null;
@@ -66,12 +82,23 @@ beforeEach(async () => {
     const request = accountFixture.request.getMockImplementation()!;
     accountFixture.request.mockImplementation(async (url, init) => {
         const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ ...profileDefaults,
+            id: storage.getState().profile.id || accountFixture.scope.accountId, ...profileReply }));
         const machineRow = (id: string) => ({ ...createPlainMachineRowFixture({ id,
             accountId: storage.getState().profile.id || accountFixture.scope.accountId }),
             active: machineTarget.isOnline, activeAt: Date.now(), daemonStateVersion: machineTarget.daemonStateVersion,
         });
+        const accessMatch = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
+        if (accessMatch) {
+            const machine = machineRow(decodeURIComponent(accessMatch[1]!));
+            return Response.json({ machineId: machine.id, custodian: machine.access!.custodian, access: machine.access,
+                canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [] });
+        }
         if (path.startsWith('/v1/machines/')) return Response.json({ machine: machineRow(decodeURIComponent(path.slice('/v1/machines/'.length))) });
-        if (path === '/v1/machines') return Response.json(['machine-1', 'machine-2', 'machine-online'].map(machineRow));
+        if (path === '/v1/machines') return Response.json([
+            ...['machine-1', 'machine-2', 'machine-online'].map(machineRow),
+            ...(descriptorAvailable ? [{ ...machineRow('descriptor-machine'), active: true }] : []),
+        ]);
         if (path === '/v1/plugins/permissions/grants/list') {
             const input = JSON.parse(String(init?.body)) as Record<string, unknown>;
             return Response.json(PluginPermissionGrantListActionOutputV1Schema.parse({ grants: [{
@@ -85,6 +112,9 @@ beforeEach(async () => {
     });
 });
 let machineTarget = { daemonStateVersion: 0, isOnline: false };
+let profileReply: Partial<Profile> | null = null;
+let descriptorAvailable = false;
+let voiceProjectionEntries: NonNullable<PluginProjectionV2['familiesById']['voiceProviders']>['entriesById'] = {};
 let capabilityState: MachineCapabilitiesCacheState = { status: 'idle' };
 const pendingDetections: Array<Readonly<{ resolve(value: unknown): void; reject(error: Error): void }>> = [];
 function primeCapabilities() {
@@ -95,14 +125,18 @@ function primeCapabilities() {
 const passiveSetupBoundary = {
     get profile() { return storage.getState().profile; },
     set profile(value: Partial<Profile> | null) {
+        profileReply = value;
         storage.setState({ profile: { ...profileDefaults, id: accountFixture.scope.accountId, ...value } });
     },
     get machineTarget() { return machineTarget; },
     set machineTarget(value: typeof machineTarget) {
         machineTarget = value;
-        storage.getState().applyMachines(['machine-1', 'machine-2', 'machine-online'].map(id => createMachineFixture({
-            id, active: value.isOnline, activeAt: Date.now(), daemonStateVersion: value.daemonStateVersion,
-        })), true, { sourceServerId: accountFixture.scope.serverId });
+        storage.getState().applyMachines([
+            ...['machine-1', 'machine-2', 'machine-online'].map(id => createMachineFixture({
+                id, active: value.isOnline, activeAt: Date.now(), daemonStateVersion: value.daemonStateVersion,
+            })),
+            ...(descriptorAvailable ? [createMachineFixture({ id: 'descriptor-machine', active: true, activeAt: Date.now() })] : []),
+        ], true, { sourceServerId: accountFixture.scope.serverId });
     },
     get state() { return capabilityState; },
     set state(next: MachineCapabilitiesCacheState) {
@@ -115,7 +149,7 @@ const passiveSetupBoundary = {
     },
     refresh: vi.fn(),
     invoke: vi.fn<(...args: unknown[]) => Promise<unknown>>(
-        async () => ({ supported: false, reason: 'error' }),
+        async () => ({ error: "unavailable" }),
     ),
 };
 const rawCredentialReadiness = vi.fn((contribution: Readonly<{ pluginId: string; localId: string }>) => contribution);
@@ -123,6 +157,16 @@ installSessionActionRpcBoundary(async request => {
     const separator = request.method.indexOf(':');
     const machineId = request.method.slice(0, separator);
     const method = request.method.slice(separator + 1);
+    if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+        return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
+            protocolVersion: 1,
+            projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {},
+                agentsById: {}, actionsById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {},
+                familiesById: { connectedAccounts: { family: 'connectedAccounts',
+                    entriesById: descriptorAvailable ? { [CODEX_CONNECTED_SERVICE_KEY]: codexDescriptorResponse } : {} },
+                    voiceProviders: { family: 'voiceProviders', entriesById: voiceProjectionEntries } } }),
+        });
+    }
     if (method === RPC_METHODS.CAPABILITIES_DETECT) {
         passiveSetupBoundary.refresh(request.params);
         if (capabilityState.status === 'loading') return await new Promise((resolve, reject) => { pendingDetections.push({ resolve, reject }); });
@@ -131,8 +175,7 @@ installSessionActionRpcBoundary(async request => {
             ? capabilityState.snapshot.response : { protocolVersion: 1, results: {} };
     }
     if (method === RPC_METHODS.CAPABILITIES_INVOKE) {
-        const answer = await passiveSetupBoundary.invoke(machineId, request.params);
-        return answer && typeof answer === 'object' && 'response' in answer ? answer.response : { error: 'unavailable' };
+        return await passiveSetupBoundary.invoke(machineId, request.params);
     }
     if (method === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_INSPECT) {
         const input = request.params as { contribution: { pluginId: string; localId: string }; rawGrant: { realm: string; phase: string; request: { origin: string; headerNames: string[] } } };
@@ -181,16 +224,12 @@ async function createActiveAccountLifetime(accountId: string, requestedServerUrl
 
 afterEach(() => {
     passiveSetupBoundary.invoke.mockReset();
-    passiveSetupBoundary.invoke.mockResolvedValue({ supported: false, reason: 'error' });
+    passiveSetupBoundary.invoke.mockResolvedValue({ error: "unavailable" });
 });
 
-vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
-    Pressable: (props: React.PropsWithChildren<Record<string, unknown>>) => React.createElement('Pressable', props, props.children),
-}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
-vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 
 vi.mock('expo-clipboard', () => ({
@@ -212,11 +251,8 @@ const CODEX_PROVIDER_ID = 'happier.agent.codex/realtime-codex';
 const CODEX_CONNECTED_SERVICE_KEY = 'happier.agent.codex/openai-codex';
 const CLAUDE_CONNECTED_SERVICE_KEY = 'happier.agent.claude/anthropic';
 
-function installCodexConnectedAccountDescriptor() {
-    installConnectedAccountDescriptorProjection({
-        scopeKey: 'voice-provider-section-test',
-        status: 'ready',
-        descriptors: [{
+// A schema-checked daemon DTO at the Socket boundary; the actual app-shell owner publishes it.
+const codexDescriptorResponse = ConnectedAccountUiProjectionEntryV1Schema.parse({
             id: 'openai-codex',
             serviceId: 'openai-codex',
             pluginId: 'happier.agent.codex',
@@ -237,103 +273,135 @@ function installCodexConnectedAccountDescriptor() {
             capabilities: [],
             availability: { state: 'available', reason: 'resolved' },
             diagnostics: [],
-        }],
-        conflicts: [],
-        errorReason: null,
+        });
+
+async function installCodexConnectedAccountDescriptor(external?: Readonly<{
+    pluginId: string;
+    occurrenceId: string;
+    declaration: VoiceProviderContribution;
+    host: BundledConversationRuntimeHost;
+}>) {
+    const { createBundledConversationRuntimeHostLease } = await import('@/voice/registry/bundledConversationRuntimeHost');
+    const { createBundledConversationRuntimes } = await import('@/voice/registry/bundledConversationRuntimes');
+    const { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } = await import('@/voice/registry/generatedBundledVoiceRuntimeEntries');
+    const lease = external ? null : createBundledConversationRuntimeHostLease();
+    const runtimes = createBundledConversationRuntimes({
+        bundledEntries: BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES,
+        host: external?.host ?? lease!.host,
     });
+    onTestFinished(async () => {
+        await Promise.all(runtimes.map(runtime => runtime.dispose()));
+        lease?.revoke();
+    });
+    // These are authored daemon transport facts, not a second projection owner.
+    // The CLI projector is deliberately not exercised by this downstream UI suite.
+    const bundledEntries = BUNDLED_FIRST_PARTY_VOICE_CONTRIBUTIONS.map(entry => {
+        const recipientContract = createBundledVoiceRecipientContract(entry);
+        return {
+            id: entry.providerId, contributionKey: entry.providerId, pluginId: entry.pluginId,
+            occurrenceId: 'voice-settings-bundled-daemon-occurrence', definition: entry.declaration,
+            ...(recipientContract ? { recipientContract,
+                recipientContractDigest: createRecipientContractDigestV1(recipientContract) } : {}),
+        } satisfies NonNullable<PluginProjectionV2['familiesById']['voiceProviders']>['entriesById'][string];
+    });
+    const externalId = external ? buildQualifiedPluginContributionKey(createPluginContributionIdentity({
+        pluginId: external.pluginId, localId: external.declaration.id,
+    })) : null;
+    voiceProjectionEntries = Object.fromEntries([
+        ...bundledEntries.map(entry => [entry.id, entry] as const),
+        ...(external && externalId ? [[externalId, {
+            id: externalId, contributionKey: externalId, pluginId: external.pluginId,
+            occurrenceId: external.occurrenceId, definition: external.declaration,
+        } satisfies NonNullable<PluginProjectionV2['familiesById']['voiceProviders']>['entriesById'][string]] as const] : []),
+    ]);
+    descriptorAvailable = true;
+    passiveSetupBoundary.machineTarget = machineTarget;
+    const projection = await renderTestScreen(<AppShellPluginUiProjectionProvider><></></AppShellPluginUiProjectionProvider>);
+    onTestFinished(projection.unmount);
+    await vi.waitFor(() => expect(getConnectedAccountAuthentication({
+        pluginId: 'happier.agent.codex', localId: 'openai-codex',
+    })).not.toBeNull());
 }
 
-type TestNode = { props: Record<string, any>; findAll: (predicate: (node: TestNode) => boolean) => TestNode[] };
-
-/**
- * The Service gallery as a provider choice: a service tile, or — for a service whose options only
- * change who pays — its "Pay with" option. Returns the same row facts the radio list exposed
- * (title, readiness detail, disabled, selected, press) so behavioural assertions stay unchanged.
- */
-/**
- * The checked passive readiness the page reports. The card shows it (the model's selected readiness
- * is the checked one) and the polite status region announces this same text.
- */
-function checkedReadinessRow(tree: { root: { findAllByProps: (props: Record<string, unknown>) => Array<{ props: Record<string, unknown> }> } }) {
-    const announcement = tree.root.findAllByProps({ statusTestID: 'settings.voice.provider.readiness-status' })[0]?.props.announcement;
-    return typeof announcement === 'string' && announcement.length > 0 ? { props: { subtitle: announcement } } : null;
+/** The actual polite region's published announcement, not a synthetic readiness row. */
+function checkedReadinessRow(tree: ReactTestRenderer) {
+    return tree.root.findAllByProps({ statusTestID: 'settings.voice.provider.readiness-status' })
+        .find(node => typeof node.props.announcement === 'string' && node.props.announcement.length > 0) ?? null;
 }
 
-function findProviderChoiceRow(tree: TestNode, query: Readonly<{ testID?: string; title?: string }>) {
-    const gallery = tree.findAll((node) => Array.isArray(node.props?.tiles) && typeof node.props?.onSelectOff === 'function')[0];
-    if (!gallery) return null;
-    const payWith = tree.findAll((node) => node.props?.testIDPrefix === 'settings.voice.provider.payWith'
-        && Array.isArray(node.props?.options))[0];
-    const tiles: any[] = gallery.props.tiles;
-    const tileRow = (tile: any) => ({ props: {
-        testID: tile.testID,
-        title: tile.title,
-        // The full prerequisite is the tile status's accessible detail; its visible text is a short status.
-        subtitle: tile.status?.detail ?? tile.status?.text ?? tile.subtitle ?? '',
-        disabled: tile.disabled,
-        selected: tile.selected,
-        accessibilityRole: 'radio',
-        rightElement: tile.selected ? {} : null,
-        onPress: tile.disabled ? undefined : () => gallery.props.onSelect(tile.id),
-    } });
-    const optionRow = (tile: any, option: any) => ({ props: {
-        testID: `${tile.testID.split('.').slice(0, -1).join('.')}.${option.id}`,
-        title: option.label,
-        subtitle: option.unavailableReason ?? option.description ?? '',
-        disabled: option.unavailableReason !== undefined,
-        selected: tile.selected && payWith!.props.value === option.id,
-        accessibilityRole: 'radio',
-        rightElement: tile.selected && payWith!.props.value === option.id ? {} : null,
-        onPress: option.unavailableReason !== undefined ? undefined : () => payWith!.props.onChange(option.id),
-    } });
-    if (query.testID === 'settings.voice.provider.off') {
-        return { props: {
-            testID: query.testID, title: 'settingsVoice.mode.off', subtitle: '', disabled: false,
-            selected: gallery.props.offSelected === true, accessibilityRole: 'radio',
-            rightElement: gallery.props.offSelected ? {} : null, onPress: () => gallery.props.onSelectOff(),
-        } };
+/** Query the rendered SDK radio hosts; selection, admission and callbacks remain product-owned. */
+function findProviderChoiceRow(tree: ReactTestRenderer | ReactTestInstance, query: Readonly<{ testID?: string; title?: string }>) {
+    const root = 'root' in tree ? tree.root : tree;
+    const hosts = findAllHostTestInstances(root, node => node.props.accessibilityRole === 'radio');
+    if (query.title) return hosts.find(node => node.props.accessibilityLabel === query.title
+        || node.props.accessibilityLabel?.startsWith(`${query.title}, `)) ?? null;
+    if (!query.testID) return null;
+    const exact = hosts.find(node => node.props.testID === query.testID);
+    const cut = query.testID.lastIndexOf('.');
+    const prefix = query.testID.slice(0, cut + 1);
+    const service = exact ?? hosts.find(node => node.props.testID?.startsWith(prefix));
+    const billing = service?.props.accessibilityState?.checked === true
+        ? hosts.find(node => node.props.testID === `settings.voice.provider.payWith:${decodeURIComponent(query.testID.slice(cut + 1))}`)
+        : null;
+    return billing ?? service ?? null;
+}
+
+function listProviderChoiceRows(tree: ReactTestRenderer | ReactTestInstance) {
+    const root = 'root' in tree ? tree.root : tree;
+    return findAllHostTestInstances(root, node => node.props.accessibilityRole === 'radio'
+        && typeof node.props.testID === 'string' && node.props.testID.startsWith('settings.voice.provider.')
+        && !node.props.testID.startsWith('settings.voice.provider.payWith:'));
+}
+
+/** Read what assistive technology receives from the real tile footer or billing segment. */
+function providerChoiceDetail(node: ReactTestInstance | null | undefined): string {
+    if (!node) return '';
+    if (node.props.testID?.startsWith('settings.voice.provider.payWith:')) {
+        let parent = node.parent;
+        while (parent) {
+            if (typeof parent.props.subtitle === 'string') return parent.props.subtitle;
+            parent = parent.parent;
+        }
     }
-    if (query.testID) {
-        const exact = tiles.find((tile) => tile.testID === query.testID);
-        // Provider ids contain dots, so the option is the last segment and the provider is the rest.
-        const rest = query.testID.startsWith('settings.voice.provider.') ? query.testID.slice('settings.voice.provider.'.length) : '';
-        const cut = rest.lastIndexOf('.');
-        const providerId = cut > 0 ? decodeURIComponent(rest.slice(0, cut)) : null;
-        const optionId = cut > 0 ? decodeURIComponent(rest.slice(cut + 1)) : null;
-        const tile = exact ?? tiles.find((candidate) => candidate.id === providerId);
-        if (!tile) return null;
-        const option = payWith && tile.selected
-            ? payWith.props.options.find((candidate: any) => candidate.id === optionId)
-            : null;
-        return option ? optionRow(tile, option) : tileRow(tile);
-    }
-    if (query.title) {
-        const selectedTile = tiles.find((tile) => tile.selected);
-        const option = payWith && selectedTile
-            ? payWith.props.options.find((candidate: any) => candidate.label === query.title)
-            : null;
-        if (option) return optionRow(selectedTile, option);
-        const tile = tiles.find((candidate) => candidate.title === query.title);
-        return tile ? tileRow(tile) : null;
-    }
-    return null;
+    // The tile's footer is a sibling of its press target, inside the same rendered card frame.
+    let frame = node.parent;
+    while (frame?.parent && typeof frame.type !== 'string') frame = frame.parent;
+    return [node.props.accessibilityLabel, ...findAllHostTestInstances(frame ?? node, child => child.props.accessible === true)
+        .map(child => child.props.accessibilityLabel)].filter(value => typeof value === 'string').join(' · ');
 }
 
-/** Every provider choice the gallery offers, including Off, as row facts. */
-function listProviderChoiceRows(tree: TestNode) {
-    const gallery = tree.findAll((node) => Array.isArray(node.props?.tiles) && typeof node.props?.onSelectOff === 'function')[0];
-    if (!gallery) return [];
-    return [
-        ...gallery.props.tiles.map((tile: any) => findProviderChoiceRow(tree, { testID: tile.testID })!),
-        findProviderChoiceRow(tree, { testID: 'settings.voice.provider.off' })!,
-    ];
-}
+const readinessRecoveryLabels = [
+    'select_provider', 'open_provider_settings', 'select_execution_machine', 'configure_credential',
+    'review_credential_access', 'configure_endpoint', 'install_model', 'switch_provider',
+].map(action => tLoose(`voice.readiness.actions.${action}`));
 
 // The settings owner graph is collection work, not part of a timed user interaction.
 await import('./VoiceProviderSection');
 await import('./BundledConversationSettingsSection');
 
 describe('VoiceProviderSection', () => {
+    it('carries the declared service description through the registry and gallery independently of billing', async () => {
+        const { PLUGIN_MANIFEST } = await import('@happier-dev/plugins-elevenlabs/manifest');
+        const { VoiceProviderContributionSchema } = await import('@happier-dev/plugin-sdk/voice');
+        const declaration = VoiceProviderContributionSchema.parse(PLUGIN_MANIFEST.contributes.voiceProviders[0]);
+        expect(declaration).toHaveProperty('description');
+        if (declaration.kind !== 'conversation' || !declaration.description) throw new Error('Expected service description');
+        const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
+        expect(createDefaultVoiceProviderRegistry().get(ELEVENLABS_PROVIDER_ID)).toHaveProperty('description', declaration.description);
+        const { VoiceProviderSection } = await import('./VoiceProviderSection');
+        const screen = await renderScreen(<VoiceProviderSection
+            voice={settingsParse({ voice: { providerId: null } }).voice}
+            setVoice={accountFixture.replaceVoice}
+            happierVoiceSupported={true}
+            platformOs="web"
+        />);
+        const gallery = screen.tree.root.findByType(VoiceServiceGallery);
+        const tile = (gallery.props.tiles as readonly VoiceServiceTile[]).find(row => row.id === ELEVENLABS_PROVIDER_ID);
+        const expected = typeof declaration.description === 'string' ? declaration.description : declaration.description.fallback;
+        expect(tile?.subtitle).toBe(expected);
+        const choice = listProviderChoiceRows(screen.tree).find(row => row.props.testID?.includes(encodeURIComponent(ELEVENLABS_PROVIDER_ID)));
+        expect(providerChoiceDetail(choice)).toContain(expected);
+    });
     it.each([null, 'machine-1'])('settles credential-scoped consumers through Account and Home replacement and settings remount (%s)', async (machineId) => {
         const { useVoiceConversationsReadinessModel } = await import('./VoiceProviderSection');
         const { readLocalConversationVoiceSettings, writeLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
@@ -381,7 +449,7 @@ describe('VoiceProviderSection', () => {
     it('does not render a second declarative settings writer for a provider-owned settings section', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const screen = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: XAI_PROVIDER_ID,
                 providers: {
                     [XAI_PROVIDER_ID]: {
@@ -389,7 +457,7 @@ describe('VoiceProviderSection', () => {
                         config: XAI_REALTIME_DEFAULT_SETTINGS,
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -434,10 +502,7 @@ describe('VoiceProviderSection', () => {
             },
         };
         passiveSetupBoundary.refresh.mockClear();
-        passiveSetupBoundary.invoke.mockResolvedValue({
-            supported: true,
-            response: { ok: true, result: { v: 1, status: 'unavailable' } },
-        });
+        passiveSetupBoundary.invoke.mockResolvedValue({ ok: true, result: { v: 1, status: 'unavailable' } });
         onTestFinished(() => {
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
@@ -474,8 +539,26 @@ describe('VoiceProviderSection', () => {
             },
             executionMachineId: 'machine-1',
         } satisfies React.ComponentProps<typeof VoiceProviderSection>;
-        const screen = await renderScreen(React.createElement(VoiceProviderSection, sectionProps));
+        const { useVoiceConversationsReadinessModel } = await import('./VoiceProviderSection');
+        const transitions: Array<Readonly<{ online: boolean; daemonVersion: number; key: string | null;
+            scope: Readonly<{ serverId: string; accountId: string }> | null }>> = [];
+        function ReadinessAuthorityProbe() {
+            const model = useVoiceConversationsReadinessModel(sectionProps);
+            const target = useMachineCliDetectionTarget('machine-1');
+            const { binding } = useServerCredentialAccountScopeBinding(accountFixture.scope.serverId);
+            transitions.push({ online: target.isOnline, daemonVersion: target.daemonStateVersion,
+                key: model.selectedReadinessCheckKey, scope: binding?.isCurrent() ? binding.scope : null });
+            return null;
+        }
+        const screen = await renderScreen(<><VoiceProviderSection {...sectionProps} /><ReadinessAuthorityProbe /></>);
         await act(async () => {});
+        await vi.waitFor(() => expect(transitions.some(frame => frame.online && frame.scope?.accountId === accountFixture.scope.accountId)).toBe(true));
+        const cold = transitions.find(frame => !frame.online && frame.scope === null);
+        const warm = transitions.find(frame => frame.online && frame.scope?.accountId === accountFixture.scope.accountId);
+        expect(cold?.daemonVersion).toBe(7);
+        expect(warm?.daemonVersion).toBe(7);
+        expect(warm?.scope).toEqual(accountFixture.scope);
+        expect(warm?.key).toBe(cold?.key);
 
         // Always-on card readiness: no "Check setup" button; the passive check ran because the page opened.
         expect(screen.findHostByTestId('settings.voice.provider.checkSetup')).toBeNull();
@@ -504,10 +587,10 @@ describe('VoiceProviderSection', () => {
             },
         );
         const readinessHost = checkedReadinessRow(screen.tree);
-        expect(readinessHost?.props.subtitle).toContain('voice.readiness.runtime_unknown');
-        expect(readinessHost?.props.subtitle).not.toContain('voice.readiness.actions.switch_provider');
+        expect(readinessHost?.props.announcement).toContain(tLoose('voice.readiness.runtime_unknown'));
+        expect(readinessHost?.props.announcement).not.toContain(tLoose('voice.readiness.actions.switch_provider'));
         // The card itself shows the checked readiness; there is no second "Setup status" row.
-        expect(screen.getTextContent()).toContain('voice.readiness.runtime_unknown');
+        expect(screen.getTextContent()).toContain(tLoose('voice.readiness.runtime_unknown'));
         expect(screen.findHostByTestId('settings.voice.provider.readiness')).toBeNull();
         const status = screen.findHostByTestId('settings.voice.provider.readiness-status');
         expect(status).not.toBeNull();
@@ -518,7 +601,7 @@ describe('VoiceProviderSection', () => {
         // A different computer is a different setup to check; the page checks it without being asked.
         passiveSetupBoundary.invoke.mockClear();
         await act(async () => {
-            screen.tree.update(React.createElement(VoiceProviderSection, { ...sectionProps, executionMachineId: 'machine-2' }));
+            await screen.update(React.createElement(VoiceProviderSection, { ...sectionProps, executionMachineId: 'machine-2' }));
         });
         await act(async () => {});
         expect(passiveSetupBoundary.invoke).toHaveBeenCalledTimes(1);
@@ -533,10 +616,7 @@ describe('VoiceProviderSection', () => {
             }],
         };
         passiveSetupBoundary.machineTarget = { daemonStateVersion: 7, isOnline: true };
-        passiveSetupBoundary.invoke.mockResolvedValue({
-            supported: true,
-            response: { ok: true, result: { v: 1, status: 'ready' } },
-        });
+        passiveSetupBoundary.invoke.mockResolvedValue({ ok: true, result: { v: 1, status: 'ready' } });
         onTestFinished(() => {
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
@@ -546,7 +626,7 @@ describe('VoiceProviderSection', () => {
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const sectionProps = {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: CODEX_PROVIDER_ID,
                 providers: {
                     [CODEX_PROVIDER_ID]: {
@@ -565,7 +645,7 @@ describe('VoiceProviderSection', () => {
                         },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -575,7 +655,7 @@ describe('VoiceProviderSection', () => {
 
         await act(async () => {});
 
-        expect(screen.getTextContent()).toContain('voice.readiness.ready');
+        expect(screen.getTextContent()).toContain(tLoose('voice.readiness.ready'));
 
         passiveSetupBoundary.profile = {
             connectedServicesV2: [{
@@ -584,11 +664,11 @@ describe('VoiceProviderSection', () => {
             }],
         };
         await act(async () => {
-            screen.tree.update(React.createElement(VoiceProviderSection, sectionProps));
+            await screen.update(React.createElement(VoiceProviderSection, sectionProps));
         });
 
-        expect(screen.getTextContent()).toContain('voice.readiness.credential_missing');
-        expect(screen.getTextContent()).not.toContain('voice.readiness.ready');
+        expect(screen.getTextContent()).toContain(tLoose('voice.readiness.credential_missing'));
+        expect(screen.getTextContent()).not.toContain(tLoose('voice.readiness.ready'));
     }, 120_000);
 
     it('does not commit a stale passive result after the selected execution machine changes', async () => {
@@ -605,10 +685,7 @@ describe('VoiceProviderSection', () => {
         });
         passiveSetupBoundary.invoke
             .mockImplementationOnce(async () => await pendingPassiveCheck)
-            .mockResolvedValueOnce({
-                supported: true,
-                response: { ok: true, result: { v: 1, status: 'ready' } },
-            });
+            .mockResolvedValueOnce({ ok: true, result: { v: 1, status: 'ready' } });
         onTestFinished(() => {
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
@@ -616,53 +693,73 @@ describe('VoiceProviderSection', () => {
             passiveSetupBoundary.refresh.mockReset();
         });
 
-        const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const render = (executionMachineId: string) => React.createElement(VoiceProviderSection, {
-            voice: {
-                providerId: CODEX_PROVIDER_ID,
-                providers: {
-                    [CODEX_PROVIDER_ID]: {
-                        schemaVersion: 2,
-                        config: {
-                            globalConnectedServices: {
-                                v: 1,
-                                bindingsByServiceId: {
-                                    [CODEX_CONNECTED_SERVICE_KEY]: {
-                                        source: 'connected',
-                                        selection: 'profile',
-                                        profileId: 'codex-profile',
+        const { VoiceProviderSection, useVoiceConversationsReadinessModel } = await import('./VoiceProviderSection');
+        const frames: Array<Readonly<{ machineId: string | null; online: boolean; daemonVersion: number;
+            scope: typeof accountFixture.scope | null; publishedActive: boolean | null; key: string | null;
+            modelExecution: string | null; modelCredential: string | null }>> = [];
+        function TransitionMetadata(props: React.ComponentProps<typeof VoiceProviderSection>) {
+            const model = useVoiceConversationsReadinessModel(props);
+            const target = useMachineCliDetectionTarget(props.executionMachineId);
+            const { binding } = useServerCredentialAccountScopeBinding(accountFixture.scope.serverId);
+            const machine = storage.getState().machineListByServerId[accountFixture.scope.serverId]
+                ?.find(row => row.id === props.executionMachineId);
+            frames.push({ machineId: props.executionMachineId ?? null, online: target.isOnline,
+                daemonVersion: target.daemonStateVersion, scope: binding?.isCurrent() ? binding.scope : null,
+                publishedActive: machine?.active ?? null, key: model.selectedReadinessCheckKey,
+                modelExecution: model.selectedProviderRow?.readinessFacts.executionMachine ?? null,
+                modelCredential: model.selectedProviderRow?.readinessFacts.credential ?? null });
+            return null;
+        }
+        const render = (executionMachineId: string) => {
+            const props = {
+                voice: settingsParse({ voice: {
+                    providerId: CODEX_PROVIDER_ID,
+                    providers: {
+                        [CODEX_PROVIDER_ID]: {
+                            schemaVersion: 2,
+                            config: {
+                                globalConnectedServices: {
+                                    v: 1,
+                                    bindingsByServiceId: {
+                                        [CODEX_CONNECTED_SERVICE_KEY]: {
+                                            source: 'connected',
+                                            selection: 'profile',
+                                            profileId: 'codex-profile',
+                                        },
                                     },
                                 },
                             },
                         },
                     },
-                },
-            } as any,
-            setVoice: vi.fn(),
-            happierVoiceSupported: true,
-            platformOs: 'web',
-            executionMachineId,
-        });
+                } }).voice,
+                setVoice: vi.fn(),
+                happierVoiceSupported: true,
+                platformOs: 'web',
+                executionMachineId,
+            } satisfies React.ComponentProps<typeof VoiceProviderSection>;
+            return <><VoiceProviderSection {...props} /><TransitionMetadata {...props} /></>;
+        };
         const screen = await renderScreen(render('machine-1'));
 
         await act(async () => {});
         await act(async () => {
-            screen.tree.update(render('machine-2'));
+            await screen.update(render('machine-2'));
         });
         await act(async () => {
-            settlePassiveCheck?.({
-                supported: true,
-                response: { ok: true, result: { v: 1, status: 'unavailable' } },
-            });
+            settlePassiveCheck?.({ ok: true, result: { v: 1, status: 'unavailable' } });
             await Promise.resolve();
         });
 
         // The page checked the new machine on its own; machine-1's late answer never lands.
-        expect(passiveSetupBoundary.invoke).toHaveBeenCalledTimes(2);
+        expect(passiveSetupBoundary.invoke, JSON.stringify({
+            frames: frames.map(({ key, ...frame }) => ({ ...frame,
+                sameKeyAsInitial: key === frames.find(initial => initial.machineId === 'machine-1')?.key })),
+            requestedMachines: passiveSetupBoundary.invoke.mock.calls.map(([machineId]) => machineId),
+        })).toHaveBeenCalledTimes(2);
         expect(passiveSetupBoundary.invoke).toHaveBeenLastCalledWith('machine-2', expect.anything());
         const readiness = checkedReadinessRow(screen.tree);
-        expect(readiness?.props.subtitle).toContain('voice.readiness.ready');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.runtime_unknown');
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.ready'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.runtime_unknown'));
     }, 120_000);
 
     it('clears a settled passive result when the active Account changes', async () => {
@@ -674,12 +771,9 @@ describe('VoiceProviderSection', () => {
         };
         passiveSetupBoundary.machineTarget = { daemonStateVersion: 7, isOnline: true };
         const accountA = await createActiveAccountLifetime('account-a');
-        passiveSetupBoundary.invoke.mockImplementation(async () => ({
-            supported: true,
-            response: { ok: true, result: { v: 1,
+        passiveSetupBoundary.invoke.mockImplementation(async () => ({ ok: true, result: { v: 1,
                 status: captureActiveServerAccountScopeLifetime()?.scope.accountId === 'account-b'
-                    ? 'ready' : 'unavailable' } },
-        }));
+                    ? 'ready' : 'unavailable' } }));
         onTestFinished(() => {
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
@@ -689,7 +783,7 @@ describe('VoiceProviderSection', () => {
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const sectionProps = {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: CODEX_PROVIDER_ID,
                 providers: {
                     [CODEX_PROVIDER_ID]: {
@@ -708,7 +802,7 @@ describe('VoiceProviderSection', () => {
                         },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web' as const,
@@ -718,7 +812,7 @@ describe('VoiceProviderSection', () => {
 
         await act(async () => {});
         expect(checkedReadinessRow(screen.tree)).not.toBeNull();
-        expect(checkedReadinessRow(screen.tree)?.props.subtitle).not.toContain('voice.readiness.ready');
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
 
         accountA.retire();
         const accountB = await createActiveAccountLifetime('account-b');
@@ -726,14 +820,14 @@ describe('VoiceProviderSection', () => {
         expect(accountB.isCurrent()).toBe(true);
         expect(storage.getState().settingsScope?.accountId).toBe('account-b');
         await act(async () => {
-            screen.tree.update(React.createElement(VoiceProviderSection, sectionProps));
+            await screen.update(React.createElement(VoiceProviderSection, sectionProps));
         });
 
         await act(async () => {});
         // Account A was unavailable; only a fresh Account B answer can be ready.
         const readiness = checkedReadinessRow(screen.tree);
-        expect(readiness?.props.subtitle).toContain('voice.readiness.ready');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.runtime_unknown');
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.ready'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.runtime_unknown'));
     }, 120_000);
 
     it('does not display a settled passive result after the active Account lifetime restarts', async () => {
@@ -745,10 +839,7 @@ describe('VoiceProviderSection', () => {
         };
         passiveSetupBoundary.machineTarget = { daemonStateVersion: 7, isOnline: true };
         const accountA = await createActiveAccountLifetime('account-a');
-        passiveSetupBoundary.invoke.mockResolvedValue({
-            supported: true,
-            response: { ok: true, result: { v: 1, status: 'ready' } },
-        });
+        passiveSetupBoundary.invoke.mockResolvedValue({ ok: true, result: { v: 1, status: 'ready' } });
         onTestFinished(() => {
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
@@ -758,7 +849,7 @@ describe('VoiceProviderSection', () => {
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const sectionProps = {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: CODEX_PROVIDER_ID,
                 providers: {
                     [CODEX_PROVIDER_ID]: {
@@ -777,7 +868,7 @@ describe('VoiceProviderSection', () => {
                         },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web' as const,
@@ -786,7 +877,7 @@ describe('VoiceProviderSection', () => {
         const screen = await renderScreen(React.createElement(VoiceProviderSection, sectionProps));
 
         await act(async () => {});
-        expect(checkedReadinessRow(screen.tree)?.props.subtitle).toContain('voice.readiness.ready');
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).toContain(tLoose('voice.readiness.ready'));
 
         let settleFreshCheck!: (value: unknown) => void;
         const freshCheck = new Promise(resolve => { settleFreshCheck = resolve; });
@@ -794,14 +885,14 @@ describe('VoiceProviderSection', () => {
         accountA.retire();
         await createActiveAccountLifetime('account-a');
         await act(async () => {
-            screen.tree.update(React.createElement(VoiceProviderSection, sectionProps));
+            await screen.update(React.createElement(VoiceProviderSection, sectionProps));
         });
 
-        expect(checkedReadinessRow(screen.tree)?.props.subtitle).not.toContain('voice.readiness.ready');
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
         await act(async () => {
-            settleFreshCheck({ supported: true, response: { ok: true, result: { v: 1, status: 'unavailable' } } });
+            settleFreshCheck({ ok: true, result: { v: 1, status: 'unavailable' } });
         });
-        expect(checkedReadinessRow(screen.tree)?.props.subtitle).not.toContain('voice.readiness.ready');
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
     }, 120_000);
 
     it('does not commit a stale passive result after the active Account lifetime restarts', async () => {
@@ -827,7 +918,7 @@ describe('VoiceProviderSection', () => {
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const render = () => React.createElement(VoiceProviderSection, {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: CODEX_PROVIDER_ID,
                 providers: {
                     [CODEX_PROVIDER_ID]: {
@@ -846,7 +937,7 @@ describe('VoiceProviderSection', () => {
                         },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -855,24 +946,18 @@ describe('VoiceProviderSection', () => {
         const screen = await renderScreen(render());
 
         await act(async () => {});
-        passiveSetupBoundary.invoke.mockResolvedValue({
-            supported: true,
-            response: { ok: true, result: { v: 1, status: 'unavailable' } },
-        });
+        passiveSetupBoundary.invoke.mockResolvedValue({ ok: true, result: { v: 1, status: 'unavailable' } });
         accountA.retire();
         await createActiveAccountLifetime('account-a');
         await act(async () => {
-            screen.tree.update(render());
+            await screen.update(render());
         });
         await act(async () => {
-            settlePassiveCheck?.({
-                supported: true,
-                response: { ok: true, result: { v: 1, status: 'ready' } },
-            });
+            settlePassiveCheck?.({ ok: true, result: { v: 1, status: 'ready' } });
             await Promise.resolve();
         });
 
-        expect(checkedReadinessRow(screen.tree)?.props.subtitle).not.toContain('voice.readiness.ready');
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
     }, 120_000);
 
     it('does not commit a delayed passive result after the selected daemon restarts', async () => {
@@ -889,7 +974,7 @@ describe('VoiceProviderSection', () => {
         });
         passiveSetupBoundary.invoke
             .mockImplementationOnce(async () => await pendingPassiveCheck)
-            .mockResolvedValueOnce({ supported: true, response: { ok: true, result: { v: 1, status: 'ready' } } });
+            .mockResolvedValueOnce({ ok: true, result: { v: 1, status: 'ready' } });
         onTestFinished(() => {
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
@@ -899,7 +984,7 @@ describe('VoiceProviderSection', () => {
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const render = () => React.createElement(VoiceProviderSection, {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: CODEX_PROVIDER_ID,
                 providers: {
                     [CODEX_PROVIDER_ID]: {
@@ -918,7 +1003,7 @@ describe('VoiceProviderSection', () => {
                         },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -929,21 +1014,18 @@ describe('VoiceProviderSection', () => {
         await act(async () => {});
         passiveSetupBoundary.machineTarget = { daemonStateVersion: 8, isOnline: true };
         await act(async () => {
-            screen.tree.update(render());
+            await screen.update(render());
         });
         await act(async () => {
-            settlePassiveCheck?.({
-                supported: true,
-                response: { ok: true, result: { v: 1, status: 'unavailable' } },
-            });
+            settlePassiveCheck?.({ ok: true, result: { v: 1, status: 'unavailable' } });
             await Promise.resolve();
         });
 
         // The restarted daemon was checked again; the old daemon's late answer never lands.
         expect(passiveSetupBoundary.invoke).toHaveBeenCalledTimes(2);
         const readiness = checkedReadinessRow(screen.tree);
-        expect(readiness?.props.subtitle).toContain('voice.readiness.ready');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.runtime_unknown');
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.ready'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.runtime_unknown'));
     }, 120_000);
 
     it('keeps the first passive setup check visibly and accessibly checking until it settles', async () => {
@@ -973,7 +1055,7 @@ describe('VoiceProviderSection', () => {
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const render = () => React.createElement(VoiceProviderSection, {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: CODEX_PROVIDER_ID,
                 providers: {
                     [CODEX_PROVIDER_ID]: {
@@ -992,7 +1074,7 @@ describe('VoiceProviderSection', () => {
                         },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -1003,16 +1085,16 @@ describe('VoiceProviderSection', () => {
 
         await act(async () => {});
 
-        expect(screen.getTextContent()).toContain('settings.updates.checking');
+        expect(screen.getTextContent()).toContain(tLoose('settings.updates.checking'));
         const checkingAnnouncers = tree.root.findAllByProps({
             statusTestID: 'settings.voice.provider.readiness-status',
         });
         expect(checkingAnnouncers).toHaveLength(1);
-        expect(checkingAnnouncers[0]?.props.announcement).toBe('settings.updates.checking');
+        expect(checkingAnnouncers[0]?.props.announcement).toBe(tLoose('settings.updates.checking'));
 
         // A re-render while the check is pending shares the one in flight.
         await act(async () => {
-            tree.update(render());
+            await screen.update(render());
         });
         expect(passiveSetupBoundary.invoke).toHaveBeenCalledTimes(1);
 
@@ -1032,32 +1114,29 @@ describe('VoiceProviderSection', () => {
             },
         };
         await act(async () => {
-            tree.update(render());
+            await screen.update(render());
         });
 
-        expect(screen.getTextContent()).toContain('settings.updates.checking');
+        expect(screen.getTextContent()).toContain(tLoose('settings.updates.checking'));
 
         await act(async () => {
             settlePassiveCheck?.({
-                supported: true,
-                response: {
                     ok: true,
                     result: { v: 1, status: 'feature_disabled' },
-                },
-            });
+                });
             await Promise.resolve();
         });
 
-        expect(screen.getTextContent()).toContain('voice.readiness.runtime_missing');
+        expect(screen.getTextContent()).toContain(tLoose('voice.readiness.runtime_missing'));
         const announcers = tree.root.findAllByProps({
             statusTestID: 'settings.voice.provider.readiness-status',
         });
         expect(announcers).toHaveLength(1);
-        expect(announcers[0]?.props.announcement).toContain('voice.readiness.runtime_missing');
+        expect(announcers[0]?.props.announcement).toContain(tLoose('voice.readiness.runtime_missing'));
 
         // A settled check is not repeated while the setup it checked is unchanged.
         await act(async () => {
-            tree.update(render());
+            await screen.update(render());
         });
         expect(passiveSetupBoundary.invoke).toHaveBeenCalledTimes(1);
     }, 120_000);
@@ -1099,7 +1178,7 @@ describe('VoiceProviderSection', () => {
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const render = () => React.createElement(VoiceProviderSection, {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: CODEX_PROVIDER_ID,
                 providers: {
                     [CODEX_PROVIDER_ID]: {
@@ -1118,19 +1197,20 @@ describe('VoiceProviderSection', () => {
                         },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
             executionMachineId: 'machine-1',
         });
-        const { tree } = await renderScreen(render());
+        const screen = await renderScreen(render());
+        const { tree } = screen;
 
         await act(async () => {});
         const terminalAnnouncement = tree.root.findAllByProps({
             statusTestID: 'settings.voice.provider.readiness-status',
         })[0];
-        expect(terminalAnnouncement?.props.announcement).toContain('voice.readiness.runtime_missing');
+        expect(terminalAnnouncement?.props.announcement).toContain(tLoose('voice.readiness.runtime_missing'));
         const terminalTransitionKey = terminalAnnouncement?.props.transitionKey;
 
         passiveSetupBoundary.state = {
@@ -1138,9 +1218,9 @@ describe('VoiceProviderSection', () => {
             snapshot: unavailableRuntimeSnapshot,
         };
         await act(async () => {
-            tree.update(render());
+            await screen.update(render());
         });
-        expect(checkedReadinessRow(tree)?.props.subtitle).toContain('voice.readiness.runtime_missing');
+        expect(checkedReadinessRow(tree)?.props.announcement).toContain(tLoose('voice.readiness.runtime_missing'));
         expect(tree.root.findAllByProps({
             statusTestID: 'settings.voice.provider.readiness-status',
         })[0]?.props.transitionKey).toBe(terminalTransitionKey);
@@ -1151,9 +1231,9 @@ describe('VoiceProviderSection', () => {
         };
         await act(async () => {
             await primeCapabilities();
-            tree.update(render());
+            await screen.update(render());
         });
-        expect(checkedReadinessRow(tree)?.props.subtitle).toContain('voice.readiness.runtime_unknown');
+        expect(checkedReadinessRow(tree)?.props.announcement).toContain(tLoose('voice.readiness.runtime_unknown'));
         expect(tree.root.findAllByProps({
             statusTestID: 'settings.voice.provider.readiness-status',
         })[0]?.props.transitionKey).not.toBe(terminalTransitionKey);
@@ -1161,8 +1241,8 @@ describe('VoiceProviderSection', () => {
 
     it('reports a persisted but unreachable Codex execution target as incompatible', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: {
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: {
                 providerId: CODEX_PROVIDER_ID,
                 providers: {
                     [CODEX_PROVIDER_ID]: {
@@ -1181,7 +1261,7 @@ describe('VoiceProviderSection', () => {
                         },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -1189,12 +1269,13 @@ describe('VoiceProviderSection', () => {
             executionMachineSelectedId: 'machine-offline',
             executionMachineSelectionKind: 'selected_unreachable',
         }));
+        const { tree } = screen;
 
         await act(async () => {});
 
         const readiness = checkedReadinessRow(tree);
-        expect(readiness?.props.subtitle).toContain('voice.readiness.execution_machine_incompatible');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.ready');
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.execution_machine_incompatible'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
         expect(JSON.stringify(readiness?.props)).not.toContain('machine-offline');
         expect(passiveSetupBoundary.invoke).not.toHaveBeenCalled();
     }, 120_000);
@@ -1204,7 +1285,7 @@ describe('VoiceProviderSection', () => {
         const setVoice = vi.fn();
         const onRecoveryAction = vi.fn();
         const screen = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: 'happier.agent.codex/realtime-codex',
                 providers: {
                     'happier.agent.codex/realtime-codex': {
@@ -1212,7 +1293,7 @@ describe('VoiceProviderSection', () => {
                         config: { globalConnectedServices: null },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice,
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -1220,15 +1301,13 @@ describe('VoiceProviderSection', () => {
         }));
 
         await act(async () => {});
-        expect(screen.getTextContent()).toContain(
-            'voice.readiness.settings_missing_required_setting',
+        expect(screen.getTextContent()).toContain(t('voice.readiness.settings_missing_required_setting', { service: 'Codex Live' }),
         );
-        expect(screen.getTextContent()).toContain(
-            'voice.readiness.actions.open_provider_settings',
+        expect(screen.getTextContent()).toContain(tLoose('voice.readiness.actions.open_provider_settings'),
         );
-        expect(screen.getTextContent()).not.toContain('voice.readiness.ready');
+        expect(screen.getTextContent()).not.toContain(tLoose('voice.readiness.ready'));
         // The card carries the readiness and its one recovery action.
-        const recoverActions = (root: any) => root.findAll((node: any) => typeof node.props?.testID === 'string'
+        const recoverActions = (root: ReactTestInstance) => root.findAll((node) => typeof node.props?.testID === 'string'
             && node.props.testID.startsWith('settings.voice.conversations.pipeline')
             && node.props.testID.endsWith('.recover')
             && typeof node.props.onPress === 'function');
@@ -1239,7 +1318,7 @@ describe('VoiceProviderSection', () => {
         expect(onRecoveryAction).toHaveBeenCalledWith('open_provider_settings');
 
         const withoutRecoveryHandler = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: {
+            voice: settingsParse({ voice: {
                 providerId: 'happier.agent.codex/realtime-codex',
                 providers: {
                     'happier.agent.codex/realtime-codex': {
@@ -1247,7 +1326,7 @@ describe('VoiceProviderSection', () => {
                         config: { globalConnectedServices: null },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -1318,7 +1397,7 @@ describe('VoiceProviderSection', () => {
         const { settingsParse } = await import('@/sync/domains/settings/settings');
         const { applyAccountVoiceCredentialSourceSelection } = await import('@/voice/credentials/accountVoiceCredential');
         const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
-        installCodexConnectedAccountDescriptor();
+        await installCodexConnectedAccountDescriptor();
         const account = {
             ref: {
                 service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
@@ -1328,7 +1407,7 @@ describe('VoiceProviderSection', () => {
             configurationReady: false,
             authenticationModeId: 'oauth',
             revisionSemantics: 'revisioned' as const,
-            credentialRevision: 'cred-1',
+            credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaaaa',
             configurationRevision: null,
             scopes: ['openid', 'profile', 'email', 'offline_access'],
         };
@@ -1371,13 +1450,6 @@ describe('VoiceProviderSection', () => {
             storageBoundary.settings = null;
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
-            installConnectedAccountDescriptorProjection({
-                scopeKey: 'voice-provider-section-test-cleanup',
-                status: 'ready',
-                descriptors: [],
-                conflicts: [],
-                errorReason: null,
-            });
         });
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
@@ -1385,7 +1457,7 @@ describe('VoiceProviderSection', () => {
         const { BundledConversationSettingsSection } = await import('./BundledConversationSettingsSection');
         // Provider choice/readiness and the public curated settings presentation
         // have separate renderers, as on the composed Conversations page.
-        const { tree } = await renderScreen(React.createElement(React.Fragment, null,
+        const screen = await renderScreen(React.createElement(React.Fragment, null,
             React.createElement(VoiceProviderSection, {
                 voice: selected.settings.voice,
                 executionMachineId: machineOnline ? 'machine-online' : 'machine-offline',
@@ -1397,13 +1469,14 @@ describe('VoiceProviderSection', () => {
                 voice: selected.settings.voice,
             }),
         ));
+        const { tree } = screen;
 
         const isCurrent = tree.root.findByType(VoiceCredentialSourceField).props.isCurrent;
         if (!isCurrent) throw new Error('Expected the selected Voice credential to expose currentness');
         expect(isCurrent()).toBe(true);
 
         await act(async () => {});
-        expect(checkedReadinessRow(tree)?.props.subtitle).toContain(expectedReadiness);
+        expect(checkedReadinessRow(tree)?.props.announcement).toContain(tLoose(expectedReadiness));
         expect(JSON.stringify(checkedReadinessRow(tree)?.props)).not.toContain(account.ref.accountId);
     }, 120_000);
 
@@ -1411,13 +1484,7 @@ describe('VoiceProviderSection', () => {
         const { settingsParse } = await import('@/sync/domains/settings/settings');
         const { applyAccountVoiceCredentialSourceSelection } = await import('@/voice/credentials/accountVoiceCredential');
         const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
-        installConnectedAccountDescriptorProjection({
-            scopeKey: 'voice-provider-section-test-descriptor-unavailable',
-            status: 'error',
-            descriptors: [],
-            conflicts: [],
-            errorReason: 'transport',
-        });
+        descriptorAvailable = false;
         const account = {
             ref: {
                 service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
@@ -1427,7 +1494,7 @@ describe('VoiceProviderSection', () => {
             configurationReady: false,
             authenticationModeId: 'oauth',
             revisionSemantics: 'revisioned' as const,
-            credentialRevision: 'cred-1',
+            credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaaaa',
             configurationRevision: null,
             scopes: ['openid', 'profile', 'email', 'offline_access'],
         };
@@ -1470,39 +1537,34 @@ describe('VoiceProviderSection', () => {
             storageBoundary.settings = null;
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
-            installConnectedAccountDescriptorProjection({
-                scopeKey: 'voice-provider-section-test-cleanup',
-                status: 'ready',
-                descriptors: [],
-                conflicts: [],
-                errorReason: null,
-            });
+            descriptorAvailable = false;
         });
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
             voice: selected.settings.voice,
             executionMachineId: 'machine-online',
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
 
-        const row = findProviderChoiceRow(tree as any, { testID: `settings.voice.provider.${encodeURIComponent(OPENAI_PROVIDER_ID)}.byo` });
-        expect(row?.props.subtitle).toContain('voice.readiness.credential_unknown');
-        expect(row?.props.subtitle).not.toContain('voice.readiness.credential_missing');
+        const row = findProviderChoiceRow(tree, { testID: `settings.voice.provider.${encodeURIComponent(OPENAI_PROVIDER_ID)}.byo` });
+        expect(providerChoiceDetail(row)).toContain(tLoose('voice.readiness.credential_unknown'));
+        expect(providerChoiceDetail(row)).not.toContain(tLoose('voice.readiness.credential_missing'));
         expect(row?.props.disabled).not.toBe(true);
 
         await act(async () => {});
         const readiness = checkedReadinessRow(tree);
-        expect(readiness?.props.subtitle).toContain('voice.readiness.credential_unknown');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.credential_missing');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.ready');
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.credential_unknown'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.credential_missing'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
     }, 120_000);
 
     it('keeps ordinary OpenAI configurable when an orphaned purpose binding makes current source resolution unknown', async () => {
         const { settingsParse } = await import('@/sync/domains/settings/settings');
-        installCodexConnectedAccountDescriptor();
+        await installCodexConnectedAccountDescriptor();
         const account = {
             ref: {
                 service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
@@ -1512,7 +1574,7 @@ describe('VoiceProviderSection', () => {
             configurationReady: false,
             authenticationModeId: 'oauth',
             revisionSemantics: 'revisioned' as const,
-            credentialRevision: 'cred-1',
+            credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaaaa',
             configurationRevision: null,
             scopes: ['openid', 'profile', 'email', 'offline_access'],
         };
@@ -1542,26 +1604,20 @@ describe('VoiceProviderSection', () => {
         onTestFinished(() => {
             storageBoundary.settings = null;
             passiveSetupBoundary.profile = null;
-            installConnectedAccountDescriptorProjection({
-                scopeKey: 'voice-provider-section-test-cleanup',
-                status: 'ready',
-                descriptors: [],
-                conflicts: [],
-                errorReason: null,
-            });
         });
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const setVoice = vi.fn();
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: { providerId: null } as any,
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: { providerId: null } }).voice,
             setVoice,
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
-        const row = findProviderChoiceRow(tree as any, { testID: `settings.voice.provider.${encodeURIComponent(OPENAI_PROVIDER_ID)}.byo` });
+        const { tree } = screen;
+        const row = findProviderChoiceRow(tree, { testID: `settings.voice.provider.${encodeURIComponent(OPENAI_PROVIDER_ID)}.byo` });
 
-        expect(row?.props.subtitle).toContain('voice.readiness.credential_unknown');
+        expect(providerChoiceDetail(row)).toContain(tLoose('voice.readiness.credential_unknown'));
         expect(row?.props.disabled).not.toBe(true);
         expect(row?.props.onPress).toBeTypeOf('function');
         await act(async () => {
@@ -1656,25 +1712,25 @@ describe('VoiceProviderSection', () => {
         'keeps the real bundled %s %s row selectable from fresh settings so its credential can be configured',
         async (providerId, optionId) => {
             const { VoiceProviderSection } = await import('./VoiceProviderSection');
-            const setVoice = vi.fn();
-            const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
+            const setVoice = vi.fn<(next: Settings['voice']) => void>();
+            const screen = await renderScreen(React.createElement(VoiceProviderSection, {
                 // ElevenLabs is one service whose billing option is chosen beneath it once it is selected.
-                voice: (providerId === ELEVENLABS_PROVIDER_ID ? { providerId } : { providerId: null }) as any,
+                voice: settingsParse({ voice: (providerId === ELEVENLABS_PROVIDER_ID ? { providerId } : { providerId: null }) }).voice,
                 setVoice,
                 happierVoiceSupported: true,
                 platformOs: 'web',
             }));
-            const row = findProviderChoiceRow(tree as any, { testID: `settings.voice.provider.${encodeURIComponent(providerId)}.${optionId}` });
+        const { tree } = screen;
+            const row = findProviderChoiceRow(tree, { testID: `settings.voice.provider.${encodeURIComponent(providerId)}.${optionId}` });
 
             expect(row?.props?.disabled).not.toBe(true);
             expect(row?.props?.onPress).toBeTypeOf('function');
             if (providerId === ELEVENLABS_PROVIDER_ID) {
-                // Pay with says what this way to pay means; once chosen, the card says what it still needs.
-                expect(row?.props?.subtitle).toBe('settingsVoice.pages.conversations.payWithOwnDescription');
+                expect(row?.props.accessibilityLabel).toBe(t('settingsVoice.mode.byo'));
             } else {
-                expect(row?.props?.subtitle).toContain('voice.readiness.credential_missing');
+                expect(providerChoiceDetail(row)).toContain(tLoose('voice.readiness.credential_missing'));
             }
-            row?.props?.onPress?.();
+            await pressTestInstanceAsync(row);
             expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
                 providerId,
                 providers: expect.objectContaining({
@@ -1683,6 +1739,15 @@ describe('VoiceProviderSection', () => {
                     }),
                 }),
             }));
+            if (providerId === ELEVENLABS_PROVIDER_ID) {
+                const selected = setVoice.mock.calls[0]?.[0];
+                if (!selected) throw new Error('Expected a Voice selection from the actual billing segment');
+                await screen.update(<VoiceProviderSection voice={selected} setVoice={setVoice}
+                    happierVoiceSupported platformOs="web" />);
+                expect(providerChoiceDetail(findProviderChoiceRow(tree, {
+                    testID: `settings.voice.provider.${encodeURIComponent(providerId)}.${optionId}`,
+                }))).toBe(t('settingsVoice.pages.conversations.payWithOwnDescription'));
+            }
         },
         120_000,
     );
@@ -1690,8 +1755,8 @@ describe('VoiceProviderSection', () => {
     it('renders localized readiness for the selected provider without exposing its internal id', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const providerId = XAI_PROVIDER_ID;
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: {
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: {
                 providerId,
                 providers: {
                     [providerId]: {
@@ -1699,17 +1764,18 @@ describe('VoiceProviderSection', () => {
                         config: XAI_REALTIME_DEFAULT_SETTINGS,
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
 
         await act(async () => {});
         const readiness = checkedReadinessRow(tree);
 
-        expect(readiness?.props.subtitle).toContain('voice.readiness.credential_missing');
-        expect(readiness?.props.subtitle).not.toContain(providerId);
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.credential_missing'));
+        expect(readiness?.props.announcement).not.toContain(providerId);
     }, 120_000);
 
     it('does not require external-publisher re-review for a bundled provider with a stale digest', async () => {
@@ -1750,19 +1816,20 @@ describe('VoiceProviderSection', () => {
         });
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: voice as any,
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: voice }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
         await act(async () => {});
         const readiness = checkedReadinessRow(tree);
-        expect(readiness?.props.subtitle).toContain('voice.readiness.ready');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.credential_missing');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.actions.configure_credential');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.credential_approval_required');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.actions.review_credential_access');
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.ready'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.credential_missing'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.actions.configure_credential'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.credential_approval_required'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.actions.review_credential_access'));
     }, 120_000);
 
     it('does not report ElevenLabs ready when its credential is approved but its BYO agent is missing', async () => {
@@ -1803,65 +1870,71 @@ describe('VoiceProviderSection', () => {
         });
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: voice as any,
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: voice }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
 
         await act(async () => {});
         const readiness = checkedReadinessRow(tree);
-        expect(readiness?.props.subtitle).toContain(
-            'voice.readiness.settings_missing_required_setting',
+        expect(readiness?.props.announcement).toContain(t('voice.readiness.settings_missing_required_setting', { service: 'ElevenLabs Voice' }),
         );
-        expect(readiness?.props.subtitle).toContain(
-            'voice.readiness.actions.open_provider_settings',
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.actions.open_provider_settings'),
         );
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.ready');
-        expect(readiness?.props.subtitle).not.toContain('credential');
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.credential_missing'));
     }, 120_000);
 
     it('offers every provider as one choice in the gallery with exactly one selected', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: { providerId: ELEVENLABS_PROVIDER_ID, providers: {
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: { providerId: ELEVENLABS_PROVIDER_ID, providers: {
                 [ELEVENLABS_PROVIDER_ID]: { schemaVersion: 2, config: elevenLabsByoConfig() },
-            } } as any,
+            } } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
         }));
-        const rows = listProviderChoiceRows(tree as any);
+        const { tree } = screen;
+        const rows = listProviderChoiceRows(tree);
         expect(rows.length).toBeGreaterThan(1);
         expect(rows.every((row) => typeof row.props.testID === 'string')).toBe(true);
-        expect(rows.filter((row) => row.props.selected === true)).toHaveLength(1);
+        expect(rows.filter((row) => row.props.accessibilityState?.checked === true)).toHaveLength(1);
         // One ElevenLabs service: who pays is its own choice beneath the gallery.
         expect(rows.filter((row) => row.props.testID.startsWith(`settings.voice.provider.${encodeURIComponent(ELEVENLABS_PROVIDER_ID)}.`))).toHaveLength(1);
-        const payWith = (tree as any).findAll((node: any) => node.props?.testIDPrefix === 'settings.voice.provider.payWith')[0];
+        const payWith = tree.findAllByType(SegmentedChoiceItem)[0];
         expect(payWith?.props.options.map((option: { id: string }) => option.id)).toEqual(['happier', 'byo']);
     });
 
     it('keeps gallery tiles and Pay with to what each choice needs or means; the card owns the recovery action', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: { providerId: ELEVENLABS_PROVIDER_ID, providers: {
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: { providerId: ELEVENLABS_PROVIDER_ID, providers: {
                 [ELEVENLABS_PROVIDER_ID]: { schemaVersion: 2, config: elevenLabsByoConfig() },
-            } } as any,
+            } } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
         await act(async () => {});
-        const gallery = (tree as any).findAll((node: any) => Array.isArray(node.props?.tiles) && typeof node.props?.onSelectOff === 'function')[0];
-        const needing = gallery.props.tiles.filter((tile: any) => tile.status?.tone === 'needs_you' && !tile.disabled);
+        const gallery = tree.findAllByType(VoiceServiceGallery)[0]!;
+        const needing = (gallery.props.tiles as readonly VoiceServiceTile[]).filter((tile) => tile.status?.tone === 'needs_you' && !tile.disabled);
         expect(needing.length).toBeGreaterThan(0);
         for (const tile of needing) {
-            expect(tile.status.text).toMatch(/^voice\.readiness\.short\./);
-            expect(tile.status.detail).not.toContain('voice.readiness.actions.');
+            expect(['needsSetup', 'needsKey', 'needsApproval', 'offOnServer', 'needsComputer', 'needsAddress',
+                'needsModel', 'installing', 'notInstalled', 'unavailableHere', 'needsUpdate', 'cantCheck']
+                .map(key => tLoose(`voice.readiness.short.${key}`))).toContain(tile.status!.text);
+            const rendered = findAllHostTestInstances(tree.root, node => node.props.testID === tile.testID)[0];
+            expect(rendered).not.toBeNull();
+            expect(providerChoiceDetail(rendered)).toContain(tile.status!.detail);
+            expect(readinessRecoveryLabels.every(action => !tile.status!.detail?.includes(action))).toBe(true);
         }
-        const payWith = (tree as any).findAll((node: any) => node.props?.testIDPrefix === 'settings.voice.provider.payWith')[0];
-        const selected = payWith.props.options.find((option: any) => option.id === payWith.props.value);
-        expect(selected.description).not.toContain('voice.readiness.');
+        const payWith = tree.findAllByType(SegmentedChoiceItem)[0];
+        const selected = payWith.props.options.find((option: Readonly<{ id: string; description?: string }>) => option.id === payWith.props.value);
+        expect(selected.description).toBe(t('settingsVoice.pages.conversations.payWithOwnDescription'));
     });
 
     it.each([
@@ -1898,35 +1971,36 @@ describe('VoiceProviderSection', () => {
                 providers: { [providerId]: envelope },
             };
             const before = JSON.stringify(voice);
-            const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-                voice: voice as any,
+            const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+                voice: settingsParse({ voice: voice }).voice,
                 setVoice,
                 happierVoiceSupported: true,
                 platformOs: 'web',
             }));
+        const { tree } = screen;
 
-            const unavailableRow = findProviderChoiceRow(tree as any, { testID: 'settings.voice.provider.selectedUnavailable' });
-            const offRow = findProviderChoiceRow(tree as any, { testID: 'settings.voice.provider.off' });
-            const choices = listProviderChoiceRows(tree as any);
-            const selectedRows = choices.filter((row) => row.props.selected === true);
+            const unavailableRow = findProviderChoiceRow(tree, { testID: 'settings.voice.provider.selectedUnavailable' });
+            const offRow = findProviderChoiceRow(tree, { testID: 'settings.voice.provider.off' });
+            const choices = listProviderChoiceRows(tree);
+            const selectedRows = choices.filter((row) => row.props.accessibilityState?.checked === true);
             const ordinaryRowsForSelectedProvider = choices
                 .filter((row) => row.props.testID?.startsWith(
                     `settings.voice.provider.${encodeURIComponent(providerId)}.`,
                 ));
-            const otherProviderRow = findProviderChoiceRow(tree as any, { testID: `settings.voice.provider.${encodeURIComponent(OPENAI_PROVIDER_ID)}.byo` });
+            const otherProviderRow = findProviderChoiceRow(tree, { testID: `settings.voice.provider.${encodeURIComponent(OPENAI_PROVIDER_ID)}.byo` });
 
             expect(unavailableRow).toBeTruthy();
             expect(unavailableRow?.props.accessibilityRole).toBe('radio');
-            expect(unavailableRow?.props.selected).toBe(true);
+            expect(unavailableRow?.props.accessibilityState?.checked).toBe(true);
             expect(unavailableRow?.props.disabled).toBe(true);
-            expect(unavailableRow?.props.title).toEqual(expect.any(String));
-            expect(unavailableRow?.props.title.length).toBeGreaterThan(0);
-            expect(unavailableRow?.props.subtitle).toContain(expectedReason);
-            expect(unavailableRow?.props.subtitle).toContain(expectedAction);
+            expect(unavailableRow?.props.accessibilityLabel).toEqual(expect.any(String));
+            expect(unavailableRow?.props.accessibilityLabel.length).toBeGreaterThan(0);
+            expect(providerChoiceDetail(unavailableRow)).toContain(tLoose(expectedReason));
+            expect(providerChoiceDetail(unavailableRow)).toContain(tLoose(expectedAction));
             expect(selectedRows.map((row) => row.props.testID)).toEqual([unavailableRow?.props.testID]);
             expect(ordinaryRowsForSelectedProvider).toHaveLength(0);
             expect(otherProviderRow).toBeTruthy();
-            expect(offRow?.props.selected).toBe(false);
+            expect(offRow?.props.accessibilityState?.checked).toBe(false);
             expect(JSON.stringify(voice)).toBe(before);
 
             offRow?.props.onPress?.();
@@ -1942,26 +2016,27 @@ describe('VoiceProviderSection', () => {
     it('shows the local provider row on web and preserves persisted local selection', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
 
-        const voice: any = {
+        const voice = settingsParse({ voice: {
             providerId: 'local_conversation',
             providers: {
                 [ELEVENLABS_PROVIDER_ID]: { schemaVersion: 2, config: elevenLabsByoConfig() },
             },
-        };
+        } }).voice;
 
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
                 voice,
                 setVoice: () => {},
                 happierVoiceSupported: true,
             }),
         );
+        const { tree } = screen;
 
         expect(
-            findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.local' })?.props?.rightElement,
+            findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.local') })?.props.accessibilityState?.checked,
         ).toBeTruthy();
         expect(
-            findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.byo' })?.props?.rightElement,
+            findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.byo') })?.props.accessibilityState?.checked,
         ).toBeFalsy();
     });
 
@@ -1970,29 +2045,30 @@ describe('VoiceProviderSection', () => {
         const setVoice = vi.fn();
 
         // Who pays is chosen beneath the selected ElevenLabs service, so the hosted option is read there.
-        const voice: any = {
+        const voice = settingsParse({ voice: {
             providerId: ELEVENLABS_PROVIDER_ID,
             providers: {
                 [ELEVENLABS_PROVIDER_ID]: { schemaVersion: 2, config: elevenLabsByoConfig() },
             },
-        };
+        } }).voice;
 
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
                 voice,
                 setVoice,
                 happierVoiceSupported: false,
             }),
         );
-        const hostedRow = findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.happier' });
+        const { tree } = screen;
+        const hostedRow = findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.happier') });
 
         expect(hostedRow?.props?.disabled).toBe(true);
-        expect(hostedRow?.props?.onPress).toBeUndefined();
-        expect(hostedRow?.props?.subtitle).toContain('settingsVoice.pages.conversations.happierBillingUnavailable');
+        expect(hostedRow?.props?.onPress).toBeTypeOf('function');
+        expect(providerChoiceDetail(hostedRow)).toContain(tLoose('settingsVoice.pages.conversations.happierBillingUnavailable'));
         // The reason alone; the recovery action lives on the card, not in a Pay with option.
-        expect(hostedRow?.props?.subtitle).not.toContain('voice.readiness.actions.');
+        expect(readinessRecoveryLabels.every(action => !providerChoiceDetail(hostedRow).includes(action))).toBe(true);
         expect(
-            findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.local' }),
+            findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.local') }),
         ).toBeTruthy();
         expect(setVoice).not.toHaveBeenCalled();
     });
@@ -2000,14 +2076,14 @@ describe('VoiceProviderSection', () => {
     it('uses the runtime platform when no platform override is supplied', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
 
-        const voice: any = {
+        const voice = settingsParse({ voice: {
             providerId: 'off',
             providers: {
                 [ELEVENLABS_PROVIDER_ID]: { schemaVersion: 2, config: elevenLabsByoConfig() },
             },
-        };
+        } }).voice;
 
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
                 voice,
                 setVoice: () => {},
@@ -2019,37 +2095,39 @@ describe('VoiceProviderSection', () => {
                 },
             }),
         );
+        const { tree } = screen;
 
-        const localRow = findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.local' });
+        const localRow = findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.local') });
 
         expect(localRow?.props?.disabled).toBe(true);
-        expect(localRow?.props?.onPress).toBeUndefined();
+        expect(localRow?.props?.onPress).toBeTypeOf('function');
     });
 
     it('keeps Local visible but fail-closed on web while detailed browser and daemon availability are still loading', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const setVoice = vi.fn();
 
-        const voice: any = {
+        const voice = settingsParse({ voice: {
             providerId: 'off',
             providers: {
                 [ELEVENLABS_PROVIDER_ID]: { schemaVersion: 2, config: elevenLabsByoConfig() },
             },
-        };
+        } }).voice;
 
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
                 voice,
                 setVoice,
                 happierVoiceSupported: true,
             }),
         );
+        const { tree } = screen;
 
-        const localRow = findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.local' });
+        const localRow = findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.local') });
 
         expect(localRow).toBeTruthy();
         expect(localRow?.props?.disabled).toBe(true);
-        expect(localRow?.props?.onPress).toBeUndefined();
+        expect(localRow?.props?.onPress).toBeTypeOf('function');
         localRow?.props?.onPress?.();
         expect(setVoice).not.toHaveBeenCalled();
     });
@@ -2057,14 +2135,14 @@ describe('VoiceProviderSection', () => {
     it('disables Local when browser, daemon, and native execution paths are unavailable', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
 
-        const voice: any = {
+        const voice = settingsParse({ voice: {
             providerId: 'off',
             providers: {
                 [ELEVENLABS_PROVIDER_ID]: { schemaVersion: 2, config: elevenLabsByoConfig() },
             },
-        };
+        } }).voice;
 
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
                 voice,
                 setVoice: () => {},
@@ -2077,25 +2155,26 @@ describe('VoiceProviderSection', () => {
                 },
             }),
         );
+        const { tree } = screen;
 
-        const localRow = findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.local' });
+        const localRow = findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.local') });
 
         expect(localRow?.props?.disabled).toBe(true);
-        expect(localRow?.props?.onPress).toBeUndefined();
+        expect(localRow?.props?.onPress).toBeTypeOf('function');
     });
 
     it('keeps Local selectable on web when browser speech is available', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const setVoice = vi.fn();
 
-        const voice: any = {
+        const voice = settingsParse({ voice: {
             providerId: 'off',
             providers: {
                 [ELEVENLABS_PROVIDER_ID]: { schemaVersion: 2, config: elevenLabsByoConfig() },
             },
-        };
+        } }).voice;
 
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
                 voice,
                 setVoice,
@@ -2108,8 +2187,9 @@ describe('VoiceProviderSection', () => {
                 },
             }),
         );
+        const { tree } = screen;
 
-        const localRow = findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.local' });
+        const localRow = findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.local') });
 
         expect(localRow?.props?.disabled).not.toBe(true);
         localRow?.props?.onPress?.();
@@ -2125,9 +2205,9 @@ describe('VoiceProviderSection', () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const setVoice = vi.fn();
 
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
-                voice: { providerId: 'off' } as any,
+                voice: settingsParse({ voice: { providerId: 'off' } }).voice,
                 setVoice,
                 happierVoiceSupported: true,
                 platformOs: 'web',
@@ -2144,8 +2224,9 @@ describe('VoiceProviderSection', () => {
                 },
             }),
         );
+        const { tree } = screen;
 
-        const localRow = findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.local' });
+        const localRow = findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.local') });
         expect(localRow?.props?.disabled).not.toBe(true);
         localRow?.props?.onPress?.();
         expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'local_conversation' }));
@@ -2155,9 +2236,9 @@ describe('VoiceProviderSection', () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const setVoice = vi.fn();
 
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
-                voice: { providerId: 'off' } as any,
+                voice: settingsParse({ voice: { providerId: 'off' } }).voice,
                 setVoice,
                 happierVoiceSupported: true,
                 platformOs: 'web',
@@ -2174,8 +2255,9 @@ describe('VoiceProviderSection', () => {
                 },
             }),
         );
+        const { tree } = screen;
 
-        const localRow = findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.local' });
+        const localRow = findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.local') });
         expect(localRow?.props?.disabled).not.toBe(true);
         localRow?.props?.onPress?.();
         expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'local_conversation' }));
@@ -2294,7 +2376,7 @@ describe('VoiceProviderSection', () => {
                     },
                 },
             );
-            const { tree } = await renderScreen(
+            const screen = await renderScreen(
                 React.createElement(VoiceProviderSection, {
                     voice,
                     executionMachineId,
@@ -2309,12 +2391,13 @@ describe('VoiceProviderSection', () => {
                     },
                 }),
             );
+        const { tree } = screen;
 
-            const localRow = findProviderChoiceRow(tree as any, { title: 'settingsVoice.mode.local' });
+            const localRow = findProviderChoiceRow(tree, { title: tLoose('settingsVoice.mode.local') });
             if (expectedCode === null) {
-                expect(localRow?.props?.subtitle).not.toContain('voice.readiness');
+                expect(providerChoiceDetail(localRow)).not.toContain('voice.readiness');
             } else {
-                expect(localRow?.props?.subtitle).toContain(expectedCode);
+                expect(providerChoiceDetail(localRow)).toContain(tLoose(expectedCode));
             }
         },
         120_000,
@@ -2371,7 +2454,7 @@ describe('VoiceProviderSection', () => {
                 },
             );
             const { VoiceProviderSection } = await import('./VoiceProviderSection');
-            const { tree } = await renderScreen(
+            const screen = await renderScreen(
                 React.createElement(VoiceProviderSection, {
                     voice,
                     executionMachineId: 'machine-online',
@@ -2385,11 +2468,12 @@ describe('VoiceProviderSection', () => {
                     },
                 }),
             );
+        const { tree } = screen;
 
             await act(async () => {});
             const readiness = checkedReadinessRow(tree);
-            expect(readiness?.props.subtitle).toContain(expectedCode);
-            expect(readiness?.props.subtitle).not.toContain('voice.readiness.ready');
+            expect(readiness?.props.announcement).toContain(tLoose(expectedCode));
+            expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
         },
         120_000,
     );
@@ -2432,7 +2516,7 @@ describe('VoiceProviderSection', () => {
             },
         );
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
                 voice,
                 executionMachineId: 'machine-online',
@@ -2452,11 +2536,12 @@ describe('VoiceProviderSection', () => {
                 },
             }),
         );
+        const { tree } = screen;
 
         await act(async () => {});
         const readiness = checkedReadinessRow(tree);
-        expect(readiness?.props.subtitle).toContain('voice.readiness.endpoint_missing');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.ready');
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.endpoint_missing'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
     }, 120_000);
 
     it('passively reports missing selected-machine credentials for nested Local cloud speech', async () => {
@@ -2502,7 +2587,7 @@ describe('VoiceProviderSection', () => {
 
         const setVoice = vi.fn();
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const { tree } = await renderScreen(
+        const screen = await renderScreen(
             React.createElement(VoiceProviderSection, {
                 voice,
                 executionMachineId: 'machine-online',
@@ -2522,11 +2607,12 @@ describe('VoiceProviderSection', () => {
                 },
             }),
         );
+        const { tree } = screen;
 
         await act(async () => {});
         const readiness = checkedReadinessRow(tree);
-        expect(readiness?.props.subtitle).toContain('voice.readiness.credential_missing');
-        expect(readiness?.props.subtitle).not.toContain('voice.readiness.ready');
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.credential_missing'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
         expect(setVoice).not.toHaveBeenCalled();
     }, 120_000);
 
@@ -2613,31 +2699,79 @@ describe('VoiceProviderSection', () => {
         });
 
         const setVoice = vi.fn();
-        const { VoiceProviderSection } = await import('./VoiceProviderSection');
-        const render = (nextVoice: typeof ready.voice) => React.createElement(VoiceProviderSection, {
-            voice: nextVoice,
-            executionMachineId: 'machine-online',
-            setVoice,
-            happierVoiceSupported: true,
-            platformOs: 'web',
-            localAvailability: {
-                browserSpeech: { support: 'cloud_only' as const, onDevice: 'unsupported' as const },
-                daemon: {
-                    featureEnabled: true,
-                    route: 'direct' as const,
-                    modelState: 'ready' as const,
-                    runtimeState: 'available' as const,
-                    pcmCapture: 'available' as const,
+        const { VoiceProviderSection, useVoiceConversationsReadinessModel } = await import('./VoiceProviderSection');
+        const { getConnectedAccountCatalogValue } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
+        const { resolveSavedSecretReference } = await import('@/sync/store/settings/savedSecretCatalogSnapshot');
+        const { resolveAccountVoiceCredentialStatus } = await import('@/voice/credentials/accountVoiceCredential');
+        const { projectVoiceRawSpeechReadinessTargets } = await import('@/voice/settings/voiceProviderReadinessInspection');
+        const frames: Array<Readonly<{ online: boolean; daemonVersion: number; scope: typeof accountFixture.scope | null;
+            publishedActive: boolean | null; key: string | null; catalogStatus: string | null; catalogStale: boolean | null;
+            purposesStatus: string; purposesStale: boolean; credentialStates: readonly string[];
+            rawTargets: readonly string[] | null; hearCode: string | null; speakCode: string | null;
+            providerId: string | null; selectedProviderId: string | null; keyPresent: boolean }>> = [];
+        function LocalMetadata(props: React.ComponentProps<typeof VoiceProviderSection>) {
+            const model = useVoiceConversationsReadinessModel(props);
+            const target = useMachineCliDetectionTarget('machine-online');
+            const { binding } = useServerCredentialAccountScopeBinding(accountFixture.scope.serverId);
+            const settings = storage.getState().settings;
+            const catalog = getSavedSecretCatalogSnapshot(accountFixture.scope);
+            const purposes = getConnectedAccountCatalogValue(accountFixture.scope, 'purposes');
+            const machine = storage.getState().machineListByServerId[accountFixture.scope.serverId]
+                ?.find(row => row.id === 'machine-online');
+            frames.push({ online: target.isOnline, daemonVersion: target.daemonStateVersion,
+                scope: binding?.isCurrent() ? binding.scope : null, publishedActive: machine?.active ?? null,
+                key: model.selectedReadinessCheckKey, catalogStatus: catalog?.status ?? null,
+                catalogStale: catalog?.stale ?? null, purposesStatus: purposes.status, purposesStale: purposes.stale,
+                credentialStates: ['gemini-stt', 'google-cloud-tts'].map(localId => resolveAccountVoiceCredentialStatus({
+                    settings, contribution: { pluginId: 'happier.voice.google', localId }, credentialSlotId: 'api_key',
+                    machineId: 'machine-online', resolveSavedSecret: ref => resolveSavedSecretReference(accountFixture.scope, settings.secrets, ref),
+                }).status),
+                rawTargets: projectVoiceRawSpeechReadinessTargets({ ...settings, voice: props.voice }, registry,
+                    'machine-online', 'conversation', purposes.value)?.map(target => target.contribution.localId) ?? null,
+                hearCode: model.selectedLocalSpeechReadiness?.hear?.code ?? null,
+                speakCode: model.selectedLocalSpeechReadiness?.speak?.code ?? null,
+                providerId: model.voice.providerId, selectedProviderId: model.selectedProviderRow?.providerId ?? null,
+                keyPresent: model.selectedReadinessCheckKey !== null });
+            return null;
+        }
+        const render = (nextVoice: typeof ready.voice) => {
+            const props = {
+                voice: nextVoice,
+                executionMachineId: 'machine-online',
+                setVoice,
+                happierVoiceSupported: true,
+                platformOs: 'web',
+                localAvailability: {
+                    browserSpeech: { support: 'cloud_only' as const, onDevice: 'unsupported' as const },
+                    daemon: {
+                        featureEnabled: true,
+                        route: 'direct' as const,
+                        modelState: 'ready' as const,
+                        runtimeState: 'available' as const,
+                        pcmCapture: 'available' as const,
+                    },
+                    nativeDevice: { requested: false },
                 },
-                nativeDevice: { requested: false },
-            },
-        });
+            } satisfies React.ComponentProps<typeof VoiceProviderSection>;
+            return <><VoiceProviderSection {...props} /><LocalMetadata {...props} /></>;
+        };
+        // This keeper starts from usable retained resources, not the foreground
+        // catalog read that can precede the real legacy-import maintenance.
+        const { getSavedSecretCatalogSnapshot } = await import('@/sync/store/settings/savedSecretCatalogSnapshot');
+        await refreshSavedSecretCatalog(accountFixture.scope);
+        await vi.waitFor(() => expect(accountFixture.resources, JSON.stringify({
+            catalogStatus: getSavedSecretCatalogSnapshot(accountFixture.scope)?.status,
+            legacyImportStatus: getSavedSecretCatalogSnapshot(accountFixture.scope)?.legacyImport?.status,
+            routes: accountFixture.request.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)).pathname),
+        })).toHaveLength(2));
         const screen = await renderScreen(render(ready.voice));
         const { tree } = screen;
 
         await act(async () => {});
-        expect(new Set(rawCredentialReadiness.mock.calls.map(([contribution]) => contribution.localId))).toEqual(new Set(['gemini-stt', 'google-cloud-tts']));
-        expect(checkedReadinessRow(tree)?.props.subtitle).toContain('voice.readiness.ready');
+        await vi.waitFor(() => expect(new Set(rawCredentialReadiness.mock.calls.map(([contribution]) => contribution.localId)),
+            JSON.stringify(frames.map(({ key, ...frame }) => ({ ...frame, sameKeyAsInitial: key === frames[0]?.key }))))
+            .toEqual(new Set(['gemini-stt', 'google-cloud-tts'])));
+        expect(checkedReadinessRow(tree)?.props.announcement).toContain(tLoose('voice.readiness.ready'));
 
         const hydrated = storage.getState().settings;
         const missingVoiceNameVoice = writeVoiceProviderSettingsConfig(
@@ -2651,9 +2785,9 @@ describe('VoiceProviderSection', () => {
             voiceSettingsV1: { ...hydrated.voiceSettingsV1, providers: missingVoiceNameVoice.providers },
         };
         storageBoundary.settings = missingVoiceName;
-        await act(async () => { tree.update(render(missingVoiceName.voice)); });
+        await act(async () => { await screen.update(render(missingVoiceName.voice)); });
         await act(async () => {});
-        expect(checkedReadinessRow(tree)?.props.subtitle).toContain('voice.readiness.settings_missing_required_setting');
+        expect(checkedReadinessRow(tree)?.props.announcement).toContain(t('voice.readiness.settings_missing_required_setting', { service: t('settingsVoice.mode.local') }));
 
         const current = storage.getState().settings;
         const { resolveAccountVoiceCredential } = await import('@/voice/credentials/accountVoiceCredential');
@@ -2667,10 +2801,10 @@ describe('VoiceProviderSection', () => {
         storageBoundary.settings = removed;
         await refreshSavedSecretCatalog(accountFixture.scope);
         await act(async () => {
-            tree.update(render(removed.voice));
+            await screen.update(render(removed.voice));
         });
 
-        expect(checkedReadinessRow(tree)?.props.subtitle).toContain('voice.readiness.credential_missing');
+        expect(checkedReadinessRow(tree)?.props.announcement).toContain(tLoose('voice.readiness.credential_missing'));
         expect(setVoice).not.toHaveBeenCalled();
     }, 120_000);
 
@@ -2769,7 +2903,7 @@ describe('VoiceProviderSection', () => {
 
         const geminiHear = { ...settings, voice: withHear('happier.voice.google/gemini-stt') };
         storageBoundary.settings = geminiHear;
-        await act(async () => { screen.tree.update(render(geminiHear.voice)); });
+        await act(async () => { await screen.update(render(geminiHear.voice)); });
         await act(async () => {});
         expect(checkedContributions()).toContain('gemini-stt');
         await screen.unmount();
@@ -2800,14 +2934,15 @@ describe('VoiceProviderSection', () => {
             await scope.unwind();
             hostLease.revoke();
         });
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: { providerId: null } as any,
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: { providerId: null } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
 
-        expect(findProviderChoiceRow(tree as any, { title: 'Synthetic Live' })).toBeFalsy();
+        expect(findProviderChoiceRow(tree, { title: 'Synthetic Live' })).toBeFalsy();
         await act(async () => {
             scope.api.voiceProviders.register('conversation', {
                 kind: 'conversation',
@@ -2839,10 +2974,10 @@ describe('VoiceProviderSection', () => {
             });
             scope.commit();
         });
-        expect(findProviderChoiceRow(tree as any, { title: 'Synthetic Live' })).toBeTruthy();
+        expect(findProviderChoiceRow(tree, { title: 'Synthetic Live' })).toBeTruthy();
 
         await act(async () => scope.unwind());
-        expect(findProviderChoiceRow(tree as any, { title: 'Synthetic Live' })).toBeFalsy();
+        expect(findProviderChoiceRow(tree, { title: 'Synthetic Live' })).toBeFalsy();
     });
 
     it('renders and persists an active external provider select through the canonical qualified envelope', async () => {
@@ -2921,8 +3056,8 @@ describe('VoiceProviderSection', () => {
         await scope.commit();
         const providerId = 'acme.synthetic-configurable/conversation';
         const setVoice = vi.fn();
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: {
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: {
                 providerId,
                 providers: {
                     [providerId]: {
@@ -2930,11 +3065,12 @@ describe('VoiceProviderSection', () => {
                         config: { voice: 'calm' },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice,
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
 
         const select = findTestInstanceByTypeWithProps(tree, DropdownMenu, {
             selectedId: JSON.stringify('calm'),
@@ -2961,7 +3097,6 @@ describe('VoiceProviderSection', () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const { createExternalVoiceProviderActivationScope } = await import('@/voice/registry/externalVoiceProviderActivation.testkit');
         const { createBundledConversationRuntimeHostLease } = await import('@/voice/registry/bundledConversationRuntimeHost');
-        installCodexConnectedAccountDescriptor();
         const declaration = PluginContributesV2Schema.parse({ voiceProviders: [{
             id: 'conversation',
             title: 'Acme selectable voice',
@@ -3029,7 +3164,7 @@ describe('VoiceProviderSection', () => {
             configurationReady: false,
             authenticationModeId: 'oauth',
             revisionSemantics: 'revisioned' as const,
-            credentialRevision: 'cred-1',
+            credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaaaa',
             configurationRevision: null,
             scopes: ['openid', 'profile', 'email', 'offline_access'],
         };
@@ -3038,13 +3173,6 @@ describe('VoiceProviderSection', () => {
             passiveSetupBoundary.profile = null;
             await scope.unwind();
             hostLease.revoke();
-            installConnectedAccountDescriptorProjection({
-                scopeKey: 'voice-provider-section-test-cleanup',
-                status: 'ready',
-                descriptors: [],
-                conflicts: [],
-                errorReason: null,
-            });
         });
         scope.api.voiceProviders.register('conversation', {
             kind: 'conversation',
@@ -3076,6 +3204,11 @@ describe('VoiceProviderSection', () => {
         });
         await scope.commit();
 
+        await installCodexConnectedAccountDescriptor({
+            pluginId: 'acme.selectable-voice', occurrenceId: 'acme.selectable-voice-occurrence-1',
+            declaration, host: hostLease.host,
+        });
+
         const providerId = 'acme.selectable-voice/conversation';
         storageBoundary.settings = settingsParse({
             secrets: [{
@@ -3101,16 +3234,17 @@ describe('VoiceProviderSection', () => {
             connectedServicesV2: [],
         };
 
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: { providerId: null } as any,
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: { providerId: null } }).voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
-        const row = findProviderChoiceRow(tree.root as any, { testID: `settings.voice.provider.${encodeURIComponent(providerId)}.default` })!;
+        const { tree } = screen;
+        const row = findProviderChoiceRow(tree.root, { testID: `settings.voice.provider.${encodeURIComponent(providerId)}.default` })!;
 
         expect(row).toBeTruthy();
-        expect(row.props.subtitle).toContain('voice.readiness.credential_unknown');
+        expect(providerChoiceDetail(row)).toContain(tLoose('voice.readiness.credential_unknown'));
         // The declaration names savedSecret and connectedAccount sources, so
         // the credential is configurable once the row can be selected. A
         // bundled row in this exact state stays selectable; provenance is not
@@ -3124,7 +3258,6 @@ describe('VoiceProviderSection', () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const { createExternalVoiceProviderActivationScope } = await import('@/voice/registry/externalVoiceProviderActivation.testkit');
         const { createBundledConversationRuntimeHostLease } = await import('@/voice/registry/bundledConversationRuntimeHost');
-        installCodexConnectedAccountDescriptor();
         const declaration = PluginContributesV2Schema.parse({ voiceProviders: [{
             id: 'conversation',
             title: 'External credential voice',
@@ -3192,7 +3325,7 @@ describe('VoiceProviderSection', () => {
             configurationReady: false,
             authenticationModeId: 'oauth',
             revisionSemantics: 'revisioned' as const,
-            credentialRevision: 'cred-1',
+            credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaaaa',
             configurationRevision: null,
             scopes: [],
         };
@@ -3231,6 +3364,10 @@ describe('VoiceProviderSection', () => {
             setInputMuted: () => {},
         });
         await scope.commit();
+        await installCodexConnectedAccountDescriptor({
+            pluginId: 'acme.external-credential', occurrenceId: 'acme.external-credential-occurrence-1',
+            declaration, host: hostLease.host,
+        });
         const providerId = 'acme.external-credential/conversation';
         const voice = {
             providerId,
@@ -3254,12 +3391,13 @@ describe('VoiceProviderSection', () => {
             connectedAccountGroupsV4: [],
             connectedServicesV2: [],
         };
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
             voice: selected.settings.voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
         const credentialEditor = tree.root.findAll((node) => (
             node.props.contribution?.pluginId === 'acme.external-credential'
             && node.props.credentialSlotId === 'api_key'
@@ -3360,8 +3498,8 @@ describe('VoiceProviderSection', () => {
             },
         };
         const setVoice = vi.fn();
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: {
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: {
                 providerId,
                 providers: {
                     [providerId]: {
@@ -3369,14 +3507,15 @@ describe('VoiceProviderSection', () => {
                         config: { globalConnectedServices: null },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice,
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
 
         const field = tree.findAllByType(VoiceGlobalConnectedServicesBindingField)
-            .find((candidate: any) => candidate.props.title === 'Claude account');
+            .find((candidate) => candidate.props.title === 'Claude account');
         expect(field).toBeTruthy();
         expect(field?.props.agentId).toEqual({
             pluginId: 'acme.voice',
@@ -3408,8 +3547,8 @@ describe('VoiceProviderSection', () => {
             },
         };
         const setVoice = vi.fn();
-        const { tree } = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: {
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: settingsParse({ voice: {
                 providerId: CODEX_PROVIDER_ID,
                 providers: {
                     [CODEX_PROVIDER_ID]: {
@@ -3417,14 +3556,15 @@ describe('VoiceProviderSection', () => {
                         config: { globalConnectedServices: null },
                     },
                 },
-            } as any,
+            } }).voice,
             setVoice,
             happierVoiceSupported: true,
             platformOs: 'web',
         }));
+        const { tree } = screen;
 
         const fields = tree.findAllByType(VoiceGlobalConnectedServicesBindingField)
-            .filter((candidate: any) => candidate.props.title === 'Codex account'
+            .filter((candidate) => candidate.props.title === 'Codex account'
                 && candidate.props.agentId?.pluginId === 'happier.agent.codex'
                 && candidate.props.agentId?.localId === 'codex');
         expect(fields).toHaveLength(1);

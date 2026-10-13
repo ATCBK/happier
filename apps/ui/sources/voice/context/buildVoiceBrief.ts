@@ -13,6 +13,8 @@ import type { AutomationInboxItem } from '@/hooks/inbox/useInboxModel';
 import type { AgentRequestKind } from '@happier-dev/protocol';
 import { resolveVoiceSessionUpdatePolicyV1 } from '@happier-dev/protocol/voice/sourceDisclosureV1';
 import { buildInboxSessionContextLine } from '@/components/inbox/workGroups/inboxSessionContextLine';
+import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
+import { isUntitledSessionName } from '@/utils/sessions/sessionUtils';
 
 export type VoiceBriefSource = Pick<InboxModel, 'sessionPresentation' | 'workGroups' | 'automationAttentionItems'
     | 'workflowAttention' | 'automationAttention' | 'isLoading' | 'showCaughtUp'> & Readonly<{
@@ -42,9 +44,16 @@ export function buildVoiceBrief(input: Readonly<{ inbox: VoiceBriefSource; setti
     const speechByKey = new Map<string, Readonly<{ title?: string; requests?: readonly string[] }>>();
     const privacy = readVoicePrivacySettings(input.settings);
     const safeTitle = (title: string) => privacy.shareFilePaths ? title : redactVoicePathLikeString(title);
+    const sessionTitle = (candidate: VoiceBriefSource['sessionPresentation']['readySessions'][number]) => {
+        if (!isSessionAwarenessContentReadableV1(candidate.awareness.encryption)) return null;
+        // Activity already resolved the exact Home's Session display owner. Keep
+        // Brief pure: never reread the ambient store to reconstruct that identity.
+        const title = candidate.title;
+        return title.trim() && !isUntitledSessionName(title) ? title : null;
+    };
     // The visual row repeats exactly what the Inbox row says under the title; never spoken.
     const sessionSubtitle = (candidate: VoiceBriefSource['sessionPresentation']['readySessions'][number]) => {
-        if (candidate.personalAttention.presentation !== 'full') return {};
+        if (!isSessionAwarenessContentReadableV1(candidate.awareness.encryption)) return {};
         const subtitle = buildInboxSessionContextLine(candidate);
         return subtitle ? { subtitle } : {};
     };
@@ -64,16 +73,19 @@ export function buildVoiceBrief(input: Readonly<{ inbox: VoiceBriefSource; setti
     for (const entry of inbox.sessionPresentation.sessionsNeedingAttention) {
         const candidate = entry.candidate;
         const address = normalizeSessionAddress(candidate.address?.serverId ?? candidate.serverId, candidate.sessionId);
-        if (!address) continue;
+        const title = sessionTitle(candidate);
+        if (!address || !title) continue;
         const requiresPerson = candidate.personalAttention.reasons.some((reason) => reason === 'permission_required' || reason === 'user_action_required');
         items.push({ key: sessionAddressKey(address), category: !requiresPerson && candidate.personalAttention.reasons.includes('failed') ? 'failed' : 'needs_you',
-            title: candidate.personalAttention.presentation === 'full' ? candidate.title : '', ...sessionSubtitle(candidate), destination: { kind: 'session', address }, ...(candidate.route ? { route: candidate.route } : {}) });
+            title, ...sessionSubtitle(candidate), destination: { kind: 'session', address }, ...(candidate.route ? { route: candidate.route } : {}) });
         projectSessionSpeech(candidate, [...entry.pendingPermissions.map((request) => ['permission', request.id, request.tool, request.arguments] as const),
             ...entry.pendingUserActions.map((request) => ['user_action', request.id, request.tool, request.arguments] as const)]);
     }
     for (const candidate of inbox.sessionPresentation.readySessions) {
         const address = normalizeSessionAddress(candidate.address?.serverId ?? candidate.serverId, candidate.sessionId);
-        if (address) items.push({ key: sessionAddressKey(address), category: 'ready', title: candidate.personalAttention.presentation === 'full' ? candidate.title : '', ...sessionSubtitle(candidate), destination: { kind: 'session', address }, ...(candidate.route ? { route: candidate.route } : {}) });
+        const title = sessionTitle(candidate);
+        if (!address || !title) continue;
+        items.push({ key: sessionAddressKey(address), category: 'ready', title, ...sessionSubtitle(candidate), destination: { kind: 'session', address }, ...(candidate.route ? { route: candidate.route } : {}) });
         projectSessionSpeech(candidate);
     }
     // These rows are already members of the Inbox's server-owned attention window,
@@ -82,13 +94,15 @@ export function buildVoiceBrief(input: Readonly<{ inbox: VoiceBriefSource; setti
         for (const item of group.items) {
             if (item.kind !== 'workflow_run') continue;
             const name = resolveWorkflowRunDisplayName(item.row.metadata);
-            const title = name.kind === 'name' ? name.value : '';
+            if (name.kind !== 'name' || !name.value.trim()) continue;
+            const title = name.value;
             items.push({ key: item.key, category: 'needs_you', title, destination: { kind: 'workflow', runId: item.runId }, route: createWorkflowRunRoute(item.runId) });
             if (privacy.shareSessionSummary && title) speechByKey.set(item.key, { title: safeTitle(title) });
         }
     }
     for (const item of inbox.automationAttentionItems) {
-        items.push({ key: item.key, category: 'needs_you', title: '', destination: { kind: 'automation', route: item.route }, route: item.route });
+        if (!item.title?.trim()) continue;
+        items.push({ key: item.key, category: 'needs_you', title: item.title, destination: { kind: 'automation', route: item.route }, route: item.route });
     }
     const rank = { needs_you: 0, failed: 1, ready: 2 } as const;
     items.sort((a, b) => rank[a.category] - rank[b.category]);

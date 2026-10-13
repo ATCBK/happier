@@ -4,14 +4,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
 import { createDeferred, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { PluginPermissionSubjectV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
-installDisconnectedServerSocketBoundary();
+vi.mock('socket.io-client', async original => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(original));
+type MachineResponses = Readonly<{ inspect: (...args: never[]) => unknown; request: (...args: never[]) => unknown }>;
+let machineResponses: MachineResponses | undefined;
+installSessionActionRpcBoundary(({ method, params }) => {
+  const prefix = 'machine-a:';
+  if (!method.startsWith(prefix)) throw new Error(`Unexpected machine transport method: ${method}`);
+  const operation = method.slice(prefix.length);
+  const respond = operation === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_INSPECT ? machineResponses?.inspect
+    : operation === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_REQUEST ? machineResponses?.request : null;
+  if (!respond) throw new Error(`Unexpected Machine RPC: ${method}`);
+  const input = params as { contribution: unknown; rawGrant: unknown };
+  return Reflect.apply(respond, undefined, [input.contribution, input.rawGrant]);
+});
 
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -25,27 +40,16 @@ vi.mock('@/platform/digest', () => import('@/platform/digest.node'));
 vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
 vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
 
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({
-    translate: (key, params) => params ? `${key} ${JSON.stringify(params)}` : key,
-  });
-});
-
 await loadSyncSingletonForTests();
+const { t } = await import('@/text');
 const { createPluginPermissionGrantActions } = await import('@/sync/domains/plugins/permissions/actions');
 const { createPluginPermissionGrantHttpActionExecutor } = await import('@/sync/domains/plugins/permissions/api');
 const { PluginPermissionGrantSheet } = await import('@/components/plugins/permissions/PluginPermissionGrantSheet');
 const { RawCredentialAuthorizationClient } = await import('./rawCredentialAuthorizationClient');
 
-function machineClient(responses: Readonly<{ inspect: (...args: never[]) => unknown; request: (...args: never[]) => unknown }>) {
-  return new RawCredentialAuthorizationClient({ machineRpc: async ({ method, payload }) => {
-    const input = payload as { contribution: unknown; rawGrant: unknown };
-    const respond = method === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_INSPECT ? responses.inspect
-      : method === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_REQUEST ? responses.request : null;
-    if (!respond) throw new Error(`Unexpected Machine RPC: ${method}`);
-    return Reflect.apply(respond, undefined, [input.contribution, input.rawGrant]);
-  } });
+function machineClient(responses: MachineResponses) {
+  machineResponses = responses;
+  return new RawCredentialAuthorizationClient();
 }
 
 function httpActions(responders: Readonly<Record<string, (input: never) => unknown>>) {
@@ -189,10 +193,15 @@ describe('VoiceRawCredentialAccessReview', () => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
+        if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-1' })]);
+        if (path === '/v1/machines/machine-a') return Response.json({ machine: createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-1' }) });
         return new Response('{}', { status: 404 });
       } });
     const { storage } = await import('@/sync/domains/state/storage');
-    storage.setState({ settingsVersion: 1, settingsScope: { serverId: account.home.id, accountId: 'account-1' } });
+    storage.getState().applySettingsForScope({ serverId: account.home.id, accountId: 'account-1' },
+      (await import('@/sync/domains/settings/settings')).settingsParse({ voice: {
+        executionMachine: { mode: 'fixed', machineId: 'machine-a' },
+      } }), 1);
     storage.getState().applyMachines([createMachineFixture({ id: 'machine-a', activeAt: Date.now(), installationId: 'installation-1' })], true, { sourceServerId: account.home.id });
   });
   afterEach(async () => { standardCleanup(); await account.dispose(); });
@@ -249,7 +258,6 @@ describe('VoiceRawCredentialAccessReview', () => {
     expect(JSON.stringify(sheet?.props.detailRows)).toContain('authorization');
     expect(JSON.stringify(sheet?.props.detailRows)).not.toContain('secret-value');
     const decisionBody = sheet?.props.labels.body({ pluginName: 'Acme Voice' });
-    expect(decisionBody).toContain('settingsVoice.externalCredentials.rawCredentialAccessReviewBody');
     expect(decisionBody).toContain(contribution.pluginId);
     expect(decisionBody).toContain(contribution.localId);
     expect(decisionBody).toContain('api_key');
@@ -305,7 +313,7 @@ describe('VoiceRawCredentialAccessReview', () => {
     await vi.waitFor(() => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.loading).toBe(false));
     expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.destructive).toBe(false);
     expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.detail)
-      .toBe('settingsVoice.externalCredentials.reviewRequired');
+      .toBe(t('settingsVoice.externalCredentials.reviewRequired'));
     // Another installation's pending request must never be presented here as
     // this installation's decision.
     expect(screen.tree.findByTestId('raw-access-sheet')).toBeNull();
@@ -434,6 +442,6 @@ describe('VoiceRawCredentialAccessReview', () => {
     await vi.waitFor(() => expect(actions.list).toHaveBeenLastCalledWith(expect.objectContaining({ subject })));
     await vi.waitFor(() => expect(screen.tree.findByTestId('raw-access-sheet')).toBeNull());
     expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.detail)
-      .toBe('settingsVoice.externalCredentials.reviewRequired');
+      .toBe(t('settingsVoice.externalCredentials.reviewRequired'));
   });
 });

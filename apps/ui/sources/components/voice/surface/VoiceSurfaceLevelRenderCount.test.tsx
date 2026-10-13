@@ -1,108 +1,74 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { voiceRuntimeLevelStore } from '@/voice/runtime/levels/voiceRuntimeLevelStore';
 import type { VoiceRuntimeLevelWriter } from '@/voice/runtime/levels/voiceRuntimeLevelStore';
-import { installVoiceSurfaceCommonModuleMocks } from './voiceSurfaceTestHelpers';
+import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings } from '@/text';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-function createHostComponentMock(type: string) {
-    return (props: any) => React.createElement(type, props, props.children);
-}
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // Counts the memoized leaf *inside* the surface boundary. A wrapper above
 // `VoiceSurface` never observes child commits and is therefore not a render oracle.
 const renderCounter = { current: 0 };
-const broadAudioSubscriptionCanary = vi.hoisted(() => ({ enabled: false }));
+const broadAudioSubscriptionCanary = { enabled: false };
 
-installVoiceSurfaceCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            View: 'View',
-            Text: 'Text',
-            Pressable: createHostComponentMock('Pressable'),
-            ScrollView: 'ScrollView',
-            Platform: { OS: 'web', select: (spec: any) => spec?.web ?? spec?.default },
-        });
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({ translate: (key) => key });
-    },
-    storage: (importOriginal) => importOriginal<typeof import('@/sync/domains/state/storage')>(),
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    status: { connecting: '#00f', connected: '#0f0', error: '#f00', default: '#999' },
-                    surface: '#fff',
-                    text: '#000',
-                    textSecondary: '#555',
-                },
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView' });
+});
+vi.mock('@expo/vector-icons', async () => {
+    const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
+    return createExpoVectorIconsMock();
+});
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock().module;
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock({
+        theme: {
+            colors: {
+                status: { connecting: '#00f', connected: '#0f0', error: '#f00', default: '#999' },
+                surface: '#fff',
+                text: '#000',
+                textSecondary: '#555',
             },
-        });
-    },
+        },
+    });
 });
-
-vi.mock('@expo/vector-icons', () => ({ Ionicons: createHostComponentMock('Ionicons') }));
-vi.mock('@/components/ui/status/StatusDot', () => ({ StatusDot: createHostComponentMock('StatusDot') }));
-vi.mock('./VoiceSurfaceView', async () => {
-    const { voiceRuntimeLevelStore } = await import('@/voice/runtime/levels/voiceRuntimeLevelStore');
-    return {
-        VoiceSurfaceView: React.memo(function CountedVoiceSurfaceView(props: any) {
-            /*
-             * Oracle canary, not production behavior. If a future surface leaks
-             * the frame-rate meter back onto its React path, this same counted
-             * leaf must commit for each sample. Keeping it in the leaf makes the
-             * test falsifiable; the former wrapper could not observe that fault.
-             */
-            const outputLevel = React.useSyncExternalStore(
-                React.useCallback(
-                    (listener) => broadAudioSubscriptionCanary.enabled
-                        ? voiceRuntimeLevelStore.subscribe('output', listener)
-                        : () => {},
-                    [],
-                ),
-                React.useCallback(
-                    () => broadAudioSubscriptionCanary.enabled
-                        ? voiceRuntimeLevelStore.getSnapshot().outputLevel
-                        : 0,
-                    [],
-                ),
-                () => 0,
-            );
-            renderCounter.current += 1;
-            return React.createElement('VoiceSurfaceView', {
-                ...props,
-                // Including the value only under the canary makes this exactly
-                // the plausible bad shape: a meter value entered the view model.
-                ...(broadAudioSubscriptionCanary.enabled ? { outputLevel } : {}),
-            });
-        }),
-    };
-});
-
-const featureEnabledState: Record<string, boolean> = { 'voice.agent': true };
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string) => featureEnabledState[featureId] ?? true,
-}));
 
 const { useVoiceSurfaceModel } = await import('./useVoiceSurfaceModel');
 const { VoiceSurfaceView } = await import('./VoiceSurfaceView');
 const { getStorage } = await import('@/sync/domains/state/storage');
 const { voiceSettingsParse } = await import('@/sync/domains/settings/voiceSettings');
 const initialStorageState = getStorage().getState();
+const previousLanguage = getPreferredLanguage();
+
+function AudioSubscriptionCanary() {
+    const level = React.useSyncExternalStore(
+        React.useCallback((listener) => voiceRuntimeLevelStore.subscribe('output', listener), []),
+        () => voiceRuntimeLevelStore.getSnapshot().outputLevel,
+        () => 0,
+    );
+    return <span>{level}</span>;
+}
 
 function VoiceSurfaceModelProbe() {
     const model = useVoiceSurfaceModel({ variant: 'sidebar' });
-    return model ? <VoiceSurfaceView model={model} /> : null;
+    // Profiler sees commits inside the real presentation subtree, including a
+    // descendant subscription that a render counter above the view would miss.
+    return model ? <React.Profiler id="voice-surface" onRender={() => { renderCounter.current += 1; }}>
+        <VoiceSurfaceView model={model} />
+        {broadAudioSubscriptionCanary.enabled ? <AudioSubscriptionCanary /> : null}
+    </React.Profiler> : null;
 }
 
 describe('Voice surface model audio-level render budget', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        await preloadTranslations('en');
+        setPreferredLanguageFromSettings('en');
         getStorage().setState(initialStorageState, true);
         getStorage().setState({
             settings: {
@@ -115,14 +81,12 @@ describe('Voice surface model audio-level render budget', () => {
         });
         renderCounter.current = 0;
         broadAudioSubscriptionCanary.enabled = false;
-        // Keep the mocked leaf and the driven store on one module instance.
-        // `vi.resetModules()` clears the store used by the test while retaining
-        // this mock's factory result, which makes a canary subscribe to an old
-        // store and turns the negative control into a false pass.
     });
 
     afterEach(() => {
+        standardCleanup();
         getStorage().setState(initialStorageState, true);
+        setPreferredLanguageFromSettings(previousLanguage);
     });
 
     async function renderSurface() {

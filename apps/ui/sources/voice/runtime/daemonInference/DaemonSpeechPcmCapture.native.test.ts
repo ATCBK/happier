@@ -1,228 +1,134 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { VOICE_RUNTIME_DAEMON_STT_PCM_FORMAT } from '@happier-dev/protocol';
-
-import { createDaemonSpeechPcmCapture } from './DaemonSpeechPcmCapture.native';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
-import type { VoicePcmCapture } from '@happier-dev/audio-stream-native';
+import type { AudioStreamFrameEvent } from '../../../../../../packages/audio-stream-native/src/HappierAudioStreamNative.types';
 
-vi.mock('@/modal', async () => {
-  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock();
+const nativeAudio = createNativeVoicePcmCaptureHarness();
+vi.mock('expo-modules-core', async original => {
+  const actual = await original<typeof import('expo-modules-core')>();
+  return { ...actual, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative'
+    ? nativeAudio.nativeModule : actual.requireOptionalNativeModule(name) };
+});
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { createNativeMicSession } = await import('../mic/NativeMicSession');
+const { createDaemonSpeechPcmCapture } = await import('./DaemonSpeechPcmCapture.native');
+const { getSharedVoicePcmCapture, getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
+const sharedCapture = getSharedVoicePcmCapture();
+const coordinator = getSharedVoiceAudioSessionCoordinator();
+if (!sharedCapture || !coordinator) throw new Error('Installed native capture coordination unavailable');
+const harness = { ...nativeAudio, capture: sharedCapture, coordinator };
+afterAll(async () => {
+  await coordinator.dispose();
+  await nativeAudio.coordinator.dispose();
+});
+const captures: Array<ReturnType<typeof createDaemonSpeechPcmCapture>> = [];
+function createCapture(overrides: Partial<Parameters<typeof createDaemonSpeechPcmCapture>[0]> = {}) {
+  const micSession = createNativeMicSession({ ensurePermission: async () => {} });
+  const options = { micSession, onAudioStarted: vi.fn(), onChunk: vi.fn(async (_bytes: Uint8Array) => {}),
+    onError: vi.fn(), ...overrides };
+  const capture = createDaemonSpeechPcmCapture(options);
+  captures.push(capture);
+  return { capture, options };
+}
+function emitNativeFrame(overrides: Partial<AudioStreamFrameEvent> = {}) {
+  const callback = vi.mocked(harness.nativeModule.addListener).mock.calls.find(([name]) => name === 'audioFrame')?.[1];
+  if (!callback) throw new Error('native frame listener missing');
+  Reflect.apply(callback, undefined, [{ streamId: 'native-stream', pcm16leBase64: 'AAABAA==',
+    sampleRate: 16_000, channels: 1, ...overrides }]);
+}
+beforeEach(() => { vi.clearAllMocks(); });
+afterEach(async () => {
+  for (const capture of captures.splice(0)) await capture.stop();
+  expect(harness.capture.getSnapshot().subscriberCount).toBe(0);
 });
 
-type SubscriberRequest = Readonly<{
-  ownerId: string;
-  format: Readonly<{ sampleRate: number; channels: number; frameMs: number }>;
-  audioSession: unknown;
-  shouldDeliver?: () => boolean;
-  onFrame: (event: any) => void | Promise<void>;
-  onDroppedFrames?: (count: number) => void;
-  onError?: (error: unknown) => void;
-}>;
-
-const sharedCapture = vi.hoisted(() => ({
-  realCapture: null as VoicePcmCapture | null,
-  available: true,
-  request: null as SubscriberRequest | null,
-  acquire: vi.fn(),
-  release: vi.fn(async () => {}),
-  waitForDrain: vi.fn(async () => {}),
-}));
-
-vi.mock('@happier-dev/audio-stream-native', () => ({
-  getSharedVoicePcmCapture: () => sharedCapture.available ? sharedCapture.realCapture ?? {
-    acquire: sharedCapture.acquire,
-    waitForDrain: sharedCapture.waitForDrain,
-  } : null,
-}));
-
-const VALID_PCM16_BASE64 = Buffer.from([0, 0, 1, 0]).toString('base64');
-const VALID_PCM16_BYTES = new Uint8Array([0, 0, 1, 0]);
-
-function createMicSession() {
-  return {
-    ensureActive: vi.fn(async () => {}),
-    setMuted: vi.fn(),
-    isMuted: vi.fn(() => false),
-    teardown: vi.fn(async () => {}),
-    getStream: vi.fn(() => null),
-    getAudioContext: vi.fn(() => null),
-  };
-}
-
-function createCaptureOptions(overrides: Partial<Parameters<typeof createDaemonSpeechPcmCapture>[0]> = {}) {
-  return {
-    micSession: createMicSession(),
-    onAudioStarted: vi.fn(),
-    onChunk: vi.fn(async (_pcm16Bytes: Uint8Array) => {}),
-    onError: vi.fn(),
-    ...overrides,
-  };
-}
-
-async function emitFrame(overrides: Record<string, unknown> = {}): Promise<void> {
-  const request = sharedCapture.request;
-  if (!request) throw new Error('missing capture request');
-  if (request.shouldDeliver?.() === false) return;
-  try {
-    await request.onFrame({
-      streamId: 'shared-stream',
-      pcm16leBase64: VALID_PCM16_BASE64,
-      sampleRate: VOICE_RUNTIME_DAEMON_STT_PCM_FORMAT.sampleRateHz,
-      channels: VOICE_RUNTIME_DAEMON_STT_PCM_FORMAT.channelCount,
-      ...overrides,
-    });
-  } catch (error) {
-    request.onError?.(error);
-  }
-}
-
-describe('createDaemonSpeechPcmCapture (native shared capture)', () => {
-  beforeEach(() => {
-    sharedCapture.realCapture = null;
-    sharedCapture.available = true;
-    sharedCapture.request = null;
-    sharedCapture.release.mockClear();
-    sharedCapture.waitForDrain.mockClear();
-    sharedCapture.acquire.mockReset();
-    sharedCapture.acquire.mockImplementation(async (request: SubscriberRequest) => {
-      sharedCapture.request = request;
-      return {
-        id: 'lease',
-        streamId: 'shared-stream',
-        release: sharedCapture.release,
-        finish: async () => { await sharedCapture.release(); await sharedCapture.waitForDrain(); },
-        waitForDrain: sharedCapture.waitForDrain,
-      };
-    });
-  });
-
-  it('fails closed when the package-owned shared capture is unavailable', async () => {
-    sharedCapture.available = false;
-    const options = createCaptureOptions();
-    const capture = createDaemonSpeechPcmCapture(options);
+describe('daemon native PCM through the shared capture owner', () => {
+  // Legacy/missing native installation is a separate app bootstrap, covered by
+  // the actual default-capture keeper in the native availability suite.
+  it('admits a conversation/AEC subscriber with canonical native format', async () => {
+    const { capture } = createCapture({ capturePurpose: 'conversation' });
     await capture.start();
-    expect(options.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'daemon_streaming_stt_pcm_capture_unavailable' }));
-    expect(sharedCapture.acquire).not.toHaveBeenCalled();
-  });
-
-  it('acquires one conversation/AEC subscriber with the canonical PCM format', async () => {
-    const options = createCaptureOptions({ capturePurpose: 'conversation' });
-    const capture = createDaemonSpeechPcmCapture(options);
-    await capture.start();
-
-    expect(options.micSession.ensureActive).toHaveBeenCalledTimes(1);
-    expect(sharedCapture.acquire).toHaveBeenCalledWith(expect.objectContaining({
-      ownerId: 'daemon-streaming-stt',
-      format: {
-        sampleRate: VOICE_RUNTIME_DAEMON_STT_PCM_FORMAT.sampleRateHz,
-        channels: VOICE_RUNTIME_DAEMON_STT_PCM_FORMAT.channelCount,
-        frameMs: 20,
-      },
-      audioSession: { mode: 'conversation', input: true, output: true, aec: 'required' },
-      maxQueuedFrames: 8,
-    }));
     expect(capture.isActive()).toBe(true);
+    expect(harness.capture.getSnapshot().subscriberCount).toBe(1);
+    expect(harness.nativeModule.start).toHaveBeenCalledWith(expect.objectContaining({ sampleRate: 16_000, channels: 1, frameMs: 20 }));
+    expect(harness.coordinator.getSnapshot().configuration).toMatchObject({ mode: 'conversation', input: true, output: true, aec: 'required' });
   });
-
-  it('delivers admitted frames on graceful Dictation finish and cancels a held chunk promptly', async () => {
-    const harness = createNativeVoicePcmCaptureHarness(false);
-    sharedCapture.realCapture = harness.capture;
-    let releaseFirst!: () => void;
-    const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  it('drains accepted Dictation frames while prompt stop abandons held delivery', async () => {
+    const held = createDeferred<void>();
     const chunks: Uint8Array[] = [];
-    const capture = createDaemonSpeechPcmCapture(createCaptureOptions({ capturePurpose: 'dictation', onChunk: async (chunk) => {
-      chunks.push(chunk);
-      if (chunks.length === 1) await first;
-    } }));
+    const { capture } = createCapture({ capturePurpose: 'dictation', onChunk: async bytes => {
+      chunks.push(bytes); if (chunks.length === 1) await held.promise;
+    } });
     await capture.start();
-    expect(harness.apply).toHaveBeenCalledWith(expect.objectContaining({ configuration: expect.objectContaining({ mode: 'dictation', output: false, aec: 'off' }) }));
-    harness.emit('AAE=');
-    harness.emit('AgM=');
+    expect(harness.coordinator.getSnapshot().configuration).toMatchObject({ mode: 'dictation', output: false, aec: 'off' });
+    harness.emit('AAE='); harness.emit('AgM=');
     await vi.waitFor(() => expect(chunks).toHaveLength(1));
     const finishing = capture.finish();
     await vi.waitFor(() => expect(harness.nativeModule.stop).toHaveBeenCalledTimes(1));
-    releaseFirst();
-    await finishing;
+    held.resolve(undefined); await finishing;
     expect(chunks).toEqual([new Uint8Array([0, 1]), new Uint8Array([2, 3])]);
     expect(capture.isActive()).toBe(false);
-
-    const held = createDaemonSpeechPcmCapture(createCaptureOptions({ onChunk: () => new Promise<void>(() => {}) }));
-    await held.start();
-    harness.emit();
-    await Promise.resolve();
-    await held.stop();
-    expect(held.isActive()).toBe(false);
+    const pending = createDeferred<void>();
+    const abandoned = createCapture({ onChunk: () => pending.promise }).capture;
+    await abandoned.start(); harness.emit();
+    await Promise.resolve(); await abandoned.stop();
+    expect(abandoned.isActive()).toBe(false);
     expect(harness.capture.getSnapshot().subscriberCount).toBe(0);
+    pending.resolve(undefined);
   });
-
-  it('decodes canonical frames and equality-gates the audio-start edge', async () => {
-    const options = createCaptureOptions();
-    const capture = createDaemonSpeechPcmCapture(options);
-    await capture.start();
-    await emitFrame();
-    await emitFrame();
-
+  it('decodes real native frames and publishes the audio-start edge once', async () => {
+    const { capture, options } = createCapture();
+    await capture.start(); emitNativeFrame(); emitNativeFrame(); await harness.capture.waitForDrain();
+    expect(vi.mocked(options.onChunk).mock.calls.map(([bytes]) => bytes)).toEqual([new Uint8Array([0, 0, 1, 0]), new Uint8Array([0, 0, 1, 0])]);
     expect(options.onAudioStarted).toHaveBeenCalledTimes(1);
-    expect(options.onChunk).toHaveBeenCalledTimes(2);
-    expect(options.onChunk).toHaveBeenNthCalledWith(1, VALID_PCM16_BYTES);
   });
-
-  it('drops muted, malformed, and non-canonical frames', async () => {
-    const micSession = createMicSession();
-    const options = createCaptureOptions({ micSession });
-    const capture = createDaemonSpeechPcmCapture(options);
-    await capture.start();
-    micSession.isMuted.mockReturnValue(true);
-    await emitFrame();
-    micSession.isMuted.mockReturnValue(false);
-    await emitFrame({ sampleRate: 48_000 });
-    await emitFrame({ channels: 2 });
-    await emitFrame({ pcm16leBase64: 'invalid' });
-    expect(options.onChunk).not.toHaveBeenCalled();
+  it('drops muted, malformed and non-canonical native frames', async () => {
+    const { capture, options } = createCapture();
+    await capture.start(); options.micSession.setMuted(true); emitNativeFrame();
+    await harness.capture.waitForDrain(); options.micSession.setMuted(false);
+    emitNativeFrame({ sampleRate: 48_000 }); emitNativeFrame({ channels: 2 });
+    emitNativeFrame({ pcm16leBase64: '!!!' }); await harness.capture.waitForDrain();
+    expect(options.onChunk).not.toHaveBeenCalled(); expect(options.onAudioStarted).not.toHaveBeenCalled();
   });
-
-  it('releases exactly once on abort/stop and leaves mic teardown to its owner', async () => {
-    const abortController = new AbortController();
-    const micSession = createMicSession();
-    const capture = createDaemonSpeechPcmCapture(createCaptureOptions({ micSession, signal: abortController.signal }));
-    await capture.start();
-    abortController.abort();
-    await capture.stop();
-    await capture.stop();
-    expect(sharedCapture.release).toHaveBeenCalledTimes(1);
-    expect(micSession.teardown).not.toHaveBeenCalled();
+  it('releases native capture once on abort and leaves microphone teardown with its owner', async () => {
+    const lifetime = new AbortController();
+    const { capture, options } = createCapture({ signal: lifetime.signal });
+    const teardown = vi.spyOn(options.micSession, 'teardown');
+    await capture.start(); lifetime.abort();
+    await vi.waitFor(() => expect(harness.capture.getSnapshot().subscriberCount).toBe(0));
+    await capture.stop(); expect(harness.nativeModule.stop).toHaveBeenCalledTimes(1);
+    expect(teardown).not.toHaveBeenCalled();
   });
-
-  it('reports startup failure and does not retain a half-open lease', async () => {
-    sharedCapture.acquire.mockRejectedValueOnce(new Error('configure_failed'));
-    const options = createCaptureOptions();
-    const capture = createDaemonSpeechPcmCapture(options);
-    await capture.start();
-    expect(options.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'daemon_streaming_stt_pcm_capture_start_failed' }));
+  it('reports native acquisition failure without retaining a half-open lease', async () => {
+    vi.mocked(harness.nativeModule.start).mockRejectedValueOnce(new Error('native_start_failed'));
+    const { capture, options } = createCapture(); await capture.start();
     expect(capture.isActive()).toBe(false);
+    expect(options.onError).toHaveBeenCalledWith(expect.objectContaining({ kind: 'provider_error' }));
+    expect(harness.capture.getSnapshot().subscriberCount).toBe(0);
+    expect(harness.coordinator.getSnapshot().leaseCount).toBe(0);
   });
-
-  it('maps subscriber delivery failures and dropped-frame backpressure to typed fatal errors', async () => {
-    const options = createCaptureOptions({ onChunk: vi.fn(async () => { throw new Error('send_failed'); }) });
-    const capture = createDaemonSpeechPcmCapture(options);
-    await capture.start();
-    await emitFrame();
-    expect(options.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'daemon_streaming_stt_pcm_chunk_failed' }));
-    await vi.waitFor(() => expect(sharedCapture.release).toHaveBeenCalledTimes(1));
-
-    const secondOptions = createCaptureOptions();
-    const second = createDaemonSpeechPcmCapture(secondOptions);
-    await second.start();
-    sharedCapture.request?.onDroppedFrames?.(1);
-    expect(secondOptions.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'daemon_streaming_stt_pcm_backpressure' }));
-    await vi.waitFor(() => expect(sharedCapture.release).toHaveBeenCalledTimes(2));
+  it('reports subscriber failure and actual queued-frame overflow as terminal capture errors', async () => {
+    const failed = createCapture({ onChunk: async () => { throw new Error('consumer_failed'); } });
+    await failed.capture.start(); harness.emit();
+    await vi.waitFor(() => expect(failed.options.onError).toHaveBeenCalled());
+    await failed.capture.stop();
+    const pending = createDeferred<void>();
+    const overflow = createCapture({ onChunk: () => pending.promise });
+    await overflow.capture.start(); harness.emit();
+    await Promise.resolve();
+    for (let frame = 0; frame < 9; frame++) harness.emit();
+    await vi.waitFor(() => expect(overflow.options.onError).toHaveBeenCalled());
+    expect(overflow.capture.isActive()).toBe(false);
+    pending.resolve(undefined);
   });
-
-  it('delegates drain waiting to its own subscriber lease', async () => {
-    const capture = createDaemonSpeechPcmCapture(createCaptureOptions());
-    await capture.start();
-    await capture.waitForDrain();
-    expect(sharedCapture.waitForDrain).toHaveBeenCalledTimes(1);
+  it('waits for its accepted subscriber work to drain', async () => {
+    const pending = createDeferred<void>();
+    const { capture, options } = createCapture({ onChunk: vi.fn(() => pending.promise) });
+    await capture.start(); harness.emit();
+    await vi.waitFor(() => expect(options.onChunk).toHaveBeenCalledTimes(1));
+    let drained = false; const draining = capture.waitForDrain().then(() => { drained = true; });
+    await Promise.resolve(); expect(drained).toBe(false);
+    pending.resolve(undefined); await draining; expect(drained).toBe(true);
   });
 });

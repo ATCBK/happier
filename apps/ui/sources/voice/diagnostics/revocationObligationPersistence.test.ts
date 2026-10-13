@@ -1,14 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const values = new Map<string, string>();
-
-vi.mock('@/sync/domains/state/persistenceStorage', () => ({
-  getPersistenceStorage: () => ({
-    getString: (key: string) => values.get(key),
-    set: (key: string, value: string) => values.set(key, value),
-    delete: (key: string) => values.delete(key),
-  }),
-}));
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
 
 import {
   addPersistedVoiceDiagnosticsMachineRevocation,
@@ -20,8 +11,15 @@ import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccoun
 const scopeA = { serverId: 'server-a', accountId: 'account-a' } as const;
 const scopeB = { serverId: 'server-a', accountId: 'account-b' } as const;
 
+function clearFixtures() {
+  for (const scope of [scopeA, scopeB]) getPersistenceStorage().delete(
+    serverAccountScopedStorageKey('voice-diagnostics-machine-revocations-v1', scope),
+  );
+}
+afterEach(clearFixtures);
+
 describe('voice diagnostics exact-machine revocation persistence', () => {
-  beforeEach(() => values.clear());
+  beforeEach(clearFixtures);
 
   it('keeps only unresolved machine ids in the exact server-account scope', () => {
     addPersistedVoiceDiagnosticsMachineRevocation(scopeA, 'machine-1');
@@ -36,7 +34,7 @@ describe('voice diagnostics exact-machine revocation persistence', () => {
   });
 
   it('fails closed on malformed persisted values without creating session opt-out state', () => {
-    values.set(
+    getPersistenceStorage().set(
       serverAccountScopedStorageKey('voice-diagnostics-machine-revocations-v1', scopeA),
       JSON.stringify({ v: 1, machineIds: ['', 42, 'ok-machine', 'x'.repeat(1025)] }),
     );

@@ -1,12 +1,55 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { streamVoiceAgentTurn } from './streamVoiceAgentTurn';
-import { VOICE_OUTPUT_INCOMPLETE_TEXT } from '@happier-dev/protocol';
+import { VOICE_OUTPUT_INCOMPLETE_TEXT, SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createSessionFixture } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import {
     readVoiceAgentActionEffectId,
     type VoiceAgentAcceptedOutputV1,
     type VoiceAgentHandle,
 } from './types';
+
+const network = await installSessionOpsNetworkBoundary();
+let home: Awaited<ReturnType<typeof network.addHome>>;
+await loadSyncSingletonForTests();
+const { streamVoiceAgentTurn } = await import('./streamVoiceAgentTurn');
+const { DaemonVoiceAgentClient } = await import('./daemonVoiceAgentClient');
+
+// Replies come from the external daemon. Scoped Account admission, Session crypto,
+// response decoding, output sequencing/redaction and transcript custody stay real.
+function serveVoiceStream(reply: Readonly<{
+    start: () => Promise<unknown>;
+    read: () => Promise<unknown>;
+    cancel: () => Promise<unknown>;
+}>) {
+    network.setRpcResponder(async request => {
+        if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START) return reply.start();
+        if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) return reply.read();
+        if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) return reply.cancel();
+        throw new Error(`Unexpected Voice stream RPC: ${request.method}`);
+    });
+    return new DaemonVoiceAgentClient({ serverId: home.id, accountId: home.accountId });
+}
+
+beforeEach(async () => {
+    network.resetRequests();
+    home = await network.addHome('https://voice-stream-output.example.test', 'account-a');
+    network.setHttpResponder(async input => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (path !== '/v2/sessions/sys_voice') return null;
+        const session = createSessionFixture({ id: 'sys_voice', serverId: home.id, active: true });
+        return Response.json({ session: SessionCurrentProjectionRecordV1Schema.parse({
+            ...session, metadataLayoutVersion: 0, metadata: JSON.stringify(session.metadata),
+            effectiveAccess: { v: 1, level: session.access!.level, sources: [{ kind: 'owner' }], capabilities: session.access!.capabilities },
+            responsibleAccountId: null, responsibleAccount: null, share: null, archivedAt: null,
+            agentState: null, dataEncryptionKey: null, pendingCount: 0, pendingVersion: 0,
+        }) });
+    });
+});
+afterAll(() => network.dispose());
 
 describe('streamVoiceAgentTurn', () => {
     it('returns the useful incomplete predecessor reply through the real consumer without cancelling it', async () => {
@@ -14,10 +57,9 @@ describe('streamVoiceAgentTurn', () => {
         const accepted: VoiceAgentAcceptedOutputV1[] = [];
         const handle = {
             backend: 'daemon', rpcSessionId: 'sys_voice', voiceAgentId: 'run_1', agentBackendId: 'claude',
-            client: {
-                start: vi.fn(), sendTurn: vi.fn(), welcome: vi.fn(), commit: vi.fn(), stop: vi.fn(),
-                startTurnStream: vi.fn(async () => ({ streamId: 'stream-incomplete' })),
-                readTurnStream: vi.fn(async () => ({
+            client: serveVoiceStream({
+                start: vi.fn(async () => ({ streamId: 'stream-incomplete' })),
+                read: vi.fn(async () => ({
                     streamId: 'stream-incomplete',
                     events: [
                         { t: 'delta' as const, textDelta: text },
@@ -25,8 +67,8 @@ describe('streamVoiceAgentTurn', () => {
                     ],
                     nextCursor: 2, done: true,
                 })),
-                cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-            },
+                cancel: vi.fn(async () => ({ ok: true as const })),
+            }),
         } satisfies Omit<VoiceAgentHandle, 'accountLifetime' | 'metadataSessionId'>;
         const result = await streamVoiceAgentTurn({
             sessionId: 'sys_voice', handle, userText: 'hello', displayUserText: 'hello',
@@ -37,7 +79,7 @@ describe('streamVoiceAgentTurn', () => {
         expect(result.assistantText.endsWith(VOICE_OUTPUT_INCOMPLETE_TEXT)).toBe(true);
         expect(result.actions).toEqual([]);
         expect(accepted.at(-1)?.effects).toEqual([{ kind: 'persist_final', text: result.assistantText }]);
-        expect(handle.client.cancelTurnStream).not.toHaveBeenCalled();
+        expect(network.requests.some(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL)).toBe(false);
     });
 
     it('projects the legacy daemon wire through the single canonical output-event boundary', async () => {
@@ -47,10 +89,9 @@ describe('streamVoiceAgentTurn', () => {
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
             agentBackendId: 'claude',
-            client: {
-                start: vi.fn(), sendTurn: vi.fn(), welcome: vi.fn(),
-                startTurnStream: vi.fn(async () => ({ streamId: 'stream-1' })),
-                readTurnStream: vi.fn(async () => ({
+            client: serveVoiceStream({
+                start: vi.fn(async () => ({ streamId: 'stream-1' })),
+                read: vi.fn(async () => ({
                     streamId: 'stream-1',
                     events: [
                         { t: 'delta' as const, textDelta: 'Hello ' },
@@ -59,9 +100,8 @@ describe('streamVoiceAgentTurn', () => {
                     nextCursor: 2,
                     done: true,
                 })),
-                cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-                commit: vi.fn(), stop: vi.fn(),
-            },
+                cancel: vi.fn(async () => ({ ok: true as const })),
+            }),
         } satisfies Omit<VoiceAgentHandle, 'accountLifetime' | 'metadataSessionId'>;
 
         const result = await streamVoiceAgentTurn({
@@ -85,10 +125,9 @@ describe('streamVoiceAgentTurn', () => {
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
             agentBackendId: 'claude',
-            client: {
-                start: vi.fn(), sendTurn: vi.fn(), welcome: vi.fn(),
-                startTurnStream: vi.fn(async () => ({ streamId: 'stream-replay' })),
-                readTurnStream: vi.fn(async () => ({
+            client: serveVoiceStream({
+                start: vi.fn(async () => ({ streamId: 'stream-replay' })),
+                read: vi.fn(async () => ({
                     streamId: 'stream-replay',
                     events: [
                         {
@@ -138,9 +177,8 @@ describe('streamVoiceAgentTurn', () => {
                     nextCursor: 4,
                     done: true,
                 })),
-                cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-                commit: vi.fn(), stop: vi.fn(),
-            },
+                cancel: vi.fn(async () => ({ ok: true as const })),
+            }),
         } satisfies Omit<VoiceAgentHandle, 'accountLifetime' | 'metadataSessionId'>;
 
         const result = await streamVoiceAgentTurn({
@@ -178,18 +216,16 @@ describe('streamVoiceAgentTurn', () => {
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
             agentBackendId: 'claude',
-            client: {
-                start: vi.fn(), sendTurn: vi.fn(), welcome: vi.fn(),
-                startTurnStream: vi.fn(async () => ({ streamId: 'stream-budget' })),
-                readTurnStream: vi.fn(async () => ({
+            client: serveVoiceStream({
+                start: vi.fn(async () => ({ streamId: 'stream-budget' })),
+                read: vi.fn(async () => ({
                     streamId: 'stream-budget',
                     events,
                     nextCursor: events.length,
                     done: true,
                 })),
-                cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-                commit: vi.fn(), stop: vi.fn(),
-            },
+                cancel: vi.fn(async () => ({ ok: true as const })),
+            }),
         } satisfies Omit<VoiceAgentHandle, 'accountLifetime' | 'metadataSessionId'>;
 
         await expect(streamVoiceAgentTurn({
@@ -217,10 +253,9 @@ describe('streamVoiceAgentTurn', () => {
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
             agentBackendId: 'claude',
-            client: {
-                start: vi.fn(), sendTurn: vi.fn(), welcome: vi.fn(),
-                startTurnStream: vi.fn(async () => ({ streamId: 'stream-order' })),
-                readTurnStream: vi.fn(async () => ({
+            client: serveVoiceStream({
+                start: vi.fn(async () => ({ streamId: 'stream-order' })),
+                read: vi.fn(async () => ({
                     streamId: 'stream-order',
                     events: [{
                         t: 'voice_output' as const,
@@ -236,9 +271,8 @@ describe('streamVoiceAgentTurn', () => {
                     nextCursor: 1,
                     done: true,
                 })),
-                cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-                commit: vi.fn(), stop: vi.fn(),
-            },
+                cancel: vi.fn(async () => ({ ok: true as const })),
+            }),
         } satisfies Omit<VoiceAgentHandle, 'accountLifetime' | 'metadataSessionId'>;
 
         await expect(streamVoiceAgentTurn({
@@ -272,16 +306,11 @@ describe('streamVoiceAgentTurn', () => {
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
             agentBackendId: 'claude',
-            client: {
-                start: vi.fn(),
-                sendTurn: vi.fn(),
-                welcome: vi.fn(),
-                startTurnStream,
-                readTurnStream,
-                cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-                commit: vi.fn(),
-                stop: vi.fn(),
-            },
+            client: serveVoiceStream({
+                start: startTurnStream,
+                read: readTurnStream,
+                cancel: vi.fn(async () => ({ ok: true as const })),
+            }),
         } satisfies Omit<VoiceAgentHandle, 'accountLifetime' | 'metadataSessionId'>;
 
         await expect(
@@ -327,16 +356,11 @@ describe('streamVoiceAgentTurn', () => {
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
             agentBackendId: 'claude',
-            client: {
-                start: vi.fn(),
-                sendTurn: vi.fn(),
-                welcome: vi.fn(),
-                startTurnStream,
-                readTurnStream,
-                cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-                commit: vi.fn(),
-                stop: vi.fn(),
-            },
+            client: serveVoiceStream({
+                start: startTurnStream,
+                read: readTurnStream,
+                cancel: vi.fn(async () => ({ ok: true as const })),
+            }),
         } satisfies Omit<VoiceAgentHandle, 'accountLifetime' | 'metadataSessionId'>;
 
         const turn = streamVoiceAgentTurn({
@@ -366,21 +390,16 @@ describe('streamVoiceAgentTurn', () => {
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
             agentBackendId: 'claude',
-            client: {
-                start: vi.fn(),
-                sendTurn: vi.fn(),
-                welcome: vi.fn(),
-                startTurnStream: vi.fn(async () => ({ streamId: 'stream-cancelled' })),
-                readTurnStream: vi.fn(async () => ({
+            client: serveVoiceStream({
+                start: vi.fn(async () => ({ streamId: 'stream-cancelled' })),
+                read: vi.fn(async () => ({
                     streamId: 'stream-cancelled',
                     events: [{ t: 'cancelled' as const }],
                     nextCursor: 1,
                     done: true,
                 })),
-                cancelTurnStream,
-                commit: vi.fn(),
-                stop: vi.fn(),
-            },
+                cancel: cancelTurnStream,
+            }),
         } satisfies Omit<VoiceAgentHandle, 'accountLifetime' | 'metadataSessionId'>;
 
         await expect(streamVoiceAgentTurn({

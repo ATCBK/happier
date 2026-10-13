@@ -4,6 +4,7 @@ import { runVoiceAgentTurnWithTools } from '@/voice/local/runVoiceAgentTurnWithT
 import type { VoiceSessionBinding } from '@/voice/binding/voiceConversationBindingTypes';
 import { buildVoiceInitialContext } from '@/voice/context/buildVoiceInitialContext';
 import { captureAssistantTextMessageBaseline } from '@/voice/runtime/waitForNextAssistantTextMessage';
+import { registerSessionRealtimeTranscriptConsumer } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 import type { VoiceSessionSnapshot } from '@/voice/session/types';
 import {
   submitDurableVoiceTextTurn,
@@ -341,8 +342,11 @@ export function createVoiceQaController(
           targetSessionAddress,
           runtimeSessionId: resolveVoiceQaRuntimeSessionId(binding, runtimeSessionId),
         });
-        if (!conversationSessionId) throw new Error('voice_session_binding_required');
+        if (!binding || !conversationSessionId) throw new Error('voice_session_binding_required');
         const baseline = captureAssistantTextMessageBaseline(conversationSessionId);
+        const releaseTranscriptConsumer = registerSessionRealtimeTranscriptConsumer(
+          conversationSessionId, binding.conversationSessionAddress.serverId,
+        );
         let appendedAssistantTurn = false;
         let shouldWatchAsyncTargetFollowUp = false;
         const appendFollowUpAssistantTurn = async (timeoutMs: number): Promise<string | null> => {
@@ -454,6 +458,7 @@ export function createVoiceQaController(
           deps.qaStore.getState().appendSystem('Local voice turn was interrupted by a higher-priority update.');
           return { assistantText: '', actions: [] };
         } finally {
+          releaseTranscriptConsumer();
           syncLatestLocalVoiceQaResolvedSessions(deps, sessionId, binding);
         }
       }

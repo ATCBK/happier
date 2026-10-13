@@ -76,6 +76,6 @@ describe('selected Voice welcome Doc', () => {
             const cancellation = new AbortController();
             cancellation.abort();
             await expect(resolveSelectedVoiceWelcomeText({ ...input, signal: cancellation.signal })).rejects.toThrow();
-        } finally { account.dispose(); fixture.dispose(); }
+        } finally { account.dispose(); await fixture.dispose(); }
     });
 });

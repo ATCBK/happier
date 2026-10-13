@@ -5,7 +5,10 @@ import { createSessionFixture, createSessionMessagesFixture, renderScreen, type 
 import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { SessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { createReadOnlySessionTranscriptSource } from '@/components/sessions/transcript/source/readOnlySessionTranscriptSource';
 
@@ -15,30 +18,39 @@ import { VoiceNeedsYouPrompts } from './VoiceNeedsYouPrompts';
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
     splitStreamingRevealTextParts: (input: { text: string; startOffset: number }) => [{ ...input, animated: false }],
 }));
-const sessionRpcTransport = vi.hoisted(() => vi.fn(async (
-    _params: Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc')['sessionRpcWithServerScope']>[0],
-) => undefined));
-// Permission custody stays real; only the server socket transport is replaced.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', async (importOriginal) => {
-    const { installServerScopedSessionRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-    return installServerScopedSessionRpcModuleMock({
-        sessionRpcWithServerScope: async <R,>(params: Parameters<typeof sessionRpcTransport>[0]): Promise<R> => {
-            if (params.method !== RPC_METHODS.SESSION_PERMISSION_RESPOND) throw new Error('Unexpected request in Voice permission fixture');
-            await sessionRpcTransport(params);
-            // This external RPC's acknowledgement has no payload; R is chosen by its caller.
-            return undefined as R;
-        },
-    })(importOriginal);
+const sessionRpcTransport = vi.hoisted(() => vi.fn(async (_request: Readonly<{
+    serverUrl: string | undefined; method: string; params: unknown;
+}>) => undefined));
+// Permission custody and the scoped Account/crypto reader remain real beneath
+// the external Socket.IO acknowledgement boundary.
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+    socket.connected = true;
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+        if (!payload || typeof payload !== 'object' || !('method' in payload)
+            || typeof payload.method !== 'string' || !('params' in payload)) throw new Error('Expected Socket RPC request');
+        if (!payload.method.endsWith(`:${RPC_METHODS.SESSION_PERMISSION_RESPOND}`)) throw new Error('Unexpected request in Voice permission fixture');
+        await sessionRpcTransport({ serverUrl, method: payload.method, params: payload.params });
+        return { ok: true, result: undefined };
+    });
 });
 
 const initialState = storage.getState();
 let screen: RenderScreenResult | null = null;
 let home: Awaited<ReturnType<typeof serveSessionActionHome>>;
-beforeEach(async () => { home = await serveSessionActionHome(); });
+beforeEach(async () => {
+    const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    home = await serveSessionActionHome({
+        homes: [{ key: 'session', serverUrl: 'https://session-actions.test', accountId: 'session-account', currentAccount: true }],
+        route: request => sessionHttp.handle(request.url) ?? undefined,
+    });
+});
 afterEach(async () => {
     await screen?.unmount();
     screen = null;
-    home.dispose();
+    await home.dispose();
     storage.setState(initialState);
 });
 
@@ -64,8 +76,8 @@ describe('VoiceNeedsYouPrompts', () => {
         expect(screen.getTextContent()).toContain('git status');
         await screen.pressByTestIdAsync('permission-footer.allow');
         expect(sessionRpcTransport).toHaveBeenLastCalledWith(expect.objectContaining({
-            sessionId: address.sessionId, method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
-            payload: { id: 'voice-request', approved: true },
+            serverUrl: 'https://session-actions.test', method: `${address.sessionId}:${RPC_METHODS.SESSION_PERMISSION_RESPOND}`,
+            params: { id: 'voice-request', approved: true },
         }));
     });
 });

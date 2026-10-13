@@ -1,139 +1,172 @@
-import { describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
+import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import type { Session } from '@/sync/domains/state/storageTypes';
 
-import { createVoiceSessionBindingManager } from './voiceConversationBindingManager';
-import { createVoiceSessionBindingStore } from './voiceConversationBindingStore';
+const network = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { sync } = await import('@/sync/sync');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { voiceSessionBindingManager } = await import('./voiceConversationBindingRuntime');
+const { ensureDefaultLocalVoiceQaBinding } = await import('@/voice/qa/ensureDefaultLocalVoiceQaBinding');
+const { voiceSessionBindingStore } = await import('./voiceConversationBindingStore');
+const { readVoiceConversationBindingMetadata } = await import('./voiceConversationBindingMetadata');
+const { createBuiltinVoiceAdapterAssembly } = await import('@/voice/adapters/registerBuiltinVoiceAdapters');
+const { registerVoiceAdapters, resetVoiceAdapterRegistryForTests } = await import('@/voice/session/voiceAdapterRegistry');
+const { writeVoiceConversationScopeMetadata } = await import('@/voice/persistence/voiceConversationScopeMetadata');
+const { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } = await import('@/voice/persistence/voiceConversationSession');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { selectVoiceTranscriptEntriesForConversationSession } = await import('@/voice/transcript/voiceTranscriptSelectors');
+const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
 
-describe('voice conversation binding persistence publication', () => {
-  it('publishes a resolved binding only after persistence succeeds and allows a safe retry', async () => {
-    const persistenceFailure = new Error('binding persistence failed');
-    const appendNote = vi.fn();
-    const persistBinding = vi.fn()
-      .mockRejectedValueOnce(persistenceFailure)
-      .mockResolvedValueOnce(undefined);
-    const store = createVoiceSessionBindingStore();
-    const manager = createVoiceSessionBindingManager({
-      store,
-      nowMs: () => 123,
-      resolveBinding: vi.fn(async () => ({
-        conversationSessionId: 'carrier-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'synthetic' as const,
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-      })),
-      appendTargetSwitchNote: appendNote,
-      persistBinding,
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+let metadata: ReturnType<typeof createSessionMetadataHttpBoundary>;
+let assembly: ReturnType<typeof createBuiltinVoiceAdapterAssembly>;
+let rejectNextBindingFor: string | null;
+const address = (sessionId: string) => ({ serverId: connection.home.id, sessionId });
+const input = () => ({ adapterId: 'local_conversation', controlSessionId: '__voice_agent__', requestedTargetSessionId: 's1',
+    requestedTargetServerId: connection.home.id });
+const notes = () => selectVoiceTranscriptEntriesForConversationSession(storage.getState(), 'carrier-s1').filter(entry => entry.kind === 'note');
+
+function carrier(sessionId: string, rootId: string): Session {
+    return createSessionFixture({ id: sessionId, serverId: connection.home.id, active: true,
+        metadata: writeVoiceConversationScopeMetadata({ path: '/project/' + rootId, host: 'tester.local', machineId: 'machine-1',
+            ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }),
+        }, { kind: 'session_root', sessionRootId: rootId }),
     });
-    const input = {
-      adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: 's1',
+}
+
+async function persistedBinding(sessionId: string) {
+    const response = metadata.handle(new URL('/v2/sessions/' + sessionId, connection.home.serverUrl));
+    if (!response) throw new Error('Missing carrier HTTP response');
+    const payload: unknown = await response.json();
+    if (!payload || typeof payload !== 'object' || !('session' in payload)) throw new Error('Missing Session response');
+    const record = SessionCurrentProjectionRecordV1Schema.parse(payload.session);
+    if (record.ownerMetadata?.t !== 'plain') throw new Error('Expected persisted Plain owner metadata');
+    return readVoiceConversationBindingMetadata(sessionId, record.ownerMetadata.v.system, { sourceServerId: connection.home.id });
+}
+
+beforeEach(async () => {
+    network.resetRequests();
+    clearDaemonMergedProjectionCacheForTests();
+    const home = await network.addHome('https://voice-binding-publication.example.test', 'account-binding');
+    metadata = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    rejectNextBindingFor = null;
+    const settings = settingsParse({ lastUsedAgent: 'codex', voice: {
+        providers: { local_conversation: { schemaVersion: 1, config: {
+            conversationMode: 'agent', agent: { backend: 'daemon', rootSessionPolicy: 'keep_warm', maxWarmRoots: 5 },
+        } } },
+    } });
+    const machine = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-binding' });
+    network.setRpcAckResponder(async request => {
+        if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)
+            return { ok: false, error: 'RPC method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
+        throw new Error('Unexpected daemon effect: ' + request.method);
+    });
+    const request = async (url: RequestInfo | URL, init?: RequestInit): Promise<Response | null> => {
+        const path = new URL(String(url)).pathname;
+        if (init?.method === 'PATCH' && path === '/v2/sessions/' + rejectNextBindingFor) {
+            const patch = SessionMetadataTuplePatchV1Schema.parse(JSON.parse(String(init.body)));
+            const owner = patch.mode === 'owner_migration' ? patch.target.ownerMetadata : patch.mode === 'owner' ? patch.ownerMetadata : null;
+            if (owner?.t === 'plain' && owner.v.system.voiceConversationBindingV1) {
+                metadata.rejectNextPatch(rejectNextBindingFor!);
+                rejectNextBindingFor = null;
+            }
+        }
+        const sessionResponse = metadata.handle(url, init);
+        if (sessionResponse) return sessionResponse;
+        if (path === '/health') return Response.json({});
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: settings }, version: 1 });
+        if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } });
+        if (path === '/v1/machines') return Response.json([machine]);
+        if (path === '/v1/machines/machine-1') return Response.json({ machine });
+        if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
+        if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 0 });
+        if (path === '/v2/sessions/metadata-upgrades') return Response.json({ sessionIds: [] });
+        return null;
     };
+    network.setHttpResponder(request);
+    connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId: 'account-binding',
+        credentialScope: 'restored-home', request });
+    await sync.refreshMachines();
+    const scope = { serverId: connection.home.id, accountId: 'account-binding' };
+    const sessions = Object.fromEntries(['s1', 's2'].flatMap(rootId => [
+        createSessionFixture({ id: rootId, serverId: scope.serverId, metadata: { path: '/project/' + rootId, host: 'tester.local', machineId: 'machine-1' } }),
+        carrier('carrier-' + rootId, rootId),
+    ]).map(session => [session.id, session]));
+    storage.setState({ settings, settingsScope: scope, profileScope: scope, sessions, sessionMessages: {} });
+    voiceSessionBindingStore.setState({ bindingsByConversationSessionId: {}, runtimeBindingsByConversationSessionId: {}, persistedBindingsByConversationSessionId: {} });
+    resetVoiceAdapterRegistryForTests();
+    assembly = createBuiltinVoiceAdapterAssembly();
+    registerVoiceAdapters(assembly.adapters);
+});
 
-    await expect(manager.ensureBound(input)).rejects.toBe(persistenceFailure);
-    expect(store.getState().getByConversationSessionId('carrier-s1')).toBeNull();
-    expect(store.getState().getByControlSessionId('voice-global')).toBeNull();
-    expect(appendNote).not.toHaveBeenCalled();
+afterEach(async () => {
+    resetVoiceAdapterRegistryForTests();
+    await assembly?.dispose();
+    await connection?.dispose();
+});
+afterAll(() => network.dispose());
 
-    await expect(manager.ensureBound(input)).resolves.toEqual(expect.objectContaining({
-      conversationSessionId: 'carrier-s1',
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-    }));
-    expect(store.getState().getByControlSessionId('voice-global')).toEqual(expect.objectContaining({
-      conversationSessionId: 'carrier-s1',
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-    }));
-    expect(persistBinding).toHaveBeenCalledTimes(2);
-    expect(appendNote).not.toHaveBeenCalled();
-  });
+describe('binding publication through actual resolver and HTTP persistence', () => {
+    it('publishes only after persistence succeeds and safely retries the failed binding', async () => {
+        rejectNextBindingFor = 'carrier-s1';
+        await expect(voiceSessionBindingManager.ensureBound(input())).rejects.toThrow();
+        expect(voiceSessionBindingStore.getState().getByConversationSessionId('carrier-s1')).toBeNull();
+        expect(voiceSessionBindingStore.getState().getByControlSessionId('__voice_agent__')).toBeNull();
+        expect(await persistedBinding('carrier-s1')).toBeNull();
+        expect(notes()).toEqual([]);
 
-  it('keeps the prior target and emits no switch note when target persistence fails, then retries safely', async () => {
-    const persistenceFailure = new Error('target persistence failed');
-    const appendNote = vi.fn();
-    const persistBinding = vi.fn()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(persistenceFailure)
-      .mockResolvedValueOnce(undefined);
-    const store = createVoiceSessionBindingStore();
-    const manager = createVoiceSessionBindingManager({
-      store,
-      nowMs: () => 456,
-      resolveBinding: vi.fn(async () => ({
-        conversationSessionId: 'carrier-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'synthetic' as const,
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-      })),
-      appendTargetSwitchNote: appendNote,
-      persistBinding,
-    });
-    await manager.ensureBound({
-      adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: 's1',
-    });
-    appendNote.mockClear();
-
-    await expect(Promise.resolve().then(() => manager.syncTargetSession({
-      controlSessionId: 'voice-global',
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-    }))).rejects.toBe(persistenceFailure);
-    expect(store.getState().getByControlSessionId('voice-global')).toEqual(expect.objectContaining({
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-    }));
-    expect(appendNote).not.toHaveBeenCalled();
-
-    await expect(manager.syncTargetSession({
-      controlSessionId: 'voice-global',
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-    })).resolves.toEqual(expect.objectContaining({
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-    }));
-    expect(store.getState().getByControlSessionId('voice-global')).toEqual(expect.objectContaining({
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-    }));
-    expect(persistBinding).toHaveBeenCalledTimes(3);
-    expect(appendNote).toHaveBeenCalledTimes(1);
-  });
-
-  it('surfaces rebind persistence failure instead of silently reopening the old conversation', async () => {
-    const persistenceFailure = new Error('rebind persistence failed');
-    const appendNote = vi.fn();
-    const store = createVoiceSessionBindingStore();
-    const manager = createVoiceSessionBindingManager({
-      store,
-      nowMs: () => 2,
-      resolveBinding: vi.fn(async () => ({
-        conversationSessionId: 'carrier-s2',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s2' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'native_session' as const,
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-      })),
-      resolveExistingBindingByConversationSessionId: () => ({
-        adapterId: 'local_conversation',
-        controlSessionId: 'voice-global',
-        conversationSessionId: 'carrier-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-        transcriptMode: 'native_session',
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-        updatedAt: 1,
-      }),
-      appendTargetSwitchNote: appendNote,
-      persistBinding: vi.fn(async () => {
-        throw persistenceFailure;
-      }),
+        const bound = await ensureDefaultLocalVoiceQaBinding({
+            controlSessionId: '__voice_agent__', requestedTargetSessionAddress: address('s1'),
+        });
+        expect(bound).toMatchObject({
+            controlSessionId: '__voice_agent__', conversationSessionId: 'carrier-s1',
+            conversationSessionAddress: address('carrier-s1'), targetSessionAddress: address('s1'),
+            transcriptMode: 'native_session',
+        });
+        expect(voiceSessionBindingStore.getState().getByControlSessionId('__voice_agent__')).toEqual(bound);
+        expect(await persistedBinding('carrier-s1')).toMatchObject(bound!);
+        expect(notes()).toEqual([]);
     });
 
-    await expect(manager.ensureBoundForOpenConversation({
-      openConversationSessionId: 'carrier-s1',
-      fallbackControlSessionId: 'voice-global',
-      activeAdapterId: 'local_conversation',
-      providerId: 'local_conversation',
-      requestedTargetSessionId: 's2',
-    })).rejects.toBe(persistenceFailure);
-    expect(store.getState().getByConversationSessionId('carrier-s2')).toBeNull();
-    expect(appendNote).not.toHaveBeenCalled();
-  });
+    it('retains prior target and emits no switch note on failed persistence, then retries safely', async () => {
+        await voiceSessionBindingManager.ensureBound(input());
+        rejectNextBindingFor = 'carrier-s1';
+        await expect(voiceSessionBindingManager.syncTargetSession({ controlSessionId: '__voice_agent__', targetSessionAddress: address('s2') })).rejects.toThrow();
+        expect(voiceSessionBindingStore.getState().getByControlSessionId('__voice_agent__')?.targetSessionAddress).toEqual(address('s1'));
+        expect(await persistedBinding('carrier-s1')).toMatchObject({ targetSessionAddress: address('s1') });
+        expect(notes()).toEqual([]);
+
+        const rebound = await voiceSessionBindingManager.syncTargetSession({ controlSessionId: '__voice_agent__', targetSessionAddress: address('s2') });
+        expect(rebound?.targetSessionAddress).toEqual(address('s2'));
+        expect(await persistedBinding('carrier-s1')).toMatchObject({ targetSessionAddress: address('s2') });
+        expect(notes()).toHaveLength(1);
+    });
+
+    it('surfaces rebind failure rather than silently reopening the old conversation', async () => {
+        const initial = await voiceSessionBindingManager.ensureBound(input());
+        expect(initial).not.toBeNull();
+        rejectNextBindingFor = 'carrier-s2';
+        await expect(voiceSessionBindingManager.ensureBoundForOpenConversation({
+            openConversationSessionId: 'carrier-s1', fallbackControlSessionId: '__voice_agent__', activeAdapterId: 'local_conversation',
+            providerId: 'local_conversation', requestedTargetSessionId: 's2', requestedTargetServerId: connection.home.id,
+        })).rejects.toThrow();
+        expect(voiceSessionBindingStore.getState().getByConversationSessionId('carrier-s2')).toBeNull();
+        expect(await persistedBinding('carrier-s2')).toBeNull();
+        expect(voiceSessionBindingStore.getState().getByConversationSessionId('carrier-s1')).toEqual(initial);
+        expect(notes()).toEqual([]);
+    });
 });

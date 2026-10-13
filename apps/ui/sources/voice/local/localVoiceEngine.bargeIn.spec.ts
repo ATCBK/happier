@@ -11,7 +11,11 @@ import {
     registerLocalVoiceEngineHarnessHooks,
     speechRecStart,
     speechRecStop,
-    submitMessage,
+    localVoicePendingEnqueue,
+    localVoiceHomeId,
+    acknowledgeLocalVoicePendingEnqueue,
+    localVoiceSpeechOutputBoundary,
+    publishLocalVoiceAssistantMessage,
 } from './localVoiceEngine.testHarness';
 
 const REPLY_TEXT = 'the weather today is sunny and warm outside right now';
@@ -21,12 +25,12 @@ async function registerControlSessionBinding(): Promise<void> {
     const storage = await getStorage();
     storage.__setState({ sessions: {
         ...storage.getState().sessions,
-        s1: { id: 's1', serverId: 'server-a', active: true, updatedAt: Date.now(), metadata: {} },
+        s1: { id: 's1', serverId: localVoiceHomeId, active: true, updatedAt: Date.now(), metadata: {} },
     } });
     const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
     voiceSessionBindingStore.getState().bind({
         adapterId: 'local_direct', controlSessionId: 's1', conversationSessionId: 's1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 's1' },
+        conversationSessionAddress: { serverId: localVoiceHomeId, sessionId: 's1' },
         transcriptMode: 'native_session', targetSessionAddress: null, updatedAt: Date.now(),
     });
 }
@@ -63,16 +67,28 @@ async function driveReplyToSpeaking() {
     expoSpeechStop.mockImplementation(() => stopSpeak?.());
     speechRecStart.mockImplementation(() => emitSpeechRecEvent('audiostart'));
     speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
-    submitMessage.mockImplementationOnce(() => {
-        storage.__setState({ sessionMessages: { s1: { messages: [
-            { id: 'm1', kind: 'agent-text', text: REPLY_TEXT, createdAt: Date.now() + 60_000 },
-        ] } } });
-        storage.__notify();
+    localVoicePendingEnqueue.mockImplementationOnce(async request => {
+        await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: 'm1', text: REPLY_TEXT });
+        return acknowledgeLocalVoicePendingEnqueue(request);
     });
     const engine = await loadLocalVoiceEngineWithCompatState();
     await engine.toggleLocalVoiceTurn('s1');
     const turnPromise = engine.sendLocalVoiceAgentTextTurn('s1', 'what is the forecast');
-    await vi.waitFor(() => expect(engine.getLocalVoiceState().status).toBe('speaking'));
+    let outputFailure: { name: string; message: string; code?: unknown } | null = null;
+    void turnPromise.catch(error => {
+        outputFailure = error instanceof Error
+            ? { name: error.name, message: error.message, ...('code' in error ? { code: error.code } : {}) }
+            : { name: typeof error, message: String(error) };
+    });
+    await vi.waitFor(() => expect(engine.getLocalVoiceState().status, JSON.stringify({
+        state: engine.getLocalVoiceState(), outputFailure,
+        audioSession: localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot(),
+        sdkOrder: {
+            recognizerStart: speechRecStart.mock.invocationCallOrder,
+            recognizerStop: speechRecStop.mock.invocationCallOrder,
+            speak: expoSpeechSpeak.mock.invocationCallOrder,
+        },
+    })).toBe('speaking'));
     return { engine, turnPromise, finishSpeak: () => finishSpeak?.(), speakingStartedAt: Date.now() };
 }
 
@@ -116,7 +132,7 @@ describe('local voice engine real-producer barge-in', () => {
         await vi.waitFor(() => expect(speechRecStart).toHaveBeenCalledTimes(2));
         clock.mockRestore();
         expect(expoSpeechStop).not.toHaveBeenCalled();
-        expect(submitMessage).toHaveBeenCalledTimes(1);
+        expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1);
         expect(handle.engine.getLocalVoiceState().status).toBe('speaking');
         handle.finishSpeak();
         await handle.turnPromise;
@@ -132,10 +148,11 @@ describe('local voice engine real-producer barge-in', () => {
         await vi.waitFor(() => expect(isVoiceTurnInterrupted('m1')).toBe(true));
         clock.mockRestore();
         await handle.turnPromise;
-        await vi.waitFor(() => expect(submitMessage).toHaveBeenCalledWith(
-            's1', INTERRUPTING_TEXT, undefined, undefined,
-            { callerSurface: 'voice_turn', forceImmediate: true, hostAdmissionOrigin: 'voice' },
-        ));
+        await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 's1', body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
+                role: 'user', content: { type: 'text', text: INTERRUPTING_TEXT },
+            }) } }),
+        })));
         expect(expoSpeechStop).toHaveBeenCalled();
     }, 180_000);
 
@@ -147,6 +164,6 @@ describe('local voice engine real-producer barge-in', () => {
         await handle.turnPromise;
         expect(isVoiceTurnInterrupted('m1')).toBe(false);
         expect(expoSpeechStop).not.toHaveBeenCalled();
-        expect(submitMessage).toHaveBeenCalledTimes(1);
+        expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1);
     }, 180_000);
 });

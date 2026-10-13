@@ -2,6 +2,7 @@ import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonVoiceSpeechTranscribeRequestSchema, DaemonVoiceSpeechTranscribeResponseSchema } from '@happier-dev/protocol/daemon/voiceSpeech';
 
 import {
     getStorage,
@@ -10,8 +11,12 @@ import {
     machineRpcWithServerScope,
     emitSpeechRecEvent,
     speechRecStop,
-    submitMessage,
+    speechRecStart,
+    localVoicePendingEnqueue,
+    localVoiceSpeechTranscription,
+    localVoiceSpeechOutputBoundary,
     registerLocalVoiceEngineHarnessHooks,
+    readLocalVoiceMachinePrerequisites,
     setRecorderUri,
     setNextRecorderPrepareError,
 } from './localVoiceEngine.testHarness';
@@ -31,27 +36,13 @@ describe('local voice engine recording lifecycle', () => {
         expect(getLocalVoiceState().error).toBe('recording_start_failed');
     });
 
-    it('maps a blank qualified STT endpoint to the daemon provider failure', async () => {
-        const storage = await getStorage();
-        storage.__setState({
-            settings: {
-                ...storage.getState().settings,
-                voice: {
-                    ...storage.getState().settings.voice,
-                    providers: {
-                        ...storage.getState().settings.voice.providers,
-                        'happier.voice.openai-compat/stt': { schemaVersion: 2, config: {
-                            ...storage.getState().settings.voice.providers['happier.voice.openai-compat/stt'].config,
-                            baseUrl: '',
-                        } },
-                    },
-                },
-            },
-        });
+    it('keeps the daemon-selected STT provider failure observable after recorded capture', async () => {
         const fallback = machineRpcWithServerScope.getMockImplementation();
         machineRpcWithServerScope.mockImplementation(async (request: any) => {
             if (request?.method === RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE) {
-                return { ok: false, errorCode: 'provider_unavailable' };
+                const input = DaemonVoiceSpeechTranscribeRequestSchema.parse(request.payload);
+                expect(input.target).toMatchObject({ pluginId: 'happier.voice.openai-compat', localId: 'stt' });
+                return DaemonVoiceSpeechTranscribeResponseSchema.parse({ ok: false, errorCode: 'provider_unavailable' });
             }
             if (!fallback) throw new Error('missing local voice machine RPC fallback');
             return await fallback(request);
@@ -61,13 +52,13 @@ describe('local voice engine recording lifecycle', () => {
         await toggleLocalVoiceTurn('s1');
         await expect(toggleLocalVoiceTurn('s1')).resolves.toBeUndefined();
 
-        expect(globalThis.fetch).toHaveBeenCalledTimes(0);
+        expect(localVoiceSpeechTranscription).toHaveBeenCalledTimes(0);
         expect(getLocalVoiceState().status).toBe('idle');
         expect(getLocalVoiceState().error).toBe('stt_provider_unavailable');
     });
 
     it('resets to idle when STT request throws (network error)', async () => {
-        (globalThis.fetch as any).mockRejectedValueOnce(new Error('network down'));
+        localVoiceSpeechTranscription.mockRejectedValueOnce(new Error('network down'));
 
         const { toggleLocalVoiceTurn, getLocalVoiceState } = await loadLocalVoiceEngineWithCompatState();
         await toggleLocalVoiceTurn('s1');
@@ -79,11 +70,8 @@ describe('local voice engine recording lifecycle', () => {
     });
 
     it('surfaces a failed recorded-audio cleanup instead of silently treating the attempt as clean', async () => {
-        fileDelete.mockRejectedValueOnce(new Error('recording_delete_failed'));
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: '' }),
-        });
+        fileDelete.mockImplementationOnce(() => { throw new Error('recording_delete_failed'); });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('');
 
         const { toggleLocalVoiceTurn, getLocalVoiceState } = await loadLocalVoiceEngineWithCompatState();
         await toggleLocalVoiceTurn('s1');
@@ -98,11 +86,16 @@ describe('local voice engine recording lifecycle', () => {
 
     it('keeps a late recorded-audio cleanup failure visible after End Voice releases its capture admission', async () => {
         const cleanupFailure = new Error('recording_delete_failed');
-        let resolveTranscription!: (response: { ok: true; json: () => Promise<{ text: string }> }) => void;
-        fileDelete.mockRejectedValueOnce(cleanupFailure);
-        (globalThis.fetch as any).mockImplementationOnce(() => new Promise((resolve) => {
-            resolveTranscription = resolve;
-        }));
+        let resolveFinalizedRecording!: (result: { uri: string }) => void;
+        let notifyFinalizationStarted!: () => void;
+        const finalizationStarted = new Promise<void>((resolve) => { notifyFinalizationStarted = resolve; });
+        // Native finalization is a genuinely asynchronous SDK boundary. End can
+        // release capture before the outstanding stop reply yields its artifact.
+        localVoiceSpeechOutputBoundary.fileRecording.stop.mockImplementationOnce(() => {
+            notifyFinalizationStarted();
+            return new Promise<{ uri: string }>((resolve) => { resolveFinalizedRecording = resolve; });
+        });
+        fileDelete.mockImplementationOnce(() => { throw cleanupFailure; });
 
         const {
             getLocalVoiceState,
@@ -111,21 +104,21 @@ describe('local voice engine recording lifecycle', () => {
         } = await loadLocalVoiceEngineWithCompatState();
         await toggleLocalVoiceTurn('s1');
         const stopAndTranscribe = toggleLocalVoiceTurn('s1');
-        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledOnce());
+        await finalizationStarted;
 
         await expect(stopLocalVoiceSession()).resolves.toBeUndefined();
         expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
             error: null,
         });
+        expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+        expect(localVoiceSpeechTranscription).not.toHaveBeenCalled();
 
-        resolveTranscription({
-            ok: true,
-            json: async () => ({ text: 'late transcript' }),
-        });
+        resolveFinalizedRecording({ uri: 'file:///tmp/rec.m4a' });
         await expect(stopAndTranscribe).resolves.toBeUndefined();
 
-        expect(submitMessage).not.toHaveBeenCalled();
+        expect(localVoiceSpeechTranscription).not.toHaveBeenCalled();
+        expect(localVoicePendingEnqueue).not.toHaveBeenCalled();
         expect(fileDelete).toHaveBeenCalledOnce();
         expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
@@ -135,7 +128,8 @@ describe('local voice engine recording lifecycle', () => {
 
     it('keeps recorded-audio transcription on the admitted STT settings after a mid-capture setting change', async () => {
         const storage = await getStorage();
-        const { toggleLocalVoiceTurn } = await loadLocalVoiceEngineWithCompatState();
+        const { toggleLocalVoiceTurn, getLocalVoiceState } = await loadLocalVoiceEngineWithCompatState();
+        const beforeCapture = await readLocalVoiceMachinePrerequisites();
         await toggleLocalVoiceTurn('s1');
 
         storage.__setState({
@@ -160,20 +154,19 @@ describe('local voice engine recording lifecycle', () => {
                 },
             },
         });
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: '' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('');
         speechRecStop.mockImplementation(() => {
             queueMicrotask(() => emitSpeechRecEvent('end', {}));
         });
 
         await expect(toggleLocalVoiceTurn('s1')).resolves.toBeUndefined();
 
-        expect(globalThis.fetch).toHaveBeenCalledWith(
-            'http://localhost:8000/v1/audio/transcriptions',
-            expect.objectContaining({ method: 'POST' }),
-        );
+        expect(localVoiceSpeechTranscription, JSON.stringify({
+            beforeCapture, afterCapture: await readLocalVoiceMachinePrerequisites(), state: getLocalVoiceState(),
+        })).toHaveBeenCalledWith(expect.objectContaining({
+            target: { pluginId: 'happier.voice.openai-compat', localId: 'stt' },
+        }));
+        expect(speechRecStart).not.toHaveBeenCalled();
         expect(fileDelete).toHaveBeenCalledOnce();
     });
 
@@ -184,7 +177,7 @@ describe('local voice engine recording lifecycle', () => {
         await toggleLocalVoiceTurn('s1');
         await expect(toggleLocalVoiceTurn('s1')).resolves.toBeUndefined();
 
-        expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(localVoiceSpeechTranscription).not.toHaveBeenCalled();
         expect(getLocalVoiceState().status).toBe('idle');
         expect(getLocalVoiceState().error).toBe('recording_uri_missing');
     });

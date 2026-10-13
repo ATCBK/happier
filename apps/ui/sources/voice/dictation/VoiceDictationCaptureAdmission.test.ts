@@ -4,6 +4,51 @@ import { createVoiceCaptureAdmissionBinding } from '@/voice/runtime/input/VoiceC
 import { createVoiceCaptureAdmissionController } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
 
 import { createVoiceDictationController, VOICE_DICTATION_LIMITS } from './VoiceDictationController';
+import { createLocalVoiceCaptureOwner } from '@/voice/runtime/input/LocalVoiceCaptureOwner';
+import { createDeviceSttController } from '@/voice/input/DeviceSttController';
+import { createNativeMicSession, createExpoAudioRecordingMicSession } from '@/voice/runtime/mic/NativeMicSession';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+import { createVoiceFileRecording } from '@happier-dev/audio-stream-native';
+import { recordedAudioTranscriptionController } from '@/voice/runtime/input/recordedAudioTranscriptionController';
+
+const recognition = vi.hoisted(() => ({ listeners: new Map<string, (event: unknown) => void>() }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }));
+vi.mock('expo-audio', () => ({ AudioModule: { requestRecordingPermissionsAsync: async () => ({ granted: true, canAskAgain: true }) } }));
+vi.mock('expo-speech-recognition', () => ({ ExpoSpeechRecognitionModule: {
+    isRecognitionAvailable: () => true,
+    requestPermissionsAsync: async () => ({ granted: true }),
+    addListener: (name: string, listener: (event: unknown) => void) => {
+        recognition.listeners.set(name, listener);
+        return { remove: () => { recognition.listeners.delete(name); } };
+    },
+    start: () => { recognition.listeners.get('audiostart')?.({}); },
+    stop: () => {
+        recognition.listeners.get('result')?.({ isFinal: true, results: [{ transcript: 'dictated transcript' }] });
+        recognition.listeners.get('end')?.({});
+    },
+} }));
+
+function createCaptureBoundary(stopRecording: () => Promise<string | null> = async () => 'file:///dictation.m4a') {
+    const native = createNativeVoicePcmCaptureHarness();
+    const sdk = { ...native.nativeModule,
+        startFileRecording: vi.fn(async () => ({ recordingId: 'dictation-recording' })),
+        setFileRecordingMuted: vi.fn(async () => {}),
+        stopFileRecording: vi.fn(async () => ({ uri: await stopRecording() })),
+    };
+    const real = createLocalVoiceCaptureOwner({ getSettings: () => DEVICE_STT_SETTINGS,
+        onCaptureStarted: () => {}, onCaptureError: () => {} }, {
+        createDeviceSttController: deps => createDeviceSttController({ ...deps, getAudioSessionCoordinator: () => native.coordinator }),
+        createLiveMicSession: () => createNativeMicSession(),
+        createRecordingMicSession: () => createExpoAudioRecordingMicSession({
+            requestPermission: async () => ({ granted: true, canAskAgain: true }),
+            acquireAudioMode: () => native.coordinator.acquire({ ownerId: 'dictation-test', mode: 'dictation',
+                input: true, output: false, aec: 'off', capture: 'provider_managed_exclusive' }),
+            createNativeFileRecording: () => createVoiceFileRecording(sdk),
+        }),
+    });
+    // Observe the actual owner; none of these spies substitutes its decisions.
+    return { startCapture: vi.fn(real.startCapture), stopCapture: vi.fn(real.stopCapture), stopSession: vi.fn(real.stopSession) };
+}
 
 const DEVICE_STT_SETTINGS = {
     voice: {
@@ -19,15 +64,7 @@ const DEVICE_STT_SETTINGS = {
 
 function createHarness() {
     const admission = createVoiceCaptureAdmissionController();
-    const rawCaptureOwner = {
-        startCapture: vi.fn(async () => {}),
-        stopCapture: vi.fn(async () => ({
-            provider: 'device' as const,
-            text: 'dictated transcript',
-            continueHandsFree: false,
-        })),
-        stopSession: vi.fn(async () => {}),
-    };
+    const rawCaptureOwner = createCaptureBoundary();
     const captureOwner = createVoiceCaptureAdmissionBinding({
         admission,
         captureOwner: rawCaptureOwner,
@@ -36,7 +73,7 @@ function createHarness() {
     const controller = createVoiceDictationController({
         captureOwner,
         getSettings: () => DEVICE_STT_SETTINGS,
-        transcribeRecordedAudio: vi.fn(),
+        transcribeRecordedAudio: recordedAudioTranscriptionController.transcribe,
         measureRecordedAudioBytes: vi.fn(async () => 0),
         deleteRecordedAudio: vi.fn(async () => {}),
     });
@@ -100,20 +137,8 @@ describe('Dictation capture admission integration', () => {
 
     it('abandons a never-settling stop, permits Conversation Voice immediately, and cleans one late artifact once', async () => {
         vi.useFakeTimers();
-        let resolveStop!: (result: Readonly<{
-            provider: 'recorded_audio';
-            uri: string;
-        }>) => void;
-        const rawCaptureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(() => new Promise<Readonly<{
-                provider: 'recorded_audio';
-                uri: string;
-            }>>((resolve) => {
-                resolveStop = resolve;
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        let resolveStop!: (uri: string) => void;
+        const rawCaptureOwner = createCaptureBoundary(() => new Promise<string>(resolve => { resolveStop = resolve; }));
         const admission = createVoiceCaptureAdmissionController();
         const captureOwner = createVoiceCaptureAdmissionBinding({
             admission,
@@ -126,6 +151,7 @@ describe('Dictation capture admission integration', () => {
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'explicit', stt: { provider: 'happier.voice.openai-compat/stt' } },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -134,7 +160,7 @@ describe('Dictation capture admission integration', () => {
                     },
                 },
             }),
-            transcribeRecordedAudio: vi.fn(async () => 'stale transcript'),
+            transcribeRecordedAudio: recordedAudioTranscriptionController.transcribe,
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio,
         });
@@ -150,10 +176,7 @@ describe('Dictation capture admission integration', () => {
         if (conversation.status === 'acquired') conversation.lease.release();
 
         await expect(controller.toggle('dictation-session-2')).resolves.toEqual({ kind: 'started' });
-        resolveStop({
-            provider: 'recorded_audio',
-            uri: 'file:///late-dictation.m4a',
-        });
+        resolveStop('file:///late-dictation.m4a');
         await vi.waitFor(() => {
             expect(deleteRecordedAudio).toHaveBeenCalledTimes(1);
         });

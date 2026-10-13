@@ -9,8 +9,8 @@
  * Three earlier rounds of tests passed against a feature that had never once
  * worked in the running app, because they invoked the row handler directly or
  * stopped at "a callback fired". Everything between the click and the write is
- * real here; only genuine system boundaries (the account-settings transport, the
- * console sink, and unavailable native adapters) are replaced.
+ * real here; only genuine system boundaries (the account-settings transport
+ * and unavailable native adapters) are replaced.
  */
 import * as React from 'react';
 import { act } from 'react';
@@ -27,38 +27,19 @@ import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testH
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const boundary = vi.hoisted(() => ({
-    log: vi.fn<(message: string) => void>(),
-}));
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
-vi.mock('@/log', () => ({ log: { log: boundary.log } }));
-
-vi.mock('react-native', async () => {
-    const actual: Record<string, unknown> = await vi.importActual('react-native-web');
-    return {
-        ...actual,
-        Platform: {
-            ...(actual.Platform as object ?? {}),
-            OS: 'web',
-            select: (values: Record<string, unknown>) =>
-                values?.web ?? values?.default ?? values?.native ?? values?.ios ?? values?.android,
-        },
-    };
-});
+// The real RNW press/focus path is this suite's contract. The renderer testkit's
+// named host components cannot deliver browser pointer events or modal focus.
+vi.mock('react-native', () => vi.importActual('react-native-web'));
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
-});
-
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key: string) => key });
 });
 
 vi.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
@@ -69,12 +50,6 @@ vi.mock('@/utils/web/radixCjs', async () => {
     return await createRadixCjsRealModule();
 });
 
-vi.mock('react-native-keyboard-controller', () => ({
-    KeyboardAvoidingView: (props: React.PropsWithChildren<Record<string, unknown>>) => (
-        React.createElement('div', null, props.children)
-    ),
-}));
-
 // Native crypto adapters are unavailable in this Node/browser harness; the
 // Protocol codecs, Account-purpose encryption and settings writer stay real.
 vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
@@ -83,6 +58,8 @@ vi.mock('@/platform/digest', () => import('@/platform/digest.node'));
 vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
 vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
 await loadSyncSingletonForTests();
+const { t } = await import('@/text');
+const { log } = await import('@/log');
 
 const { createVoiceProviderRegistry } = await import('@/voice/registry/providerRegistry');
 const { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } = await import(
@@ -123,6 +100,7 @@ let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 beforeEach(() => {
     // JSDOM lacks Web Locks; retain the real Home mutation and Account CAS owners.
     webLocks = installWebLockManagerMock();
+    log.clear();
 });
 
 afterEach(async () => {
@@ -139,13 +117,12 @@ afterEach(async () => {
         account = undefined;
         webLocks?.restore();
         webLocks = undefined;
-        boundary.log.mockClear();
+        log.clear();
     }
 });
 
 function voiceCredentialGestureRecords(): string[] {
-    return boundary.log.mock.calls
-        .map(([message]) => String(message))
+    return log.getLogs()
         .filter((message) => message.includes('voice_credential:'));
 }
 
@@ -580,7 +557,7 @@ describe('Voice credential row → saved-secret picker → account-settings writ
             credentialSource: { kind: 'savedSecret' },
             credentialBindings: { account: { 'api-key': selectedRef } },
         });
-        expect(credentialDetail()).toContain('settingsVoice.local.voiceCredential.setOnAccount');
+        expect(credentialDetail()).toContain(t('settingsVoice.local.voiceCredential.setOnAccount'));
         expect(voiceCredentialGestureRecords()).toEqual([]);
     }, CASE_TIMEOUT_MS);
 
@@ -658,7 +635,7 @@ describe('Voice credential row → saved-secret picker → account-settings writ
             approvedRecipientContractDigest: expect.stringMatching(/^sha256:/),
         });
         expect(account!.settingsWrites).toHaveLength(1);
-        expect(credentialDetail()).toContain('settingsVoice.local.voiceCredential.setOnAccount');
+        expect(credentialDetail()).toContain(t('settingsVoice.local.voiceCredential.setOnAccount'));
         expect(appliedVoiceBinding()?.approvedRecipientContractDigest).not.toBe(approvedDigest);
     }, CASE_TIMEOUT_MS);
 
@@ -675,7 +652,7 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         expect(account!.settingsWrites).toHaveLength(1);
         expect(account!.persistedSettings.voiceSettingsV1).toEqual(before);
         expect(appliedVoiceBinding()).toBeNull();
-        expect(credentialDetail()).toContain('settingsVoice.local.voiceCredential.notSetOnAccount');
+        expect(credentialDetail()).toContain(t('settingsVoice.local.voiceCredential.notSetOnAccount'));
         expect(voiceCredentialGestureRecords()).toHaveLength(1);
         expect(voiceCredentialGestureRecords()[0]).toContain('voice_credential_source_conflict');
         expect(voiceCredentialGestureRecords()[0]).toContain('"outcome":"failed"');

@@ -6,6 +6,7 @@ import {
 } from '@happier-dev/agents';
 import {
   MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent,
+  AgentSessionRealtimeInspectResultV1Schema,
   PluginProjectionV2Schema, SessionCurrentProjectionRecordV1Schema,
   SessionMetadataTuplePatchV1Schema, SessionSpawnNewInputV2Schema,
   V2SessionListResponseSchema, MachineAccessGrantsListResponseV1Schema,
@@ -655,7 +656,7 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     try {
       const resolveBinding = hostLease.host.resolveAgentRealtimeVoiceConversationBinding;
       if (!resolveBinding) throw new Error('Agent realtime binding resolver is unavailable');
-      await expect(resolveBinding({
+      const bindingInput = {
         provider: {
           pluginId: 'acme.voice.codex',
           localId: 'realtime-codex',
@@ -668,7 +669,8 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
         requestedTargetSessionAddress: null,
         settings: state.settings,
         connectedServices,
-      })).resolves.toEqual({
+      };
+      await expect(resolveBinding(bindingInput)).resolves.toEqual({
         conversationSessionAddress: {
           serverId: homeId,
           sessionId: 'installed-codex-global',
@@ -686,6 +688,15 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
         }),
         expect.anything(),
       );
+      expect(sessionRpcResponse).toHaveBeenLastCalledWith({
+        sessionId: 'installed-codex-global', serverId: homeId,
+        method: 'session.agentRealtime.inspect',
+        payload: { v: 1, provider: bindingInput.provider },
+      });
+      sessionRpcResponse.mockResolvedValueOnce(AgentSessionRealtimeInspectResultV1Schema.parse({
+        ok: false, status: 'unavailable', code: 'runtime_stale', message: 'Runtime stale', reason: 'update_required',
+      }));
+      await expect(resolveBinding(bindingInput)).rejects.toMatchObject({ code: 'update_required' });
     } finally {
       hostLease.revoke();
     }

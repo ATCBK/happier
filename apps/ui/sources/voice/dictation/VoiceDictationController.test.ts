@@ -1,10 +1,190 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createExpoFileSystemFileMock } from '@/dev/testkit/mocks/expoFileSystem';
+import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import type { RecordedAudioTranscriptionRequest } from '@/voice/runtime/input/recordedAudioTranscriptionController';
+import { DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema, DaemonVoiceSpeechTranscribeResponseSchema } from '@happier-dev/protocol/daemon/voiceSpeech';
+import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 
 import { createVoiceCaptureAdmissionBinding } from '@/voice/runtime/input/VoiceCaptureAdmissionBinding';
 import { createVoiceCaptureAdmissionController } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
 
-import { createVoiceDictationController } from './VoiceDictationController';
+const network = await installSessionOpsNetworkBoundary();
+const { createVoiceDictationController: createActualVoiceDictationController } = await import('./VoiceDictationController');
+const { recordedAudioTranscriptionController } = await import('@/voice/runtime/input/recordedAudioTranscriptionController');
+const { storage } = await import('@/sync/domains/state/storage');
+const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { resolveVoiceExecutionMachineId } = await import('@/voice/settings/executionMachine');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const controllers: Array<ReturnType<typeof createActualVoiceDictationController>> = [];
+const captures: Array<Readonly<{ stopSession(): Promise<void>; dispose(): Promise<void> }>> = [];
+function createVoiceDictationController(deps: Parameters<typeof createActualVoiceDictationController>[0]) {
+    const controller = createActualVoiceDictationController({ resolveExecutionMachineId: () => resolveVoiceExecutionMachineId(), ...deps });
+    controllers.push(controller);
+    return controller;
+}
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+const { createLocalVoiceCaptureOwner } = await import('@/voice/runtime/input/LocalVoiceCaptureOwner');
+const { createDeviceSttController } = await import('@/voice/input/DeviceSttController');
+const { createNativeMicSession, createExpoAudioRecordingMicSession } = await import('@/voice/runtime/mic/NativeMicSession');
+import { createVoiceFileRecording } from '@happier-dev/audio-stream-native';
+
+const physicalRecognition = vi.hoisted(() => ({
+    listeners: new Map<string, (event: unknown) => void>(),
+    text: () => '',
+    start: vi.fn(),
+}));
+let files = createExpoFileSystemFileMock();
+vi.mock('expo-file-system', () => ({ File: class {
+    constructor(uri: string) { return new files.module.File(uri); }
+} }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }));
+vi.mock('expo-audio', () => ({ AudioModule: { requestRecordingPermissionsAsync: async () => ({ granted: true, canAskAgain: true }) } }));
+vi.mock('expo-speech-recognition', () => ({ ExpoSpeechRecognitionModule: {
+    isRecognitionAvailable: () => true,
+    requestPermissionsAsync: async () => ({ granted: true }),
+    addListener: (name: string, listener: (event: unknown) => void) => {
+        physicalRecognition.listeners.set(name, listener);
+        return { remove: () => { physicalRecognition.listeners.delete(name); } };
+    },
+    start: () => {
+        physicalRecognition.start();
+        physicalRecognition.listeners.get('audiostart')?.({});
+    },
+    stop: () => {
+        physicalRecognition.listeners.get('result')?.({ isFinal: true, results: [{ transcript: physicalRecognition.text() }] });
+        physicalRecognition.listeners.get('end')?.({});
+    },
+} }));
+
+/** Actual capture/microphone/recorder owners above SDK start, stop and OS restore. */
+function createRealCaptureBoundary(input: Readonly<{
+    recordedUri?: () => string | null;
+    recognizedText?: () => string;
+    prepare?: () => Promise<void>;
+    stop?: () => Promise<string | null>;
+    restore?: () => Promise<void>;
+}> = {}) {
+    const native = createNativeVoicePcmCaptureHarness();
+    if (input.restore) native.restore.mockImplementation(input.restore);
+    physicalRecognition.text = input.recognizedText ?? (() => '');
+    const finalizeRecording = async () => {
+        const uri = await (input.stop ? input.stop() : input.recordedUri?.() ?? 'file:///dictation.m4a');
+        if (uri) files.files.set(uri, [1, 2, 3, 4]);
+        return uri;
+    };
+    const sdk = { ...native.nativeModule,
+        startFileRecording: async () => { await input.prepare?.(); return { recordingId: 'dictation-recording' }; },
+        setFileRecordingMuted: async () => {},
+        stopFileRecording: async () => ({ uri: await finalizeRecording() }),
+    };
+    const real = createLocalVoiceCaptureOwner({ getSettings: () => ({}), onCaptureStarted: () => {}, onCaptureError: () => {} }, {
+        createDeviceSttController: deps => createDeviceSttController({ ...deps, getAudioSessionCoordinator: () => native.coordinator }),
+        createLiveMicSession: () => createNativeMicSession(),
+        createRecordingMicSession: () => createExpoAudioRecordingMicSession({
+            requestPermission: async () => ({ granted: true, canAskAgain: true }),
+            acquireAudioMode: () => native.coordinator.acquire({ ownerId: 'dictation-test', mode: 'dictation',
+                input: true, output: false, aec: 'off', capture: 'provider_managed_exclusive' }),
+            createNativeFileRecording: () => createVoiceFileRecording(sdk),
+            createRecorder: () => {
+                let uri: string | null = null;
+                return { get uri() { return uri; },
+                    prepareToRecordAsync: async () => { await input.prepare?.(); }, pause() {}, record() {},
+                    stop: async () => { uri = await finalizeRecording(); } };
+            },
+        }),
+    });
+    captures.push({ stopSession: real.stopSession, dispose: native.coordinator.dispose });
+    return { startCapture: vi.fn(real.startCapture), stopCapture: vi.fn(real.stopCapture), stopSession: vi.fn(real.stopSession) };
+}
+
+let speechHome: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
+let speechReply: (() => Promise<string | null | undefined>) | null = null;
+type SpeechFault = 'credential_unavailable' | 'machine_unavailable' | 'transfer_failed' | 'provider_secret_raw_error';
+let speechFault: SpeechFault | null = null;
+/** The spy observes the public call and delegates every decision to the real owner. */
+function createTranscriptionProbe(reply: (observed: RecordedAudioTranscriptionRequest) => Promise<string | null | undefined> = async () => null,
+    fault?: SpeechFault) {
+    return vi.fn(async (request: RecordedAudioTranscriptionRequest) => {
+        speechFault = fault ?? null;
+        if (speechFault === 'machine_unavailable') {
+            const current = storage.getState().machines['machine-ready-at-start'];
+            if (!current) throw new Error('Expected fixture machine');
+            const unavailable = { ...current, active: false, activeAt: 0 };
+            storage.setState({ machines: { [unavailable.id]: unavailable },
+                machineListByServerId: { [speechHome.home.id]: [unavailable] } });
+        }
+        speechReply = () => reply(request);
+        return await recordedAudioTranscriptionController.transcribe(request);
+    });
+}
+beforeEach(async ({ task }) => {
+    // Real credentials must be admitted in the SDK store for this case's
+    // platform, before the explicit Account/Home fixture starts.
+    const webCase = task.name.includes('web Blob recording')
+        || task.name === 'records web Auto local-neural Dictation before using the single-shot transcription owner'
+        || task.name === 'pins the selected execution machine for the whole recorded-audio attempt';
+    (Platform as unknown as { OS: string }).OS = webCase ? 'web' : ORIGINAL_PLATFORM_OS;
+    files = createExpoFileSystemFileMock();
+    physicalRecognition.start.mockClear();
+    speechReply = null; speechFault = null;
+    network.resetRequests();
+    const serverUrl = 'https://dictation-controller.test';
+    await network.addHome(serverUrl, 'artifact-account');
+    const features = createRootLayoutFeaturesResponse({ features: {
+        voice: { enabled: true }, execution: { runs: { enabled: true } },
+        machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+    } });
+    features.capabilities.machines.liveStream.serverRouted = { disabledReason: null,
+        caps: MachineLiveStreamRelayCapsV1Schema.parse({ maxBitrateBps: 64000, maxFramesPerSecond: 50,
+            maxFrameBytes: 16000, maxDurationMs: 60000, maxTotalBytes: 1000000,
+            maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1 }) };
+    speechHome = await createPlainArtifactHomeFixture(serverUrl, { serverFeatures: features,
+        handleRequest: async path => {
+            if (path.startsWith('/v1/machines/')) {
+                const id = decodeURIComponent(path.slice('/v1/machines/'.length).split('/')[0]!);
+                const row = createPlainMachineRowFixture({ id, accountId: 'artifact-account' });
+                return path.endsWith('/access') ? Response.json({ machineId: id, custodian: row.access!.custodian,
+                    access: row.access, canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [] })
+                    : Response.json({ machine: row });
+            }
+            return null;
+        },
+    });
+    const machine = createMachineFixture({ id: 'machine-ready-at-start', activeAt: Date.now() });
+    storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [speechHome.home.id]: [machine] } });
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ experiments: true, featureToggles: {
+        voice: true, 'execution.runs': true, 'voice.agent': true, 'voice.daemonInference': true },
+        voice: { ...storage.getState().settings.voice, executionMachine: { mode: 'fixed', machineId: machine.id } } }, storage.getState().settings));
+    primeServerFeaturesSnapshot({ serverId: speechHome.home.id, snapshot: { status: 'ready', features } });
+    const recipient = createTransferRecipientKeyPair();
+    let sizeBytes = 4;
+    network.setRpcResponder(async ({ method, payload }) => {
+        const request = payload as Record<string, unknown>;
+        if (method.endsWith('upload.init')) {
+            if (speechFault === 'transfer_failed') return { success: false, error: 'transfer_failed', errorCode: 'transfer_failed' };
+            sizeBytes = Number(request.sizeBytes); return {
+            success: true, uploadId: 'controller-upload', chunkSizeBytes: 65536, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64 }; }
+        if (method.endsWith('upload.chunk') || method.endsWith('upload.abort') || method.endsWith('stt.cancel')) return { success: true };
+        if (method.endsWith('upload.finalize')) {
+            const result = { success: true, uploadId: 'controller-upload', sizeBytes, sha256: '0'.repeat(64) };
+            return method.startsWith('daemon.voice.speech') ? DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema.parse(result)
+                : { ...result, path: '/tmp/controller.m4a' };
+        }
+        if (method.endsWith('stt.transcribe') || method === 'daemon.voice.speech.transcribe') {
+            if (speechFault === 'credential_unavailable') return DaemonVoiceSpeechTranscribeResponseSchema.parse({ ok: false, errorCode: speechFault });
+            if (speechFault === 'provider_secret_raw_error') throw Object.assign(new Error('private provider detail'), { code: speechFault });
+            const text = await speechReply?.() ?? '';
+            if (method === 'daemon.voice.speech.transcribe') return DaemonVoiceSpeechTranscribeResponseSchema.parse({ ok: true, requestId: request.requestId, text });
+            return { ok: true, requestId: request.requestId, text, language: request.language ?? null, modelPackId: request.packId ?? null };
+        }
+        throw new Error(`Unexpected Dictation SDK request: ${method}`);
+    });
+});
+afterAll(() => network.dispose());
 
 const ORIGINAL_PLATFORM_OS = Platform.OS;
 
@@ -34,26 +214,17 @@ function createDeferred(): Readonly<{
 function createPendingCaptureStartHarness() {
     const startSettled = createDeferred();
     const teardownSettled = createDeferred();
-    let observedSignal: AbortSignal | null = null;
-    const rawCaptureOwner = {
-        startCapture: vi.fn(async (args: { signal?: AbortSignal }) => {
-            observedSignal = args.signal ?? null;
-            if (rawCaptureOwner.startCapture.mock.calls.length === 1) {
-                await startSettled.promise;
-            }
-        }),
-        stopCapture: vi.fn(async () => {
-            throw new Error('stop_capture_during_startup');
-        }),
-        stopSession: vi.fn(async () => {
-            await startSettled.promise;
-            await teardownSettled.promise;
-        }),
-    };
+    let prepareCount = 0;
+    const rawCaptureOwner = createRealCaptureBoundary({
+        prepare: async () => {
+            if (++prepareCount === 1) await startSettled.promise;
+        },
+        restore: async () => { await teardownSettled.promise; },
+    });
     const admission = createVoiceCaptureAdmissionController();
     const captureOwner = createVoiceCaptureAdmissionBinding({
         admission,
-        captureOwner: rawCaptureOwner as never,
+        captureOwner: rawCaptureOwner,
         productOwner: 'dictation',
     });
     const controller = createVoiceDictationController({
@@ -62,41 +233,39 @@ function createPendingCaptureStartHarness() {
         getSettings: () => ({
             voice: {
                 providerId: 'local_conversation',
+                dictation: { sttBinding: 'same_as_local' },
                 providers: {
                     local_conversation: {
                         schemaVersion: 1,
-                        config: { stt: { provider: 'device' } },
+                        config: { stt: { provider: 'happier.voice.openai-compat/stt' } },
                     },
                 },
             },
         }),
-        transcribeRecordedAudio: vi.fn(),
+        transcribeRecordedAudio: createTranscriptionProbe(),
     });
     return {
         admission,
         controller,
-        getObservedSignal: () => observedSignal,
+        getObservedSignal: () => rawCaptureOwner.startCapture.mock.calls[0]?.[0].signal ?? null,
+        hasEnteredPrepare: () => prepareCount > 0,
         rawCaptureOwner,
         startSettled,
         teardownSettled,
     };
 }
 
-afterEach(() => {
+afterEach(async () => {
     vi.useRealTimers();
+    for (const controller of controllers.splice(0)) await controller.cancel();
+    for (const capture of captures.splice(0)) { await capture.stopSession(); await capture.dispose(); }
+    await speechHome?.dispose();
     (Platform as unknown as { OS: string }).OS = ORIGINAL_PLATFORM_OS;
 });
 
 describe('createVoiceDictationController', () => {
     it('uses explicit Dictation STT instead of silently inheriting conversational Voice', async () => {
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///dictation.m4a' });
         const settings = {
             voice: {
                 providerId: 'local_conversation',
@@ -116,7 +285,7 @@ describe('createVoiceDictationController', () => {
                 },
             },
         };
-        const transcribeRecordedAudio = vi.fn(async () => 'eigenständige Auswahl');
+        const transcribeRecordedAudio = createTranscriptionProbe(async () => 'eigenständige Auswahl');
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
@@ -160,15 +329,8 @@ describe('createVoiceDictationController', () => {
     });
 
     it('keeps origin-neutral capture correlation out of Session-targeted transcription routing', async () => {
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
-        const transcribeRecordedAudio = vi.fn(async () => 'workflow text');
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///dictation.m4a' });
+        const transcribeRecordedAudio = createTranscriptionProbe(async () => 'workflow text');
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
@@ -203,15 +365,7 @@ describe('createVoiceDictationController', () => {
     });
 
     it('inherits Local Voice STT only through the visible same-as-local binding', async () => {
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'device' as const,
-                text: 'bound local choice',
-                continueHandsFree: false,
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recognizedText: () => 'bound local choice' });
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
@@ -231,7 +385,7 @@ describe('createVoiceDictationController', () => {
                     },
                 },
             }),
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
@@ -242,22 +396,7 @@ describe('createVoiceDictationController', () => {
 
     it('re-resolves the persisted Dictation selection before every normal start', async () => {
         let provider: 'device' | 'happier.voice.openai-compat/stt' = 'device';
-        const captureOwner = {
-            startCapture: vi.fn(async (_request: { provider: string }) => {}),
-            stopCapture: vi.fn(async (args: { provider: string }) => (
-                args.provider === 'device'
-                    ? {
-                        provider: 'device' as const,
-                        text: '',
-                        continueHandsFree: false,
-                    }
-                    : {
-                        provider: 'recorded_audio' as const,
-                        uri: null,
-                    }
-            )),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => null });
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
@@ -270,7 +409,7 @@ describe('createVoiceDictationController', () => {
                     },
                 },
             }),
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
@@ -283,15 +422,8 @@ describe('createVoiceDictationController', () => {
     });
 
     it('captures one utterance through the selected recorded-audio STT provider', async () => {
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
-        const transcribeRecordedAudio = vi.fn(async () => ' dictated text ');
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///dictation.m4a' });
+        const transcribeRecordedAudio = createTranscriptionProbe(async () => ' dictated text ');
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
@@ -345,14 +477,7 @@ describe('createVoiceDictationController', () => {
     });
 
     it('surfaces a failed recorded-audio deletion without discarding the completed transcript', async () => {
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation-retained.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///dictation-retained.m4a' });
         const deleteRecordedAudio = vi.fn(async () => {
             throw new Error('recording_delete_failed');
         });
@@ -369,7 +494,7 @@ describe('createVoiceDictationController', () => {
             }),
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio,
-            transcribeRecordedAudio: vi.fn(async () => 'usable transcript'),
+            transcribeRecordedAudio: createTranscriptionProbe(async () => 'usable transcript'),
         });
 
         await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
@@ -394,15 +519,8 @@ describe('createVoiceDictationController', () => {
 
     it('records web Auto local-neural Dictation before using the single-shot transcription owner', async () => {
         (Platform as unknown as { OS: string }).OS = 'web';
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///daemon-dictation.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
-        const transcribeRecordedAudio = vi.fn(async () => 'daemon transcript');
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///daemon-dictation.m4a' });
+        const transcribeRecordedAudio = createTranscriptionProbe(async () => 'daemon transcript');
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
@@ -441,16 +559,8 @@ describe('createVoiceDictationController', () => {
 
     it('pins the selected execution machine for the whole recorded-audio attempt', async () => {
         (Platform as unknown as { OS: string }).OS = 'web';
-        let executionMachineId: string | null = 'machine-ready-at-start';
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///daemon-dictation.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
-        const transcribeRecordedAudio = vi.fn(async () => 'open the project settings');
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///daemon-dictation.m4a' });
+        const transcribeRecordedAudio = createTranscriptionProbe(async () => 'open the project settings');
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
@@ -468,12 +578,13 @@ describe('createVoiceDictationController', () => {
                     },
                 },
             }),
-            resolveExecutionMachineId: () => executionMachineId,
             transcribeRecordedAudio,
         });
 
         await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
-        executionMachineId = null;
+        storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...storage.getState().settings.voice,
+            executionMachine: { mode: 'fixed', machineId: null } } }, storage.getState().settings));
+        expect(resolveVoiceExecutionMachineId()).toBeNull();
         await expect(controller.toggle('session-1')).resolves.toEqual({
             kind: 'completed',
             text: 'open the project settings',
@@ -485,22 +596,15 @@ describe('createVoiceDictationController', () => {
     });
 
     it('returns streaming device text without creating a recorded-audio transcription', async () => {
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'device' as const,
-                text: ' device transcript ',
-                continueHandsFree: false,
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
-        const transcribeRecordedAudio = vi.fn();
+        const captureOwner = createRealCaptureBoundary({ recognizedText: () => ' device transcript ' });
+        const transcribeRecordedAudio = createTranscriptionProbe();
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -522,15 +626,8 @@ describe('createVoiceDictationController', () => {
 
     it('aborts and discards an in-flight transcription when its session is cancelled', async () => {
         let resolveTranscription: (value: string) => void = () => {};
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
-        const transcribeRecordedAudio = vi.fn((params: { signal?: AbortSignal | null }) => (
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///dictation.m4a' });
+        const transcribeRecordedAudio = createTranscriptionProbe((params: { signal?: AbortSignal | null }) => (
             new Promise<string>((resolve) => {
                 resolveTranscription = resolve;
                 params.signal?.addEventListener('abort', () => resolve('late transcript'), { once: true });
@@ -542,6 +639,7 @@ describe('createVoiceDictationController', () => {
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -568,20 +666,8 @@ describe('createVoiceDictationController', () => {
     });
 
     it('removes a recorded-audio artifact that settles after cancellation', async () => {
-        let resolveStoppedCapture!: (result: Readonly<{
-            provider: 'recorded_audio';
-            uri: string;
-        }>) => void;
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(() => new Promise<Readonly<{
-                provider: 'recorded_audio';
-                uri: string;
-            }>>((resolve) => {
-                resolveStoppedCapture = resolve;
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        let resolveStoppedCapture!: (uri: string) => void;
+        const captureOwner = createRealCaptureBoundary({ stop: () => new Promise<string>(resolve => { resolveStoppedCapture = resolve; }) });
         const deleteRecordedAudio = vi.fn(async () => {});
         const controller = createVoiceDictationController({
             captureOwner,
@@ -596,7 +682,7 @@ describe('createVoiceDictationController', () => {
             }),
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio,
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
@@ -606,10 +692,7 @@ describe('createVoiceDictationController', () => {
         });
 
         await controller.cancel('session-1');
-        resolveStoppedCapture({
-            provider: 'recorded_audio',
-            uri: 'file:///late-dictation.m4a',
-        });
+        resolveStoppedCapture('file:///late-dictation.m4a');
 
         await expect(completion).resolves.toEqual({ kind: 'cancelled' });
         expect(deleteRecordedAudio).toHaveBeenCalledOnce();
@@ -623,20 +706,8 @@ describe('createVoiceDictationController', () => {
         if (uri.startsWith('blob:')) {
             (Platform as unknown as { OS: string }).OS = 'web';
         }
-        let resolveStoppedCapture!: (result: Readonly<{
-            provider: 'recorded_audio';
-            uri: string;
-        }>) => void;
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(() => new Promise<Readonly<{
-                provider: 'recorded_audio';
-                uri: string;
-            }>>((resolve) => {
-                resolveStoppedCapture = resolve;
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        let resolveStoppedCapture!: (uri: string) => void;
+        const captureOwner = createRealCaptureBoundary({ stop: () => new Promise<string>(resolve => { resolveStoppedCapture = resolve; }) });
         const deleteRecordedAudio = vi.fn(async () => {});
         const controller = createVoiceDictationController({
             captureOwner,
@@ -651,7 +722,7 @@ describe('createVoiceDictationController', () => {
             }),
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio,
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
@@ -668,7 +739,7 @@ describe('createVoiceDictationController', () => {
         });
         expect(captureOwner.stopSession).toHaveBeenCalledWith('session-1');
 
-        resolveStoppedCapture({ provider: 'recorded_audio', uri });
+        resolveStoppedCapture(uri);
         await cancellation;
         await vi.waitFor(() => {
             expect(deleteRecordedAudio).toHaveBeenCalledWith(uri);
@@ -676,152 +747,76 @@ describe('createVoiceDictationController', () => {
         });
     });
 
-    it('cleans a cancelled recording before a pending session teardown while retaining capture admission', async () => {
-        const teardown = createDeferred();
-        const rawCaptureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation-pending-teardown.m4a',
-            })),
-            stopSession: vi.fn(async () => {
-                await teardown.promise;
-            }),
-        };
+
+    it('retains recording admission through native restore and admits only one simultaneous cancellation retry', async () => {
+        const restore = createDeferred();
+        let restoreEntered = false;
+        const rawCaptureOwner = createRealCaptureBoundary({
+            recordedUri: () => 'file:///dictation-pending-restore.m4a',
+            restore: async () => {
+                restoreEntered = true;
+                await restore.promise;
+            },
+        });
         const admission = createVoiceCaptureAdmissionController();
         const captureOwner = createVoiceCaptureAdmissionBinding({
             admission,
-            captureOwner: rawCaptureOwner as never,
+            captureOwner: rawCaptureOwner,
             productOwner: 'dictation',
         });
         const deleteRecordedAudio = vi.fn(async () => {});
         const controller = createVoiceDictationController({
             captureOwner,
-            getSettings: () => ({
-                voice: {
-                    dictation: {
-                        sttBinding: 'explicit',
-                        language: null,
-                        stt: { provider: 'happier.voice.openai-compat/stt' },
-                    },
-                },
-            }),
+            getSettings: () => ({ voice: { dictation: {
+                sttBinding: 'explicit', language: null,
+                stt: { provider: 'happier.voice.openai-compat/stt' },
+            } } }),
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio,
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         try {
             await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
             await controller.cancel('session-1');
-
             await vi.waitFor(() => {
-                expect(deleteRecordedAudio).toHaveBeenCalledWith(
-                    'file:///dictation-pending-teardown.m4a',
-                );
+                expect(restoreEntered).toBe(true);
                 expect(rawCaptureOwner.stopSession).toHaveBeenCalledWith('session-1');
             });
-
-            // stopCapture has finalized the recording, but the capture binding
-            // correctly retains its lease until its owner-local session teardown
-            // settles. A retry must not race an old teardown into a new capture.
+            expect(deleteRecordedAudio).not.toHaveBeenCalled();
             expect(admission.acquire('conversation')).toMatchObject({
-                status: 'busy',
-                activeOwner: 'dictation',
+                status: 'busy', activeOwner: 'dictation',
             });
-            let retrySettled = false;
-            const retry = controller.toggle('session-1').then((result) => {
-                retrySettled = true;
+
+            let firstRetrySettled = false;
+            const firstRetry = controller.toggle('session-1').then((result) => {
+                firstRetrySettled = true;
                 return result;
             });
-            await Promise.resolve();
-            expect(rawCaptureOwner.startCapture).toHaveBeenCalledTimes(1);
-            expect(retrySettled).toBe(false);
-
-            teardown.resolve();
-            await expect(retry).resolves.toEqual({ kind: 'started' });
-        } finally {
-            teardown.resolve();
-        }
-    });
-
-    it('starts only one same-session retry after simultaneous waiters release a cancelled teardown', async () => {
-        const teardown = createDeferred();
-        const rawCaptureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation-simultaneous-retry.m4a',
-            })),
-            stopSession: vi.fn(async () => {
-                await teardown.promise;
-            }),
-        };
-        const admission = createVoiceCaptureAdmissionController();
-        const captureOwner = createVoiceCaptureAdmissionBinding({
-            admission,
-            captureOwner: rawCaptureOwner as never,
-            productOwner: 'dictation',
-        });
-        const controller = createVoiceDictationController({
-            captureOwner,
-            getSettings: () => ({
-                voice: {
-                    dictation: {
-                        sttBinding: 'explicit',
-                        language: null,
-                        stt: { provider: 'happier.voice.openai-compat/stt' },
-                    },
-                },
-            }),
-            measureRecordedAudioBytes: vi.fn(async () => 4),
-            deleteRecordedAudio: vi.fn(async () => {}),
-            transcribeRecordedAudio: vi.fn(),
-        });
-
-        try {
-            await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
-            await controller.cancel('session-1');
-            await vi.waitFor(() => {
-                expect(rawCaptureOwner.stopSession).toHaveBeenCalledWith('session-1');
-            });
-
-            const firstRetry = controller.toggle('session-1');
             const secondRetry = controller.toggle('session-1');
             await Promise.resolve();
             expect(rawCaptureOwner.startCapture).toHaveBeenCalledTimes(1);
+            expect(firstRetrySettled).toBe(false);
 
-            teardown.resolve();
-
+            restore.resolve();
             await expect(firstRetry).resolves.toEqual({ kind: 'started' });
             await expect(secondRetry).resolves.toEqual({ kind: 'cancelled' });
+            await vi.waitFor(() => {
+                expect(deleteRecordedAudio).toHaveBeenCalledOnce();
+                expect(deleteRecordedAudio).toHaveBeenCalledWith('file:///dictation-pending-restore.m4a');
+            });
             expect(rawCaptureOwner.startCapture).toHaveBeenCalledTimes(2);
             expect(rawCaptureOwner.stopSession).toHaveBeenCalledTimes(1);
-            expect(controller.getSnapshot()).toEqual({
-                sessionId: 'session-1',
-                status: 'listening',
-            });
+            expect(controller.getSnapshot()).toEqual({ sessionId: 'session-1', status: 'listening' });
         } finally {
-            teardown.resolve();
+            restore.resolve();
             await controller.cancel('session-1');
         }
     });
 
     it('waits for prompt cancellation cleanup before restarting the same Dictation session', async () => {
-        let resolveStoppedCapture!: (result: Readonly<{
-            provider: 'recorded_audio';
-            uri: string;
-        }>) => void;
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(() => new Promise<Readonly<{
-                provider: 'recorded_audio';
-                uri: string;
-            }>>((resolve) => {
-                resolveStoppedCapture = resolve;
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        let resolveStoppedCapture!: (uri: string) => void;
+        const captureOwner = createRealCaptureBoundary({ stop: () => new Promise<string>(resolve => { resolveStoppedCapture = resolve; }) });
         const controller = createVoiceDictationController({
             captureOwner,
             getSettings: () => ({
@@ -835,7 +830,7 @@ describe('createVoiceDictationController', () => {
             }),
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio: vi.fn(async () => {}),
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
@@ -844,47 +839,44 @@ describe('createVoiceDictationController', () => {
         await Promise.resolve();
         expect(captureOwner.startCapture).toHaveBeenCalledTimes(1);
 
-        resolveStoppedCapture({
-            provider: 'recorded_audio',
-            uri: 'file:///dictation-retry-after-cancel.m4a',
-        });
+        resolveStoppedCapture('file:///dictation-retry-after-cancel.m4a');
 
         await expect(retry).resolves.toEqual({ kind: 'started' });
         expect(captureOwner.startCapture).toHaveBeenCalledTimes(2);
     });
 
     it('treats End Dictation during capture startup as cancellation', async () => {
-        let resolveStart: () => void = () => {};
-        const captureOwner = {
-            startCapture: vi.fn(() => new Promise<void>((resolve) => {
-                resolveStart = resolve;
-            })),
-            stopCapture: vi.fn(),
-            stopSession: vi.fn(async () => {}),
-        };
+        const start = createDeferred();
+        let prepareEntered = false;
+        const captureOwner = createRealCaptureBoundary({ prepare: async () => {
+            prepareEntered = true;
+            await start.promise;
+        } });
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
-                            config: { stt: { provider: 'device' } },
+                            config: { stt: { provider: 'happier.voice.openai-compat/stt' } },
                         },
                     },
                 },
             }),
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         const starting = controller.toggle('session-1');
         await vi.waitFor(() => {
             expect(captureOwner.startCapture).toHaveBeenCalledTimes(1);
+            expect(prepareEntered).toBe(true);
         });
         const ending = controller.toggle('session-1');
-        resolveStart();
+        start.resolve();
 
         await expect(ending).resolves.toEqual({ kind: 'cancelled' });
         await expect(starting).resolves.toEqual({ kind: 'cancelled' });
@@ -905,6 +897,7 @@ describe('createVoiceDictationController', () => {
         });
         await vi.advanceTimersByTimeAsync(0);
         expect(harness.rawCaptureOwner.startCapture).toHaveBeenCalledTimes(1);
+        expect(harness.hasEnteredPrepare()).toBe(true);
         expect(harness.getObservedSignal()?.aborted).toBe(false);
 
         await vi.advanceTimersByTimeAsync(EXPECTED_DICTATION_LIMITS.captureDurationMs);
@@ -977,6 +970,7 @@ describe('createVoiceDictationController', () => {
         });
         await vi.waitFor(() => {
             expect(harness.rawCaptureOwner.startCapture).toHaveBeenCalledTimes(1);
+            expect(harness.hasEnteredPrepare()).toBe(true);
         });
 
         let cancelSettlementCount = 0;
@@ -1017,17 +1011,13 @@ describe('createVoiceDictationController', () => {
 
     it('waits for cross-session teardown to release admission before starting the next session', async () => {
         const teardownSettled = createDeferred();
-        const rawCaptureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'device' as const,
-                text: '',
-                continueHandsFree: false,
-            })),
-            stopSession: vi.fn(async () => {
+        let restoreEntered = false;
+        const rawCaptureOwner = createRealCaptureBoundary({
+            restore: async () => {
+                restoreEntered = true;
                 await teardownSettled.promise;
-            }),
-        };
+            },
+        });
         const admission = createVoiceCaptureAdmissionController();
         const captureOwner = createVoiceCaptureAdmissionBinding({
             admission,
@@ -1040,6 +1030,7 @@ describe('createVoiceDictationController', () => {
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1048,60 +1039,61 @@ describe('createVoiceDictationController', () => {
                     },
                 },
             }),
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
-        await expect(controller.toggle('session-a')).resolves.toEqual({ kind: 'started' });
+        try {
+            await expect(controller.toggle('session-a')).resolves.toEqual({ kind: 'started' });
+            expect(physicalRecognition.start).toHaveBeenCalledOnce();
 
-        let switchSettled = false;
-        const switching = controller.toggle('session-b').then(
-            (result) => ({ status: 'resolved' as const, result }),
-            (error: unknown) => ({ status: 'rejected' as const, error }),
-        ).then((outcome) => {
-            switchSettled = true;
-            return outcome;
-        });
-        await vi.waitFor(() => {
+            let switchSettled = false;
+            const switching = controller.toggle('session-b').then(
+                (result) => ({ status: 'resolved' as const, result }),
+                (error: unknown) => ({ status: 'rejected' as const, error }),
+            ).then((outcome) => {
+                switchSettled = true;
+                return outcome;
+            });
+            await vi.waitFor(() => {
+                expect(rawCaptureOwner.stopSession).toHaveBeenCalledTimes(1);
+                expect(restoreEntered).toBe(true);
+            });
+
+            expect(switchSettled).toBe(false);
+            expect(physicalRecognition.start).toHaveBeenCalledOnce();
+            expect(controller.getSnapshot().status).not.toBe('listening');
+            expect(admission.acquire('conversation')).toEqual({
+                status: 'busy',
+                activeOwner: 'dictation',
+            });
+
+            teardownSettled.resolve();
+
+            await expect(switching).resolves.toEqual({
+                status: 'resolved',
+                result: { kind: 'started' },
+            });
+            expect(physicalRecognition.start).toHaveBeenCalledTimes(2);
+            expect(rawCaptureOwner.startCapture).toHaveBeenNthCalledWith(
+                2,
+                expect.objectContaining({ sessionId: 'session-b' }),
+            );
             expect(rawCaptureOwner.stopSession).toHaveBeenCalledTimes(1);
-        });
-
-        expect(switchSettled).toBe(false);
-        expect(rawCaptureOwner.startCapture).toHaveBeenCalledTimes(1);
-        expect(admission.acquire('conversation')).toEqual({
-            status: 'busy',
-            activeOwner: 'dictation',
-        });
-
-        teardownSettled.resolve();
-
-        await expect(switching).resolves.toEqual({
-            status: 'resolved',
-            result: { kind: 'started' },
-        });
-        expect(rawCaptureOwner.startCapture).toHaveBeenNthCalledWith(
-            2,
-            expect.objectContaining({ sessionId: 'session-b' }),
-        );
-        expect(rawCaptureOwner.stopSession).toHaveBeenCalledTimes(1);
-        await controller.cancel('session-b');
+            await controller.cancel('session-b');
+        } finally {
+            teardownSettled.resolve();
+        }
     });
 
     it('projects capture-owner failure separately from silent cancellation', async () => {
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'device' as const,
-                text: '',
-                continueHandsFree: false,
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recognizedText: () => '' });
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1110,7 +1102,7 @@ describe('createVoiceDictationController', () => {
                     },
                 },
             }),
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
@@ -1144,24 +1136,17 @@ describe('createVoiceDictationController', () => {
     });
 
     it('does not start a retry until failed capture cleanup has completed', async () => {
-        let resolveCleanup: () => void = () => {};
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'device' as const,
-                text: '',
-                continueHandsFree: false,
-            })),
-            stopSession: vi.fn(() => new Promise<void>((resolve) => {
-                resolveCleanup = resolve;
-            })),
-        };
+        const cleanup = createDeferred();
+        const captureOwner = createRealCaptureBoundary({
+            restore: async () => { await cleanup.promise; },
+        });
         const controller = createVoiceDictationController({
             captureOwner,
             ...TEST_RECORDED_AUDIO_BOUNDARY,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1170,7 +1155,7 @@ describe('createVoiceDictationController', () => {
                     },
                 },
             }),
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         await controller.toggle('session-1');
@@ -1187,7 +1172,7 @@ describe('createVoiceDictationController', () => {
         await vi.waitFor(() => {
             expect(captureOwner.stopSession).toHaveBeenCalledWith('session-1');
         });
-        resolveCleanup();
+        cleanup.resolve();
         await vi.waitFor(async () => {
             await expect(controller.toggle('session-1')).resolves.toEqual({
                 kind: 'started',
@@ -1198,22 +1183,16 @@ describe('createVoiceDictationController', () => {
 
     it('allows capture at the exact duration limit and fails at limit + 1 with one bounded teardown', async () => {
         vi.useFakeTimers();
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///dictation.m4a' });
         const measureRecordedAudioBytes = vi.fn(async () => 4);
         const deleteRecordedAudio = vi.fn(async () => {});
-        const transcribeRecordedAudio = vi.fn(async () => 'must not be inserted');
+        const transcribeRecordedAudio = createTranscriptionProbe(async () => 'must not be inserted');
         const controller = createVoiceDictationController({
             captureOwner,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1261,20 +1240,14 @@ describe('createVoiceDictationController', () => {
     it('bounds a pending provider transcription and settles a simultaneous navigation cancel once', async () => {
         vi.useFakeTimers();
         let transcriptionSignal: AbortSignal | null = null;
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///dictation.m4a' });
         const deleteRecordedAudio = vi.fn(async () => {});
         const controller = createVoiceDictationController({
             captureOwner,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1285,17 +1258,17 @@ describe('createVoiceDictationController', () => {
             }),
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio,
-            transcribeRecordedAudio: vi.fn((params) => {
+            transcribeRecordedAudio: createTranscriptionProbe((params) => {
                 transcriptionSignal = params.signal ?? null;
                 return new Promise<string>(() => {});
             }),
         });
 
         await controller.toggle('session-1');
+        const stopRequestedAt = Date.now();
         const completion = controller.toggle('session-1');
-        await vi.advanceTimersByTimeAsync(0);
-        expect(transcriptionSignal).not.toBeNull();
-        await vi.advanceTimersByTimeAsync(EXPECTED_DICTATION_LIMITS.transcriptionDeadlineMs);
+        await vi.waitFor(() => expect(transcriptionSignal).not.toBeNull());
+        await vi.advanceTimersByTimeAsync(EXPECTED_DICTATION_LIMITS.transcriptionDeadlineMs - (Date.now() - stopRequestedAt));
         expect(controller.getSnapshot().status).toBe('transcribing');
 
         const navigationCancel = controller.cancel('session-1');
@@ -1315,27 +1288,16 @@ describe('createVoiceDictationController', () => {
 
     it('bounds recorder finalization from the stop request and still cleans a late recording', async () => {
         vi.useFakeTimers();
-        let resolveStoppedCapture!: (result: Readonly<{
-            provider: 'recorded_audio';
-            uri: string;
-        }>) => void;
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(() => new Promise<Readonly<{
-                provider: 'recorded_audio';
-                uri: string;
-            }>>((resolve) => {
-                resolveStoppedCapture = resolve;
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        let resolveStoppedCapture!: (uri: string) => void;
+        const captureOwner = createRealCaptureBoundary({ stop: () => new Promise<string>(resolve => { resolveStoppedCapture = resolve; }) });
         const deleteRecordedAudio = vi.fn(async () => {});
-        const transcribeRecordedAudio = vi.fn(async () => 'must not start before finalization');
+        const transcribeRecordedAudio = createTranscriptionProbe(async () => 'must not start before finalization');
         const controller = createVoiceDictationController({
             captureOwner,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1382,10 +1344,7 @@ describe('createVoiceDictationController', () => {
             expect(captureOwner.stopSession).toHaveBeenCalledWith('session-1');
             expect(transcribeRecordedAudio).not.toHaveBeenCalled();
         } finally {
-            resolveStoppedCapture({
-                provider: 'recorded_audio',
-                uri: 'file:///late-dictation-after-deadline.m4a',
-            });
+            resolveStoppedCapture('file:///late-dictation-after-deadline.m4a');
             await completion;
         }
 
@@ -1398,26 +1357,14 @@ describe('createVoiceDictationController', () => {
 
     it('does not project a stale late-artifact cleanup failure into a same-session retry', async () => {
         vi.useFakeTimers();
-        let resolveFirstStop!: (result: Readonly<{
-            provider: 'recorded_audio';
-            uri: string;
-        }>) => void;
-        const firstStop = new Promise<Readonly<{
-            provider: 'recorded_audio';
-            uri: string;
-        }>>((resolve) => {
+        let resolveFirstStop!: (uri: string | null) => void;
+        const firstStop = new Promise<string | null>((resolve) => {
             resolveFirstStop = resolve;
         });
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn()
-                .mockImplementationOnce(() => firstStop)
-                .mockResolvedValueOnce({
-                    provider: 'recorded_audio' as const,
-                    uri: null,
-                }),
-            stopSession: vi.fn(async () => {}),
-        };
+        let stopCount = 0;
+        const captureOwner = createRealCaptureBoundary({
+            stop: async () => ++stopCount === 1 ? await firstStop : null,
+        });
         const deleteRecordedAudio = vi.fn(async () => {
             throw new Error('stale_recording_delete_failed');
         });
@@ -1426,6 +1373,7 @@ describe('createVoiceDictationController', () => {
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1436,7 +1384,7 @@ describe('createVoiceDictationController', () => {
             }),
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio,
-            transcribeRecordedAudio: vi.fn(async () => 'stale transcript'),
+            transcribeRecordedAudio: createTranscriptionProbe(async () => 'stale transcript'),
         });
 
         await expect(controller.toggle('session-1')).resolves.toEqual({ kind: 'started' });
@@ -1452,10 +1400,7 @@ describe('createVoiceDictationController', () => {
             expect(captureOwner.stopSession).toHaveBeenCalledTimes(2);
         });
 
-        resolveFirstStop({
-            provider: 'recorded_audio',
-            uri: 'file:///stale-dictation.m4a',
-        });
+        resolveFirstStop('file:///stale-dictation.m4a');
         await vi.waitFor(() => {
             expect(deleteRecordedAudio).toHaveBeenCalledTimes(1);
         });
@@ -1468,19 +1413,13 @@ describe('createVoiceDictationController', () => {
     it('reports a typed transcription deadline when the provider remains pending', async () => {
         vi.useFakeTimers();
         let transcriptionSignal: AbortSignal | null = null;
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation.m4a',
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///dictation.m4a' });
         const controller = createVoiceDictationController({
             captureOwner,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1491,18 +1430,18 @@ describe('createVoiceDictationController', () => {
             }),
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio: vi.fn(async () => {}),
-            transcribeRecordedAudio: vi.fn((params) => {
+            transcribeRecordedAudio: createTranscriptionProbe((params) => {
                 transcriptionSignal = params.signal ?? null;
                 return new Promise<string>(() => {});
             }),
         });
 
         await controller.toggle('session-1');
+        const stopRequestedAt = Date.now();
         const completion = controller.toggle('session-1');
-        await vi.advanceTimersByTimeAsync(0);
-        expect(transcriptionSignal).not.toBeNull();
+        await vi.waitFor(() => expect(transcriptionSignal).not.toBeNull());
 
-        await vi.advanceTimersByTimeAsync(EXPECTED_DICTATION_LIMITS.transcriptionDeadlineMs);
+        await vi.advanceTimersByTimeAsync(EXPECTED_DICTATION_LIMITS.transcriptionDeadlineMs - (Date.now() - stopRequestedAt));
         expect(controller.getSnapshot().status).toBe('transcribing');
         await vi.advanceTimersByTimeAsync(1);
 
@@ -1528,20 +1467,13 @@ describe('createVoiceDictationController', () => {
         const exact = scalar.repeat(EXPECTED_DICTATION_LIMITS.transcriptCharacters);
         const over = `${exact}${scalar}`;
         const transcripts = [exact, over];
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'device' as const,
-                text: transcripts.shift() ?? '',
-                continueHandsFree: false,
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recognizedText: () => transcripts.shift() ?? '' });
         const controller = createVoiceDictationController({
             captureOwner,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1552,7 +1484,7 @@ describe('createVoiceDictationController', () => {
             }),
             measureRecordedAudioBytes: vi.fn(),
             deleteRecordedAudio: vi.fn(),
-            transcribeRecordedAudio: vi.fn(),
+            transcribeRecordedAudio: createTranscriptionProbe(),
         });
 
         await controller.toggle('session-1');
@@ -1580,20 +1512,13 @@ describe('createVoiceDictationController', () => {
         { code: 'transfer_failed', reason: 'transcription_transfer_failed' },
         { code: 'provider_secret_raw_error', reason: 'transcription_failed' },
     ] as const)('projects recorded-audio $code into bounded Dictation recovery', async ({ code, reason }) => {
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: 'file:///dictation.m4a',
-                continueHandsFree: false,
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => 'file:///dictation.m4a' });
         const controller = createVoiceDictationController({
             captureOwner,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,
@@ -1604,9 +1529,7 @@ describe('createVoiceDictationController', () => {
             }),
             measureRecordedAudioBytes: vi.fn(async () => 4),
             deleteRecordedAudio: vi.fn(async () => {}),
-            transcribeRecordedAudio: vi.fn(async () => {
-                throw Object.assign(new Error('private provider detail'), { code });
-            }),
+            transcribeRecordedAudio: createTranscriptionProbe(async () => '', code),
         });
 
         await controller.toggle('session-1');
@@ -1626,21 +1549,15 @@ describe('createVoiceDictationController', () => {
             EXPECTED_DICTATION_LIMITS.recordedAudioBytes,
             EXPECTED_DICTATION_LIMITS.recordedAudioBytes + 1,
         ];
-        const captureOwner = {
-            startCapture: vi.fn(async () => {}),
-            stopCapture: vi.fn(async () => ({
-                provider: 'recorded_audio' as const,
-                uri: `file:///dictation-${sizes.length}.m4a`,
-            })),
-            stopSession: vi.fn(async () => {}),
-        };
+        const captureOwner = createRealCaptureBoundary({ recordedUri: () => `file:///dictation-${sizes.length}.m4a` });
         const deleteRecordedAudio = vi.fn(async () => {});
-        const transcribeRecordedAudio = vi.fn(async () => 'bounded text');
+        const transcribeRecordedAudio = createTranscriptionProbe(async () => 'bounded text');
         const controller = createVoiceDictationController({
             captureOwner,
             getSettings: () => ({
                 voice: {
                     providerId: 'local_conversation',
+                    dictation: { sttBinding: 'same_as_local' },
                     providers: {
                         local_conversation: {
                             schemaVersion: 1,

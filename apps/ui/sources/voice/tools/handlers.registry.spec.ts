@@ -9,7 +9,7 @@ describe('voice tool handlers registry alignment', () => {
     const handlers = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
 
     for (const toolName of listVoiceClientToolNames()) {
-      expect(typeof (handlers as any)[toolName]).toBe(
+      expect(typeof handlers[toolName]).toBe(
         ['invokeAction', 'readCurrentUiContext', 'invokeCurrentUiCommand'].includes(toolName)
           ? 'undefined'
           : 'function',

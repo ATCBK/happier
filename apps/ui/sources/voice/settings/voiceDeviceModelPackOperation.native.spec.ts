@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DownloadOptions, DownloadProgressData, DownloadResumable } from 'expo-file-system/legacy';
+import { createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
 
-import { createMemFs } from '@/voice/modelPacks/installerTestFs';
 import { invokeVoiceDeviceModelPackOperation } from './voiceDeviceModelPackOperation.native';
 import * as React from 'react';
 import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
@@ -10,22 +11,30 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
-const filesystem = createMemFs();
-const confirm = vi.hoisted(() => vi.fn(async () => true));
+const filesystem = await vi.hoisted(async () => (await import('@/voice/modelPacks/installerTestFs')).createMemFs());
+const nativeDialogs = vi.hoisted(() => ({
+    alert: vi.fn<typeof import('react-native')['Alert']['alert']>(),
+}));
+const nativeDownload = vi.hoisted(() => vi.fn<(
+    url: string, uri: string, options?: DownloadOptions, progress?: (value: DownloadProgressData) => void,
+) => Pick<DownloadResumable, 'downloadAsync' | 'pauseAsync' | 'cancelAsync'>>());
+const nativeTransferReplies: string[] = [];
 
-// Native filesystem, modal presentation and HTTP are genuine system boundaries.
+// Only the native filesystem, OS dialog buttons and HTTP are substituted.
 vi.mock('expo-file-system', () => filesystem.fs);
+vi.mock('expo-file-system/legacy', () => ({ createDownloadResumable: nativeDownload,
+    FileSystemSessionType: { BACKGROUND: 0, FOREGROUND: 1 } }));
 vi.mock('@happier-dev/sherpa-native', () => ({ getOptionalHappierSherpaNativeModule: () => null }));
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { confirm } }).module;
-});
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock();
-});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
+    { platformOS: 'ios' }, { Alert: nativeDialogs }));
+// Model operations never start the unavailable vendor conversation SDK.
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: () => { throw new Error('Unexpected ElevenLabs conversation start'); } } }));
+const { getPreferredLanguage, setPreferredLanguageFromSettings } = await import('@/text');
+const initialLanguage = getPreferredLanguage();
+afterAll(() => { setPreferredLanguageFromSettings(initialLanguage); });
 
 const packId = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
 const modelUri = () => `${filesystem.root}/${packId}/model.onnx`;
@@ -39,15 +48,34 @@ const input = { packId, role: 'stt_sherpa' as const, isCurrent: () => true };
 describe('native device model operations through the real installer', () => {
     beforeEach(() => {
         filesystem.files.clear();
-        confirm.mockReset().mockResolvedValue(true);
+        nativeTransferReplies.length = 0;
+        setPreferredLanguageFromSettings('en');
+        nativeDialogs.alert.mockReset().mockImplementation((_title, _message, buttons) => {
+            buttons?.find(button => button.style !== 'cancel')?.onPress?.();
+        });
         vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('model.onnx')
             ? new Response(new Uint8Array([1]), { headers: { 'content-length': '1' } })
             : new Response(JSON.stringify(manifest), { headers: { 'content-type': 'application/json' } })));
+        nativeDownload.mockReset().mockImplementation((url, uri, options, progress) => {
+            const controller = new AbortController();
+            return {
+                async downloadAsync() {
+                    const download = createMemNativeDownload(filesystem.fs, globalThis.fetch);
+                    const result = await download({ url, fileUri: uri, signal: controller.signal,
+                        onProgress: loaded => progress?.({ totalBytesWritten: loaded, totalBytesExpectedToWrite: loaded }),
+                    });
+                    nativeTransferReplies.push(url);
+                    return { ...result, uri, mimeType: 'application/octet-stream' };
+                },
+                async pauseAsync() { return { url, fileUri: uri, options: options ?? {} }; },
+                async cancelAsync() { controller.abort(); },
+            };
+        });
     });
     afterEach(() => vi.unstubAllGlobals());
 
     it.each(['prepare', 'update'] as const)('keeps a slow %s pending for its caller instead of imposing a local deadline', async (operation) => {
-        vi.useFakeTimers();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         try {
             if (operation === 'update') {
                 filesystem.files.set(modelUri(), new Uint8Array([9]));
@@ -81,6 +109,8 @@ describe('native device model operations through the real installer', () => {
             await manifestRequested.promise;
             await vi.advanceTimersByTimeAsync(300_000);
             finishManifest?.(Response.json(manifest));
+            await vi.waitFor(() => expect(nativeDownload, 'Native transfer admitted after manifest release').toHaveBeenCalled());
+            await vi.waitFor(() => expect(nativeTransferReplies, 'Native SDK transfer settled').toContain(manifest.files[0]!.url));
             expect(await outcome).toBe('completed');
             expect(filesystem.files.get(modelUri())).toEqual(new Uint8Array([1]));
         } finally {
@@ -104,7 +134,10 @@ describe('native device model operations through the real installer', () => {
     it('preserves the installed bytes when selection changes while removal consent is open', async () => {
         filesystem.files.set(modelUri(), new Uint8Array([9]));
         let current = true;
-        confirm.mockImplementationOnce(async () => { current = false; return true; });
+        nativeDialogs.alert.mockImplementationOnce((_title, _message, buttons) => {
+            current = false;
+            buttons?.find(button => button.style !== 'cancel')?.onPress?.();
+        });
         expect(await invokeVoiceDeviceModelPackOperation({ ...input, operation: 'remove', isCurrent: () => current }))
             .toEqual({ status: 'cancelled' });
         expect(filesystem.files.get(modelUri())).toEqual(new Uint8Array([9]));
@@ -115,7 +148,9 @@ describe('native device model operations through the real installer', () => {
         filesystem.files.set(`${filesystem.root}/${packId}/pack.json`, new TextEncoder().encode(JSON.stringify({
             manifest: { ...manifest, version: 'v1', files: [{ ...manifest.files[0], sha256: 'a'.repeat(64) }] },
         })));
-        confirm.mockResolvedValueOnce(false);
+        nativeDialogs.alert.mockImplementationOnce((_title, _message, buttons) => {
+            buttons?.find(button => button.style === 'cancel')?.onPress?.();
+        });
         const checked: unknown[] = [];
         const result = await invokeVoiceDeviceModelPackOperation({ ...input, operation: 'update',
             onUpdateChecked: (value: unknown) => checked.push(value),
@@ -128,7 +163,9 @@ describe('native device model operations through the real installer', () => {
     it('does not remove the old UI selection after the pack changes during consent', async () => {
         filesystem.files.set(modelUri(), new Uint8Array([9]));
         let answer!: (confirmed: boolean) => void;
-        confirm.mockImplementationOnce(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+        nativeDialogs.alert.mockImplementationOnce((_title, _message, buttons) => {
+            answer = confirmed => buttons?.find(button => (button.style === 'cancel') === !confirmed)?.onPress?.();
+        });
         const props = { packId, manifestUrl: 'https://example.test/manifest.json',
             role: 'stt_sherpa' as const };
         const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: props });
@@ -176,7 +213,9 @@ describe('native device model operations through the real installer', () => {
     it('keeps committed removal custody when a replacement selection suspends without committing', async () => {
         filesystem.files.set(modelUri(), new Uint8Array([9]));
         let answer!: (confirmed: boolean) => void;
-        confirm.mockImplementationOnce(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+        nativeDialogs.alert.mockImplementationOnce((_title, _message, buttons) => {
+            answer = confirmed => buttons?.find(button => (button.style === 'cancel') === !confirmed)?.onPress?.();
+        });
         const neverCommits = new Promise<never>(() => undefined);
         function Harness(props: { packId: string; suspend?: Promise<never> }) {
             const owner = useLocalNeuralModelPackState({ ...input, packId: props.packId, manifestUrl: null });
@@ -210,7 +249,9 @@ describe('native device model operations through the real installer', () => {
             expect(lifetime?.isCurrent()).toBe(true);
             filesystem.files.set(modelUri(), new Uint8Array([9]));
             let answer!: (confirmed: boolean) => void;
-            confirm.mockImplementationOnce(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+            nativeDialogs.alert.mockImplementationOnce((_title, _message, buttons) => {
+                answer = confirmed => buttons?.find(button => (button.style === 'cancel') === !confirmed)?.onPress?.();
+            });
             const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: { ...input, manifestUrl: null } });
             await act(async () => { hook.getCurrent().clearAssets(); });
             await act(async () => { retireActiveServerAccountScopeLifetime(); });

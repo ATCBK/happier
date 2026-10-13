@@ -1,320 +1,172 @@
+import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthContextType } from '@/auth/context/AuthContext';
-import { getCurrentAuth, setCurrentAuth } from '@/auth/context/currentAuth';
-import { installVoiceToolActionImplCommonModuleMocks } from './voiceToolActionImplTestHelpers';
-import type { ActiveServerSwitchResult } from '@/sync/domains/server/activeServerSwitch';
+import { createSessionFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-const setActiveServerAndSwitch = vi.fn(async (_params: any): Promise<ActiveServerSwitchResult> => 'switched');
-const routerNavigate = vi.fn();
-const refreshFromActiveServer = vi.fn(async () => {});
-const setPrimaryActionSessionForVoiceTool = vi.fn(async (_params: any) => ({
-  ok: true,
-  status: 'ok',
-  sessionId: 's_default',
-}));
+const routerNavigate = vi.hoisted(() => vi.fn());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    router: { navigate: routerNavigate },
+}).module);
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { getCurrentAuth, setCurrentAuth } = await import('@/auth/context/currentAuth');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { buildSessionListRenderableFromSession } = await import('@/sync/domains/session/listing/sessionListRenderable');
+const { useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore');
+const { openSessionForVoiceTool } = await import('./openSession');
+const initialState = storage.getState();
+const initialTargets = useVoiceTargetStore.getState();
+let previousAuth: AuthContextType | null;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+let a: string;
+let b: string;
 
-const state: any = {
-  sessions: {
-    s_setup: {
-      id: 's_setup',
-      metadata: {
-        summary: { text: 'Session Setup' },
-      },
-    },
-    s_matrix: {
-      id: 's_matrix',
-      metadata: {
-        name: 'leeroy',
-      },
-    },
-  },
-  sessionListRowsByServerId: {
-    'server-a': {
-      s_visible: {
-        id: 's_visible',
-        updatedAt: 321,
-        metadata: {
-          summaryText: 'Visible only in current list',
-        },
-      },
-      s_matrix: {
-        id: 's_matrix',
-        updatedAt: 322,
-        metadata: {
-          summaryText: 'Session QA Voice Matrix',
-        },
-      },
-    },
-    'server-b': {
-      s_other: {
-        id: 's_other',
-        metadata: { summary: { text: 'Other summary' } },
-      },
-    },
-  },
-  ordinarySessionListMembershipByServerId: {
-    'server-a': ['s_visible', 's_matrix'],
-    'server-b': ['s_other'],
-  },
-  sessionListIndexByServerId: {
-    'server-a': [
-      { type: 'session', sessionId: 's_visible', serverId: 'server-a', serverName: 'Server A' },
-      { type: 'session', sessionId: 's_matrix', serverId: 'server-a', serverName: 'Server A' },
-    ],
-  },
-  concurrentSessionListCacheByServerId: {
-    'server-b': {
-      serverName: 'Server B',
-    },
-  },
-};
-
-installVoiceToolActionImplCommonModuleMocks({
-  storage: async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-      storage: {
-        getState: () => state,
-      } as typeof import('@/sync/domains/state/storage').storage,
+beforeEach(async () => {
+    await home.reset();
+    storage.setState(initialState, true);
+    useVoiceTargetStore.setState(useVoiceTargetStore.getInitialState(), true);
+    a = await home.addHome({ name: 'Server A', serverUrl: 'https://voice-open-a.test', accountId: 'account-a' });
+    b = await home.addHome({ name: 'Server B', serverUrl: 'https://voice-open-b.test', accountId: 'account-b', active: false });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://voice-open-a.test', accountId: 'account-a',
+        request: async (url, init) => home.request(url, init),
     });
-  },
-  router: async () => {
-    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({
-      router: {
-        navigate: (path: any, options: any) => routerNavigate(path, options),
-      },
-    }).module;
-  },
+    installHomeGovernanceBoundaries(home);
+    previousAuth = getCurrentAuth();
+    setCurrentAuth({
+        isAuthenticated: true, credentials: connection.credentials, credentialAuthorityKind: 'account',
+        login: async () => ({ kind: 'completed' }), loginWithCredentials: async () => ({ kind: 'completed' }),
+        logout: async () => ({ kind: 'completed' }), refreshFromActiveServer: async () => {},
+    });
+    const setup = createSessionFixture({ id: 's_setup', serverId: a,
+        metadata: { ...createSessionFixture().metadata, summary: { text: 'Session Setup', updatedAt: 1 } } });
+    const matrix = createSessionFixture({ id: 's_matrix', serverId: a,
+        metadata: { ...createSessionFixture().metadata, name: 'leeroy' } });
+    storage.setState({
+        sessions: { s_setup: setup, s_matrix: matrix },
+        sessionListRowsByServerId: {
+            [a]: {
+                s_visible: buildSessionListRenderableFromSession(createSessionFixture({ id: 's_visible', serverId: a, updatedAt: 321,
+                    metadata: { ...createSessionFixture().metadata, summaryText: 'Visible only in current list' } })),
+                s_matrix: buildSessionListRenderableFromSession(createSessionFixture({ id: 's_matrix', serverId: a, updatedAt: 322,
+                    metadata: { ...createSessionFixture().metadata, summaryText: 'Session QA Voice Matrix' } })),
+            },
+            [b]: { s_other: buildSessionListRenderableFromSession(createSessionFixture({ id: 's_other', serverId: b,
+                metadata: { ...createSessionFixture().metadata, summary: { text: 'Other summary', updatedAt: 1 } } })) },
+        },
+        ordinarySessionListMembershipByServerId: { [a]: ['s_visible', 's_matrix'], [b]: ['s_other'] },
+        sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: { [b]: { serverName: 'Server B' } },
+    });
+    routerNavigate.mockClear();
+});
+afterEach(async () => {
+    setCurrentAuth(previousAuth);
+    await connection.dispose();
+    await home.reset();
+    storage.setState(initialState, true);
+    useVoiceTargetStore.setState(initialTargets, true);
 });
 
-const authFixture = {
-  isAuthenticated: true,
-  credentials: { token: 'account-token' },
-  credentialAuthorityKind: 'account',
-  login: async () => ({ kind: 'completed' as const }),
-  loginWithCredentials: async () => ({ kind: 'completed' as const }),
-  logout: async () => ({ kind: 'completed' as const }),
-  refreshFromActiveServer,
-} satisfies AuthContextType;
-let previousAuth: AuthContextType | null;
-
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-  setActiveServerAndSwitch: (params: any) => setActiveServerAndSwitch(params),
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-  getActiveServerSnapshot: () => ({ serverId: 'server-a' }),
-}));
-
-vi.mock('./sessionTargets', () => ({
-  setPrimaryActionSessionId: (params: any) => setPrimaryActionSessionForVoiceTool(params),
-}));
-
 describe('openSessionForVoiceTool', () => {
-  beforeEach(() => {
-    previousAuth = getCurrentAuth();
-    setCurrentAuth(authFixture);
-    setActiveServerAndSwitch.mockReset();
-    setActiveServerAndSwitch.mockResolvedValue('switched');
-    routerNavigate.mockClear();
-    refreshFromActiveServer.mockClear();
-    setPrimaryActionSessionForVoiceTool.mockClear();
-  });
-
-  afterEach(() => {
-    setCurrentAuth(previousAuth);
-  });
-
-  it('opens the exact session through the mounted workspace owner for an imperative Voice tool', async () => {
-    const { createWorkspaceState, reduceWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
-    const { createWorkspaceNavigationAdapter } = await import('@/components/appShell/workspace/workspaceNavigationAdapter');
-    const { createWorkspaceActionAdapter } = await import('@/components/appShell/workspace/workspaceActions');
-    const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
-    const { openSessionForVoiceTool } = await import('./openSession');
-    let workspace = createWorkspaceState({ id: 'voice-tool-tab', target: { kind: 'voice', params: {} }, pinned: false, preview: false });
-    const navigation = createWorkspaceNavigationAdapter({
-      getState: () => workspace, getCatalog: () => [],
-      dispatch: (action) => { workspace = reduceWorkspaceState(workspace, action); },
-      transport: { commit: () => {} }, createId: () => 'voice-session-tab', onChange: () => {},
+    it('opens the exact session through the mounted workspace owner for an imperative Voice tool', async () => {
+        const { createWorkspaceState, reduceWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
+        const { createWorkspaceNavigationAdapter } = await import('@/components/appShell/workspace/workspaceNavigationAdapter');
+        const { createWorkspaceActionAdapter } = await import('@/components/appShell/workspace/workspaceActions');
+        const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
+        let workspace = createWorkspaceState({ id: 'voice-tool-tab', target: { kind: 'voice', params: {} }, pinned: false, preview: false });
+        const navigation = createWorkspaceNavigationAdapter({
+            getState: () => workspace, getCatalog: () => [],
+            dispatch: action => { workspace = reduceWorkspaceState(workspace, action); },
+            transport: { commit: () => {} }, createId: () => 'voice-session-tab', onChange: () => {},
+        });
+        const execute = createWorkspaceActionAdapter({ getState: () => workspace, navigation, readCanvas: () => null, createId: () => 'voice-session-tab' });
+        const unregister = registerMountedWorkspaceAction(async ({ actionId, input }) => execute(actionId, input));
+        try {
+            expect(await openSessionForVoiceTool({ sessionId: 's_setup', serverId: a, query: { jumpSeq: '42' } }))
+                .toMatchObject({ ok: true, address: { serverId: a, sessionId: 's_setup' } });
+            const group = workspace.groups[workspace.focusedGroupId];
+            expect(workspace.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: { id: 's_setup', serverId: a, jumpSeq: '42' } });
+            expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: a, sessionId: 's_setup' });
+            expect(routerNavigate).not.toHaveBeenCalled();
+        } finally { unregister(); }
     });
-    const execute = createWorkspaceActionAdapter({
-      getState: () => workspace, navigation, readCanvas: () => null, createId: () => 'voice-session-tab',
+    it('returns a human-readable session reference after actually switching to the cached cross-server Home', async () => {
+        const result = await openSessionForVoiceTool({ sessionId: 's_other',
+            resolveServerIdForSessionId: () => b, resolveServerNameForSessionId: () => 'Server B',
+        });
+        expect(getActiveServerSnapshot().serverId).toBe(b);
+        expect(routerNavigate).toHaveBeenCalledWith(`/session/s_other?serverId=${b}`, expect.any(Object));
+        expect(result).toMatchObject({ ok: true, sessionId: 's_other', session: {
+            id: 's_other', title: 'Other summary', serverId: b, serverName: 'Server B',
+        } });
+        expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: b, sessionId: 's_other' });
     });
-    const unregister = registerMountedWorkspaceAction(async ({ actionId, input }) => execute(actionId, input));
-    try {
-      expect(await openSessionForVoiceTool({ sessionId: 's_setup', serverId: 'server-a', query: { jumpSeq: '42' } }))
-        .toMatchObject({ ok: true, address: { serverId: 'server-a', sessionId: 's_setup' } });
-      const group = workspace.groups[workspace.focusedGroupId];
-      expect(workspace.tabs[group.activeTabId].target).toMatchObject({
-        kind: 'session', params: { id: 's_setup', serverId: 'server-a', jumpSeq: '42' },
-      });
-      expect(routerNavigate).not.toHaveBeenCalled();
-    } finally {
-      unregister();
-    }
-  });
-
-  it('returns a human-readable session reference for cached cross-server sessions', async () => {
-    const { openSessionForVoiceTool } = await import('./openSession');
-
-    const result = await openSessionForVoiceTool({
-      sessionId: 's_other',
-      resolveServerIdForSessionId: () => 'server-b',
-      resolveServerNameForSessionId: () => 'Server B',
+    it('fails without mutating Voice targets when the target Home credential store refuses the switch', async () => {
+        const credentials = vi.mocked(TokenStorage.getCredentialsForServerUrl);
+        const readCredentials = credentials.getMockImplementation();
+        if (!readCredentials) throw new Error('Existing Home credential boundary missing');
+        credentials.mockImplementation(async serverUrl => {
+            if (new URL(serverUrl).origin === 'https://voice-open-b.test') throw new Error('Target Home credential storage unavailable');
+            return readCredentials(serverUrl);
+        });
+        const result = await openSessionForVoiceTool({ sessionId: 's_other',
+            resolveServerIdForSessionId: () => b, resolveServerNameForSessionId: () => 'Server B',
+        });
+        expect(getActiveServerSnapshot().serverId).toBe(a);
+        expect(routerNavigate).not.toHaveBeenCalled();
+        expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toBeNull();
+        expect(useVoiceTargetStore.getState().lastFocusedSessionAddress).toBeNull();
+        expect(result).toEqual({ ok: false, status: 'server_switch_failed', error: {
+            code: 'server_switch_failed', message: 'server_switch_failed', serverId: b, serverName: 'Server B',
+        } });
     });
-
-    expect(setActiveServerAndSwitch).toHaveBeenCalledWith({
-      serverId: 'server-b',
-      scope: 'device',
-      refreshAuth: refreshFromActiveServer,
+    it('opens a session by human title and ignores trailing sentence punctuation', async () => {
+        const result = await openSessionForVoiceTool({ sessionTitle: 'Session Setup.',
+            corpus: { activeServerId: a, knownServerIds: [a], coverage: 'complete' },
+        });
+        expect(getActiveServerSnapshot().serverId).toBe(a);
+        expect(routerNavigate).toHaveBeenCalledWith(`/session/s_setup?serverId=${a}`, expect.any(Object));
+        expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: a, sessionId: 's_setup' });
+        expect(result).toMatchObject({ ok: true, sessionId: 's_setup', session: { id: 's_setup', title: 'Session Setup' } });
     });
-    expect(routerNavigate).toHaveBeenCalledWith('/session/s_other?serverId=server-b', expect.any(Object));
-    expect(result).toMatchObject({
-      ok: true,
-      sessionId: 's_other',
-      session: {
-        id: 's_other',
-        title: 'Other summary',
-        serverId: 'server-b',
-        serverName: 'Server B',
-      },
+    it('opens a session by title when the lookup title lives on metadata.summaryText', async () => {
+        const result = await openSessionForVoiceTool({ sessionTitle: 'Session QA Voice Matrix',
+            corpus: { activeServerId: a, knownServerIds: [a], coverage: 'complete' },
+        });
+        expect(routerNavigate).toHaveBeenCalledWith(`/session/s_matrix?serverId=${a}`, expect.any(Object));
+        expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: a, sessionId: 's_matrix' });
+        expect(result).toMatchObject({ ok: true, sessionId: 's_matrix', session: { id: 's_matrix', title: 'Session QA Voice Matrix' } });
     });
-  });
-
-  it('fails without mutating voice targets when cross-server switching fails', async () => {
-    setActiveServerAndSwitch.mockResolvedValueOnce('blocked');
-
-    const { openSessionForVoiceTool } = await import('./openSession');
-
-    const result = await openSessionForVoiceTool({
-      sessionId: 's_other',
-      resolveServerIdForSessionId: () => 'server-b',
-      resolveServerNameForSessionId: () => 'Server B',
+    it('prefers the current visible session title over a stale raw session title for the same session id', async () => {
+        storage.setState(current => ({ sessions: { ...current.sessions, s_matrix: createSessionFixture({ id: 's_matrix', serverId: a,
+            metadata: { ...createSessionFixture().metadata, summaryText: 'Session QA Voice Matrix!' } }),
+        } }));
+        const result = await openSessionForVoiceTool({ sessionTitle: 'Session QA Voice Matrix',
+            corpus: { activeServerId: a, knownServerIds: [a], coverage: 'complete' },
+        });
+        expect(routerNavigate).toHaveBeenCalledWith(`/session/s_matrix?serverId=${a}`, expect.any(Object));
+        expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: a, sessionId: 's_matrix' });
+        expect(result).toMatchObject({ ok: true, sessionId: 's_matrix', session: { id: 's_matrix', title: 'Session QA Voice Matrix' } });
     });
-
-    expect(setActiveServerAndSwitch).toHaveBeenCalledWith({
-      serverId: 'server-b',
-      scope: 'device',
-      refreshAuth: refreshFromActiveServer,
+    it('opens a session by title when the session only exists in the active session lookup index', async () => {
+        const result = await openSessionForVoiceTool({ sessionTitle: 'Visible only in current list',
+            corpus: { activeServerId: a, knownServerIds: [a], coverage: 'complete' },
+        });
+        expect(routerNavigate).toHaveBeenCalledWith(`/session/s_visible?serverId=${a}`, expect.any(Object));
+        expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: a, sessionId: 's_visible' });
+        expect(result).toMatchObject({ ok: true, sessionId: 's_visible', session: { id: 's_visible', title: 'Visible only in current list' } });
     });
-    expect(routerNavigate).not.toHaveBeenCalled();
-    expect(setPrimaryActionSessionForVoiceTool).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      ok: false,
-      status: 'server_switch_failed',
-      error: {
-        code: 'server_switch_failed',
-        message: 'server_switch_failed',
-        serverId: 'server-b',
-        serverName: 'Server B',
-      },
+    it('publishes the canonical primary and last-focused target while opening the exact session', async () => {
+        await openSessionForVoiceTool({ sessionId: 's_setup', serverId: a });
+        expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: a, sessionId: 's_setup' });
+        expect(useVoiceTargetStore.getState().lastFocusedSessionAddress).toEqual({ serverId: a, sessionId: 's_setup' });
     });
-  });
-
-  it('opens a session by human title and ignores trailing sentence punctuation', async () => {
-    const { openSessionForVoiceTool } = await import('./openSession');
-
-    const result = await openSessionForVoiceTool({
-      sessionTitle: 'Session Setup.',
-      corpus: { activeServerId: 'server-a', knownServerIds: ['server-a'], coverage: 'complete' },
-      resolveServerIdForSessionId: () => null,
-      resolveServerNameForSessionId: () => null,
-    });
-
-    expect(setActiveServerAndSwitch).not.toHaveBeenCalled();
-    expect(routerNavigate).toHaveBeenCalledWith('/session/s_setup?serverId=server-a', expect.any(Object));
-    expect(setPrimaryActionSessionForVoiceTool).toHaveBeenCalledWith({ sessionId: 's_setup', serverId: 'server-a', updateLastFocused: true });
-    expect(result).toMatchObject({
-      ok: true,
-      sessionId: 's_setup',
-      session: {
-        id: 's_setup',
-        title: 'Session Setup',
-      },
-    });
-  });
-
-  it('opens a session by title when the lookup title lives on metadata.summaryText', async () => {
-    const { openSessionForVoiceTool } = await import('./openSession');
-
-    const result = await openSessionForVoiceTool({
-      sessionTitle: 'Session QA Voice Matrix',
-      corpus: { activeServerId: 'server-a', knownServerIds: ['server-a'], coverage: 'complete' },
-      resolveServerIdForSessionId: () => null,
-      resolveServerNameForSessionId: () => null,
-    });
-
-    expect(routerNavigate).toHaveBeenCalledWith('/session/s_matrix?serverId=server-a', expect.any(Object));
-    expect(setPrimaryActionSessionForVoiceTool).toHaveBeenCalledWith({ sessionId: 's_matrix', serverId: 'server-a', updateLastFocused: true });
-    expect(result).toMatchObject({
-      ok: true,
-      sessionId: 's_matrix',
-      session: {
-        id: 's_matrix',
-        title: 'Session QA Voice Matrix',
-      },
-    });
-  });
-
-  it('prefers the current visible session title over a stale raw session title for the same session id', async () => {
-    const { openSessionForVoiceTool } = await import('./openSession');
-
-    const result = await openSessionForVoiceTool({
-      sessionTitle: 'Session QA Voice Matrix',
-      corpus: { activeServerId: 'server-a', knownServerIds: ['server-a'], coverage: 'complete' },
-      resolveServerIdForSessionId: () => null,
-      resolveServerNameForSessionId: () => null,
-    });
-
-    expect(routerNavigate).toHaveBeenCalledWith('/session/s_matrix?serverId=server-a', expect.any(Object));
-    expect(setPrimaryActionSessionForVoiceTool).toHaveBeenCalledWith({ sessionId: 's_matrix', serverId: 'server-a', updateLastFocused: true });
-    expect(result).toMatchObject({
-      ok: true,
-      sessionId: 's_matrix',
-      session: {
-        id: 's_matrix',
-        title: 'Session QA Voice Matrix',
-      },
-    });
-  });
-
-  it('opens a session by title when the session only exists in the active session lookup index', async () => {
-    const { openSessionForVoiceTool } = await import('./openSession');
-
-    const result = await openSessionForVoiceTool({
-      sessionTitle: 'Visible only in current list',
-      corpus: { activeServerId: 'server-a', knownServerIds: ['server-a'], coverage: 'complete' },
-      resolveServerIdForSessionId: () => null,
-      resolveServerNameForSessionId: () => null,
-    });
-
-    expect(routerNavigate).toHaveBeenCalledWith('/session/s_visible?serverId=server-a', expect.any(Object));
-    expect(setPrimaryActionSessionForVoiceTool).toHaveBeenCalledWith({ sessionId: 's_visible', serverId: 'server-a', updateLastFocused: true });
-    expect(result).toMatchObject({
-      ok: true,
-      sessionId: 's_visible',
-      session: {
-        id: 's_visible',
-        title: 'Visible only in current list',
-      },
-    });
-  });
-
-  it('routes session target updates through the canonical synced helper', async () => {
-    const { openSessionForVoiceTool } = await import('./openSession');
-
-    await openSessionForVoiceTool({
-      sessionId: 's_setup',
-      serverId: 'server-a',
-      resolveServerIdForSessionId: () => null,
-      resolveServerNameForSessionId: () => null,
-    });
-
-    expect(setPrimaryActionSessionForVoiceTool).toHaveBeenCalledWith({
-      sessionId: 's_setup',
-      serverId: 'server-a',
-      updateLastFocused: true,
-    });
-  });
 });

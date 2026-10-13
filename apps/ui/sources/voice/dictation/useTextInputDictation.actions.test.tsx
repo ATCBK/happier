@@ -1,12 +1,17 @@
 import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createMachineFixture, createRootLayoutFeaturesResponse, renderHook, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse, renderHook, standardCleanup } from '@/dev/testkit';
 import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { ApprovalRequestSchema } from '@happier-dev/protocol';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
+import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 const recording = vi.hoisted(() => ({ starts: 0, stops: 0 }));
 const machineRpc = vi.hoisted(() => vi.fn());
@@ -15,24 +20,30 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
     pathname: '/session/words', segments: ['(app)', 'session', '[id]'], params: { id: 'words' },
 }).module);
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
-// Substitute the browser recorder only; capture admission, Dictation and field delivery remain real.
-vi.mock('@/voice/runtime/input/LocalVoiceCaptureOwner', async importOriginal => {
-    const real = await importOriginal<typeof import('@/voice/runtime/input/LocalVoiceCaptureOwner')>();
-    return { ...real, createLocalVoiceCaptureOwner: (deps: Parameters<typeof real.createLocalVoiceCaptureOwner>[0]) =>
-        real.createLocalVoiceCaptureOwner(deps, { createRecordingMicSession: () => ({
-            ensureActive: async () => {}, setMuted() {}, isMuted: () => false, teardown: async () => {}, getStream: () => null,
-            beginRecording: async () => { recording.starts += 1; },
-            stopRecording: async () => { recording.stops += 1; return 'blob:dictation-action'; },
-        }) }) };
+// Substitute Expo's recorder SDK; microphone permission, audio-mode leases,
+// artifact cleanup, capture admission and field delivery run through their owners.
+vi.mock('expo-audio', () => {
+    class AudioRecorderWeb {
+        uri: string | null = null;
+        async prepareToRecordAsync() {}
+        pause() {}
+        record() { recording.starts += 1; }
+        async stop() { recording.stops += 1; this.uri = 'blob:dictation-action'; }
+    }
+    return { AudioModule: { AudioRecorderWeb, setAudioModeAsync: async () => {} },
+        RecordingPresets: { HIGH_QUALITY: { web: { mimeType: 'audio/webm' } } } };
 });
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async importOriginal => ({
-    ...await importOriginal<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc')>(),
-    machineRpcWithServerScope: (...args: unknown[]) => machineRpc(...args),
-}));
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+installSessionActionRpcBoundary(request => machineRpc({
+    method: request.method.slice(request.method.indexOf(':') + 1), payload: request.params,
+}));
+const recordingModule = await loadVitestModuleForNodeRequire(
+    new URL('../runtime/mic/NativeMicSession.ts', import.meta.url),
+    () => import('@/voice/runtime/mic/NativeMicSession'),
+);
+afterAll(() => recordingModule.dispose());
 const { storage } = await import('@/sync/domains/state/storage');
 const { voiceSettingsParse } = await import('@/sync/domains/settings/voiceSettings');
 const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
@@ -51,6 +62,7 @@ const { createDefaultActionExecutor } = await import('@/sync/ops/actions/default
 const { useTextInputDictation } = await import('./useTextInputDictation');
 const { voiceDictationController } = await import('./useVoiceDictation');
 let unregister: (() => void) | undefined;
+let restoredConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 
 function ActionPort() {
     const reader = useOptionalCurrentUiContextReader();
@@ -66,6 +78,7 @@ function ActionPort() {
 
 afterEach(async () => {
     await voiceDictationController.cancel();
+    await restoredConnection?.dispose(); restoredConnection = undefined;
     unregister?.(); unregister = undefined;
     await standardCleanup(); resetRuntimeFetch(); resetServerFeaturesClientForTests(); vi.unstubAllGlobals();
     machineRpc.mockReset(); recording.starts = 0; recording.stops = 0;
@@ -78,14 +91,24 @@ describe('mounted field Dictation Actions', () => {
         const serverId = await home.addHome({ name: 'Dictation Home', serverUrl, serverIdentityId: 'dictation-home', accountId: 'alice', currentAccount: true });
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'alice' };
         publishAppliedActiveServerSnapshot({ serverId, serverUrl, generation: 0 });
-        const features = createRootLayoutFeaturesResponse({ features: {
+        const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: 'dictation-home' } }, features: {
             voice: { enabled: true, happierVoice: { enabled: false } },
-            machines: { enabled: true, liveStream: { enabled: true } },
+            machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
         } });
+        // Synthetic Home deployment input, rather than a reconstructed client policy.
+        features.capabilities.machines.liveStream.serverRouted = { disabledReason: null,
+            caps: MachineLiveStreamRelayCapsV1Schema.parse({ maxBitrateBps: 64000, maxFramesPerSecond: 50,
+                maxFrameBytes: 16000, maxDurationMs: 60000, maxTotalBytes: 1000000,
+                maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1 }) };
         primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
         home.answer(serverId, '/v1/features', { body: features });
         home.answer(serverId, '/v1/features/authenticated', { body: features });
+        home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         home.answer(serverId, '/v1/kv/bulk', { body: { values: [] } });
+        restoredConnection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
+            credentials: (await TokenStorage.getCredentialsForServerUrl(serverUrl))!,
+            request: (url, init) => home.request(url, init) });
+        await home.selectHomes([serverId]);
         storage.setState({ settingsScope: scope, profileScope: scope });
         storage.getState().applySettingsForScope(scope, { ...storage.getState().settings, experiments: true,
             featureToggles: { ...storage.getState().settings.featureToggles, voice: true, 'voice.agent': true,
@@ -93,7 +116,16 @@ describe('mounted field Dictation Actions', () => {
             voice: voiceSettingsParse({ providerId: 'off', executionMachine: { mode: 'fixed', machineId: 'speech-machine' },
                 dictation: { sttBinding: 'explicit', stt: { provider: 'local_neural', localNeural: { execution: 'daemon' } } } }),
         }, 1);
-        storage.setState({ machines: { 'speech-machine': createMachineFixture({ id: 'speech-machine', active: true, activeAt: Date.now() }) } });
+        const speechMachine = createMachineFixture({ id: 'speech-machine', active: true, activeAt: Date.now() });
+        const speechMachineRow = createPlainMachineRowFixture({ id: speechMachine.id, accountId: 'alice' });
+        storage.setState({ machines: { [speechMachine.id]: speechMachine },
+            machineListByServerId: { [serverId]: [speechMachine] } });
+        home.answer(serverId, '/v1/machines', { body: [speechMachineRow] });
+        home.answer(serverId, `/v1/machines/${speechMachine.id}`, { body: { machine: speechMachineRow } });
+        home.answer(serverId, `/v1/machines/${speechMachine.id}/access`, { body: {
+            machineId: speechMachine.id, custodian: speechMachineRow.access!.custodian, access: speechMachineRow.access,
+            canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+        } });
         expect(storage.getState().settingsScope).toEqual(scope);
         expect(storage.getState().settings.featureToggles.voice).toBe(true);
         expect(await resolveRuntimeFeatureDecision({ featureId: 'voice.daemonInference' })).toMatchObject({ state: 'enabled' });
@@ -101,7 +133,8 @@ describe('mounted field Dictation Actions', () => {
         setRuntimeFetch(async (url, init) => String(url) === 'blob:dictation-action'
             ? new Response(blob) : home.request(url, init));
         let permission: 'prompt' | 'granted' = 'prompt';
-        vi.stubGlobal('navigator', { permissions: { query: async () => ({ state: permission }) } });
+        vi.stubGlobal('navigator', { permissions: { query: async () => ({ state: permission }) },
+            mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
         const recipient = createTransferRecipientKeyPair();
         machineRpc.mockImplementation(async ({ method }: { method: string }) => {
             if (method.endsWith('upload.init')) return { success: true, uploadId: 'dictation-upload', chunkSizeBytes: 65536, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64 };
@@ -161,14 +194,20 @@ describe('mounted field Dictation Actions', () => {
             const decided = await execute('approval.request.decide', { artifactId: approval.id, decision: 'approve' }, ui);
             expect(decided, JSON.stringify(decided))
                 .toMatchObject({ ok: true, result: { status: 'approved' } });
-            expect(await requested).toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'listening' } });
+            const admitted = await requested;
+            expect(admitted, JSON.stringify(admitted)).toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'listening' } });
         } finally {
             approvalWait.abort();
             await requested;
         }
         expect(voiceDictationController.getSnapshot()).toMatchObject({ sessionId: 'mounted-field', status: 'listening' });
+        expect(recording.starts).toBe(1);
+        const observations: unknown[] = [];
+        const unsubscribe = voiceDictationController.subscribe(() => observations.push(voiceDictationController.getSnapshot()));
         const finished = await execute('ui.current_context.command.invoke', { commandId: finish }, agent);
+        unsubscribe();
         expect(finished, JSON.stringify({ finished, snapshot: voiceDictationController.getSnapshot(),
+            recording, observations,
             methods: machineRpc.mock.calls.map(([request]) => request.method) }))
             .toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'idle', inserted: true } });
         expect(words).toBe('draft editable words');
@@ -178,6 +217,14 @@ describe('mounted field Dictation Actions', () => {
         expect(await execute('ui.current_context.command.invoke', { commandId: cancel }, agent))
             .toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'idle', inserted: false } });
         expect(words).toBe('draft editable words');
+        // Removing the production AppShell registration must disconnect the
+        // Action even while the same focused field/controller are still mounted.
+        unregister?.(); unregister = undefined;
+        const startsBeforeUnregister = recording.starts;
+        expect(await execute('ui.voice_global.dictation.start', { commandId: start }, ui))
+            .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });
+        expect(recording.starts).toBe(startsBeforeUnregister);
+        expect(voiceDictationController.getSnapshot().status).toBe('idle');
         await field.unmount();
         expect(await execute('ui.voice_global.dictation.start', { commandId: start }, ui))
             .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });

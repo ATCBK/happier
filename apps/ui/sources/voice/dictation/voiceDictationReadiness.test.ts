@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { createVoiceProviderRegistry } from '@/voice/registry/providerRegistry';
+import { VoiceProviderContributionSchema } from '@happier-dev/protocol/plugins/contributions/voice';
 import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import {
   readLocalConversationVoiceSettings,
@@ -55,33 +56,24 @@ describe('resolveVoiceDictationReadiness', () => {
   const SETTINGS_MODE_DICTATION_PROVIDER_ID = 'happier.voice.fixture/settings-mode-stt';
 
   function createSettingsModeDictationRegistry() {
+    // Authored public declaration input; the real registry owns settings projection.
+    const declaration = VoiceProviderContributionSchema.parse({
+      id: 'settings-mode-stt', title: 'Fixture', kind: 'speech', roles: ['dictation_stt'], platforms: ['web'],
+      settings: { schemaVersion: 1, fields: [
+        { id: 'model', title: 'Model', schema: { type: 'string', minLength: 1, maxLength: 128 }, default: 'fixture-model', presentation: { control: 'text' } },
+        { id: 'mode', title: 'Mode', schema: { type: 'string', enum: ['daemon'] }, default: 'daemon', presentation: { control: 'select', options: [{ value: 'daemon', title: 'Daemon' }] } },
+      ] },
+    });
     return createVoiceProviderRegistry({
-      builtIn: [{
-        kind: 'voice.speech-engine.v1',
+      bundledContributions: [{
         pluginId: 'happier.voice.fixture',
         providerId: SETTINGS_MODE_DICTATION_PROVIDER_ID,
+        declaration,
+      }],
+      bundledPresentations: [{
+        providerId: SETTINGS_MODE_DICTATION_PROVIDER_ID,
         settingsSectionId: 'voice.fixture.settings-mode-stt',
-        role: 'stt',
-        roles: ['dictation_stt'],
-        requirements: [],
-        requirementsByMode: {
-          daemon: ['execution_machine'],
-        },
-        supportedPlatforms: ['web'],
-        projectSettings: (envelope) => {
-          if (!envelope) return { status: 'needs_migration' as const, modeId: null };
-          if (envelope.schemaVersion !== 1) {
-            return { status: 'unsupported_version' as const, modeId: null };
-          }
-          const mode = envelope.config !== null
-            && typeof envelope.config === 'object'
-            && !Array.isArray(envelope.config)
-            ? (envelope.config as Readonly<Record<string, unknown>>).mode
-            : null;
-          return mode === 'daemon'
-            ? { status: 'ready' as const, modeId: 'daemon' }
-            : { status: 'invalid' as const, modeId: null };
-        },
+        createSettingsSpec: () => ({ titleKey: 'Fixture', subtitleKey: 'Fixture', detailKey: 'Fixture', iconName: 'cloud', fields: [], test: null }),
       }],
     });
   }
@@ -324,12 +316,12 @@ describe('resolveVoiceDictationReadiness', () => {
   it.each([
     {
       label: 'a malformed current envelope',
-      envelope: { schemaVersion: 1, config: { mode: 42 } },
+      envelope: { schemaVersion: 1, config: { model: 'fixture-model', mode: 42 } },
       expected: { status: 'needs_setup', code: 'settings_invalid' },
     },
     {
       label: 'an unsupported future envelope',
-      envelope: { schemaVersion: 2, config: { mode: 'daemon' } },
+      envelope: { schemaVersion: 2, config: { model: 'fixture-model', mode: 'daemon' } },
       expected: { status: 'incompatible', code: 'settings_unsupported_version' },
     },
   ])('uses the canonical provider-settings projection for $label', ({ envelope, expected }) => {
@@ -369,7 +361,7 @@ describe('resolveVoiceDictationReadiness', () => {
     const settings = settingsParse({
       voice: {
         providers: {
-          [SETTINGS_MODE_DICTATION_PROVIDER_ID]: { schemaVersion: 1, config: { mode: 'daemon' } },
+          [SETTINGS_MODE_DICTATION_PROVIDER_ID]: { schemaVersion: 1, config: { model: 'fixture-model', mode: 'daemon' } },
         },
         dictation: {
           sttBinding: 'explicit',

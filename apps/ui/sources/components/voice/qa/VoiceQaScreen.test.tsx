@@ -1,13 +1,19 @@
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import React from 'react';
+import 'fake-indexeddb/auto';
+import { DEFAULT_SESSION_CAPABILITIES } from '@happier-dev/protocol';
+import { MetadataSchema } from '@happier-dev/session-core/state';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setPreferredLanguageFromSettings, t } from '@/text';
 
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
+import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import {
   readLocalConversationVoiceSettings,
   voiceSettingsParse,
+  writeVoiceProviderSettingsConfig,
 } from '@/sync/domains/settings/voiceSettings';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
 import { resetVoiceQaStoreForTests, useVoiceQaStore } from '@/voice/qa/voiceQaStore';
@@ -18,10 +24,21 @@ import {
   pressTestInstanceAsync,
   renderScreen as renderTestScreen,
   standardCleanup,
+  createSessionFixture,
+  createSessionListRenderableSessionFixture,
+  createSessionMessagesFixture,
+  createMachineFixture,
 } from '@/dev/testkit';
-import { installVoiceQaCommonModuleMocks } from './voiceQaScreenTestHelpers';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import {
-  beginVoiceQaOutputTap,
   getVoiceQaOutputTapSnapshot,
   resetVoiceQaOutputTapForTests,
 } from '@/voice/qa/voiceQaOutputTap';
@@ -31,166 +48,224 @@ import {
   recordMachineRpcPeerMediationReceipt,
 } from '@/sync/domains/machines/peer/mediation/rpc/receiptLog';
 
-const voiceQaControllerMocks = vi.hoisted(() => ({
-  start: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
-  clear: vi.fn(() => {}),
-  sendPrompt: vi.fn(async () => {}),
-  sendContextUpdate: vi.fn(async () => {}),
-}));
-const recordedAudioTranscriptionControllerMocks = vi.hoisted(() => ({
-  transcribe: vi.fn<(
-    params: Readonly<{
-      sessionId?: string | null;
-      uri: string;
-      settings: unknown;
-      decryptSecretValue?: (value: unknown) => string | null;
-    }>,
-  ) => Promise<string | null>>(async () => null),
-}));
-const outputFixturePlaybackMocks = vi.hoisted(() => ({
-  play: vi.fn(async () => {}),
-  stop: vi.fn(() => {}),
-}));
-const daemonRecordedAudioFallbackMocks = vi.hoisted(() => ({
-  transcribeRecordedAudio: vi.fn<(
-    params: Readonly<{
-      sessionId?: string | null;
-      source: unknown;
-      inputMimeType: string;
-      packId: string | null;
-      language: string | null;
-      normalization?: unknown;
-    }>,
-  ) => Promise<Readonly<{ text: string; language: string | null; modelPackId: string | null }>>>(async () => ({
-    text: 'hello explicit daemon stt',
-    language: 'en',
-    modelPackId: 'daemon-pack',
-  })),
-}));
-const daemonVoiceInferenceClientConstructorMock = vi.hoisted(() => vi.fn<(deps?: Record<string, unknown>) => void>());
-
-type PassthroughComponentProps = Readonly<Record<string, unknown> & { children?: React.ReactNode }>;
-
-function createPassthroughComponentMock(typeName: string) {
-    return (props: PassthroughComponentProps) => React.createElement(typeName, props, props.children);
-}
-
+// Only vendor/native/network boundaries are replaced; the generated contribution,
+// adapter assembly, lifecycle, QA controllers and persistence owners stay real.
+const sdk = vi.hoisted(() => ({ startSession: vi.fn(), endSession: vi.fn(), sendUserMessage: vi.fn(), sendContextualUpdate: vi.fn() }));
+// Browser-reported device locale is external; translation lookup and locale state stay real.
+vi.hoisted(() => {
+  vi.stubGlobal('navigator', { ...globalThis.navigator, language: 'en-US', languages: ['en-US'] });
+});
+vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: sdk.startSession } }));
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: sdk.startSession } }));
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
 const expoRouterMock = await vi.hoisted(async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
   return createExpoRouterMock();
 });
 
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+type DaemonRpcRequest = Readonly<{ machineId: string; method: string; payload: Record<string, unknown> }>;
+const daemonRpcRequests: DaemonRpcRequest[] = [];
+let transcriptionError: string | null = null;
+let heldTranscription: Promise<unknown> | null = null;
+let assembly: ReturnType<typeof import('@/voice/adapters/registerBuiltinVoiceAdapters').createBuiltinVoiceAdapterAssembly> | null = null;
+let lifecycle: ReturnType<typeof import('@/voice/session/voiceSessionLifecycleController').createVoiceSessionLifecycleController> | null = null;
+let unsubscribeLifecycle: (() => void) | null = null;
+const pendingWrites: Array<Readonly<{ sessionId: string; body: Record<string, unknown> }>> = [];
+const pendingRows = new Map<string, Readonly<{ sessionId: string; row: Record<string, unknown> }>>();
+let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+const homeSessions: Record<string, ReturnType<typeof createSessionFixture>> = {};
+const recordingBytes = new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4, 87, 65, 86, 69]);
+const uploadedRecording = new File([recordingBytes], 'recording.wav', { type: 'audio/wav' });
+const transcribeRequests = () => daemonRpcRequests.filter(request => request.method === 'daemon.voiceInference.stt.transcribe');
+
+installDisconnectedServerSocketBoundary(socket => {
+  socket.connect = vi.fn<typeof socket.connect>(() => {
+    socket.connected = true;
+    for (const listener of socket.listeners('connect')) listener();
+    return socket;
+  });
+  socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
+  socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, rawPayload) => {
+    if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
+    const request = rawPayload as Readonly<{ method: string; params: Record<string, unknown> }>;
+    const separator = request.method.indexOf(':');
+    const machineId = request.method.slice(0, separator);
+    const method = request.method.slice(separator + 1);
+    daemonRpcRequests.push({ machineId, method, payload: request.params });
+    let result: unknown;
+    if (method === 'daemon.voiceInference.stt.upload.init') {
+      result = { success: true, uploadId: 'qa-upload', chunkSizeBytes: 1024,
+        recipientPublicKeyBase64: createTransferRecipientKeyPair().recipientPublicKeyBase64 };
+    } else if (method === 'daemon.voiceInference.stt.upload.chunk') {
+      result = { success: true };
+    } else if (method === 'daemon.voiceInference.stt.upload.finalize') {
+      result = { success: true, uploadId: 'qa-upload', path: '/tmp/qa-recording.wav',
+        sizeBytes: recordingBytes.byteLength, sha256: 'qa-recording' };
+    } else if (method === 'daemon.voiceInference.stt.transcribe') {
+      result = heldTranscription ? await heldTranscription
+        : transcriptionError ? { ok: false, errorCode: 'internal_error', error: transcriptionError }
+        : { ok: true, requestId: request.params.requestId, text: 'hello explicit daemon stt',
+          language: 'en', modelPackId: 'daemon-pack' };
+    } else if (method === 'daemon.voiceInference.stt.cancel' || method === 'daemon.voiceInference.stt.upload.abort') {
+      result = method.endsWith('.abort') ? { success: true } : { ok: true };
+    } else {
+      return { ok: false, error: 'RPC_METHOD_NOT_AVAILABLE' };
+    }
+    return { ok: true, result };
+  });
+});
+
+async function prepareDaemonAudioQa() {
+  await loadSyncSingletonForTests();
+  const sessionHttp = createSessionMetadataHttpBoundary(() => homeSessions);
+  const answerRequest = async (url: RequestInfo | URL, init?: RequestInit): Promise<Response | null> => {
+    const requestedUrl = new URL(String(url));
+    const path = requestedUrl.pathname;
+    if (requestedUrl.protocol === 'blob:') return new Response(uploadedRecording);
+    if (path === '/health') return Response.json({ status: 'ok' });
+    if (path === '/v1/features') {
+      const features = createRootLayoutFeaturesResponse({
+        features: { voice: { enabled: true, daemonInference: { enabled: true }, agent: { enabled: true } } },
+        capabilities: { session: { ...DEFAULT_SESSION_CAPABILITIES, pendingInput: { protocolVersion: 4 } } },
+      });
+      features.features.machines.liveStream.serverRouted.enabled = true;
+      features.capabilities.machines.liveStream.serverRouted = { caps: {}, disabledReason: null };
+      return Response.json(features);
+    }
+    const preparation = answerVoiceRealtimePreparationHttpRequest(url, storage.getState().settings);
+    if (preparation) return preparation;
+    const sessionResponse = sessionHttp.handle(url, init);
+    if (sessionResponse) return sessionResponse;
+    if (path === '/v1/voice/token') return Response.json({ allowed: true, token: 'hosted-token',
+      leaseId: 'qa-lease', bindingNonce: 'qa-nonce', expiresAtMs: Date.now() + 60_000 });
+    if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
+    const pendingPath = /^\/v2\/sessions\/([^/]+)\/pending$/u.exec(path);
+    if (pendingPath && init?.method === 'POST') {
+      const body: Record<string, unknown> = JSON.parse(String(init.body));
+      const sessionId = decodeURIComponent(pendingPath[1]);
+      pendingWrites.push({ sessionId, body });
+      const row = { localId: body.localId, content: body.content, messageRole: body.messageRole,
+        status: 'queued', deliveryStatus: { status: 'external_handoff' },
+        position: 0, createdAt: Date.now(), updatedAt: Date.now(), discardedAt: null, discardedReason: null };
+      pendingRows.set(String(body.localId), { sessionId, row });
+      return Response.json({ didWrite: true, requestedAction: body.requestedAction,
+        pending: row, pendingCount: 1, pendingVersion: 1 });
+    }
+    const handledPath = /^\/v2\/sessions\/([^/]+)\/pending\/([^/]+)\/delivery\/handled$/u.exec(path);
+    if (handledPath && init?.method === 'POST') {
+      pendingRows.delete(decodeURIComponent(handledPath[2]));
+      return Response.json({});
+    }
+    if (pendingPath) {
+      const pending = [...pendingRows.values()]
+        .filter(value => value.sessionId === decodeURIComponent(pendingPath[1])).map(value => value.row);
+      return Response.json({ pending, discarded: [], pendingCount: pending.length, pendingVersion: 1 });
+    }
+    if (/^\/v2\/sessions\/[^/]+\/messages$/u.test(path)) return Response.json({ messages: [], hasMore: false });
+    if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+    if (path === '/v2/account/settings') return Response.json({ version: 1,
+      content: { t: 'plain', v: storage.getState().settings } });
+    if (path.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
+      id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'voice-qa-account',
+    }) });
+    return new Response('{}', { status: 404 });
+  };
+  account = await restoreServerAccountForTest({
+    serverUrl: 'https://voice-qa.example.test', accountId: 'voice-qa-account', credentialScope: 'restored-home',
+    request: answerRequest,
+  });
+  const { sync } = await import('@/sync/sync');
+  await sync.resumeSync('manual');
+  setRuntimeFetch(async (url, init) => await answerRequest(url, init) ?? new Response('{}', { status: 404 }));
+}
+
+
+async function prepareRealtimeQa(targetSessionId: string) {
+  await prepareDaemonAudioQa();
+  expoRouterMock.state.router.setParams({ voiceQaServerId: account!.home.id });
+  const { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } = await import('@/voice/registry/generatedBundledVoiceRuntimeEntries');
+  const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.elevenlabs');
+  if (!entry || !entry.declaration.settings) throw new Error('Missing declared ElevenLabs Voice contribution');
+  expect(await TokenStorage.getCredentials()).toEqual(account!.credentials);
+  sdk.endSession.mockReset().mockResolvedValue(undefined);
+  sdk.startSession.mockReset().mockResolvedValue({
+    endSession: sdk.endSession, setMicMuted() {}, setVolume() {},
+    sendUserMessage: sdk.sendUserMessage, sendContextualUpdate: sdk.sendContextualUpdate,
+    getId: () => 'voice-qa-provider-conversation',
+  });
+  const voice = writeVoiceProviderSettingsConfig(storage.getState().settings.voice, entry.providerId,
+    Object.fromEntries(entry.declaration.settings.fields.map(field => [field.id, field.default])));
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta(
+    { voice: { ...voice, providerId: entry.providerId } }, storage.getState().settings,
+  ));
+  homeSessions[targetSessionId] = createSessionFixture({ id: targetSessionId,
+    serverId: account!.home.id, encryptionMode: 'plain', active: false,
+    metadata: { path: '/target', host: 'test' } });
+  storage.getState().applySessions(Object.values(homeSessions));
+  const { createBuiltinVoiceAdapterAssembly } = await import('@/voice/adapters/registerBuiltinVoiceAdapters');
+  const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+  const { voiceConversationRuntimeMachine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
+  voiceConversationRuntimeMachine.reset();
+  assembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [entry] });
+  registerVoiceAdapters(assembly.adapters);
+  voiceSessionBindingStore.getState().bind({
+    adapterId: entry.providerId, controlSessionId: targetSessionId, conversationSessionId: targetSessionId,
+    conversationSessionAddress: { serverId: account!.home.id, sessionId: targetSessionId },
+    targetSessionAddress: { serverId: account!.home.id, sessionId: targetSessionId },
+    lifetime: 'runtime_attempt', transcriptMode: 'synthetic', updatedAt: Date.now(),
+  });
+  const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+  const { setVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleControllerStore');
+  lifecycle = createVoiceSessionLifecycleController();
+  setVoiceSessionLifecycleController(lifecycle);
+  lifecycle.setConfiguredProviderId(entry.providerId);
+  unsubscribeLifecycle = lifecycle.subscribe(() => setVoiceSessionSnapshot(lifecycle!.getSnapshot()));
+}
+
+class BrowserFixtureAudio {
+  static instances: BrowserFixtureAudio[] = [];
+  onended: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  readonly play = vi.fn(async () => undefined);
+  readonly pause = vi.fn(() => undefined);
+  constructor(readonly url: string) {
+    BrowserFixtureAudio.instances.push(this);
+  }
+}
+const fixtureFetches: string[] = [];
+const emptySessionMetadata = MetadataSchema.parse({});
+
+function prepareOutputPlaybackQa() {
+  BrowserFixtureAudio.instances.length = 0;
+  fixtureFetches.length = 0;
+  vi.stubGlobal('AudioContext', undefined);
+  vi.stubGlobal('webkitAudioContext', undefined);
+  vi.stubGlobal('Audio', BrowserFixtureAudio);
+  setRuntimeFetch(async url => {
+    fixtureFetches.push(String(url));
+    return new Response(recordingBytes, { headers: { 'content-type': 'audio/wav' } });
+  });
+}
+
 async function renderScreen(element: React.ReactElement) {
-  const { AuthProvider } = await import('@/auth/context/AuthContext');
+  const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
   return await renderTestScreen(
-    <AuthProvider initialCredentials={{ token: 'voice-qa-token', secret: 'voice-qa-secret' }}>
+    <InjectedAuthProvider credentials={account?.credentials ?? { token: 'voice-qa-token', secret: 'voice-qa-secret' }}>
       {element}
-    </AuthProvider>,
+    </InjectedAuthProvider>,
   );
 }
 
-installVoiceQaCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            View: 'View',
-            Text: 'Text',
-            TextInput: 'TextInput',
-            ScrollView: 'ScrollView',
-            Platform: {
-                OS: 'web',
-                select: (spec: any) => spec?.web ?? spec?.default,
-            },
-        });
-    },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    text: '#000',
-                    textSecondary: '#666',
-                    surface: '#fff',
-                    surfaceHigh: '#f5f5f5',
-                    divider: '#ddd',
-                    groupped: { background: '#fafafa' },
-                    input: { placeholder: '#999' },
-                    button: { primary: { background: '#000', tint: '#fff' } },
-                },
-            },
-        });
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({ translate: (key) => key });
-    },
-});
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
-}));
-
-vi.mock('@/sync/api/session/apiSocket', () => ({
-  apiSocket: {
-    getSocketId: vi.fn(() => ''),
-  },
-}));
-
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-    RoundButton: createPassthroughComponentMock('RoundButton'),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: createPassthroughComponentMock('Item'),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: createPassthroughComponentMock('ItemGroup'),
-}));
-
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: createPassthroughComponentMock('ItemList'),
-}));
-
-vi.mock('@/voice/qa/voiceQaController', () => ({
-  voiceQaController: voiceQaControllerMocks,
-}));
-vi.mock('@/voice/qa/voiceQaOutputFixturePlayback', () => ({
-  voiceQaOutputFixturePlayback: outputFixturePlaybackMocks,
-}));
-vi.mock('@/voice/runtime/input/recordedAudioTranscriptionController', () => ({
-  recordedAudioTranscriptionController: recordedAudioTranscriptionControllerMocks,
-}));
-vi.mock('@/voice/input/prepareDaemonVoiceInferenceSttSource', () => ({
-  prepareDaemonVoiceInferenceSttSource: vi.fn(async () => ({
-    source: {
-      kind: 'web',
-      file: new File([new Uint8Array([1, 2, 3])], 'recording.wav', { type: 'audio/wav' }),
-    },
-    inputMimeType: 'audio/wav',
-    normalization: {
-      inputTransport: 'upload_transfer',
-      strategy: 'ui_pretranscoded_pcm16_fallback',
-      systemFfmpegAllowed: false,
-    },
-  })),
-}));
-vi.mock('@/voice/runtime/daemonInference/DaemonVoiceInferenceClient', () => ({
-  DaemonVoiceInferenceClient: class {
-    constructor(deps?: Record<string, unknown>) {
-      daemonVoiceInferenceClientConstructorMock(deps);
-    }
-  },
-}));
-vi.mock('@/voice/runtime/daemonInference/DaemonSttController', () => ({
-  DaemonSttController: class {
-    async transcribeRecordedAudio(params: any) {
-      return await daemonRecordedAudioFallbackMocks.transcribeRecordedAudio(params);
-    }
-  },
-}));
-
+// Hoist framework boundaries before storage's import graph reaches real media owners.
+vi.mock('react-native', async () => (
+  await import('@/dev/testkit/mocks/reactNative')
+).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (
+  await import('@/dev/testkit/mocks/unistyles')
+).createUnistylesMock());
 vi.mock('expo-router', () => expoRouterMock.module);
 
 describe('VoiceQaScreen', () => {
@@ -199,12 +274,14 @@ describe('VoiceQaScreen', () => {
   const originalRevokeObjectURL = globalThis.URL.revokeObjectURL;
 
   beforeEach(() => {
+    setPreferredLanguageFromSettings('en');
     process.env.EXPO_PUBLIC_DEBUG = '1';
     resetVoiceQaOutputTapForTests();
     clearMachineRpcPeerMediationReceiptsForTest();
     vi.clearAllMocks();
     expoRouterMock.state.router.setParams({
       voiceQaSessionId: undefined,
+      voiceQaServerId: undefined,
       voiceQaMode: undefined,
       voiceQaTransportRoute: undefined,
       voiceQaOutputCapture: undefined,
@@ -214,13 +291,12 @@ describe('VoiceQaScreen', () => {
       voiceQaRecordedAudioDaemonMachineId: undefined,
       voiceQaRecordedAudioDaemonBasePath: undefined,
     });
-    recordedAudioTranscriptionControllerMocks.transcribe.mockResolvedValue(null);
-    daemonRecordedAudioFallbackMocks.transcribeRecordedAudio.mockResolvedValue({
-      text: 'hello explicit daemon stt',
-      language: 'en',
-      modelPackId: 'daemon-pack',
-    });
-    daemonVoiceInferenceClientConstructorMock.mockReset();
+    daemonRpcRequests.length = 0;
+    pendingWrites.length = 0;
+    pendingRows.clear();
+    for (const sessionId of Object.keys(homeSessions)) delete homeSessions[sessionId];
+    transcriptionError = null;
+    heldTranscription = null;
     resetVoiceQaStoreForTests();
     useVoiceTargetStore.getState().setPrimaryActionSessionAddress(null);
     useVoiceTargetStore.getState().setLastFocusedSessionAddress(null);
@@ -248,17 +324,35 @@ describe('VoiceQaScreen', () => {
     });
     storage.setState({
       settings: settingsParse({
-        ...(storage.getState() as any).settings,
+        ...(storage.getState()).settings,
         voiceSettingsV1: voice,
         voice,
       }),
         sessionMessages: {},
-    } as any);
+    });
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:voice-qa-recording');
     globalThis.URL.revokeObjectURL = vi.fn();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (assembly) {
+      const { voiceQaController } = await import('@/voice/qa/voiceQaController');
+      await voiceQaController.stop();
+      await lifecycle?.dispose();
+      unsubscribeLifecycle?.();
+      unsubscribeLifecycle = null;
+      lifecycle = null;
+      await assembly.dispose();
+      assembly = null;
+      const { resetVoiceAdapterRegistryForTests } = await import('@/voice/session/voiceAdapterRegistry');
+      const { setVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleControllerStore');
+      resetVoiceAdapterRegistryForTests();
+      setVoiceSessionLifecycleController(null);
+    }
+    const { voiceQaOutputFixturePlayback } = await import('@/voice/qa/voiceQaOutputFixturePlayback');
+    voiceQaOutputFixturePlayback.stop();
+    await account?.dispose();
+    account = null;
     vi.useRealTimers();
     process.env.EXPO_PUBLIC_DEBUG = originalDebug;
     resetVoiceQaOutputTapForTests();
@@ -268,20 +362,25 @@ describe('VoiceQaScreen', () => {
     globalThis.URL.revokeObjectURL = originalRevokeObjectURL;
   });
 
+  afterAll(() => {
+    setPreferredLanguageFromSettings(null);
+    vi.unstubAllGlobals();
+  });
+
   it('renders without re-render loops when there is no active QA session yet', async () => {
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     let tree!: renderer.ReactTestRenderer;
     tree = (await renderScreen(<VoiceQaScreen />)).tree;
 
-    const texts = tree.findAll((node) => String(node.type) === 'Text').map((node: any) => String(node.props.children));
-    expect(texts).toContain('devVoiceQa.title');
+    const texts = tree.findAll((node) => String(node.type) === 'Text').map((node) => String(node.props.children));
+    expect(texts).toContain(t('devVoiceQa.title'));
     expect(useVoiceQaStore.getState().status).toBe('idle');
-    const items = tree.findAll((node) => String(node.type) === 'Item');
-    expect(items.find((node: any) => node.props.title === 'devVoiceQa.targetSession')?.props.detail)
-      .toBe('voiceSurface.noTarget');
-    expect(items.find((node: any) => node.props.title === 'devVoiceQa.runtimeSession')?.props.detail)
-      .toBe('common.none');
+    const items = tree.findAll((node) => 'title' in node.props && 'detail' in node.props);
+    expect(items.find((node) => node.props.title === t('devVoiceQa.targetSession'))?.props.detail)
+      .toBe(t('voiceSurface.noTarget'));
+    expect(items.find((node) => node.props.title === t('devVoiceQa.runtimeSession'))?.props.detail)
+      .toBe(t('common.none'));
     const mediaSnapshot = JSON.parse(String(
       tree.find((node) => String(node.props?.testID) === 'voiceQa.media.snapshot').props.children,
     ));
@@ -392,21 +491,23 @@ describe('VoiceQaScreen', () => {
 
     await act(async () => {
       storage.setState({
-        ...(storage.getState() as any),
+        ...(storage.getState()),
         sessions: {
-          ...((storage.getState() as any).sessions ?? {}),
-          target_s1: {
+          ...((storage.getState()).sessions ?? {}),
+          target_s1: createSessionFixture({
             id: 'target_s1',
             updatedAt: 5,
             metadata: {
+              ...emptySessionMetadata,
               name: 'target_s1',
             },
-          },
-          voice_session_1: {
+          }),
+          voice_session_1: createSessionFixture({
             id: 'voice_session_1',
             serverId: getActiveServerSnapshot().serverId,
             updatedAt: 10,
             metadata: {
+              ...emptySessionMetadata,
               systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
               voiceConversationBindingV1: {
                 v: 1,
@@ -418,18 +519,18 @@ describe('VoiceQaScreen', () => {
                 updatedAt: 100,
               },
             },
-          },
+          }),
         },
-      } as any);
+      });
     });
     await flushHookEffects({ cycles: 1, turns: 1 });
 
     const openConversationNodes = tree.findAll((node) => String(node.props?.testID) === 'voiceQa.openConversation');
     expect(openConversationNodes.length).toBeGreaterThan(0);
 
-    const items = tree.findAll((node) => String(node.type) === 'Item');
-    const runtimeItem = items.find((node: any) => node.props.title === 'devVoiceQa.runtimeSession');
-    expect(runtimeItem?.props.detail).toBe('devVoiceQa.runtimeSession');
+    const items = tree.findAll((node) => 'title' in node.props && 'detail' in node.props);
+    const runtimeItem = items.find((node) => node.props.title === t('devVoiceQa.runtimeSession'));
+    expect(runtimeItem?.props.detail).toBe(t('devVoiceQa.runtimeSession'));
   });
 
   it('shows the bound target session and hidden conversation session for local voice QA', async () => {
@@ -448,12 +549,12 @@ describe('VoiceQaScreen', () => {
     });
     tree = (await renderScreen(<VoiceQaScreen />)).tree;
 
-    const items = tree.findAll((node) => String(node.type) === 'Item');
-    const targetItem = items.find((node: any) => node.props.title === 'devVoiceQa.targetSession');
-    const runtimeItem = items.find((node: any) => node.props.title === 'devVoiceQa.runtimeSession');
+    const items = tree.findAll((node) => 'title' in node.props && 'detail' in node.props);
+    const targetItem = items.find((node) => node.props.title === t('devVoiceQa.targetSession'));
+    const runtimeItem = items.find((node) => node.props.title === t('devVoiceQa.runtimeSession'));
 
-    expect(targetItem?.props.detail).toBe('devVoiceQa.targetSession');
-    expect(runtimeItem?.props.detail).toBe('devVoiceQa.runtimeSession');
+    expect(targetItem?.props.detail).toBe(t('devVoiceQa.targetSession'));
+    expect(runtimeItem?.props.detail).toBe(t('devVoiceQa.runtimeSession'));
   });
 
   it('falls back to generic human labels when session metadata only contains raw ids', async () => {
@@ -461,25 +562,27 @@ describe('VoiceQaScreen', () => {
 
     let tree!: renderer.ReactTestRenderer;
     storage.setState({
-        ...(storage.getState() as any),
+        ...(storage.getState()),
         sessions: {
-            ...((storage.getState() as any).sessions ?? {}),
-            target_s1: {
+            ...((storage.getState()).sessions ?? {}),
+            target_s1: createSessionFixture({
                 id: 'target_s1',
                 serverId: getActiveServerSnapshot().serverId,
                 metadata: {
+                  ...emptySessionMetadata,
                     name: 'target_s1',
                 },
-            },
-            voice_session_1: {
+            }),
+            voice_session_1: createSessionFixture({
                 id: 'voice_session_1',
                 serverId: getActiveServerSnapshot().serverId,
                 metadata: {
+                  ...emptySessionMetadata,
                     name: 'voice_session_1',
                 },
-            },
+            }),
         },
-    } as any);
+    });
     useVoiceQaStore.getState().begin('local_voice_agent', '__voice_agent__');
     voiceSessionBindingStore.getState().bind({
         adapterId: 'local_conversation',
@@ -492,19 +595,19 @@ describe('VoiceQaScreen', () => {
     });
     tree = (await renderScreen(<VoiceQaScreen />)).tree;
 
-    const items = tree.findAll((node) => String(node.type) === 'Item');
-    const targetItem = items.find((node: any) => node.props.title === 'devVoiceQa.targetSession');
-    const runtimeItem = items.find((node: any) => node.props.title === 'devVoiceQa.runtimeSession');
+    const items = tree.findAll((node) => 'title' in node.props && 'detail' in node.props);
+    const targetItem = items.find((node) => node.props.title === t('devVoiceQa.targetSession'));
+    const runtimeItem = items.find((node) => node.props.title === t('devVoiceQa.runtimeSession'));
 
-    expect(targetItem?.props.detail).toBe('devVoiceQa.targetSession');
-    expect(runtimeItem?.props.detail).toBe('devVoiceQa.runtimeSession');
+    expect(targetItem?.props.detail).toBe(t('devVoiceQa.targetSession'));
+    expect(runtimeItem?.props.detail).toBe(t('devVoiceQa.runtimeSession'));
   });
 
   it('prefers the active QA target and runtime session details over drifting global bindings', async () => {
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     let tree!: renderer.ReactTestRenderer;
-    useVoiceQaStore.setState((state: any) => ({
+    useVoiceQaStore.setState((state) => ({
         ...state,
         provider: 'local_voice_agent',
         sessionId: '__voice_agent__',
@@ -531,19 +634,19 @@ describe('VoiceQaScreen', () => {
     });
     tree = (await renderScreen(<VoiceQaScreen />)).tree;
 
-    const items = tree.findAll((node) => String(node.type) === 'Item');
-    const targetItem = items.find((node: any) => node.props.title === 'devVoiceQa.targetSession');
-    const runtimeItem = items.find((node: any) => node.props.title === 'devVoiceQa.runtimeSession');
+    const items = tree.findAll((node) => 'title' in node.props && 'detail' in node.props);
+    const targetItem = items.find((node) => node.props.title === t('devVoiceQa.targetSession'));
+    const runtimeItem = items.find((node) => node.props.title === t('devVoiceQa.runtimeSession'));
 
-    expect(targetItem?.props.detail).toBe('devVoiceQa.targetSession');
-    expect(runtimeItem?.props.detail).toBe('devVoiceQa.runtimeSession');
+    expect(targetItem?.props.detail).toBe(t('devVoiceQa.targetSession'));
+    expect(runtimeItem?.props.detail).toBe(t('devVoiceQa.runtimeSession'));
   });
 
   it('uses the translated voice-agent label for the global sentinel', async () => {
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     let tree!: renderer.ReactTestRenderer;
-    useVoiceQaStore.setState((state: any) => ({
+    useVoiceQaStore.setState((state) => ({
         ...state,
         provider: 'local_voice_agent',
         sessionId: '__voice_agent__',
@@ -552,17 +655,17 @@ describe('VoiceQaScreen', () => {
     }));
     tree = (await renderScreen(<VoiceQaScreen />)).tree;
 
-    const items = tree.findAll((node) => String(node.type) === 'Item');
-    const targetItem = items.find((node: any) => node.props.title === 'devVoiceQa.targetSession');
+    const items = tree.findAll((node) => 'title' in node.props && 'detail' in node.props);
+    const targetItem = items.find((node) => node.props.title === t('devVoiceQa.targetSession'));
 
-    expect(targetItem?.props.detail).toBe('voiceActivity.format.voiceAgent');
+    expect(targetItem?.props.detail).toBe(t('voiceActivity.format.voiceAgent'));
   });
 
   it('replaces the global voice sentinel with the active target session label', async () => {
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     let tree!: renderer.ReactTestRenderer;
-    storage.setState((state: any) => ({
+    storage.setState((state) => ({
         settings: {
             ...state.settings,
             voice: {
@@ -575,21 +678,25 @@ describe('VoiceQaScreen', () => {
         },
         sessions: {
             ...(state.sessions ?? {}),
-            s_current: {
+            s_current: createSessionFixture({
                 id: 's_current',
+                serverId: getActiveServerSnapshot().serverId,
                 metadata: {
+                  ...emptySessionMetadata,
                     summaryText: 'Session QA Voice Matrix',
                 },
-            },
-            hidden_voice_conversation: {
+            }),
+            hidden_voice_conversation: createSessionFixture({
                 id: 'hidden_voice_conversation',
+                serverId: getActiveServerSnapshot().serverId,
                 metadata: {
+                  ...emptySessionMetadata,
                     name: 'voice-agent',
                 },
-            },
+            }),
         },
-    } as any));
-    useVoiceQaStore.setState((state: any) => ({
+    }));
+    useVoiceQaStore.setState((state) => ({
         ...state,
         provider: 'local_voice_agent',
         sessionId: '__voice_agent__',
@@ -600,9 +707,9 @@ describe('VoiceQaScreen', () => {
     useVoiceTargetStore.getState().setPrimaryActionSessionAddress({ serverId: getActiveServerSnapshot().serverId, sessionId: 's_current' });
     tree = (await renderScreen(<VoiceQaScreen />)).tree;
 
-    const items = tree.findAll((node) => String(node.type) === 'Item');
-    const targetItem = items.find((node: any) => node.props.title === 'devVoiceQa.targetSession');
-    const runtimeItem = items.find((node: any) => node.props.title === 'devVoiceQa.runtimeSession');
+    const items = tree.findAll((node) => 'title' in node.props && 'detail' in node.props);
+    const targetItem = items.find((node) => node.props.title === t('devVoiceQa.targetSession'));
+    const runtimeItem = items.find((node) => node.props.title === t('devVoiceQa.runtimeSession'));
 
     expect(targetItem?.props.detail).toBe('Session QA Voice Matrix');
     expect(runtimeItem?.props.detail).toBe('voice-agent');
@@ -615,7 +722,7 @@ describe('VoiceQaScreen', () => {
     const serverId = 'voice-qa-label-server';
     const runtimeServerId = getActiveServerSnapshot().serverId;
 
-    storage.setState((state: any) => ({
+    storage.setState((state) => ({
       settings: {
         ...state.settings,
         voice: {
@@ -629,40 +736,45 @@ describe('VoiceQaScreen', () => {
       },
       sessions: {
         ...(state.sessions ?? {}),
-        [targetSessionId]: {
+        [targetSessionId]: createSessionFixture({
           id: targetSessionId,
           serverId,
           presence: 1,
           metadata: {
+            ...emptySessionMetadata,
             summaryText: 'Raw private target summary',
             path: '/Users/alice/raw-private-target',
           },
-        },
-        [runtimeSessionId]: {
+        }),
+        [runtimeSessionId]: createSessionFixture({
           id: runtimeSessionId,
           serverId: runtimeServerId,
           presence: 1,
           metadata: {
+            ...emptySessionMetadata,
             name: runtimeSessionId,
           },
-        },
+        }),
       },
       sessionListRowsByServerId: { [serverId]: {
         ...(state.sessionListRowsByServerId?.[serverId] ?? {}),
-        [targetSessionId]: {
+        [targetSessionId]: createSessionListRenderableSessionFixture({
           id: targetSessionId,
           metadata: {
+            ...emptySessionMetadata,
             summaryText: 'Preferred private target summary',
             path: '/Users/alice/preferred-private-target',
           },
-        },
+        }),
       }, [runtimeServerId]: {
-        [runtimeSessionId]: {
+        [runtimeSessionId]: createSessionListRenderableSessionFixture({
           id: runtimeSessionId,
           metadata: {
+            ...emptySessionMetadata,
             name: 'Preferred runtime label',
+            path: '',
           },
-        },
+        }),
       },
       },
       sessionListIndexByServerId: {
@@ -675,8 +787,8 @@ describe('VoiceQaScreen', () => {
         ],
       },
       concurrentSessionListCacheByServerId: {},
-    } as any));
-    useVoiceQaStore.setState((state: any) => ({
+    }));
+    useVoiceQaStore.setState((state) => ({
       ...state,
       provider: 'local_voice_agent',
       sessionId: '__voice_agent__',
@@ -687,20 +799,21 @@ describe('VoiceQaScreen', () => {
 
     const tree = (await renderScreen(<VoiceQaScreen />)).tree;
     const readLabel = (title: string) => tree
-      .findAll((node) => String(node.type) === 'Item')
-      .find((node: any) => node.props.title === title)
+      .findAll((node) => 'title' in node.props && 'detail' in node.props)
+      .find((node) => node.props.title === title)
       ?.props.detail;
 
-    expect(readLabel('devVoiceQa.targetSession')).toBe('devVoiceQa.targetSession');
-    expect(readLabel('devVoiceQa.runtimeSession')).toBe('devVoiceQa.runtimeSession');
+    expect(readLabel(t('devVoiceQa.targetSession'))).toBe(t('devVoiceQa.targetSession'));
+    expect(readLabel(t('devVoiceQa.runtimeSession'))).toBe(t('devVoiceQa.runtimeSession'));
 
     await act(async () => {
-      storage.setState((state: any) => ({
+      storage.setState((state) => ({
         sessionListRowsByServerId: { [serverId]: {
           ...state.sessionListRowsByServerId?.[serverId],
           [targetSessionId]: {
             ...state.sessionListRowsByServerId?.[serverId]?.[targetSessionId],
             metadata: {
+              ...emptySessionMetadata,
               name: 'Updated offline target label',
               summaryText: 'Updated preferred target summary',
               path: '/Users/alice/updated-private-target',
@@ -710,18 +823,19 @@ describe('VoiceQaScreen', () => {
           [runtimeSessionId]: {
             ...state.sessionListRowsByServerId?.[runtimeServerId]?.[runtimeSessionId],
             metadata: {
+              ...emptySessionMetadata,
               name: 'Updated runtime label',
               summaryText: 'Updated preferred runtime summary',
             },
           },
         } },
-      } as any));
+      }));
     });
-    expect(readLabel('devVoiceQa.targetSession')).toBe('devVoiceQa.targetSession');
-    expect(readLabel('devVoiceQa.runtimeSession')).toBe('devVoiceQa.runtimeSession');
+    expect(readLabel(t('devVoiceQa.targetSession'))).toBe(t('devVoiceQa.targetSession'));
+    expect(readLabel(t('devVoiceQa.runtimeSession'))).toBe(t('devVoiceQa.runtimeSession'));
 
     await act(async () => {
-      storage.setState((state: any) => ({
+      storage.setState((state) => ({
         settings: {
           ...state.settings,
           voice: {
@@ -733,13 +847,13 @@ describe('VoiceQaScreen', () => {
             },
           },
         },
-      } as any));
+      }));
     });
-    expect(readLabel('devVoiceQa.targetSession')).toBe('Updated preferred target summary');
-    expect(readLabel('devVoiceQa.runtimeSession')).toBe('Updated preferred runtime summary');
+    expect(readLabel(t('devVoiceQa.targetSession'))).toBe('Updated preferred target summary');
+    expect(readLabel(t('devVoiceQa.runtimeSession'))).toBe('Updated preferred runtime summary');
 
     await act(async () => {
-      storage.setState((state: any) => {
+      storage.setState((state) => {
         const serverRows = { ...state.sessionListRowsByServerId?.[serverId] };
         delete serverRows[targetSessionId];
         delete serverRows[runtimeSessionId];
@@ -749,23 +863,23 @@ describe('VoiceQaScreen', () => {
             [targetSessionId]: {
               ...state.sessions[targetSessionId],
               presence: 1,
-              metadata: { name: 'Raw offline target label' },
+              metadata: { ...emptySessionMetadata, name: 'Raw offline target label' },
             },
             [runtimeSessionId]: {
               ...state.sessions[runtimeSessionId],
               presence: 1,
-              metadata: { name: 'Raw offline runtime label' },
+              metadata: { ...emptySessionMetadata, name: 'Raw offline runtime label' },
             },
           },
           sessionListRowsByServerId: { ...state.sessionListRowsByServerId, [serverId]: serverRows, [runtimeServerId]: {} },
-        } as any;
+        };
       });
     });
-    expect(readLabel('devVoiceQa.targetSession')).toBe('Raw offline target label');
-    expect(readLabel('devVoiceQa.runtimeSession')).toBe('Raw offline runtime label');
+    expect(readLabel(t('devVoiceQa.targetSession'))).toBe('Raw offline target label');
+    expect(readLabel(t('devVoiceQa.runtimeSession'))).toBe('Raw offline runtime label');
 
     await act(async () => {
-      storage.setState((state: any) => ({
+      storage.setState((state) => ({
         settings: {
           ...state.settings,
           voice: {
@@ -777,24 +891,25 @@ describe('VoiceQaScreen', () => {
             },
           },
         },
-      } as any));
+      }));
     });
-    expect(readLabel('devVoiceQa.targetSession')).toBe('devVoiceQa.targetSession');
-    expect(readLabel('devVoiceQa.runtimeSession')).toBe('devVoiceQa.runtimeSession');
+    expect(readLabel(t('devVoiceQa.targetSession'))).toBe(t('devVoiceQa.targetSession'));
+    expect(readLabel(t('devVoiceQa.runtimeSession'))).toBe(t('devVoiceQa.runtimeSession'));
 
     await act(async () => {
-      storage.setState((state: any) => {
+      storage.setState((state) => {
         const sessions = { ...state.sessions };
         delete sessions[targetSessionId];
         delete sessions[runtimeSessionId];
-        return { sessions } as any;
+        return { sessions };
       });
     });
-    expect(readLabel('devVoiceQa.targetSession')).toBe('devVoiceQa.targetSession');
-    expect(readLabel('devVoiceQa.runtimeSession')).toBe('devVoiceQa.runtimeSession');
+    expect(readLabel(t('devVoiceQa.targetSession'))).toBe(t('devVoiceQa.targetSession'));
+    expect(readLabel(t('devVoiceQa.runtimeSession'))).toBe(t('devVoiceQa.runtimeSession'));
   });
 
   it('uses the latest session id when start is pressed before the button rerenders', async () => {
+    await prepareRealtimeQa('session_latest');
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     let tree!: renderer.ReactTestRenderer;
@@ -808,13 +923,22 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(startButton);
     });
 
-    expect(voiceQaControllerMocks.start).toHaveBeenCalledWith({
-      sessionId: 'session_latest',
-      initialContext: '',
+    await vi.waitFor(() => {
+      const state = useVoiceQaStore.getState();
+      expect({ status: state.status,
+        errors: state.entries.filter(entry => entry.kind === 'error').map(entry => entry.text),
+        adapter: assembly!.adapters[0].getSnapshot(), sdkStarts: sdk.startSession.mock.calls.length,
+      }).toMatchObject({ status: 'running', errors: [], adapter: { status: 'connected' }, sdkStarts: 1 });
     });
+    expect(useVoiceQaStore.getState()).toMatchObject({ status: 'running',
+      targetSessionAddress: { serverId: account!.home.id, sessionId: 'session_latest' } });
+    expect(sdk.startSession).toHaveBeenCalledWith(expect.objectContaining({
+      overrides: expect.objectContaining({ conversation: { textOnly: true } }),
+    }));
   });
 
   it('uses the explicit dev-route media mode while preserving the normal start control', async () => {
+    await prepareRealtimeQa('session_media');
     expoRouterMock.state.router.setParams({ voiceQaMode: 'media' });
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
@@ -827,14 +951,34 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(startButton);
     });
 
-    expect(voiceQaControllerMocks.start).toHaveBeenCalledWith({
-      sessionId: 'session_media',
-      initialContext: '',
-      mode: 'media',
+    await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('running'));
+    expect(useVoiceQaStore.getState()).toMatchObject({ status: 'running',
+      targetSessionAddress: { serverId: account!.home.id, sessionId: 'session_media' } });
+    expect(lifecycle!.getSnapshot().status).toBe('connected');
+    expect(sdk.startSession).toHaveBeenCalledWith(expect.objectContaining({
+      overrides: expect.objectContaining({ conversation: { textOnly: false } }),
+    }));
+  });
+
+  it('refuses Start when the actual provider registration is withdrawn', async () => {
+    await prepareRealtimeQa('session_withdrawn');
+    await assembly!.dispose();
+    const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+    registerVoiceAdapters([]);
+    const { VoiceQaScreen } = await import('./VoiceQaScreen');
+    const tree = (await renderScreen(<VoiceQaScreen />)).tree;
+    await act(async () => {
+      tree.changeTextByTestId('voiceQa.sessionIdInput', 'session_withdrawn');
+      await tree.pressByTestIdAsync('voiceQa.start');
     });
+    await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('error'));
+    expect(useVoiceQaStore.getState().entries.filter(entry => entry.kind === 'error').map(entry => entry.text))
+      .toContain('realtime_voice_session_not_registered');
+    expect(sdk.startSession).not.toHaveBeenCalled();
   });
 
   it('passes the explicit dev-route server-relay requirement to the media attempt', async () => {
+    await prepareRealtimeQa('session_relay');
     expoRouterMock.state.router.setParams({
       voiceQaMode: 'media',
       voiceQaTransportRoute: 'server_relay',
@@ -850,15 +994,18 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(startButton);
     });
 
-    expect(voiceQaControllerMocks.start).toHaveBeenCalledWith({
-      sessionId: 'session_relay',
-      initialContext: '',
-      mode: 'media',
-      transportRouteRequirement: 'server_relay',
-    });
+    await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('running'));
+    expect(useVoiceQaStore.getState()).toMatchObject({ status: 'running',
+      targetSessionAddress: { serverId: account!.home.id, sessionId: 'session_relay' } });
+    const { readDaemonSpeechStreamQaRouteRequirement } = await import('@/voice/runtime/daemonInference/daemonSpeechStreamQaRouteRequirement');
+    expect(readDaemonSpeechStreamQaRouteRequirement('session_relay')).toBe('server_relay');
+    expect(readDaemonSpeechStreamQaRouteRequirement('another-session')).toBeNull();
+    await pressTestInstanceAsync(tree.find(node => node.props.testID === 'voiceQa.stop'));
+    expect(readDaemonSpeechStreamQaRouteRequirement('session_relay')).toBeNull();
   });
 
   it('enables bounded output evidence and plays a route fixture from a user gesture through the QA playback owner', async () => {
+    prepareOutputPlaybackQa();
     expoRouterMock.state.router.setParams({
       voiceQaOutputCapture: '1',
       voiceQaOutputFixtureUrl: 'https://fixtures.invalid/output.wav',
@@ -867,20 +1014,20 @@ describe('VoiceQaScreen', () => {
     const rendered = await renderScreen(<VoiceQaScreen />);
 
     await flushHookEffects({ cycles: 2, turns: 2 });
-    expect(outputFixturePlaybackMocks.play).not.toHaveBeenCalled();
+    expect(fixtureFetches).toEqual([]);
     const playFixtureButton = rendered.tree.find(
       (node) => String(node.props?.testID) === 'voiceQa.output.playFixture',
     );
     await pressTestInstanceAsync(playFixtureButton);
-    expect(outputFixturePlaybackMocks.play).toHaveBeenCalledWith('https://fixtures.invalid/output.wav');
+    await vi.waitFor(() => expect({
+      errors: useVoiceQaStore.getState().entries.filter(entry => entry.kind === 'error').map(entry => entry.text),
+      fetches: fixtureFetches,
+      audioInstances: BrowserFixtureAudio.instances.length,
+    }).toMatchObject({ errors: [], fetches: ['https://fixtures.invalid/output.wav'], audioInstances: 1 }));
+    expect(fixtureFetches).toEqual(['https://fixtures.invalid/output.wav']);
 
     await act(async () => {
-      const handle = beginVoiceQaOutputTap({
-        bytes: new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4, 87, 65, 86, 69]).buffer,
-        format: 'wav',
-      });
-      handle.markPlaying();
-      handle.markCompleted();
+      BrowserFixtureAudio.instances[0].onended?.();
       await Promise.resolve();
     });
     await flushHookEffects({ cycles: 1, turns: 1 });
@@ -897,6 +1044,7 @@ describe('VoiceQaScreen', () => {
   });
 
   it('can cancel fixture playback on a bounded dev-route timer', async () => {
+    prepareOutputPlaybackQa();
     vi.useFakeTimers();
     expoRouterMock.state.router.setParams({
       voiceQaOutputCapture: '1',
@@ -907,32 +1055,28 @@ describe('VoiceQaScreen', () => {
     const rendered = await renderScreen(<VoiceQaScreen />);
     await flushHookEffects({ cycles: 1, turns: 1 });
 
-    expect(outputFixturePlaybackMocks.stop).not.toHaveBeenCalled();
+    expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).not.toBe('cancelled');
     const playFixtureButton = rendered.tree.find(
       (node) => String(node.props?.testID) === 'voiceQa.output.playFixture',
     );
     await pressTestInstanceAsync(playFixtureButton);
+    await flushHookEffects({ cycles: 2, turns: 2 });
+    expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing');
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(24);
     });
-    expect(outputFixturePlaybackMocks.stop).not.toHaveBeenCalled();
-    await act(async () => {
-      const handle = beginVoiceQaOutputTap({
-        bytes: new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4, 87, 65, 86, 69]).buffer,
-        format: 'wav',
-      });
-      handle.markPlaying();
-      await Promise.resolve();
-    });
+    expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing');
     await flushHookEffects({ cycles: 1, turns: 1 });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(1);
     });
-    expect(outputFixturePlaybackMocks.stop).toHaveBeenCalledTimes(1);
+    expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('cancelled');
+    expect(BrowserFixtureAudio.instances[0]?.pause).toHaveBeenCalled();
     vi.useRealTimers();
   });
 
   it('uses the latest prompt when send is pressed before the button rerenders', async () => {
+    await prepareRealtimeQa('session_send');
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     let tree!: renderer.ReactTestRenderer;
@@ -948,18 +1092,29 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(sendButton);
     });
 
-    expect(voiceQaControllerMocks.sendPrompt).toHaveBeenCalledWith({
-      sessionId: 'session_send',
-      prompt: 'prompt_latest',
-    });
+    await vi.waitFor(() => expect(pendingWrites).toHaveLength(1));
+    await vi.waitFor(() => expect(sdk.sendUserMessage).toHaveBeenCalledWith('prompt_latest'));
+    expect(useVoiceQaStore.getState().targetSessionAddress?.sessionId).toBe('session_send');
+    expect(pendingWrites).toEqual([expect.objectContaining({ sessionId: 'session_send',
+      body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
+        role: 'user', content: expect.objectContaining({ text: 'prompt_latest' }),
+      }) } }),
+    })]);
+    expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'user' && entry.text === 'prompt_latest')).toBe(true);
   });
 
-  it('uses the latest session id when stop is pressed before the button rerenders', async () => {
+  it('stops the admitted provider session when input changes before the button rerenders', async () => {
+    await prepareRealtimeQa('session_stop_admitted');
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     let tree!: renderer.ReactTestRenderer;
     tree = (await renderScreen(<VoiceQaScreen />)).tree;
 
+    const { voiceQaController } = await import('@/voice/qa/voiceQaController');
+    await act(async () => {
+      await voiceQaController.start({ sessionAddress: { serverId: account!.home.id, sessionId: 'session_stop_admitted' } });
+    });
+    expect(useVoiceQaStore.getState().status).toBe('running');
     const sessionInput = tree.find((node) => String(node.props?.testID) === 'voiceQa.sessionIdInput');
     const stopButton = tree.find((node) => String(node.props?.testID) === 'voiceQa.stop');
 
@@ -968,12 +1123,13 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(stopButton);
     });
 
-    expect(voiceQaControllerMocks.stop).toHaveBeenCalledWith({
-      sessionId: 'session_stop_latest',
-    });
+    await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('idle'));
+    expect(useVoiceQaStore.getState().status).toBe('idle');
+    expect(sdk.endSession).toHaveBeenCalledTimes(1);
   });
 
   it('calls clear without routing through the busy action wrapper', async () => {
+    useVoiceQaStore.getState().appendUser('retained diagnostic prompt');
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     let tree!: renderer.ReactTestRenderer;
@@ -985,9 +1141,8 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(clearButton);
     });
 
-    expect(voiceQaControllerMocks.clear).toHaveBeenCalledTimes(1);
-    expect(voiceQaControllerMocks.start).not.toHaveBeenCalled();
-    expect(voiceQaControllerMocks.stop).not.toHaveBeenCalled();
+    expect(useVoiceQaStore.getState().entries).toEqual([]);
+    expect(useVoiceQaStore.getState().status).toBe('idle');
   });
 
   it('opens the hidden conversation route for the bound runtime session', async () => {
@@ -995,16 +1150,16 @@ describe('VoiceQaScreen', () => {
 
     let tree!: renderer.ReactTestRenderer;
     useVoiceQaStore.getState().begin('local_voice_agent', '__voice_agent__');
-    storage.setState((state: any) => ({
+    storage.setState((state) => ({
       sessions: {
         ...state.sessions,
-        voice_session_qa_open: {
+        voice_session_qa_open: createSessionFixture({
           id: 'voice_session_qa_open',
           serverId: getActiveServerSnapshot().serverId,
-          metadata: {},
-        },
+          metadata: emptySessionMetadata,
+        }),
       },
-    } as any));
+    }));
     voiceSessionBindingStore.getState().bind({
       adapterId: 'local_conversation',
       controlSessionId: '__voice_agent__',
@@ -1034,30 +1189,29 @@ describe('VoiceQaScreen', () => {
     useVoiceQaStore.getState().appendUser('user prompt');
     useVoiceQaStore.getState().appendAssistant('assistant reply');
     storage.setState({
-      ...(storage.getState() as any),
+      ...(storage.getState()),
       sessionMessages: {
-        voice_hidden_runtime: {
-          messages: [
-            {
+        voice_hidden_runtime: createSessionMessagesFixture({
+          messageIdsOldestFirst: ['proj_1', 'proj_2'],
+          messagesById: {
+            proj_1: {
+              kind: 'agent-text',
               id: 'proj_1',
               createdAt: 1,
               localId: 'proj_1',
-              isSidechain: false,
-              role: 'agent',
-              content: [{ type: 'text', text: 'Assistant is speaking', uuid: 'proj_1', parentUUID: null }],
+              text: 'Assistant is speaking',
             },
-            {
+            proj_2: {
+              kind: 'agent-text',
               id: 'proj_2',
               createdAt: 2,
               localId: 'proj_2',
-              isSidechain: false,
-              role: 'agent',
-              content: [{ type: 'text', text: '[Voice] Tool result: sendSessionMessage succeeded', uuid: 'proj_2', parentUUID: null }],
+              text: '[Voice] Tool result: sendSessionMessage succeeded',
             },
-          ],
-        },
+          },
+        }),
       },
-    } as any);
+    });
     voiceSessionBindingStore.getState().bind({
       adapterId: 'local_conversation',
       controlSessionId: '__voice_agent__',
@@ -1067,13 +1221,13 @@ describe('VoiceQaScreen', () => {
       transcriptMode: 'native_session',
       updatedAt: Date.now(),
     });
-    useVoiceQaStore.setState((state: any) => ({
+    useVoiceQaStore.setState((state) => ({
       ...state,
       runtimeSessionId: 'voice_hidden_runtime',
     }));
 
     const tree = (await renderScreen(<VoiceQaScreen />)).tree;
-    const allText = tree.findAll((node) => String(node.type) === 'Text').map((node: any) => String(node.props.children));
+    const allText = tree.findAll((node) => String(node.type) === 'Text').map((node) => String(node.props.children));
 
     expect(allText).toContain('user');
     expect(allText).toContain('user prompt');
@@ -1081,11 +1235,12 @@ describe('VoiceQaScreen', () => {
     expect(allText).toContain('assistant reply');
     expect(allText.some((text) => text.includes('Assistant is speaking'))).toBe(true);
     expect(allText.some((text) => text.includes('[Voice] Tool result: sendSessionMessage succeeded'))).toBe(true);
-    expect(allText).not.toContain('devVoiceQa.transcriptEmpty');
-    expect(allText).not.toContain('devVoiceQa.activityEmpty');
+    expect(allText).not.toContain(t('devVoiceQa.transcriptEmpty'));
+    expect(allText).not.toContain(t('devVoiceQa.activityEmpty'));
   });
 
   it('transcribes a complete explicit recorded-audio target without consulting configured runtime settings', async () => {
+    await prepareDaemonAudioQa();
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     const tree = (await renderScreen(<VoiceQaScreen />)).tree;
@@ -1104,7 +1259,7 @@ describe('VoiceQaScreen', () => {
       daemonBasePathInput.props.onChangeText('/tmp/voice-agent');
       fileInput.props.onChange({
         target: {
-          files: [{ name: 'recording.wav', type: 'audio/wav' }],
+          files: [uploadedRecording],
           value: 'recording.wav',
         },
       });
@@ -1114,11 +1269,16 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
-    expect(recordedAudioTranscriptionControllerMocks.transcribe).not.toHaveBeenCalled();
-    expect(daemonRecordedAudioFallbackMocks.transcribeRecordedAudio).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'session-daemon-stt',
+    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('success'));
+
+    expect({
+      status: String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children),
+      result: tree.find(node => node.props.testID === 'voiceQa.recordedAudio.result').props.children,
+      requests: transcribeRequests(),
+    }).toMatchObject({ status: expect.stringContaining('success'), result: expect.stringContaining('hello explicit daemon stt'), requests: [expect.any(Object)] });
+    expect(transcribeRequests()[0]?.payload).toMatchObject({
       packId: 'sherpa-onnx-stt-en-v1',
-    }));
+    });
 
     const statusText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.status');
     const resultText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.result');
@@ -1126,12 +1286,13 @@ describe('VoiceQaScreen', () => {
     expect(String(statusText.props.children)).toContain('success');
     expect(String(resultText.props.children)).toContain('hello explicit daemon stt');
     expect(storage.getState().settings.voice).toEqual(configuredVoiceBeforeTranscription);
-    expect((storage.getState() as any).sessions?.['session-daemon-stt']).toBeUndefined();
+    expect((storage.getState()).sessions?.['session-daemon-stt']).toBeUndefined();
     expect(Object.hasOwn(storage.getState(), 'sessionListRenderables')).toBe(false);
-    expect((storage.getState() as any).machines?.['machine-daemon-stt']).toBeUndefined();
+    expect((storage.getState()).machines?.['machine-daemon-stt']).toBeUndefined();
   });
 
   it('uses recorded-audio daemon route params for the explicit daemon fallback path', async () => {
+    await prepareDaemonAudioQa();
     expoRouterMock.state.router.setParams({
       voiceQaSessionId: 'session-from-route',
       voiceQaRecordedAudioDaemonSttPackId: 'sherpa-onnx-stt-en-v1',
@@ -1157,7 +1318,7 @@ describe('VoiceQaScreen', () => {
     await act(async () => {
       fileInput.props.onChange({
         target: {
-          files: [{ name: 'recording.wav', type: 'audio/wav' }],
+          files: [uploadedRecording],
           value: 'recording.wav',
         },
       });
@@ -1167,18 +1328,15 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
-    expect(recordedAudioTranscriptionControllerMocks.transcribe).not.toHaveBeenCalled();
-    expect(daemonRecordedAudioFallbackMocks.transcribeRecordedAudio).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'session-from-route',
-      inputMimeType: 'audio/wav',
+    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('success'));
+
+    expect(daemonRpcRequests.filter(request => request.method.endsWith('.transcribe'))).toHaveLength(1);
+    expect(transcribeRequests()[0]?.payload).toMatchObject({
       packId: 'sherpa-onnx-stt-en-v1',
       language: 'en',
-    }));
-    const daemonClientDeps = daemonVoiceInferenceClientConstructorMock.mock.calls.at(-1)?.[0] as
-      | { resolveVoiceHomeDaemonMachineId?: () => string | null }
-      | undefined;
-    expect(daemonClientDeps?.resolveVoiceHomeDaemonMachineId?.()).toBe('machine-from-route');
-    expect((storage.getState() as any).sessions?.['session-from-route']).toBeUndefined();
+    });
+    expect(transcribeRequests()[0]?.machineId).toBe('machine-from-route');
+    expect((storage.getState()).sessions?.['session-from-route']).toBeUndefined();
     const statusText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.status');
     const resultText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.result');
     expect(String(statusText.props.children)).toContain('success');
@@ -1186,6 +1344,7 @@ describe('VoiceQaScreen', () => {
   });
 
   it('uses the latest explicit daemon machine target after the screen rerenders', async () => {
+    await prepareDaemonAudioQa();
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
     const tree = (await renderScreen(<VoiceQaScreen />)).tree;
     const sessionInput = tree.find((node) => String(node.props?.testID) === 'voiceQa.sessionIdInput');
@@ -1202,7 +1361,7 @@ describe('VoiceQaScreen', () => {
       daemonBasePathInput.props.onChangeText('/repo/before-rerender');
       fileInput.props.onChange({
         target: {
-          files: [{ name: 'recording.wav', type: 'audio/wav' }],
+          files: [uploadedRecording],
           value: 'recording.wav',
         },
       });
@@ -1215,18 +1374,23 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
-    const daemonClientDeps = daemonVoiceInferenceClientConstructorMock.mock.calls.at(-1)?.[0] as
-      | { resolveVoiceHomeDaemonMachineId?: () => string | null }
-      | undefined;
-    expect(daemonClientDeps?.resolveVoiceHomeDaemonMachineId?.()).toBe('machine-after-rerender');
-    expect((storage.getState() as any).sessions?.['session-latest-target']).toBeUndefined();
+    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('success'));
+
+    expect(transcribeRequests()[0]?.machineId).toBe('machine-after-rerender');
+    expect((storage.getState()).sessions?.['session-latest-target']).toBeUndefined();
   });
 
   it('restores temporarily primed recorded-audio settings when the QA screen unmounts mid-action', async () => {
-    let resolveTranscription!: (value: string | null) => void;
-    recordedAudioTranscriptionControllerMocks.transcribe.mockReturnValueOnce(new Promise((resolve) => {
-      resolveTranscription = resolve;
-    }));
+    await prepareDaemonAudioQa();
+    let resolveTranscription!: (value: unknown) => void;
+    heldTranscription = new Promise(resolve => { resolveTranscription = resolve; });
+    storage.getState().applyMachines([createMachineFixture({
+      id: 'qa-configured-machine', serverId: account!.home.id, activeAt: Date.now(),
+    })]);
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceSettingsParse({
+      ...storage.getState().settings.voice,
+      executionMachine: { mode: 'fixed', machineId: 'qa-configured-machine', autoMachineId: null },
+    }) }, storage.getState().settings));
     const baseline = {
       experiments: storage.getState().settings.experiments,
       featureToggles: storage.getState().settings.featureToggles,
@@ -1243,7 +1407,7 @@ describe('VoiceQaScreen', () => {
       daemonPackIdInput.props.onChangeText('sherpa-onnx-stt-en-v1');
       fileInput.props.onChange({
         target: {
-          files: [{ name: 'recording.wav', type: 'audio/wav' }],
+          files: [uploadedRecording],
           value: 'recording.wav',
         },
       });
@@ -1251,7 +1415,7 @@ describe('VoiceQaScreen', () => {
     await act(async () => {
       transcribeButton.props.onPress();
       await vi.waitFor(() => {
-        expect(recordedAudioTranscriptionControllerMocks.transcribe).toHaveBeenCalledTimes(1);
+        expect(transcribeRequests()).toHaveLength(1);
       });
     });
     const primedSettings = storage.getState().settings;
@@ -1269,11 +1433,13 @@ describe('VoiceQaScreen', () => {
     });
     expect(storage.getState().settings).toMatchObject(baseline);
 
-    resolveTranscription(null);
+    resolveTranscription({ ok: true, requestId: transcribeRequests()[0]?.payload.requestId,
+      text: '', language: 'en', modelPackId: 'daemon-pack' });
     await Promise.resolve();
   });
 
   it('uses the explicit daemon QA path directly when every target field is complete', async () => {
+    await prepareDaemonAudioQa();
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     const tree = (await renderScreen(<VoiceQaScreen />)).tree;
@@ -1291,7 +1457,7 @@ describe('VoiceQaScreen', () => {
       daemonBasePathInput.props.onChangeText('/tmp/voice-agent');
       fileInput.props.onChange({
         target: {
-          files: [{ name: 'recording.wav', type: 'audio/wav' }],
+          files: [uploadedRecording],
           value: 'recording.wav',
         },
       });
@@ -1301,21 +1467,15 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
-    expect(daemonRecordedAudioFallbackMocks.transcribeRecordedAudio).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'session-daemon-fallback',
-      inputMimeType: 'audio/wav',
+    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('success'));
+
+    expect(transcribeRequests()[0]?.payload).toMatchObject({
       packId: 'sherpa-onnx-stt-en-v1',
       language: 'en',
-    }));
-    expect(recordedAudioTranscriptionControllerMocks.transcribe).not.toHaveBeenCalled();
-    expect(daemonVoiceInferenceClientConstructorMock).toHaveBeenCalledWith(expect.objectContaining({
-      isRuntimeFeatureEnabled: expect.any(Function),
-      resolveVoiceHomeDaemonMachineId: expect.any(Function),
-    }));
-    const daemonClientDeps = daemonVoiceInferenceClientConstructorMock.mock.calls.at(-1)?.[0] as
-      | { resolveVoiceHomeDaemonMachineId?: () => string | null }
-      | undefined;
-    expect(daemonClientDeps?.resolveVoiceHomeDaemonMachineId?.()).toBe('machine-daemon-stt');
+    });
+    expect(daemonRpcRequests.filter(request => request.method.endsWith('.transcribe'))).toHaveLength(1);
+
+    expect(transcribeRequests()[0]?.machineId).toBe('machine-daemon-stt');
     const statusText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.status');
     const resultText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.result');
 
@@ -1324,7 +1484,8 @@ describe('VoiceQaScreen', () => {
   });
 
   it('surfaces explicit daemon QA fallback failures instead of collapsing them to empty', async () => {
-    daemonRecordedAudioFallbackMocks.transcribeRecordedAudio.mockRejectedValueOnce(new Error('daemon_rpc_failed'));
+    await prepareDaemonAudioQa();
+    transcriptionError = 'daemon_rpc_failed';
 
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
@@ -1343,7 +1504,7 @@ describe('VoiceQaScreen', () => {
       daemonBasePathInput.props.onChangeText('/tmp/voice-agent');
       fileInput.props.onChange({
         target: {
-          files: [{ name: 'recording.wav', type: 'audio/wav' }],
+          files: [uploadedRecording],
           value: 'recording.wav',
         },
       });
@@ -1353,11 +1514,13 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
+    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('error'));
+
     const statusText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.status');
     const resultText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.result');
 
     expect(String(statusText.props.children)).toContain('error');
     expect(String(resultText.props.children)).toContain('daemon_rpc_failed');
-    expect(recordedAudioTranscriptionControllerMocks.transcribe).not.toHaveBeenCalled();
+    expect(daemonRpcRequests.filter(request => request.method.endsWith('.transcribe'))).toHaveLength(1);
   });
 });

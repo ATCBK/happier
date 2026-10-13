@@ -1,5 +1,6 @@
 import { storage } from '@/sync/domains/state/storage';
-import { resolveMachineForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
+import { resolveMachineForActiveServerFromState, resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
+import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { resolveVoiceExecutionMachineSelectionFromState } from '@/voice/settings/executionMachine';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -16,8 +17,10 @@ export type VoiceExecutionMachinePresentation = Readonly<{
 
 function machineLabelFromState(state: ReturnType<typeof storage.getState>, selectedMachineId: string | null): string | null {
   if (!selectedMachineId) return null;
-  return getMachineDisplayName(resolveMachineForActiveServerFromState(state, selectedMachineId,
-    { serverId: getAppliedActiveServerSnapshot().serverId })) ?? selectedMachineId;
+  const scope = { serverId: getAppliedActiveServerSnapshot().serverId };
+  const machines = resolveVisibleMachinesForActiveServerFromState(state, scope).filter(isMachineVisibleForLaunchSelection);
+  return getMachineDisplayName(resolveMachineForActiveServerFromState(state, selectedMachineId, scope), machines)
+    ?? getMachineDisplayName({ id: selectedMachineId, absence: 'unlisted' });
 }
 
 /** The same machine facts used by mounted controls and prepared settings mutations. */

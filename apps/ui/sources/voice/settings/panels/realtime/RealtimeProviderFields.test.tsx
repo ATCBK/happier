@@ -1,11 +1,16 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
 import { parseRealtimeSettingsDescriptor } from './descriptor';
+import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
+import { createVoiceProviderRegistry } from '@/voice/registry/providerRegistry';
+import { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
+import type { VoiceAdapterController } from '@/voice/session/types';
+import { setPreferredLanguageFromSettings, t, tLoose } from '@/text';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(standardCleanup);
@@ -20,72 +25,91 @@ const audioPreview = vi.hoisted(() => ({
   create: vi.fn(),
   play: vi.fn(),
   remove: vi.fn(),
-  addListener: vi.fn(() => ({ remove: vi.fn() })),
+  addListener: vi.fn((_event: string, _listener: (status: Readonly<{ didJustFinish?: boolean }>) => void) => ({ remove: vi.fn() })),
 }));
-const playbackAudioMode = vi.hoisted(() => {
-  const release = vi.fn(async () => undefined);
-  return {
-    acquire: vi.fn(async () => Object.freeze({ release })),
-    release,
-  };
-});
+const nativeAlert = vi.hoisted(() => vi.fn<typeof import('react-native')['Alert']['alert']>());
+const nativeAudio = vi.hoisted(() => ({
+  module: null as ReturnType<typeof import('@/dev/testkit/harness/nativeVoicePcmCapture').createNativeVoicePcmCaptureHarness>['nativeModule'] | null,
+}));
+// Native module discovery is the OS boundary; the shared registry and lease coordinator stay real.
+vi.mock('expo-modules-core', async original => ({
+  ...await original<typeof import('expo-modules-core')>(),
+  requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative' ? nativeAudio.module : null,
+}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: any) => React.createElement('Item', props, props.rightElement),
-}));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-  DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
-}));
-vi.mock('@/components/ui/forms/Switch', () => ({
-  Switch: (props: any) => React.createElement('Switch', props),
-}));
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-  return createReactNativeWebMock({ Pressable: (props: any) => React.createElement('Pressable', props, props.children) });
+  return createReactNativeWebMock({ Platform: { OS: 'ios' }, Alert: { alert: nativeAlert },
+    Pressable: (props: React.PropsWithChildren<Record<string, unknown>>) => React.createElement('Pressable', props, props.children) });
 });
-vi.mock('@expo/vector-icons', () => ({ Ionicons: (props: any) => React.createElement('Ionicons', props) }));
+vi.mock('@expo/vector-icons', async () =>
+  (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('react-native-unistyles', async () => {
   const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
   return createUnistylesMock();
 });
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({
-    translate: (key: string, params?: Record<string, unknown>) => params?.voice ? `${key}:${params.voice}` : key,
-    translateLoose: (key: string) => key,
-  });
-});
-vi.mock('@/modal', async () => {
-  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock({ confirmResult: true }).module;
-});
-vi.mock('@/voice/session/voiceAdapterRegistry', () => ({
-  performVoiceAdapterRuntimeAction: action,
-}));
 vi.mock('expo-audio', () => ({
   createAudioPlayer: audioPreview.create,
 }));
-vi.mock('@/voice/runtime/voiceAudioMode', () => ({
-  acquireVoicePlaybackAudioMode: playbackAudioMode.acquire,
-}));
-
 // Keep cold owner-graph compilation outside each rendered interaction's timeout.
+nativeAudio.module = (await import('@/dev/testkit/harness/nativeVoicePcmCapture')).createNativeVoicePcmCaptureHarness().nativeModule;
+const { getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
 const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
 
-const owner = Object.freeze({
-  schemaVersion: 1,
-  defaultConfig: Object.freeze({
-    model: Object.freeze({ kind: 'pinned', id: 'stable' }),
-    resumptionEnabled: false,
-  }),
-  parseConfig(value: unknown) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const input = value as any;
-    if (!['pinned', 'moving_alias'].includes(input.model?.kind)) return null;
-    if (typeof input.model?.id !== 'string' || typeof input.resumptionEnabled !== 'boolean') return null;
-    return input;
-  },
+const providerId = 'acme.voice/realtime';
+const declaration = VoiceProviderContributionSchema.parse({
+  id: 'realtime', title: 'Fixture realtime', kind: 'conversation', roles: ['realtime_conversation'],
+  platforms: ['web', 'ios', 'android'], capabilities: { turn: { cancelResponse: false, bargeIn: false } },
+  client: { artifactId: 'fixture-voice', exportName: 'activate' },
+  settings: { schemaVersion: 1, fields: [
+    { id: 'model', title: 'Model', schema: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['pinned', 'moving_alias'] }, id: { type: 'string', minLength: 1 },
+    }, required: ['kind', 'id'], additionalProperties: false }, default: { kind: 'pinned', id: 'stable' }, presentation: { control: 'json' } },
+    { id: 'resumptionEnabled', title: 'Resume', schema: { type: 'boolean' }, default: false, presentation: { control: 'switch' } },
+    { id: 'voice', title: 'Voice', schema: { type: 'object', properties: { kind: { const: 'catalog' }, id: { type: 'string' } },
+      required: ['kind', 'id'], additionalProperties: false }, default: { kind: 'catalog', id: 'voice_a' }, presentation: { control: 'json' } },
+    { id: 'turnDetection', title: 'VAD', schema: { type: 'object', properties: { threshold: { anyOf: [{ type: 'number' }, { type: 'null' }] } },
+      required: ['threshold'], additionalProperties: false }, default: { threshold: null }, presentation: { control: 'json' } },
+    { id: 'language', title: 'Language', schema: { type: 'string', maxLength: 128 }, default: '', presentation: { control: 'text' } },
+  ] },
 });
+const entry = createVoiceProviderRegistry({
+  bundledContributions: [{ pluginId: 'acme.voice', providerId, declaration }],
+  bundledPresentations: [{ providerId, settingsSectionId: 'voice.fixture.realtime', createSettingsSpec: () => null }],
+}).get(providerId);
+if (!entry?.providerSettings) throw new Error('Expected the real declared fixture settings owner');
+const settingsOwner = entry.providerSettings;
+if (!isConfigRecord(settingsOwner.defaultConfig)) throw new Error('Expected declared object settings');
+const owner = {
+  schemaVersion: settingsOwner.schemaVersion,
+  defaultConfig: settingsOwner.defaultConfig,
+  parseConfig(value: unknown) {
+    const parsed = settingsOwner.parseConfig(value);
+    return isConfigRecord(parsed) ? parsed : null;
+  },
+};
+const registrationToken = {};
+const refuseConversation = async () => { throw new Error('This fixture exposes only provider privacy actions'); };
+beforeEach(async () => {
+  const { Platform } = await import('react-native');
+  Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
+  setPreferredLanguageFromSettings('en');
+  // Human dismissal enters through the native dialog SDK; real ModalManager settles it.
+  nativeAlert.mockReset().mockImplementation((_title, _message, buttons) => {
+    if (buttons?.length === 1) queueMicrotask(() => buttons[0].onPress?.());
+  });
+  action.mockReset().mockResolvedValue({ status: 'completed' });
+  const adapter = {
+    id: providerId, engineKind: 'realtime', start: refuseConversation, stop: refuseConversation,
+    toggle: refuseConversation, interrupt: refuseConversation, setMuted: refuseConversation,
+    sendContextUpdate: () => { throw new Error('This fixture exposes only provider privacy actions'); },
+    getSnapshot: () => ({ adapterId: providerId, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false }),
+    performRuntimeAction: action,
+  } satisfies VoiceAdapterController;
+  commitExternalVoiceProviderRegistration({ token: registrationToken, pluginId: 'acme.voice', localId: 'realtime',
+    providerId, descriptor: entry, adapter });
+});
+afterEach(() => removeExternalVoiceProviderRegistration(registrationToken));
 
 function isConfigRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -106,7 +130,7 @@ describe('RealtimeProviderFields', () => {
     const row = screen.tree.findAll((node) => node.props?.testIDPrefix === 'settings.voice.greeting' && Array.isArray(node.props?.options))[0]!;
     expect(row.props.options.map((option: { id: string }) => option.id)).toEqual(['off', 'immediate', 'on_first_turn']);
     expect(row.props.value).toBe('immediate');
-    expect(row.props.options.find((option: { id: string }) => option.id === 'immediate').description).toBe('voicePresence.greetingLiteralUnavailable');
+    expect(row.props.options.find((option: { id: string }) => option.id === 'immediate').description).toBe(t('voicePresence.greetingLiteralUnavailable'));
   });
   it('reveals a contributed VAD subfield from search without changing its provider settings', async () => {
     const { voiceSettingsDeclarationRegistry } = await import('@/voice/settings/voiceContributedSettingsDeclarations');
@@ -138,19 +162,13 @@ describe('RealtimeProviderFields', () => {
     audioPreview.play.mockClear();
     audioPreview.remove.mockClear();
     audioPreview.addListener.mockClear();
-    playbackAudioMode.acquire.mockClear();
-    playbackAudioMode.release.mockClear();
     let onPlaybackStatusUpdate: ((status: Readonly<{ didJustFinish?: boolean }>) => void) | null = null;
-    audioPreview.addListener.mockImplementationOnce(((_event: string, listener: (status: Readonly<{ didJustFinish?: boolean }>) => void) => {
+    audioPreview.addListener.mockImplementationOnce((_event, listener) => {
       onPlaybackStatusUpdate = listener;
       return { remove: vi.fn() };
-    }) as any);
-    const catalogOwner = {
-      schemaVersion: 1,
-      defaultConfig: { voice: { kind: 'catalog', id: 'voice_a' } },
-      parseConfig(value: unknown) { return value && typeof value === 'object' ? value as any : null; },
-    };
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    });
+    const catalogOwner = owner;
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
       credential: { kind: 'api_key', catalog: null }, links: {},
       fields: [{ kind: 'voice_catalog', path: 'voice', titleKey: 'fixture.voice' }],
@@ -158,7 +176,7 @@ describe('RealtimeProviderFields', () => {
     if (!descriptor) throw new Error('invalid fixture descriptor');
     const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: 'fixture_realtime', descriptor, owner: catalogOwner,
+      providerId: providerId, descriptor, owner: catalogOwner,
       config: catalogOwner.defaultConfig, credentialStatus: 'ready',
       catalog: { phase: 'ready', rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
       onRequestCatalog: vi.fn(),
@@ -171,14 +189,19 @@ describe('RealtimeProviderFields', () => {
       'https://example.test/a.mp3',
       { keepAudioSessionActive: true },
     );
-    expect(playbackAudioMode.acquire).toHaveBeenCalledWith('realtime-catalog-preview');
+    const coordinator = getSharedVoiceAudioSessionCoordinator();
+    expect(coordinator?.getSnapshot()).toMatchObject({ leaseCount: 1, configuration: {
+      mode: 'playback', input: false, output: true, capture: 'host_managed',
+    } });
 
     act(() => onPlaybackStatusUpdate?.({ didJustFinish: true }));
-    await vi.waitFor(() => expect(playbackAudioMode.release).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(coordinator?.getSnapshot()).toMatchObject({
+      leaseCount: 0, pendingReleaseCount: 0, configuration: null,
+    }));
   });
 
   it('renders provider-owned fields without provider-id or path-specific host branches', async () => {
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1',
       modes: ['byo'],
       credential: { kind: 'api_key', catalog: null },
@@ -198,7 +221,7 @@ describe('RealtimeProviderFields', () => {
     if (!descriptor) throw new Error('invalid fixture descriptor');
     const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: 'fixture_realtime', descriptor, owner,
+      providerId: providerId, descriptor, owner,
       config: owner.defaultConfig,
       credentialStatus: 'ready', catalog: { phase: 'ready', rows: [] },
       onRequestCatalog: vi.fn(),
@@ -214,10 +237,10 @@ describe('RealtimeProviderFields', () => {
 
   it('coalesces destructive provider actions while one request is in flight', async () => {
     let release!: () => void;
-    action.mockImplementationOnce(async () => await new Promise<any>((resolve) => {
+    action.mockImplementationOnce(async () => await new Promise<{ status: 'completed' }>((resolve) => {
       release = () => resolve({ status: 'completed' });
     }));
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
       credential: { kind: 'api_key', catalog: null }, links: {},
       fields: [{
@@ -229,8 +252,8 @@ describe('RealtimeProviderFields', () => {
     if (!descriptor) throw new Error('invalid fixture descriptor');
     const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: 'fixture_realtime', descriptor, owner,
-      config: { model: { kind: 'pinned', id: 'stable' }, resumptionEnabled: true },
+      providerId: providerId, descriptor, owner,
+      config: { ...owner.defaultConfig, resumptionEnabled: true },
       credentialStatus: 'ready',
       catalog: { phase: 'ready', rows: [] }, onRequestCatalog: vi.fn(),
     }));
@@ -245,8 +268,7 @@ describe('RealtimeProviderFields', () => {
 
   it('shows a failure result when a provider privacy action rejects', async () => {
     action.mockRejectedValueOnce(new Error('provider unavailable'));
-    const { Modal } = await import('@/modal');
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
       credential: { kind: 'api_key', catalog: null }, links: {},
       fields: [{
@@ -257,27 +279,25 @@ describe('RealtimeProviderFields', () => {
     if (!descriptor) throw new Error('invalid fixture descriptor');
     const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: 'fixture_realtime', descriptor, owner,
-      config: { model: { kind: 'pinned', id: 'stable' }, resumptionEnabled: true },
+      providerId: providerId, descriptor, owner,
+      config: { ...owner.defaultConfig, resumptionEnabled: true },
       credentialStatus: 'ready',
       catalog: { phase: 'idle' }, onRequestCatalog: vi.fn(),
     }));
     await act(async () => {
       screen.tree.findByProps({ testID: 'voice-realtime-forget-provider-conversation' }).props.onPress();
-      await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith(
-        'common.error',
-        'settingsVoice.realtimeProviders.resumption.failed',
+      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledWith(
+        t('common.error'),
+        tLoose('settingsVoice.realtimeProviders.resumption.failed'),
+        expect.arrayContaining([expect.objectContaining({ text: t('common.ok'), onPress: expect.any(Function) })]),
+        { cancelable: false },
       ));
     });
   });
 
   it('keeps catalog preview controls accessible without provider-specific host UI', async () => {
-    const catalogOwner = {
-      schemaVersion: 1,
-      defaultConfig: { voice: { kind: 'catalog', id: 'voice_a' } },
-      parseConfig(value: unknown) { return value && typeof value === 'object' ? value as any : null; },
-    };
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const catalogOwner = owner;
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
       credential: { kind: 'api_key', catalog: 'voices' }, links: {},
       fields: [{ kind: 'voice_catalog', path: 'voice', titleKey: 'fixture.voice', subtitleKey: 'fixture.voice.help' }],
@@ -285,7 +305,7 @@ describe('RealtimeProviderFields', () => {
     if (!descriptor) throw new Error('invalid fixture descriptor');
     const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: 'fixture_realtime', descriptor, owner: catalogOwner,
+      providerId: providerId, descriptor, owner: catalogOwner,
       config: catalogOwner.defaultConfig, credentialStatus: 'ready',
       catalog: { phase: 'ready', rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
       onRequestCatalog: vi.fn(),
@@ -294,7 +314,7 @@ describe('RealtimeProviderFields', () => {
     const preview = dropdown.props.items[0].rightElement;
     const painted = await renderScreen(preview);
     const button = painted.tree.findAll(node => typeof node.type === 'string'
-      && node.props.role === 'button')[0];
+      && (node.props.accessibilityRole ?? node.props.role) === 'button')[0];
     expect(button).toBeDefined();
     expect(button!.props.accessibilityLabel).toContain('Voice A');
     const { StyleSheet } = await import('react-native');
@@ -308,12 +328,8 @@ describe('RealtimeProviderFields', () => {
   it('does not start a stale catalog preview after the selected provider changes', async () => {
     audioPreview.play.mockClear();
     audioPreview.remove.mockClear();
-    const catalogOwner = {
-      schemaVersion: 1,
-      defaultConfig: { voice: { kind: 'catalog', id: 'voice_a' } },
-      parseConfig(value: unknown) { return value && typeof value === 'object' ? value as any : null; },
-    };
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const catalogOwner = owner;
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
       credential: { kind: 'api_key', catalog: 'voices' }, links: {},
       fields: [{ kind: 'voice_catalog', path: 'voice', titleKey: 'fixture.voice' }],
@@ -325,7 +341,7 @@ describe('RealtimeProviderFields', () => {
       credentialStatus: 'ready', onRequestCatalog: vi.fn(),
       catalog: { phase: 'ready' as const, rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
     });
-    const screen = await renderScreen(render('fixture_realtime'));
+    const screen = await renderScreen(render(providerId));
     const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].rightElement;
     act(() => preview.props.onPress({ stopPropagation: vi.fn() }));
     await screen.update(render('another_provider'));
@@ -337,15 +353,15 @@ describe('RealtimeProviderFields', () => {
     audioPreview.play.mockClear();
     audioPreview.remove.mockClear();
     audioPreview.create.mockReturnValue({ play: audioPreview.play, remove: audioPreview.remove, addListener: audioPreview.addListener });
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'], credential: { kind: 'api_key', catalog: 'voices' }, links: {},
       fields: [{ kind: 'voice_catalog', path: 'voice', titleKey: 'fixture.voice' }],
     });
     if (!descriptor) throw new Error('invalid fixture descriptor');
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: 'fixture_realtime', descriptor,
-      owner: { schemaVersion: 1, defaultConfig: { voice: 'voice_a' }, parseConfig: value => value && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : null },
-      config: { voice: 'voice_a' }, credentialStatus: 'ready', onRequestCatalog: vi.fn(),
+      providerId: providerId, descriptor,
+      owner,
+      config: owner.defaultConfig, credentialStatus: 'ready', onRequestCatalog: vi.fn(),
       catalog: { phase: 'ready', rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
     }));
     const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].rightElement;
@@ -354,18 +370,14 @@ describe('RealtimeProviderFields', () => {
     const { stopRealtimeCatalogPreview } = await import('./catalogPreview');
     expect(stopRealtimeCatalogPreview('another_provider')).toBe(false);
     expect(audioPreview.remove).not.toHaveBeenCalled();
-    await act(async () => { expect(stopRealtimeCatalogPreview('fixture_realtime')).toBe(true); });
+    await act(async () => { expect(stopRealtimeCatalogPreview(providerId)).toBe(true); });
     expect(audioPreview.remove).toHaveBeenCalled();
     await screen.unmount();
   });
 
   it('keeps provider-declared advanced VAD tuning collapsed until explicitly expanded', async () => {
-    const vadOwner = {
-      schemaVersion: 1,
-      defaultConfig: { turnDetection: { threshold: null } },
-      parseConfig(value: unknown) { return value && typeof value === 'object' ? value as any : null; },
-    };
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const vadOwner = owner;
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
       credential: { kind: 'api_key', catalog: null }, links: {},
       fields: [{
@@ -377,24 +389,22 @@ describe('RealtimeProviderFields', () => {
     if (!descriptor) throw new Error('invalid fixture descriptor');
     const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: 'fixture_realtime', descriptor, owner: vadOwner,
+      providerId: providerId, descriptor, owner: vadOwner,
       config: vadOwner.defaultConfig, credentialStatus: 'ready',
       catalog: { phase: 'idle' }, onRequestCatalog: vi.fn(),
     }));
     expect(screen.tree.findAllByProps({ testID: 'voice-realtime-field-turnDetection-threshold' })).toHaveLength(0);
     const disclosure = screen.tree.findByProps({ testID: 'voice-realtime-advanced-turnDetection' });
-    expect(disclosure.props.accessibilityLabel).toContain('settingsVoice.realtimeProviders.advanced.show');
+    expect(disclosure.props.accessibilityLabel).toContain(tLoose('settingsVoice.realtimeProviders.advanced.show'));
     act(() => disclosure.props.onPress());
     expect(screen.tree.findByProps({ testID: 'voice-realtime-field-turnDetection-threshold' })).toBeTruthy();
   });
 
   it('keeps nested interactive settings controls outside parent row pressables on web', async () => {
-    const catalogOwner = {
-      schemaVersion: 1,
-      defaultConfig: { voice: { kind: 'catalog', id: 'voice_a' }, resumptionEnabled: false },
-      parseConfig(value: unknown) { return value && typeof value === 'object' ? value as any : null; },
-    };
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const { Platform } = await import('react-native');
+    Object.defineProperty(Platform, 'OS', { value: 'web', configurable: true });
+    const catalogOwner = owner;
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
       credential: { kind: 'api_key', catalog: 'voices' }, links: {},
       fields: [
@@ -405,7 +415,7 @@ describe('RealtimeProviderFields', () => {
     if (!descriptor) throw new Error('invalid fixture descriptor');
     const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: 'fixture_realtime', descriptor, owner: catalogOwner,
+      providerId: providerId, descriptor, owner: catalogOwner,
       config: catalogOwner.defaultConfig, credentialStatus: 'ready',
       catalog: { phase: 'ready', rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
       onRequestCatalog: vi.fn(),
@@ -419,9 +429,7 @@ describe('RealtimeProviderFields', () => {
   it('suppresses a stale provider-action result after the selected provider changes', async () => {
     let resolveAction!: (value: { status: 'completed' }) => void;
     action.mockImplementationOnce(async () => await new Promise((resolve) => { resolveAction = resolve; }));
-    const { Modal } = await import('@/modal');
-    vi.mocked(Modal.alertAsync).mockClear();
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
       credential: { kind: 'api_key', catalog: null }, links: {},
       fields: [{ kind: 'privacy_opt_in', path: 'resumptionEnabled', titleKey: 'fixture.resume', forgetAction: 'forget_provider_conversation' }],
@@ -430,23 +438,19 @@ describe('RealtimeProviderFields', () => {
     const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
     const render = (providerId: string) => React.createElement(RealtimeProviderFields, {
       providerId, descriptor, owner,
-      config: { model: { kind: 'pinned', id: 'stable' }, resumptionEnabled: true },
+      config: { ...owner.defaultConfig, resumptionEnabled: true },
       credentialStatus: 'ready', catalog: { phase: 'idle' as const }, onRequestCatalog: vi.fn(),
     });
-    const screen = await renderScreen(render('fixture_realtime'));
+    const screen = await renderScreen(render(providerId));
     act(() => screen.tree.findByProps({ testID: 'voice-realtime-forget-provider-conversation' }).props.onPress());
     await screen.update(render('another_provider'));
     await act(async () => resolveAction({ status: 'completed' }));
-    expect(Modal.alertAsync).not.toHaveBeenCalled();
+    expect(nativeAlert).not.toHaveBeenCalled();
   });
 
   it('renders language hints from canonical locale facts instead of raw translation keys', async () => {
-    const languageOwner = {
-      schemaVersion: 1,
-      defaultConfig: { language: null },
-      parseConfig(value: unknown) { return value && typeof value === 'object' ? value as any : null; },
-    };
-    const descriptor = parseRealtimeSettingsDescriptor('fixture_realtime', {
+    const languageOwner = owner;
+    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
       credential: { kind: 'api_key', catalog: null }, links: {},
       fields: [{ kind: 'language_hint', path: 'language', titleKey: 'fixture.language', options: ['en', 'ar-EG', 'pt-BR', 'bn'] }],
@@ -454,12 +458,12 @@ describe('RealtimeProviderFields', () => {
     if (!descriptor) throw new Error('invalid fixture descriptor');
     const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: 'fixture_realtime', descriptor, owner: languageOwner,
+      providerId: providerId, descriptor, owner: languageOwner,
       config: languageOwner.defaultConfig, credentialStatus: 'ready',
       catalog: { phase: 'idle' }, onRequestCatalog: vi.fn(),
     }));
     const rows = screen.tree.findByProps({ testID: 'voice-realtime-field-language' }).props.items;
-    expect(rows[0]?.title).toBe('settingsVoice.realtimeProviders.options.automatic');
+    expect(rows[0]?.title).toBe(tLoose('settingsVoice.realtimeProviders.options.automatic'));
     for (const row of rows.slice(1)) {
       expect(row.title).not.toBe(row.id);
       expect(String(row.title)).not.toMatch(/^settingsVoice\./u);

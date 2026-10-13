@@ -1,457 +1,207 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
+import { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } from '@happier-dev/protocol/voice/sessionBinding';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import type { VoiceSessionBinding } from './voiceConversationBindingTypes';
 
-describe('createVoiceSessionBindingManager', () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
-  it('stores a binding returned by the resolver', async () => {
-    const appendNote = vi.fn();
-    const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-    const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
+const { storage } = await import('@/sync/domains/state/storage');
+const { sync } = await import('@/sync/sync');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { createVoiceSettingsAccountTestHarness } = await import('@/voice/settings/panels/voiceSettingsAccountTestHarness');
+const { createVoiceSessionBindingStore } = await import('./voiceConversationBindingStore');
+const { createVoiceConversationBindingResolver } = await import('./VoiceConversationBindingResolver');
+const { createVoiceSessionBindingManager } = await import('./voiceConversationBindingManager');
+const { writeVoiceConversationBindingMetadata, readVoiceConversationBindingMetadata } = await import('./voiceConversationBindingMetadata');
+const { appendVoiceTargetSessionSwitchNote } = await import('./appendVoiceTargetSessionSwitchNote');
+const { selectVoiceTranscriptEntriesForConversationSession } = await import('@/voice/transcript/voiceTranscriptSelectors');
+const { createBuiltinVoiceAdapterAssembly } = await import('@/voice/adapters/registerBuiltinVoiceAdapters');
+const { registerVoiceAdapters, resetVoiceAdapterRegistryForTests, getVoiceAdapterRegistry } = await import('@/voice/session/voiceAdapterRegistry');
 
-    const store = createVoiceSessionBindingStore();
-    const manager = createVoiceSessionBindingManager({
-      store,
-      nowMs: () => 123,
-      resolveBinding: vi.fn(async () => ({
-        conversationSessionId: 'carrier-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'synthetic' as const,
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-      })),
-      appendTargetSwitchNote: appendNote,
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
+let http: ReturnType<typeof createSessionMetadataHttpBoundary>;
+let assembly: ReturnType<typeof createBuiltinVoiceAdapterAssembly>;
+let store: ReturnType<typeof createVoiceSessionBindingStore>;
+let manager: ReturnType<typeof createVoiceSessionBindingManager>;
+let now = 123;
+const address = (sessionId: string) => ({ serverId: account.scope.serverId, sessionId });
+const input = { adapterId: 'local_conversation', controlSessionId: 'voice-global', requestedTargetSessionId: 's1' };
+const notes = () => selectVoiceTranscriptEntriesForConversationSession(storage.getState(), 'carrier-s1').filter(entry => entry.kind === 'note');
+
+function seedBinding(overrides: Partial<VoiceSessionBinding> = {}) {
+    const binding: VoiceSessionBinding = {
+        adapterId: 'local_conversation', controlSessionId: 'voice-global',
+        conversationSessionId: 'carrier-s1', conversationSessionAddress: address('carrier-s1'),
+        transcriptMode: 'native_session', targetSessionAddress: address('s1'), updatedAt: 1, ...overrides,
+    };
+    const session = createSessionFixture({ id: binding.conversationSessionId, serverId: account.scope.serverId,
+        metadata: writeVoiceConversationBindingMetadata({ ...createSessionFixture().metadata!,
+            ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }),
+        }, binding),
+    });
+    storage.setState(state => ({ sessions: { ...state.sessions, [session.id]: session } }));
+    http.replaceSession(session.id);
+    return binding;
+}
+
+async function persistedBinding(sessionId = 'carrier-s1') {
+    const response = http.handle(new URL('/v2/sessions/' + sessionId, getActiveServerSnapshot().serverUrl));
+    if (!response) throw new Error('Missing persisted Voice session');
+    const payload: unknown = await response.json();
+    if (!payload || typeof payload !== 'object' || !('session' in payload)) throw new Error('Missing Session response');
+    const record = SessionCurrentProjectionRecordV1Schema.parse(payload.session);
+    if (record.ownerMetadata?.t !== 'plain') throw new Error('Expected Plain Account owner metadata');
+    return readVoiceConversationBindingMetadata(sessionId, record.ownerMetadata.v.system, { sourceServerId: account.scope.serverId });
+}
+
+beforeEach(async () => {
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { privacy: { shareSessionSummary: true } } }));
+    storage.setState({ sessions: {
+        s1: createSessionFixture({ id: 's1', serverId: account.scope.serverId,
+            metadata: { ...createSessionFixture().metadata!, name: 'Previous project' } }),
+        s2: createSessionFixture({ id: 's2', serverId: account.scope.serverId,
+            metadata: { ...createSessionFixture().metadata!, name: 'Next project' } }),
+    }, sessionMessages: {} });
+    http = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    const request = account.request.getMockImplementation();
+    if (!request) throw new Error('Account HTTP boundary missing');
+    account.request.mockImplementation(async (url, init) => http.handle(url, init) ?? request(url, init));
+    store = createVoiceSessionBindingStore();
+    // Real persisted-binding policy and Sync persistence; only Home HTTP and the clock are controlled.
+    const resolver = createVoiceConversationBindingResolver({ store: createVoiceSessionBindingStore() });
+    resetVoiceAdapterRegistryForTests();
+    assembly = createBuiltinVoiceAdapterAssembly();
+    registerVoiceAdapters(assembly.adapters);
+    now = 123;
+    manager = createVoiceSessionBindingManager({
+        store, nowMs: () => now,
+        resolveBinding: async params => resolver.resolveByControlSessionId(params),
+        resolveExistingBindingByConversationSessionId: conversationSessionId => resolver.resolveByConversationSessionId({ conversationSessionId }),
+        resolveConversationTargeting: adapterId => getVoiceAdapterRegistry().get(adapterId)?.conversationTargeting ?? 'route_target',
+        persistBinding: async binding => { await sync.patchSessionMetadataWithRetry(binding.conversationSessionId,
+            metadata => writeVoiceConversationBindingMetadata(metadata, binding)); },
+        appendTargetSwitchNote: appendVoiceTargetSessionSwitchNote,
+    });
+});
+
+afterEach(async () => {
+    resetVoiceAdapterRegistryForTests();
+    await assembly?.dispose();
+    await account?.dispose();
+});
+
+describe('binding manager with real binding and persistence owners', () => {
+    it('stores and persists the binding from the canonical resolver', async () => {
+        seedBinding();
+        const binding = await manager.ensureBound(input);
+        expect(binding?.conversationSessionId).toBe('carrier-s1');
+        expect(store.getState().getByConversationSessionId('carrier-s1')?.adapterId).toBe('local_conversation');
+        expect(store.getState().getByControlSessionId('voice-global')).toEqual(binding);
+        expect(await persistedBinding()).toMatchObject(binding!);
+        expect(notes()).toEqual([]);
     });
 
-    const binding = await manager.ensureBound({
-      adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: 's1',
+    it('appends a target-switch note when target changes within the same conversation', async () => {
+        seedBinding();
+        await manager.ensureBound(input);
+        seedBinding({ targetSessionAddress: address('s2'), updatedAt: 2 });
+        await manager.ensureBound({ ...input, requestedTargetSessionId: 's2' });
+        expect(await persistedBinding()).toMatchObject({ targetSessionAddress: address('s2') });
+        expect(notes()).toHaveLength(1);
+        expect(notes()[0]?.text).toContain('Previous project');
+        expect(notes()[0]?.text).toContain('Next project');
     });
 
-    expect(binding?.conversationSessionId).toBe('carrier-s1');
-    expect(store.getState().getByConversationSessionId('carrier-s1')?.adapterId).toBe('happier.voice.elevenlabs/realtime-elevenlabs');
-    expect(store.getState().getByControlSessionId('voice-global')?.conversationSessionId).toBe('carrier-s1');
-    expect(appendNote).not.toHaveBeenCalled();
-  });
-
-  it('appends a target-switch note when the target session changes within the same conversation session', async () => {
-    const appendNote = vi.fn();
-    const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-    const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-    const store = createVoiceSessionBindingStore();
-    const resolveBinding = vi
-      .fn()
-      .mockResolvedValue({
-        conversationSessionId: 'carrier-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'synthetic',
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-      })
-      .mockResolvedValueOnce({
-        conversationSessionId: 'carrier-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'synthetic',
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-      })
-      .mockResolvedValueOnce({
-        conversationSessionId: 'carrier-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'synthetic',
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-      });
-
-    const manager = createVoiceSessionBindingManager({
-      store,
-      nowMs: () => 123,
-      resolveBinding,
-      appendTargetSwitchNote: appendNote,
+    it('updates tracked target while preserving the same conversation', async () => {
+        seedBinding();
+        await manager.ensureBound(input);
+        now = 456;
+        const next = await manager.syncTargetSession({ controlSessionId: 'voice-global', targetSessionAddress: address('s2') });
+        expect(next).toMatchObject({ conversationSessionId: 'carrier-s1', targetSessionAddress: address('s2'), updatedAt: 456 });
+        expect(await persistedBinding()).toMatchObject(next!);
+        expect(notes()).toHaveLength(1);
     });
 
-    await manager.ensureBound({
-      adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: 's1',
-    });
-    await manager.ensureBound({
-      adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: 's2',
-    });
-
-    expect(appendNote).toHaveBeenCalledWith({
-      conversationSessionId: 'carrier-s1',
-      previousTargetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-    });
-  });
-
-  it('updates the tracked target session without re-resolving the conversation session', async () => {
-    const appendNote = vi.fn();
-    const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-    const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-    const store = createVoiceSessionBindingStore();
-    const resolveBinding = vi.fn(async () => ({
-      conversationSessionId: 'carrier-s1',
-      conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-      controlSessionId: 'voice-global',
-      transcriptMode: 'synthetic' as const,
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-    }));
-
-    const manager = createVoiceSessionBindingManager({
-      store,
-      nowMs: () => 456,
-      resolveBinding,
-      appendTargetSwitchNote: appendNote,
+    it('reuses binding semantics without a persistence write when unchanged', async () => {
+        seedBinding({ targetSessionAddress: null });
+        const initial = await manager.ensureBound({ ...input, requestedTargetSessionId: null });
+        const writes = http.writes.length;
+        now = 789;
+        expect(await manager.ensureBound({ ...input, requestedTargetSessionId: null })).toEqual(initial);
+        expect(store.getState().getByControlSessionId('voice-global')).toEqual(initial);
+        expect(http.writes).toHaveLength(writes);
     });
 
-    await manager.ensureBound({
-      adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: 's1',
+    it('canonicalizes ids before canonical lookup and persistence', async () => {
+        seedBinding();
+        const padded = { adapterId: ' local_conversation ', controlSessionId: ' voice-global ', requestedTargetSessionId: ' s1 ' };
+        const initial = await manager.ensureBound(padded);
+        expect(initial).toMatchObject({ adapterId: 'local_conversation', controlSessionId: 'voice-global', targetSessionAddress: address('s1') });
+        now = 456;
+        expect(await manager.ensureBound(padded)).toEqual(initial);
+        expect(await persistedBinding()).toMatchObject(initial!);
     });
 
-    const next = await manager.syncTargetSession({
-      controlSessionId: 'voice-global',
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
+    it('keeps a contributed bound-conversation attachment fixed when the route drifts', async () => {
+        const adapterId = 'happier.agent.codex/realtime-codex';
+        expect(getVoiceAdapterRegistry().get(adapterId)?.conversationTargeting).toBe('bound_conversation');
+        seedBinding({ adapterId, conversationSessionId: 'hidden-codex-voice-a', conversationSessionAddress: address('hidden-codex-voice-a'), targetSessionAddress: null });
+        expect(await manager.ensureBoundForOpenConversation({ openConversationSessionId: 'hidden-codex-voice-a', fallbackControlSessionId: 'voice-global',
+            activeAdapterId: adapterId, providerId: adapterId, requestedTargetSessionId: 'visible-session-b', requestedTargetServerId: account.scope.serverId,
+        })).toEqual({ conversationSessionId: 'hidden-codex-voice-a', conversationServerId: account.scope.serverId });
+        expect(http.writes).toEqual([]);
     });
 
-    expect(resolveBinding).toHaveBeenCalledTimes(1);
-    expect(next).toEqual(
-      expect.objectContaining({
-        conversationSessionId: 'carrier-s1',
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-        updatedAt: 456,
-      }),
-    );
-    expect(appendNote).toHaveBeenCalledWith({
-      conversationSessionId: 'carrier-s1',
-      previousTargetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-    });
-  });
-
-  it('reuses an existing binding when re-resolution returns the same binding semantics', async () => {
-    const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-    const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-    const store = createVoiceSessionBindingStore();
-    const resolveBinding = vi
-      .fn()
-      .mockResolvedValueOnce({
-        conversationSessionId: 'carrier-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'native_session' as const,
-        targetSessionAddress: null,
-      })
-      .mockResolvedValueOnce({
-        conversationSessionId: 'carrier-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'native_session' as const,
-        targetSessionAddress: null,
-      });
-
-    const manager = createVoiceSessionBindingManager({
-      store,
-      nowMs: () => 789,
-      resolveBinding,
+    it('opens the existing conversation without rebinding when target matches', async () => {
+        seedBinding();
+        expect(await manager.ensureBoundForOpenConversation({ openConversationSessionId: 'carrier-s1', fallbackControlSessionId: 'voice-global',
+            activeAdapterId: 'local_conversation', providerId: 'local_conversation', requestedTargetSessionId: 's1', requestedTargetServerId: account.scope.serverId,
+        })).toEqual({ conversationSessionId: 'carrier-s1', conversationServerId: account.scope.serverId });
+        expect(http.writes).toEqual([]);
     });
 
-    const initial = await manager.ensureBound({
-      adapterId: 'local_conversation',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: null,
+    it('rebinds to the canonical new conversation when requested target drifts', async () => {
+        seedBinding();
+        seedBinding({ conversationSessionId: 'carrier-s2', conversationSessionAddress: address('carrier-s2'), targetSessionAddress: address('s2'), updatedAt: 2 });
+        expect(await manager.ensureBoundForOpenConversation({ openConversationSessionId: 'carrier-s1', fallbackControlSessionId: 'voice-global',
+            activeAdapterId: 'local_conversation', providerId: 'local_conversation', requestedTargetSessionId: 's2', requestedTargetServerId: account.scope.serverId,
+        })).toEqual({ conversationSessionId: 'carrier-s2', conversationServerId: account.scope.serverId });
+        expect(await persistedBinding('carrier-s2')).toMatchObject({ targetSessionAddress: address('s2') });
     });
 
-    await expect(
-      manager.ensureBound({
-        adapterId: 'local_conversation',
-        controlSessionId: 'voice-global',
-        requestedTargetSessionId: null,
-      }),
-    ).resolves.toEqual(initial);
-    expect(resolveBinding).toHaveBeenCalledTimes(2);
-    expect(store.getState().getByControlSessionId('voice-global')).toEqual(initial);
-  });
-
-  it('canonicalizes ids before resolving and storing a binding', async () => {
-    const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-    const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-    const store = createVoiceSessionBindingStore();
-    const nowMs = vi.fn()
-      .mockReturnValueOnce(123)
-      .mockReturnValueOnce(456);
-    const resolveBinding = vi.fn(async () => ({
-      conversationSessionId: 'carrier-s1',
-      conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-      controlSessionId: 'voice-global',
-      transcriptMode: 'synthetic' as const,
-      targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-    }));
-    const manager = createVoiceSessionBindingManager({
-      store,
-      nowMs,
-      resolveBinding,
+    it('uses provider selection when no existing open-conversation binding remains', async () => {
+        seedBinding({ conversationSessionId: 'voice-root-s1', conversationSessionAddress: address('voice-root-s1') });
+        expect(await manager.ensureBoundForOpenConversation({ openConversationSessionId: 'carrier-missing', fallbackControlSessionId: 'voice-global',
+            activeAdapterId: null, providerId: 'local_conversation', requestedTargetSessionId: 's1', requestedTargetServerId: account.scope.serverId,
+        })).toEqual({ conversationSessionId: 'voice-root-s1', conversationServerId: account.scope.serverId });
+        expect(await persistedBinding('voice-root-s1')).toMatchObject({ adapterId: 'local_conversation' });
     });
 
-    const initial = await manager.ensureBound({
-      adapterId: ' happier.voice.elevenlabs/realtime-elevenlabs ',
-      controlSessionId: ' voice-global ',
-      requestedTargetSessionId: ' s1 ',
-    });
-    const rebound = await manager.ensureBound({
-      adapterId: ' happier.voice.elevenlabs/realtime-elevenlabs ',
-      controlSessionId: ' voice-global ',
-      requestedTargetSessionId: ' s1 ',
+    it('falls back to original conversation when rebinding cannot proceed', async () => {
+        expect(await manager.ensureBoundForOpenConversation({ openConversationSessionId: 'carrier-s1', fallbackControlSessionId: null,
+            activeAdapterId: null, providerId: 'local_conversation', requestedTargetSessionId: null,
+        })).toEqual({ conversationSessionId: 'carrier-s1', conversationServerId: null });
+        expect(http.writes).toEqual([]);
     });
 
-    expect(resolveBinding).toHaveBeenNthCalledWith(1, {
-      adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: 's1',
+    it('rebinds when canonical metadata changes conversation and transcript semantics', async () => {
+        seedBinding({ conversationSessionId: 'carrier-home', conversationSessionAddress: address('carrier-home'), targetSessionAddress: null });
+        await manager.ensureBound({ ...input, requestedTargetSessionId: null });
+        seedBinding({ conversationSessionId: 'carrier-root', conversationSessionAddress: address('carrier-root'), transcriptMode: 'synthetic', targetSessionAddress: null, updatedAt: 1000 });
+        now = 790;
+        const rebound = await manager.ensureBound({ ...input, requestedTargetSessionId: null });
+        expect(rebound).toMatchObject({ conversationSessionId: 'carrier-root', transcriptMode: 'synthetic', updatedAt: 790 });
+        expect(store.getState().getByControlSessionId('voice-global')).toEqual(rebound);
+        expect(await persistedBinding('carrier-root')).toMatchObject(rebound!);
     });
-    expect(resolveBinding).toHaveBeenNthCalledWith(2, {
-      adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: 's1',
-    });
-    expect(rebound).toEqual(initial);
-    expect(nowMs).toHaveBeenCalledTimes(1);
-    expect(store.getState().getByControlSessionId('voice-global')).toEqual(initial);
-  });
-
-  describe('ensureBoundForOpenConversation', () => {
-    it('keeps a bound-conversation attachment fixed when the visible route drifts', async () => {
-      const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-      const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-      const store = createVoiceSessionBindingStore();
-      const resolveBinding = vi.fn(async () => null);
-      const manager = createVoiceSessionBindingManager({
-        store,
-        nowMs: () => 1,
-        resolveBinding,
-        resolveExistingBindingByConversationSessionId: () => ({
-          adapterId: 'happier.agent.codex/realtime-codex',
-          controlSessionId: 'voice-global',
-          conversationSessionId: 'hidden-codex-voice-a',
-          conversationSessionAddress: { serverId: 'server-a', sessionId: 'hidden-codex-voice-a' },
-          transcriptMode: 'native_session',
-          targetSessionAddress: null,
-          updatedAt: 1,
-        }),
-        resolveConversationTargeting: () => 'bound_conversation',
-      });
-
-      const result = await manager.ensureBoundForOpenConversation({
-        openConversationSessionId: 'hidden-codex-voice-a',
-        fallbackControlSessionId: 'voice-global',
-        activeAdapterId: 'happier.agent.codex/realtime-codex',
-        providerId: 'happier.agent.codex/realtime-codex',
-        requestedTargetSessionId: 'visible-session-b',
-      });
-
-      expect(resolveBinding).not.toHaveBeenCalled();
-      expect(result).toEqual({ conversationSessionId: 'hidden-codex-voice-a', conversationServerId: 'server-a' });
-    });
-
-    it('routes to the existing conversation session without rebinding when the target already matches', async () => {
-      const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-      const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-      const store = createVoiceSessionBindingStore();
-      const resolveBinding = vi.fn(async () => null);
-      const manager = createVoiceSessionBindingManager({
-        store,
-        nowMs: () => 1,
-        resolveBinding,
-        resolveExistingBindingByConversationSessionId: () => ({
-          adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-          controlSessionId: 'voice-global',
-          conversationSessionId: 'carrier-s1',
-          conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-          transcriptMode: 'synthetic',
-          targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-          updatedAt: 1,
-        }),
-      });
-
-      const result = await manager.ensureBoundForOpenConversation({
-        openConversationSessionId: 'carrier-s1',
-        fallbackControlSessionId: 'voice-global',
-        activeAdapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-        providerId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-        requestedTargetSessionId: 's1',
-        requestedTargetServerId: 'server-a',
-      });
-
-      expect(resolveBinding).not.toHaveBeenCalled();
-      expect(result).toEqual({ conversationSessionId: 'carrier-s1', conversationServerId: 'server-a' });
-    });
-
-    it('rebinds through ensureBound when the requested target drifts from the existing binding', async () => {
-      const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-      const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-      const store = createVoiceSessionBindingStore();
-      const resolveBinding = vi.fn(async () => ({
-        conversationSessionId: 'carrier-s2',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s2' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'native_session' as const,
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's2' },
-      }));
-      const manager = createVoiceSessionBindingManager({
-        store,
-        nowMs: () => 2,
-        resolveBinding,
-        resolveExistingBindingByConversationSessionId: () => ({
-          adapterId: 'local_conversation',
-          controlSessionId: 'voice-global',
-          conversationSessionId: 'carrier-s1',
-          conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-s1' },
-          transcriptMode: 'native_session',
-          targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-          updatedAt: 1,
-        }),
-      });
-
-      const result = await manager.ensureBoundForOpenConversation({
-        openConversationSessionId: 'carrier-s1',
-        fallbackControlSessionId: 'voice-global',
-        activeAdapterId: 'local_conversation',
-        providerId: 'local_conversation',
-        requestedTargetSessionId: 's2',
-        requestedTargetServerId: 'server-a',
-      });
-
-      expect(resolveBinding).toHaveBeenCalledWith({
-        adapterId: 'local_conversation',
-        controlSessionId: 'voice-global',
-        requestedTargetSessionId: 's2',
-        requestedTargetServerId: 'server-a',
-      });
-      expect(result).toEqual({ conversationSessionId: 'carrier-s2', conversationServerId: 'server-a' });
-    });
-
-    it('rebinds when no existing binding is found, using the active adapter then provider id', async () => {
-      const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-      const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-      const store = createVoiceSessionBindingStore();
-      const resolveBinding = vi.fn(async () => ({
-        conversationSessionId: 'voice-root-s1',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'voice-root-s1' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'native_session' as const,
-        targetSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-      }));
-      const manager = createVoiceSessionBindingManager({
-        store,
-        nowMs: () => 3,
-        resolveBinding,
-        resolveExistingBindingByConversationSessionId: () => null,
-      });
-
-      const result = await manager.ensureBoundForOpenConversation({
-        openConversationSessionId: 'carrier-s1',
-        fallbackControlSessionId: 'voice-global',
-        activeAdapterId: null,
-        providerId: 'local_conversation',
-        requestedTargetSessionId: 's1',
-        requestedTargetServerId: 'server-a',
-      });
-
-      expect(resolveBinding).toHaveBeenCalledWith({
-        adapterId: 'local_conversation',
-        controlSessionId: 'voice-global',
-        requestedTargetSessionId: 's1',
-        requestedTargetServerId: 'server-a',
-      });
-      expect(result).toEqual({ conversationSessionId: 'voice-root-s1', conversationServerId: 'server-a' });
-    });
-
-    it('falls back to the original conversation session when rebinding cannot proceed', async () => {
-      const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-      const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-      const store = createVoiceSessionBindingStore();
-      const resolveBinding = vi.fn(async () => null);
-      const manager = createVoiceSessionBindingManager({
-        store,
-        nowMs: () => 4,
-        resolveBinding,
-        resolveExistingBindingByConversationSessionId: () => null,
-      });
-
-      const result = await manager.ensureBoundForOpenConversation({
-        openConversationSessionId: 'carrier-s1',
-        fallbackControlSessionId: null,
-        activeAdapterId: null,
-        providerId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-        requestedTargetSessionId: null,
-      });
-
-      expect(result).toEqual({ conversationSessionId: 'carrier-s1', conversationServerId: null });
-    });
-  });
-
-  it('rebinds when re-resolution changes binding semantics for the same control session and target session', async () => {
-    const { createVoiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-    const { createVoiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingManager');
-
-    const store = createVoiceSessionBindingStore();
-    const resolveBinding = vi
-      .fn()
-      .mockResolvedValueOnce({
-        conversationSessionId: 'carrier-home',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-home' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'native_session' as const,
-        targetSessionAddress: null,
-      })
-      .mockResolvedValueOnce({
-        conversationSessionId: 'carrier-root',
-        conversationSessionAddress: { serverId: 'server-a', sessionId: 'carrier-root' },
-        controlSessionId: 'voice-global',
-        transcriptMode: 'synthetic' as const,
-        targetSessionAddress: null,
-      });
-
-    const manager = createVoiceSessionBindingManager({
-      store,
-      nowMs: () => 790,
-      resolveBinding,
-    });
-
-    await manager.ensureBound({
-      adapterId: 'local_conversation',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: null,
-    });
-
-    const rebound = await manager.ensureBound({
-      adapterId: 'local_conversation',
-      controlSessionId: 'voice-global',
-      requestedTargetSessionId: null,
-    });
-
-    expect(resolveBinding).toHaveBeenCalledTimes(2);
-    expect(rebound).toEqual(expect.objectContaining({
-      conversationSessionId: 'carrier-root',
-      transcriptMode: 'synthetic',
-      updatedAt: 790,
-    }));
-    expect(store.getState().getByControlSessionId('voice-global')).toEqual(rebound);
-  });
 });

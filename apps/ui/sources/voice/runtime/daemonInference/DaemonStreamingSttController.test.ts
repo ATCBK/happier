@@ -1,994 +1,479 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import {
+  DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
+  DaemonVoiceInferenceSttStreamStartRequestSchema, DaemonVoiceInferenceSttStreamStartResponseSchema,
+  DaemonVoiceInferenceSttStreamChunkRequestSchema, DaemonVoiceInferenceSttStreamChunkResponseSchema,
+  DaemonVoiceInferenceSttStreamFinishRequestSchema, DaemonVoiceInferenceSttStreamFinishResponseSchema,
+  DaemonVoiceInferenceSttStreamCancelRequestSchema, DaemonVoiceInferenceSttStreamCancelResponseSchema,
+  type DaemonVoiceInferenceSttStreamEvent,
+} from '@happier-dev/protocol/daemon/voiceInference';
+import { installSessionOpsNetworkBoundary, type SessionOpsRpcRequest } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import type { SttStartParams } from '@/voice/input/sttController';
 
-import { createDaemonStreamingSttController } from './DaemonStreamingSttController';
-import type { DaemonSpeechPcmCaptureOptions } from './DaemonSpeechPcmCapture';
-import type { SttSink } from '@/voice/input/sttController';
-import { createVoiceMachineError } from '@/voice/runtime/machine/voiceMachineError';
-import { createTurnEndpointController } from '@/voice/runtime/input/TurnEndpointController';
+// Install the physical transport before importing its runtime consumers.
+const network = await installSessionOpsNetworkBoundary();
+const { createDeferred, createMachineFixture } = await import('@/dev/testkit');
+const { storage } = await import('@/sync/domains/state/storage');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+const { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } = await import('@/dev/testkit/harness/voiceWebRtcHarness');
+const { createDaemonStreamingSttController } = await import('./DaemonStreamingSttController');
+const { createWebDaemonSpeechPcmCapture } = await import('./WebDaemonSpeechPcmCapture.web');
+const { createTurnEndpointController } = await import('@/voice/runtime/input/TurnEndpointController');
+const { daemonSpeechStreamDiagnostics } = await import('./daemonSpeechStreamDiagnostics');
+const { voiceSettingsParse, readLocalConversationVoiceSettings, writeLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+const { VoiceLocalSttSchema } = await import('@/sync/domains/settings/voiceLocalSttSettings');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
 
-vi.mock('@/utils/platform/microphonePermissions', () => ({
-  isPermissionDeniedMicrophoneError: () => false,
-}));
+const features = FeaturesResponseSchema.parse({
+  features: {
+    voice: { enabled: true }, execution: { runs: { enabled: true } },
+    machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+  },
+  capabilities: { machines: { liveStream: { serverRouted: {
+    caps: MachineLiveStreamRelayCapsV1Schema.parse({}), disabledReason: null,
+  } } } },
+});
+const rpc = vi.fn<(request: SessionOpsRpcRequest) => Promise<unknown>>();
+const initialState = storage.getState();
+let account: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
+let browser: ReturnType<typeof installVoiceWebRtcBrowserBoundary>;
+let context: InstanceType<typeof TestVoiceAudioContext>;
+let activeController: ReturnType<typeof createDaemonStreamingSttController> | null = null;
+let streamNumber = 0;
+let chunkEvents: readonly DaemonVoiceInferenceSttStreamEvent[] = [];
+let finishEvents: readonly DaemonVoiceInferenceSttStreamEvent[] = [];
+let finishText = '';
+let ackSeq = -1;
 
-type TestPcmCaptureOptions = DaemonSpeechPcmCaptureOptions;
-
-function createSink(): SttSink {
-  return {
-    onAudioStarted: vi.fn(),
-    onPartial: vi.fn(),
-    onFinal: vi.fn(),
-    onEndpoint: vi.fn(),
-    onError: vi.fn(),
-  };
+const methods = {
+  start: 'daemon.voiceInference.stt.stream.start',
+  chunk: 'daemon.voiceInference.stt.stream.chunk',
+  finish: 'daemon.voiceInference.stt.stream.finish',
+  cancel: 'daemon.voiceInference.stt.stream.cancel',
+};
+const requests = (name: keyof typeof methods) => network.requests.filter(request => request.method === methods[name]);
+function createSink() {
+  return { onAudioStarted: vi.fn(), onPartial: vi.fn(), onFinal: vi.fn(), onEndpoint: vi.fn(), onError: vi.fn() };
 }
 
-function requireCaptureOptions(options: TestPcmCaptureOptions | null): TestPcmCaptureOptions {
-  if (!options) {
-    throw new Error('expected daemon PCM capture options');
+async function respond(request: SessionOpsRpcRequest): Promise<unknown> {
+  expect(request.targetId).toBe('streaming-machine');
+  switch (request.method) {
+    case methods.start: {
+      const input = DaemonVoiceInferenceSttStreamStartRequestSchema.parse(request.payload);
+      ackSeq = -1;
+      return DaemonVoiceInferenceSttStreamStartResponseSchema.parse({
+        ok: true, requestId: input.requestId, streamId: 'stream-' + ++streamNumber, generation: 1,
+        ackSeq, format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
+      });
+    }
+    case methods.chunk: {
+      const input = DaemonVoiceInferenceSttStreamChunkRequestSchema.parse(request.payload);
+      ackSeq = input.seq;
+      return DaemonVoiceInferenceSttStreamChunkResponseSchema.parse({
+        ok: true, streamId: input.streamId, generation: input.generation, ackSeq, events: chunkEvents,
+      });
+    }
+    case methods.finish: {
+      const input = DaemonVoiceInferenceSttStreamFinishRequestSchema.parse(request.payload);
+      return DaemonVoiceInferenceSttStreamFinishResponseSchema.parse({
+        ok: true, streamId: input.streamId, generation: input.generation, ackSeq,
+        finalText: finishText, language: 'en', modelPackId: 'stt-pack-1', events: finishEvents,
+      });
+    }
+    case methods.cancel:
+      return DaemonVoiceInferenceSttStreamCancelResponseSchema.parse({
+        ok: true, ...DaemonVoiceInferenceSttStreamCancelRequestSchema.parse(request.payload),
+      });
+    default: throw new Error('unexpected daemon request: ' + request.method);
   }
-  return options;
+}
+function controller(endpointController?: NonNullable<Parameters<typeof createDaemonStreamingSttController>[0]>['endpointController']) {
+  activeController = createDaemonStreamingSttController({
+    getSettings: () => storage.getState().settings,
+    // Explicit browser production implementation in this portable host test.
+    createPcmCapture: createWebDaemonSpeechPcmCapture, endpointController,
+  });
+  return activeController;
+}
+function startParams(overrides: Partial<SttStartParams> = {}) {
+  return { sessionId: 'active-control-session', micSession: browser.micSession, sink: createSink(), ...overrides };
+}
+function emitPcm() {
+  // Physical 24 kHz browser frame; actual capture resamples/encodes 20 ms PCM.
+  context.emitInput(new Float32Array(480).fill(0.25));
+}
+function provisional() {
+  chunkEvents = [{ type: 'partial', seq: 0, text: 'provisional words', isEndpoint: false, confidence: null }];
 }
 
-function emitCaptureError(options: TestPcmCaptureOptions | null): void {
-  const onError = requireCaptureOptions(options).onError;
-  if (!onError) {
-    throw new Error('expected daemon PCM capture onError handler');
-  }
-  onError(createVoiceMachineError({
-    kind: 'provider_error',
-    reason: 'daemon_streaming_stt_web_mic_unavailable',
-  }));
-}
+beforeEach(async () => {
+  network.resetRequests();
+  await network.addHome('https://streaming-stt.example.test', 'streaming-account');
+  account = await createPlainArtifactHomeFixture('https://streaming-stt.example.test', {
+    serverFeatures: features,
+    handleRequest: async path => path.startsWith('/v1/machines/') ? Response.json({ machine: {
+      id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+    } }) : null,
+  });
+  const machine = createMachineFixture({ id: 'streaming-machine', activeAt: Date.now() });
+  storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [account.home.id]: [machine] } });
+  const voice = voiceSettingsParse({ providerId: 'local_conversation',
+    executionMachine: { mode: 'fixed', machineId: machine.id } });
+  const configuredVoice = writeLocalConversationVoiceSettings(voice, {
+    ...readLocalConversationVoiceSettings(voice),
+    stt: VoiceLocalSttSchema.parse({ provider: 'local_neural', localNeural: {
+      assetId: 'stt-pack-1', language: 'en', execution: 'daemon',
+    } }),
+  });
+  storage.getState().applySettingsLocal({
+    experiments: true, featureToggles: { voice: true, 'execution.runs': true, 'voice.agent': true, 'voice.daemonInference': true },
+    ...normalizeVoiceSettingsLocalDelta({ voice: configuredVoice }, storage.getState().settings),
+  });
+  primeServerFeaturesSnapshot({ serverId: getActiveServerSnapshot().serverId, snapshot: { status: 'ready', features } });
+  streamNumber = 0; chunkEvents = []; finishEvents = []; finishText = ''; ackSeq = -1;
+  rpc.mockReset().mockImplementation(respond);
+  network.setRpcResponder(rpc);
+  context = new TestVoiceAudioContext();
+  browser = installVoiceWebRtcBrowserBoundary({ createAudioContext: () => context as unknown as AudioContext });
+});
+afterEach(async () => {
+  await activeController?.stop();
+  activeController = null;
+  await browser?.micSession.teardown();
+  browser?.restore();
+  await account?.dispose();
+  storage.setState(initialState, true);
+  resetServerFeaturesClientForTests();
+  vi.useRealTimers();
+});
+afterAll(() => network.dispose());
 
-describe('createDaemonStreamingSttController', () => {
+describe('createDaemonStreamingSttController with actual capture and daemon client', () => {
   it('streams canonical mic PCM into the daemon sender and maps partial/endpoint/final events into the sink', async () => {
-    let captureOptions: TestPcmCaptureOptions | null = null;
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => [
-        { type: 'partial' as const, seq: 0, text: 'open', isEndpoint: false, confidence: null },
-        { type: 'endpoint' as const, seq: 0, transcript: 'open notes', reason: 'vad' as const },
-      ]),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: 0,
-        finalText: 'open notes',
-        language: 'en',
-        modelPackId: 'stt-pack-1',
-        events: [{ type: 'final' as const, seq: 0, text: 'open notes', language: 'en', modelPackId: 'stt-pack-1' }],
-      })),
-      cancel: vi.fn(async () => {}),
-    };
-    const createStreamingSttSender = vi.fn(async () => sender);
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({
-        voice: {
-          providerId: 'local_conversation',
-          providers: {
-            local_conversation: { schemaVersion: 1, config: {
-              stt: {
-                provider: 'local_neural',
-                localNeural: { assetId: 'stt-pack-1', language: 'en', execution: 'daemon' },
-              },
-            } },
-          },
-        },
-      }),
-      createClient: () => ({ createStreamingSttSender }),
-      createPcmCapture: (options) => {
-        captureOptions = options;
-        return capture;
-      },
+    chunkEvents = [
+      { type: 'partial', seq: 0, text: 'open', isEndpoint: false, confidence: null },
+      { type: 'endpoint', seq: 0, transcript: 'open notes', reason: 'vad' },
+    ];
+    finishText = 'open notes';
+    finishEvents = [{ type: 'final', seq: 0, text: 'open notes', language: 'en', modelPackId: 'stt-pack-1' }];
+    const runtime = controller();
+    const params = startParams();
+    expect(readLocalConversationVoiceSettings(storage.getState().settings.voice).stt).toMatchObject({
+      provider: 'local_neural', localNeural: { assetId: 'stt-pack-1', language: 'en', execution: 'daemon' },
     });
-    const sink = createSink();
-    const pcmBytes = new Uint8Array([0, 1, 2, 3]);
-    const micSession = {
-      ensureActive: vi.fn(async () => {}),
-      setMuted: vi.fn(),
-      isMuted: vi.fn(() => false),
-      teardown: vi.fn(async () => {}),
-      getStream: vi.fn(() => null),
-    };
-
-    await controller.start({ sessionId: 'active-control-session', micSession, sink });
-    const options = requireCaptureOptions(captureOptions);
-    await options.onChunk(pcmBytes);
-    options.onAudioStarted();
-    await expect(controller.stop()).resolves.toEqual({ finalText: 'open notes' });
-
-    expect(createStreamingSttSender).toHaveBeenCalledWith({
-      sessionId: 'active-control-session',
-      packId: 'stt-pack-1',
-      language: 'en',
-      signal: undefined,
+    await runtime.start(params);
+    emitPcm();
+    await vi.waitFor(() => expect(params.sink.onEndpoint).toHaveBeenCalledWith('vad'));
+    await expect(runtime.stop()).resolves.toEqual({ finalText: 'open notes' });
+    expect(DaemonVoiceInferenceSttStreamStartRequestSchema.parse(requests('start')[0]?.payload)).toMatchObject({
+      packId: 'stt-pack-1', language: 'en', streamingMode: 'runtime', format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
     });
-    expect(sender.start).toHaveBeenCalledTimes(1);
-    expect(capture.start).toHaveBeenCalledTimes(1);
-    expect(sender.pushChunk).toHaveBeenCalledWith(pcmBytes);
-    expect(sink.onPartial).toHaveBeenCalledWith('open');
-    expect(sink.onFinal).toHaveBeenCalledWith('open notes');
-    expect(sink.onEndpoint).toHaveBeenCalledWith('vad');
-    expect(sink.onAudioStarted).toHaveBeenCalledTimes(1);
-    expect(capture.finish).toHaveBeenCalledTimes(1);
-    expect(capture.stop).not.toHaveBeenCalled();
-    expect(sender.finish).toHaveBeenCalledTimes(1);
-    expect(sender.cancel).not.toHaveBeenCalled();
+    const sent = DaemonVoiceInferenceSttStreamChunkRequestSchema.parse(requests('chunk')[0]?.payload);
+    const bytes = new Uint8Array(Buffer.from(sent.pcm16Base64, 'base64'));
+    expect(bytes).toHaveLength(640);
+    expect([...bytes.slice(0, 4)]).toEqual([0, 32, 0, 32]);
+    expect(params.sink.onPartial).toHaveBeenCalledWith('open');
+    expect(params.sink.onFinal).toHaveBeenCalledWith('open notes');
+    expect(params.sink.onAudioStarted).toHaveBeenCalledTimes(1);
+    expect(context.processor.onaudioprocess).toBeNull();
+    expect(requests('finish')).toHaveLength(1);
+    expect(requests('cancel')).toHaveLength(0);
   });
 
   it('delivers and applies a queued PCM chunk released by capture drain before finishing', async () => {
-    let captureOptions: TestPcmCaptureOptions | null = null;
-    const callOrder: string[] = [];
-    const drainedPcmBytes = new Uint8Array([4, 5, 6, 7]);
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {
-        await requireCaptureOptions(captureOptions).onChunk(drainedPcmBytes);
-      }),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => {
-        callOrder.push('push');
-        return [
-          {
-            type: 'final' as const,
-            seq: 0,
-            text: 'drained words',
-            language: 'en',
-            modelPackId: 'stt-pack-1',
-          },
-        ];
-      }),
-      finish: vi.fn(async () => {
-        callOrder.push('finish');
-        return {
-          ok: true as const,
-          streamId: 'stream-1',
-          generation: 1,
-          ackSeq: 0,
-          finalText: '',
-          language: 'en',
-          modelPackId: 'stt-pack-1',
-          events: [],
-        };
-      }),
-      cancel: vi.fn(async () => {}),
-    };
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({}),
-      createClient: () => ({ createStreamingSttSender: vi.fn(async () => sender) }),
-      createPcmCapture: (options) => {
-        captureOptions = options;
-        return capture;
-      },
-    });
-
-    await controller.start({
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink: createSink(),
-    });
-
-    await expect(controller.stop()).resolves.toEqual({ finalText: 'drained words' });
-    expect(sender.pushChunk).toHaveBeenCalledWith(drainedPcmBytes);
-    expect(callOrder).toEqual(['push', 'finish']);
+    chunkEvents = [{ type: 'final', seq: 0, text: 'drained words', language: 'en', modelPackId: 'stt-pack-1' }];
+    const runtime = controller();
+    await runtime.start(startParams());
+    emitPcm();
+    // Stop before the already admitted capture delivery microtask runs.
+    await expect(runtime.stop()).resolves.toEqual({ finalText: 'drained words' });
+    expect(network.requests.map(request => request.method)).toEqual([methods.start, methods.chunk, methods.finish]);
+    expect(DaemonVoiceInferenceSttStreamFinishRequestSchema.parse(requests('finish')[0]?.payload).finalSeq).toBe(0);
   });
 
   it('retains a final transcript carried only by finish events', async () => {
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => []),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: -1,
-        finalText: '',
-        language: 'en',
-        modelPackId: 'stt-pack-1',
-        events: [
-          {
-            type: 'final' as const,
-            seq: 0,
-            text: 'finish event words',
-            language: 'en',
-            modelPackId: 'stt-pack-1',
-          },
-        ],
-      })),
-      cancel: vi.fn(async () => {}),
-    };
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({}),
-      createClient: () => ({ createStreamingSttSender: vi.fn(async () => sender) }),
-      createPcmCapture: () => capture,
-    });
-
-    await controller.start({
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink: createSink(),
-    });
-
-    await expect(controller.stop()).resolves.toEqual({ finalText: 'finish event words' });
+    finishEvents = [{ type: 'final', seq: 0, text: 'finish event words', language: 'en', modelPackId: 'stt-pack-1' }];
+    const runtime = controller();
+    await runtime.start(startParams());
+    await expect(runtime.stop()).resolves.toEqual({ finalText: 'finish event words' });
   });
 
   it('keeps a non-endpoint partial provisional when successful finish has no authoritative final', async () => {
-    let captureOptions: TestPcmCaptureOptions | null = null;
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => [
-        { type: 'partial' as const, seq: 0, text: 'provisional words', isEndpoint: false, confidence: null },
-      ]),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: 0,
-        finalText: '',
-        language: 'en',
-        modelPackId: 'stt-pack-1',
-        events: [],
-      })),
-      cancel: vi.fn(async () => {}),
-    };
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({}),
-      createClient: () => ({ createStreamingSttSender: vi.fn(async () => sender) }),
-      createPcmCapture: (options) => {
-        captureOptions = options;
-        return capture;
-      },
-    });
-    const sink = createSink();
-
-    await controller.start({
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink,
-    });
-    await requireCaptureOptions(captureOptions).onChunk(new Uint8Array([0, 1]));
-
-    expect(sink.onPartial).toHaveBeenCalledWith('provisional words');
-    expect(sink.onFinal).not.toHaveBeenCalled();
-    await expect(controller.stop()).resolves.toEqual({ finalText: '' });
-    expect(sender.finish).toHaveBeenCalledTimes(1);
-    expect(sender.cancel).not.toHaveBeenCalled();
+    provisional();
+    const runtime = controller();
+    const params = startParams();
+    await runtime.start(params);
+    emitPcm();
+    await vi.waitFor(() => expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words'));
+    expect(params.sink.onFinal).not.toHaveBeenCalled();
+    await expect(runtime.stop()).resolves.toEqual({ finalText: '' });
+    expect(requests('finish')).toHaveLength(1);
+    expect(requests('cancel')).toHaveLength(0);
   });
 
   it.each([
-    ['finish timeout', Object.assign(new Error('daemon_speech_stream_finish_timeout'), { code: 'daemon_speech_stream_finish_timeout' }), 'stt_timeout', 'daemon_streaming_stt_finish_timeout'],
-    ['invalid ACK', Object.assign(new Error('daemon_speech_stream_invalid_ack'), { code: 'daemon_speech_stream_invalid_ack' }), 'provider_error', 'daemon_streaming_stt_invalid_ack'],
-    ['stale finish', Object.assign(new Error('daemon_speech_stream_stale_finish'), { code: 'daemon_speech_stream_stale_finish' }), 'provider_error', 'daemon_streaming_stt_stale_finish'],
-    ['transport failure', new Error('socket closed'), 'provider_error', 'daemon_streaming_stt_finalization_failed'],
-  ])('does not promote a provisional partial when %s prevents truthful finalization', async (
-    _label,
-    finishError,
-    expectedKind,
-    expectedReason,
-  ) => {
-    let captureOptions: TestPcmCaptureOptions | null = null;
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => [
-        { type: 'partial' as const, seq: 0, text: 'provisional words', isEndpoint: false, confidence: null },
-      ]),
-      finish: vi.fn(async () => {
-        throw finishError;
-      }),
-      cancel: vi.fn(async () => {}),
-    };
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({}),
-      createClient: () => ({ createStreamingSttSender: vi.fn(async () => sender) }),
-      createPcmCapture: (options) => {
-        captureOptions = options;
-        return capture;
-      },
+    ['finish timeout', 'stt_timeout', 'daemon_streaming_stt_finish_timeout'],
+    ['invalid ACK', 'provider_error', 'daemon_streaming_stt_invalid_ack'],
+    ['transport failure', 'provider_error', 'daemon_streaming_stt_finalization_failed'],
+  ] as const)('does not promote a provisional partial when %s prevents truthful finalization', async (failure, kind, reason) => {
+    provisional();
+    const runtime = controller();
+    const params = startParams();
+    await runtime.start(params);
+    emitPcm();
+    await vi.waitFor(() => expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words'));
+    const entered = createDeferred<void>();
+    rpc.mockImplementation(async request => {
+      if (request.method !== methods.finish) return respond(request);
+      entered.resolve();
+      if (failure === 'finish timeout') return new Promise<never>(() => {});
+      if (failure === 'transport failure') throw new Error('socket closed');
+      return DaemonVoiceInferenceSttStreamFinishResponseSchema.parse({
+        ok: true, streamId: 'stream-1', generation: 1, ackSeq: 1,
+        finalText: '', language: 'en', modelPackId: 'stt-pack-1', events: [],
+      });
     });
-    const sink = createSink();
+    if (failure === 'finish timeout') vi.useFakeTimers();
+    const first = runtime.stop();
+    const concurrent = runtime.stop();
+    await entered.promise;
+    if (failure === 'finish timeout') await vi.advanceTimersByTimeAsync(10_000);
+    const expected = { error: expect.objectContaining({ kind, reason }) };
+    await expect(first).resolves.toEqual(expected);
+    await expect(concurrent).resolves.toEqual(expected);
+    expect(params.sink.onFinal).not.toHaveBeenCalled();
+    expect(requests('finish')).toHaveLength(1);
+    expect(requests('cancel')).toHaveLength(1);
+  });
 
-    await controller.start({
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink,
+  it('does not publish a stale finish after cancellation invalidates its sender', async () => {
+    provisional();
+    const reply = createDeferred<unknown>();
+    const entered = createDeferred<void>();
+    rpc.mockImplementation(async request => {
+      if (request.method !== methods.finish) return respond(request);
+      entered.resolve();
+      return reply.promise;
     });
-    await requireCaptureOptions(captureOptions).onChunk(new Uint8Array([0, 1]));
-
-    const firstStop = controller.stop();
-    const concurrentStop = controller.stop();
-    await expect(firstStop).resolves.toEqual({
-      error: expect.objectContaining({
-        kind: expectedKind,
-        reason: expectedReason,
-      }),
-    });
-    await expect(concurrentStop).resolves.toEqual({
-      error: expect.objectContaining({
-        kind: expectedKind,
-        reason: expectedReason,
-      }),
-    });
-
-    expect(sink.onPartial).toHaveBeenCalledWith('provisional words');
-    expect(sender.finish).toHaveBeenCalledTimes(1);
-    expect(sender.cancel).toHaveBeenCalledTimes(1);
+    const abort = new AbortController();
+    const runtime = controller();
+    const params = startParams({ signal: abort.signal });
+    await runtime.start(params);
+    emitPcm();
+    await vi.waitFor(() => expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words'));
+    const first = runtime.stop();
+    const concurrent = runtime.stop();
+    await entered.promise;
+    abort.abort();
+    reply.resolve(DaemonVoiceInferenceSttStreamFinishResponseSchema.parse({
+      ok: true, streamId: 'stream-1', generation: 1, ackSeq: 0, finalText: 'stale final words',
+      language: 'en', modelPackId: 'stt-pack-1', events: [],
+    }));
+    await expect(first).resolves.toEqual({ finalText: '' });
+    await expect(concurrent).resolves.toEqual({ finalText: '' });
+    expect(params.sink.onFinal).not.toHaveBeenCalled();
+    expect(params.sink.onError).not.toHaveBeenCalled();
+    expect(requests('finish')).toHaveLength(1);
+    await vi.waitFor(() => expect(requests('cancel')).toHaveLength(1));
   });
 
   it('waits for a stopping handle to finish before starting the next stream', async () => {
-    let releaseDrain!: () => void;
-    const drainGate = new Promise<void>((resolve) => {
-      releaseDrain = resolve;
+    const gate = createDeferred<void>();
+    const entered = createDeferred<void>();
+    rpc.mockImplementation(async request => {
+      if (request.method === methods.finish && streamNumber === 1) {
+        entered.resolve();
+        await gate.promise;
+      }
+      return respond(request);
     });
-    const firstCapture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => drainGate),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const secondCapture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const createSender = () => ({
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => []),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: -1,
-        finalText: '',
-        language: null,
-        modelPackId: null,
-        events: [],
-      })),
-      cancel: vi.fn(async () => {}),
-    });
-    const senders = [createSender(), createSender()];
-    const createStreamingSttSender = vi.fn(async () => senders[createStreamingSttSender.mock.calls.length - 1]!);
-    const createPcmCapture = vi.fn(() => (
-      createPcmCapture.mock.calls.length === 1 ? firstCapture : secondCapture
-    ));
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({}),
-      createClient: () => ({ createStreamingSttSender }),
-      createPcmCapture,
-    });
-    const micSession = {
-      ensureActive: vi.fn(async () => {}),
-      setMuted: vi.fn(),
-      isMuted: vi.fn(() => false),
-      teardown: vi.fn(async () => {}),
-      getStream: vi.fn(() => null),
-    };
-
-    await controller.start({ micSession, sink: createSink() });
-    const stopping = controller.stop();
+    const runtime = controller();
+    await runtime.start(startParams());
+    const stopping = runtime.stop();
+    await entered.promise;
+    const starting = runtime.start(startParams());
     await Promise.resolve();
-    const starting = controller.start({ micSession, sink: createSink() });
-    await Promise.resolve();
-
-    expect(createStreamingSttSender).toHaveBeenCalledTimes(1);
-
-    releaseDrain();
+    expect(requests('start')).toHaveLength(1);
+    expect(context.processor.onaudioprocess).toBeNull();
+    gate.resolve();
     await stopping;
     await starting;
-    expect(createStreamingSttSender).toHaveBeenCalledTimes(2);
-    await controller.stop();
+    expect(requests('start')).toHaveLength(2);
+    expect(context.processor.onaudioprocess).not.toBeNull();
+    await runtime.stop();
   });
 
   it('cancels the sender and capture when the caller aborts the active stream', async () => {
-    let captureOptions: TestPcmCaptureOptions | null = null;
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => false),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => []),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: -1,
-        finalText: '',
-        language: null,
-        modelPackId: null,
-        events: [],
-      })),
-      cancel: vi.fn(async () => {}),
-    };
-    const abortController = new AbortController();
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({}),
-      createClient: () => ({ createStreamingSttSender: vi.fn(async () => sender) }),
-      createPcmCapture: (options) => {
-        captureOptions = options;
-        return capture;
-      },
-    });
-    const sink = createSink();
-
-    await controller.start({
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink,
-      signal: abortController.signal,
-    });
-
-    abortController.abort();
-    await requireCaptureOptions(captureOptions).onChunk(new Uint8Array([0, 1]));
-    await expect(controller.stop()).resolves.toEqual({ finalText: '' });
-
-    expect(capture.stop).toHaveBeenCalled();
-    expect(sender.cancel).toHaveBeenCalled();
-    expect(sender.finish).not.toHaveBeenCalled();
+    const abort = new AbortController();
+    const runtime = controller();
+    const params = startParams({ signal: abort.signal });
+    await runtime.start(params);
+    abort.abort();
+    emitPcm();
+    await expect(runtime.stop()).resolves.toEqual({ finalText: '' });
+    expect(context.processor.onaudioprocess).toBeNull();
+    expect(requests('chunk')).toHaveLength(0);
+    expect(requests('cancel')).toHaveLength(1);
+    expect(requests('finish')).toHaveLength(0);
+    expect(params.sink.onFinal).not.toHaveBeenCalled();
   });
 
   it('ignores an in-flight daemon response that arrives after abort and stop begin', async () => {
-    let captureOptions: TestPcmCaptureOptions | null = null;
-    let resolveCaptureStop!: () => void;
-    let resolvePush!: (events: readonly [
-      { type: 'partial'; seq: number; text: string; isEndpoint: boolean; confidence: null },
-      { type: 'endpoint'; seq: number; transcript: string; reason: 'vad' },
-    ]) => void;
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(() => new Promise<void>((resolve) => {
-        resolveCaptureStop = resolve;
-      })),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(() => new Promise<readonly [
-        { type: 'partial'; seq: number; text: string; isEndpoint: boolean; confidence: null },
-        { type: 'endpoint'; seq: number; transcript: string; reason: 'vad' },
-      ]>((resolve) => {
-        resolvePush = resolve;
-      })),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: -1,
-        finalText: '',
-        language: null,
-        modelPackId: null,
-        events: [],
-      })),
-      cancel: vi.fn(async () => {}),
-    };
-    const abortController = new AbortController();
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({}),
-      createClient: () => ({ createStreamingSttSender: vi.fn(async () => sender) }),
-      createPcmCapture: (options) => {
-        captureOptions = options;
-        return capture;
-      },
+    const reply = createDeferred<unknown>();
+    const gate = createDeferred<void>();
+    const entered = createDeferred<void>();
+    rpc.mockImplementation(async request => {
+      if (request.method === methods.chunk) { entered.resolve(); return reply.promise; }
+      if (request.method === methods.cancel) await gate.promise;
+      return respond(request);
     });
-    const sink = createSink();
-
-    await controller.start({
-      sessionId: 'daemon-control-session',
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink,
-      signal: abortController.signal,
-    });
-    const pushing = requireCaptureOptions(captureOptions).onChunk(new Uint8Array([0, 1]));
-    await vi.waitFor(() => {
-      expect(sender.pushChunk).toHaveBeenCalledTimes(1);
-    });
-
-    abortController.abort();
-    const stopping = controller.stop();
-    resolvePush([
-      { type: 'partial', seq: 0, text: 'late provisional words', isEndpoint: true, confidence: null },
-      { type: 'endpoint', seq: 0, transcript: 'late final words', reason: 'vad' },
-    ]);
-    await pushing;
-
-    expect(sink.onPartial).not.toHaveBeenCalled();
-    expect(sink.onFinal).not.toHaveBeenCalled();
-    expect(sink.onEndpoint).not.toHaveBeenCalled();
-
-    resolveCaptureStop();
+    const abort = new AbortController();
+    const runtime = controller();
+    const params = startParams({ signal: abort.signal });
+    await runtime.start(params);
+    emitPcm();
+    await entered.promise;
+    abort.abort();
+    let finished = false;
+    const stopping = runtime.stop().then(result => { finished = true; return result; });
+    reply.resolve(DaemonVoiceInferenceSttStreamChunkResponseSchema.parse({
+      ok: true, streamId: 'stream-1', generation: 1, ackSeq: 0, events: [
+        { type: 'partial', seq: 0, text: 'late provisional words', isEndpoint: true, confidence: null },
+        { type: 'endpoint', seq: 0, transcript: 'late final words', reason: 'vad' },
+      ],
+    }));
+    await vi.waitFor(() => expect(requests('cancel')).toHaveLength(1));
+    expect(finished).toBe(false);
+    expect(context.processor.onaudioprocess).toBeNull();
+    expect(params.sink.onPartial).not.toHaveBeenCalled();
+    expect(params.sink.onFinal).not.toHaveBeenCalled();
+    expect(params.sink.onEndpoint).not.toHaveBeenCalled();
+    gate.resolve();
     await expect(stopping).resolves.toEqual({ finalText: '' });
-    expect(sender.finish).not.toHaveBeenCalled();
-    expect(sender.cancel).toHaveBeenCalledTimes(1);
+    expect(requests('finish')).toHaveLength(0);
+    expect(requests('cancel')).toHaveLength(1);
   });
 
-  it.each(['stop', 'abort'] as const)(
-    'clears daemon endpoint authority so a late endpoint after %s cannot signal',
-    async (terminalAction) => {
-      const capture = {
-        start: vi.fn(async () => {}),
-        stop: vi.fn(async () => {}),
-        finish: vi.fn(async () => {}),
-        waitForDrain: vi.fn(async () => {}),
-        isActive: vi.fn(() => true),
-      };
-      const sender = {
-        start: vi.fn(async () => {}),
-        pushChunk: vi.fn(async () => []),
-        finish: vi.fn(async () => ({
-          ok: true as const,
-          streamId: 'stream-1',
-          generation: 1,
-          ackSeq: -1,
-          finalText: '',
-          language: null,
-          modelPackId: null,
-          events: [],
-        })),
-        cancel: vi.fn(async () => {}),
-      };
-      const onEndpointSignal = vi.fn();
-      const endpointController = createTurnEndpointController({
-        onSignal: onEndpointSignal,
-      });
-      const abortController = new AbortController();
-      const controller = createDaemonStreamingSttController({
-        endpointController,
-        getSettings: () => ({}),
-        createClient: () => ({
-          createStreamingSttSender: vi.fn(async () => sender),
-        }),
-        createPcmCapture: () => capture,
-      });
-
-      await controller.start({
-        sessionId: 'daemon-control-session',
-        micSession: {
-          ensureActive: vi.fn(async () => {}),
-          setMuted: vi.fn(),
-          isMuted: vi.fn(() => false),
-          teardown: vi.fn(async () => {}),
-          getStream: vi.fn(() => null),
-        },
-        sink: createSink(),
-        signal: abortController.signal,
-      });
-      if (terminalAction === 'abort') {
-        abortController.abort();
-        await controller.stop();
-      } else {
-        await controller.stop();
-      }
-
-      endpointController.signalEndpointDetected({
-        sessionId: 'daemon-control-session',
-        source: 'native_stream',
-        transcript: 'late transcript',
-      });
-      expect(onEndpointSignal).not.toHaveBeenCalled();
-    },
-  );
+  it.each(['stop', 'abort'] as const)('clears daemon endpoint authority so a late endpoint after %s cannot signal', async terminalAction => {
+    const onSignal = vi.fn();
+    const endpointController = createTurnEndpointController({ onSignal });
+    const abort = new AbortController();
+    const runtime = controller(endpointController);
+    await runtime.start(startParams({ signal: abort.signal }));
+    if (terminalAction === 'abort') abort.abort();
+    await runtime.stop();
+    endpointController.signalEndpointDetected({ sessionId: 'active-control-session', source: 'native_stream', transcript: 'late transcript' });
+    expect(onSignal).not.toHaveBeenCalled();
+  });
 
   it('cancels the daemon stream when PCM capture reports a startup failure without throwing', async () => {
-    let captureOptions: TestPcmCaptureOptions | null = null;
-    const capture = {
-      start: vi.fn(async () => {
-        emitCaptureError(captureOptions);
-      }),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => false),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => []),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: -1,
-        finalText: '',
-        language: null,
-        modelPackId: null,
-        events: [],
-      })),
-      cancel: vi.fn(async () => {}),
-    };
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({}),
-      createClient: () => ({ createStreamingSttSender: vi.fn(async () => sender) }),
-      createPcmCapture: (options) => {
-        captureOptions = options;
-        return capture;
-      },
-    });
-    const sink = createSink();
-
-    await controller.start({
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink,
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    await expect(controller.stop()).resolves.toEqual({ finalText: '' });
-
-    expect(sink.onError).toHaveBeenCalledWith({
-      kind: 'provider_error',
-      phase: 'runtime',
-      presentation: 'notice',
-      reason: 'daemon_streaming_stt_web_mic_unavailable',
-      recoverable: true,
-      recoveryAction: 'retry',
-      retryPolicy: 'user_action',
-    });
-    expect(capture.stop).toHaveBeenCalledTimes(1);
-    expect(sender.cancel).toHaveBeenCalledTimes(1);
-    expect(sender.finish).not.toHaveBeenCalled();
+    context.createMediaStreamSource.mockImplementationOnce(() => { throw new Error('audio device unavailable'); });
+    const runtime = controller();
+    const params = startParams();
+    await runtime.start(params);
+    await vi.waitFor(() => expect(params.sink.onError).toHaveBeenCalledWith({
+      kind: 'provider_error', phase: 'runtime', presentation: 'notice',
+      reason: 'daemon_streaming_stt_web_mic_media_source_failed', recoverable: true,
+      recoveryAction: 'retry', retryPolicy: 'user_action',
+    }));
+    await expect(runtime.stop()).resolves.toEqual({ finalText: '' });
+    expect(requests('cancel')).toHaveLength(1);
+    expect(requests('finish')).toHaveLength(0);
+    expect(context.processor.onaudioprocess).toBeNull();
   });
 
   it('publishes a PCM runtime error only after capture and sender cancellation settle', async () => {
-    let captureOptions: TestPcmCaptureOptions | null = null;
-    let resolveCaptureStop!: () => void;
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(() => new Promise<void>((resolve) => {
-        resolveCaptureStop = resolve;
-      })),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => []),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: -1,
-        finalText: '',
-        language: null,
-        modelPackId: null,
-        events: [],
-      })),
-      cancel: vi.fn(async () => {}),
-    };
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({}),
-      createClient: () => ({ createStreamingSttSender: vi.fn(async () => sender) }),
-      createPcmCapture: (options) => {
-        captureOptions = options;
-        return capture;
-      },
+    const gate = createDeferred<void>();
+    rpc.mockImplementation(async request => {
+      if (request.method === methods.cancel) await gate.promise;
+      return respond(request);
     });
-    const sink = createSink();
-    await controller.start({
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink,
-    });
-
-    emitCaptureError(captureOptions);
-    let stopFinished = false;
-    const stopping = controller.stop().then((result) => {
-      stopFinished = true;
-      return result;
-    });
-    await Promise.resolve();
-
-    expect(sink.onError).not.toHaveBeenCalled();
-    expect(stopFinished).toBe(false);
-
-    resolveCaptureStop();
+    const runtime = controller();
+    const params = startParams();
+    await runtime.start(params);
+    browser.micTrack.dispatchEvent(new Event('ended'));
+    let finished = false;
+    const stopping = runtime.stop().then(result => { finished = true; return result; });
+    await vi.waitFor(() => expect(requests('cancel')).toHaveLength(1));
+    expect(params.sink.onError).not.toHaveBeenCalled();
+    expect(finished).toBe(false);
+    expect(context.processor.onaudioprocess).toBeNull();
+    gate.resolve();
     await expect(stopping).resolves.toEqual({ finalText: '' });
-    expect(capture.stop).toHaveBeenCalledTimes(1);
-    expect(sender.cancel).toHaveBeenCalledTimes(1);
-    expect(sink.onError).toHaveBeenCalledWith(expect.objectContaining({
-      reason: 'daemon_streaming_stt_web_mic_unavailable',
-    }));
+    expect(requests('cancel')).toHaveLength(1);
+    expect(params.sink.onError).toHaveBeenCalledWith({
+      kind: 'provider_error', phase: 'runtime', presentation: 'notice',
+      reason: 'daemon_streaming_stt_web_mic_device_lost', recoverable: true,
+      recoveryAction: 'retry', retryPolicy: 'user_action',
+    });
   });
 
   it('surfaces typed daemon runtime startup errors instead of a generic start failure', async () => {
-    const recordStartFailure = vi.fn();
-    const startFailure = Object.assign(new Error('daemon_voice_inference_runtime_unavailable'), {
-      code: 'runtime_unavailable',
+    rpc.mockImplementation(async request => request.method === methods.start
+      ? DaemonVoiceInferenceSttStreamStartResponseSchema.parse({ ok: false, errorCode: 'runtime_unavailable', error: 'daemon_voice_inference_runtime_unavailable', retryable: false })
+      : respond(request));
+    const runtime = controller();
+    const params = startParams();
+    await runtime.start(params);
+    expect(params.sink.onError).toHaveBeenCalledWith({
+      kind: 'provider_error', phase: 'runtime', presentation: 'notice',
+      reason: 'daemon_streaming_stt_runtime_unavailable', recoverable: true,
+      recoveryAction: 'retry', retryPolicy: 'user_action',
     });
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({
-        voice: {
-          providerId: 'local_conversation',
-          providers: {
-            local_conversation: { schemaVersion: 1, config: {
-              stt: {
-                provider: 'local_neural',
-                localNeural: { assetId: 'stt-pack-1', language: 'en', execution: 'daemon' },
-              },
-            } },
-          },
-        },
-      }),
-      createClient: () => ({
-        createStreamingSttSender: vi.fn(async () => {
-          throw startFailure;
-        }),
-      }),
-      recordStartFailure,
-      createPcmCapture: () => {
-        throw new Error('capture_must_not_start_after_sender_failure');
-      },
-    });
-    const sink = createSink();
-
-    await controller.start({
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink,
-    });
-
-    expect(sink.onError).toHaveBeenCalledWith({
-      kind: 'provider_error',
-      phase: 'runtime',
-      presentation: 'notice',
-      reason: 'daemon_streaming_stt_runtime_unavailable',
-      recoverable: true,
-      recoveryAction: 'retry',
-      retryPolicy: 'user_action',
-    });
-    expect(recordStartFailure).toHaveBeenCalledWith(startFailure);
+    expect(daemonSpeechStreamDiagnostics.snapshot().lastStartFailure).toMatchObject({ code: 'runtime_unavailable' });
+    expect(browser.micSession.getStream()).toBeNull();
+    expect(context.createMediaStreamSource).not.toHaveBeenCalled();
+    expect(requests('chunk')).toHaveLength(0);
   });
 
   it('cancels the active daemon stream when PCM chunk delivery fails during capture', async () => {
-    let captureOptions: TestPcmCaptureOptions | null = null;
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const sender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => {
-        throw Object.assign(new Error('daemon_voice_inference_substream_response_timeout'), {
-          code: 'daemon_voice_inference_substream_response_timeout',
-        });
-      }),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: 0,
-        finalText: '',
-        language: null,
-        modelPackId: null,
-        events: [],
-      })),
-      cancel: vi.fn(async () => {}),
-    };
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({
-        voice: {
-          providerId: 'local_conversation',
-          providers: {
-            local_conversation: { schemaVersion: 1, config: {
-              stt: {
-                provider: 'local_neural',
-                localNeural: { assetId: 'stt-pack-1', language: 'en', execution: 'daemon' },
-              },
-            } },
-          },
-        },
-      }),
-      createClient: () => ({ createStreamingSttSender: vi.fn(async () => sender) }),
-      createPcmCapture: (options) => {
-        captureOptions = options;
-        return capture;
-      },
-    });
-    const sink = createSink();
-
-    await controller.start({
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink,
-    });
-
-    await expect(requireCaptureOptions(captureOptions).onChunk(new Uint8Array([0, 1]))).resolves.toBeUndefined();
-
-    await vi.waitFor(() => {
-      expect(sender.cancel).toHaveBeenCalledTimes(1);
-      expect(sink.onError).toHaveBeenCalledWith({
-        kind: 'provider_error',
-        phase: 'runtime',
-        presentation: 'notice',
-        reason: 'daemon_streaming_stt_pcm_chunk_failed',
-        recoverable: true,
-        recoveryAction: 'retry',
-        retryPolicy: 'user_action',
-      });
-    });
-    expect(sender.finish).not.toHaveBeenCalled();
+    rpc.mockImplementation(async request => request.method === methods.chunk
+      ? DaemonVoiceInferenceSttStreamChunkResponseSchema.parse({ ok: false, errorCode: 'request_timeout', error: 'daemon_voice_inference_substream_response_timeout', retryable: true })
+      : respond(request));
+    const runtime = controller();
+    const params = startParams();
+    await runtime.start(params);
+    emitPcm();
+    await vi.waitFor(() => expect(params.sink.onError).toHaveBeenCalledWith({
+      kind: 'provider_error', phase: 'runtime', presentation: 'notice',
+      reason: 'daemon_streaming_stt_pcm_chunk_failed', recoverable: true,
+      recoveryAction: 'retry', retryPolicy: 'user_action',
+    }));
+    expect(requests('cancel')).toHaveLength(1);
+    expect(requests('finish')).toHaveLength(0);
+    expect(context.processor.onaudioprocess).toBeNull();
   });
 
   it('does not start a late daemon sender or PCM capture after cancellation, and permits retry', async () => {
-    let resolveSender!: (sender: {
-      start: ReturnType<typeof vi.fn>;
-      pushChunk: ReturnType<typeof vi.fn>;
-      finish: ReturnType<typeof vi.fn>;
-      cancel: ReturnType<typeof vi.fn>;
-    }) => void;
-    const firstSender = {
-      start: vi.fn(async () => {}),
-      pushChunk: vi.fn(async () => []),
-      finish: vi.fn(async () => ({
-        ok: true as const,
-        streamId: 'stream-1',
-        generation: 1,
-        ackSeq: -1,
-        finalText: '',
-        language: null,
-        modelPackId: null,
-        events: [],
-      })),
-      cancel: vi.fn(async () => {}),
-    };
-    const secondSender = {
-      ...firstSender,
-      start: vi.fn(async () => {}),
-      cancel: vi.fn(async () => {}),
-    };
-    const createStreamingSttSender = vi.fn()
-      .mockImplementationOnce(() => new Promise((resolve) => {
-        resolveSender = resolve;
-      }))
-      .mockResolvedValueOnce(secondSender);
-    const capture = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      finish: vi.fn(async () => {}),
-      waitForDrain: vi.fn(async () => {}),
-      isActive: vi.fn(() => true),
-    };
-    const createPcmCapture = vi.fn(() => capture);
-    const controller = createDaemonStreamingSttController({
-      getSettings: () => ({
-        voice: {
-          providerId: 'local_conversation',
-          providers: {
-            local_conversation: { schemaVersion: 1, config: {
-              stt: {
-                provider: 'local_neural',
-                localNeural: { assetId: 'stt-pack-1', language: 'en', execution: 'daemon' },
-              },
-            } },
-          },
-        },
-      }),
-      createClient: () => ({ createStreamingSttSender }),
-      createPcmCapture,
+    const gate = createDeferred<void>();
+    const entered = createDeferred<void>();
+    const readCredentials = TokenStorage.getCredentialsForServerUrl;
+    vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await gate.promise;
+      return readCredentials(...args);
     });
-    const abortController = new AbortController();
-    const startParams = {
-      micSession: {
-        ensureActive: vi.fn(async () => {}),
-        setMuted: vi.fn(),
-        isMuted: vi.fn(() => false),
-        teardown: vi.fn(async () => {}),
-        getStream: vi.fn(() => null),
-      },
-      sink: createSink(),
-    };
-
-    const starting = controller.start({
-      ...startParams,
-      signal: abortController.signal,
-    });
-    await vi.waitFor(() => {
-      expect(createStreamingSttSender).toHaveBeenCalledTimes(1);
-    });
-    abortController.abort();
-    resolveSender(firstSender);
+    const abort = new AbortController();
+    const runtime = controller();
+    const params = startParams();
+    const starting = runtime.start({ ...params, signal: abort.signal });
+    await entered.promise;
+    abort.abort();
+    gate.resolve();
     await starting;
-
-    expect(firstSender.start).not.toHaveBeenCalled();
-    expect(firstSender.cancel).toHaveBeenCalledTimes(1);
-    expect(createPcmCapture).not.toHaveBeenCalled();
-
-    await controller.start(startParams);
-    expect(secondSender.start).toHaveBeenCalledTimes(1);
-    expect(createPcmCapture).toHaveBeenCalledTimes(1);
+    expect(requests('start')).toHaveLength(0);
+    expect(browser.micSession.getStream()).toBeNull();
+    expect(context.createMediaStreamSource).not.toHaveBeenCalled();
+    await runtime.start(params);
+    expect(requests('start')).toHaveLength(1);
+    expect(context.processor.onaudioprocess).not.toBeNull();
+    await runtime.stop();
   });
+
 });

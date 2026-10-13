@@ -1,89 +1,122 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import {
+  createRetainedVoiceAgentRpcBoundary,
+  createStandaloneVoicePolicyHarness,
+  prepareStandaloneVoicePolicyHarness,
+} from '@/dev/testkit/harness/standaloneVoicePolicyHarness';
 
-import { installVoiceAgentCommonModuleMocks } from '@/voice/agent/voiceAgentTestHelpers';
-import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
-
-const ensureBoundSpy = vi.fn(async (_args: any) => ({
-  adapterId: 'local_conversation',
-  controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-  conversationSessionId: 'carrier-1',
-  transcriptMode: 'native_session',
-  targetSessionId: 's1',
-  updatedAt: 1,
-}));
-vi.mock('@/voice/binding/voiceConversationBindingRuntime', () => ({
-  voiceSessionBindingManager: {
-    ensureBound: (args: any) => ensureBoundSpy(args),
-  },
-}));
-
-const stopSpy = vi.fn(async (_sessionId: string) => {});
-vi.mock('@/voice/agent/voiceAgentSessions', () => ({
-  voiceAgentSessions: {
-    stop: (sessionId: string) => stopSpy(sessionId),
-  },
-}));
-
-const state: any = {
-  settings: {
-    voice: {
-      providerId: 'local_conversation',
-      providers: {
-        local_conversation: { schemaVersion: 1, config: {
-          conversationMode: 'agent',
-          agent: { backend: 'daemon', stayInVoiceHome: false, teleportEnabled: true },
-        } },
-      },
-    },
-  },
-};
-
-installVoiceAgentCommonModuleMocks({
-  storage: async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-      storage: { getState: () => state },
-    });
-  },
-});
+await prepareStandaloneVoicePolicyHarness();
+const { storage } = await import('@/sync/domains/state/storage');
+const { readLocalConversationVoiceSettings, writeVoiceProviderSettingsConfig } = await import('@/sync/domains/settings/voiceSettings');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const { writeVoiceConversationScopeMetadata } = await import('@/voice/persistence/voiceConversationScopeMetadata');
+const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+const { readVoiceConversationBindingMetadata } = await import('@/voice/binding/voiceConversationBindingMetadata');
+const { readVoiceSessionOwnerMetadataFromState } = await import('@/voice/shared/readVoiceSessionOwnerMetadata');
+const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('./voiceAgentGlobalSessionId');
+const { teleportVoiceAgentToSessionRoot } = await import('./teleportVoiceAgentToSessionRoot');
+const { flushActivityUpdates } = await import('@/sync/engine/socket/socket');
 
 describe('teleportVoiceAgentToSessionRoot', () => {
-  beforeEach(() => {
-    vi.resetModules();
-    ensureBoundSpy.mockReset();
-    stopSpy.mockReset();
-    state.settings.voice.providerId = 'local_conversation';
-    state.settings.voice.providers.local_conversation.config.conversationMode = 'agent';
-    state.settings.voice.providers.local_conversation.config.agent = { backend: 'daemon', stayInVoiceHome: false, teleportEnabled: true };
+  let harness: Awaited<ReturnType<typeof createStandaloneVoicePolicyHarness>>;
+  let active: Awaited<ReturnType<typeof harness.activateLocalAgent>>;
+  let daemon: Awaited<ReturnType<typeof createRetainedVoiceAgentRpcBoundary>>;
+  let bindingAtStop: ReturnType<typeof readVoiceConversationBindingMetadata>;
+  let unsubscribeActivity: (() => void) | undefined;
+
+  function setTeleportPolicy(policy: Readonly<{ teleportEnabled?: boolean; stayInVoiceHome?: boolean }>) {
+    const voice = storage.getState().settings.voice;
+    const config = readLocalConversationVoiceSettings(voice);
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: writeVoiceProviderSettingsConfig(voice, 'local_conversation', {
+      ...config, conversationMode: 'agent', agent: { ...config.agent, teleportEnabled: true, stayInVoiceHome: false, ...policy },
+    }) }, storage.getState().settings));
+  }
+
+  beforeEach(async () => {
+    bindingAtStop = null;
+    // A live daemon independently publishes activity; durable HTTP rows alone
+    // do not prove either the old Voice Home or the requested root is online.
+    unsubscribeActivity = storage.subscribe(current => {
+      const serverId = current.profileScope?.serverId;
+      if (!serverId) return;
+      const updates = new Map(['global-carrier', 's1'].flatMap(id => {
+        const session = current.sessions[id];
+        const row = current.sessionListRowsByServerId[serverId]?.[id];
+        if (session?.active !== true || (session.presence === 'online' && (!row || row.presence === 'online'))) return [];
+        const activeAt = Math.max(Date.now(), (session.activeAt ?? 0) + 1, (row?.activeAt ?? 0) + 1);
+        return [[id, { type: 'activity' as const, id, active: true, activeAt, thinking: false }] as const];
+      }));
+      if (updates.size) flushActivityUpdates({ updates, applySessions: current.applySessions, sourceServerId: serverId });
+    });
+    daemon = await createRetainedVoiceAgentRpcBoundary({ onRpc: method => {
+      if (method !== SESSION_RPC_METHODS.EXECUTION_RUN_STOP) return;
+      // Observe the persisted binding at the actual daemon stop boundary.
+      // Stopping first, or merely forwarding the target, cannot satisfy this.
+      bindingAtStop = readVoiceConversationBindingMetadata('carrier-1',
+        readVoiceSessionOwnerMetadataFromState(storage.getState(), 'carrier-1'),
+        { sourceServerId: active.binding.conversationSessionAddress.serverId });
+    } });
+    harness = await createStandaloneVoicePolicyHarness({ mode: 'off', dispatch: daemon.dispatch,
+      initializeSessionId: 'global-carrier',
+      existingSession: { id: 'global-carrier', active: true,
+        metadata: writeVoiceConversationScopeMetadata({ path: '/voice', host: 'voice.test', machineId: 'machine-1',
+          flavor: 'claude', systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+          agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+        }, { kind: 'voice_home' }) },
+      sessions: [
+        createSessionFixture({ id: 's1', active: true,
+          metadata: { path: '/repo', host: 'voice.test', machineId: 'machine-1', flavor: 'claude' } }),
+        createSessionFixture({ id: 'carrier-1', active: true,
+          metadata: writeVoiceConversationScopeMetadata({ path: '/repo', host: 'voice.test', machineId: 'machine-1',
+            flavor: 'claude', systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+          }, { kind: 'session_root', sessionRootId: 's1' }) }),
+      ],
+    });
+    active = await harness.activateLocalAgent();
+    const machine = createMachineFixture({ id: 'machine-1', activeAt: Date.now(),
+      access: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }).access });
+    storage.setState({ machines: { [machine.id]: machine },
+      machineListByServerId: { [active.binding.conversationSessionAddress.serverId]: [machine] } });
+    setTeleportPolicy({});
+    daemon.requests.length = 0;
+  });
+
+  afterEach(async () => {
+    unsubscribeActivity?.();
+    await active?.dispose();
+    await harness?.dispose();
   });
 
   it('rebinds the global voice agent to the requested session root before stopping the global run', async () => {
-    const { teleportVoiceAgentToSessionRoot } = await import('./teleportVoiceAgentToSessionRoot');
-
     await expect(teleportVoiceAgentToSessionRoot({ sessionId: 's1' })).resolves.toEqual({ ok: true });
-    expect(ensureBoundSpy).toHaveBeenCalledWith({
-      adapterId: 'local_conversation',
-      controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-      requestedTargetSessionId: 's1',
-    });
-    expect(stopSpy).toHaveBeenCalledWith(VOICE_AGENT_GLOBAL_SESSION_ID);
+    const target = { serverId: active.binding.conversationSessionAddress.serverId, sessionId: 's1' };
+    expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID))
+      .toMatchObject({ conversationSessionId: 'carrier-1', targetSessionAddress: target });
+    expect(bindingAtStop).toMatchObject({ controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+      conversationSessionId: 'carrier-1', targetSessionAddress: target });
+    expect(daemon.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP))
+      .toEqual([{ method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, input: { runId: 'local-agent-run' } }]);
+    expect(daemon.readRetainedRun()).toBeNull();
   });
 
   it('fails closed when teleport is disabled', async () => {
-    const { teleportVoiceAgentToSessionRoot } = await import('./teleportVoiceAgentToSessionRoot');
-    state.settings.voice.providers.local_conversation.config.agent.teleportEnabled = false;
-
-    await expect(teleportVoiceAgentToSessionRoot({ sessionId: 's1' })).resolves.toEqual({ ok: false, code: 'VOICE_TELEPORT_DISABLED' });
-    expect(ensureBoundSpy).not.toHaveBeenCalled();
-    expect(stopSpy).not.toHaveBeenCalled();
+    setTeleportPolicy({ teleportEnabled: false });
+    await expect(teleportVoiceAgentToSessionRoot({ sessionId: 's1' }))
+      .resolves.toEqual({ ok: false, code: 'VOICE_TELEPORT_DISABLED' });
+    expect(daemon.requests).toEqual([]);
+    expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID)?.targetSessionAddress).toBeNull();
+    expect(daemon.readRetainedRun()?.status).toBe('running');
   });
 
   it('fails closed when stayInVoiceHome is enabled', async () => {
-    const { teleportVoiceAgentToSessionRoot } = await import('./teleportVoiceAgentToSessionRoot');
-    state.settings.voice.providers.local_conversation.config.agent.stayInVoiceHome = true;
-
-    await expect(teleportVoiceAgentToSessionRoot({ sessionId: 's1' })).resolves.toEqual({ ok: false, code: 'VOICE_TELEPORT_BLOCKED_BY_HOME' });
-    expect(ensureBoundSpy).not.toHaveBeenCalled();
-    expect(stopSpy).not.toHaveBeenCalled();
+    setTeleportPolicy({ stayInVoiceHome: true });
+    await expect(teleportVoiceAgentToSessionRoot({ sessionId: 's1' }))
+      .resolves.toEqual({ ok: false, code: 'VOICE_TELEPORT_BLOCKED_BY_HOME' });
+    expect(daemon.requests).toEqual([]);
+    expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID)?.targetSessionAddress).toBeNull();
+    expect(daemon.readRetainedRun()?.status).toBe('running');
   });
 });

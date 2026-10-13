@@ -11,6 +11,9 @@ vi.mock('@ricky0123/vad-web', () => ({
         new: (...args: unknown[]) => micVadNew(...args),
     },
 }));
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } = await import('@/dev/testkit/harness/voiceWebRtcHarness');
 
 describe('createWebVadController', () => {
     const previousWindow = (globalThis as { window?: object }).window;
@@ -80,17 +83,11 @@ describe('createWebVadController', () => {
 
     it('consumes the canonical mic session stream and shared AudioContext instead of self-acquiring', async () => {
         const onEndpointSignal = vi.fn();
-        const sharedStream = { id: 'shared' } as unknown as MediaStream;
-        const sharedAudioContext = { state: 'running' } as unknown as AudioContext;
-        const ensureActive = vi.fn(async () => {});
-        const micSession = {
-            ensureActive,
-            setMuted: vi.fn(),
-            isMuted: vi.fn(() => false),
-            teardown: vi.fn(async () => {}),
-            getStream: vi.fn(() => sharedStream),
-            getAudioContext: vi.fn(() => sharedAudioContext),
-        };
+        const sharedAudioContext = new TestVoiceAudioContext();
+        const browser = installVoiceWebRtcBrowserBoundary({ createAudioContext: () => sharedAudioContext as unknown as AudioContext });
+        const micSession = browser.micSession;
+        await micSession.ensureActive();
+        const sharedStream = browser.micStream;
 
         const { createWebVadController } = await import('./WebVadController.web');
         const controller = createWebVadController({ onEndpointSignal });
@@ -99,7 +96,7 @@ describe('createWebVadController', () => {
             minSpeechMs: 120,
             redemptionMs: 450,
             sessionId: 'session-shared',
-            micSession: micSession as never,
+            micSession,
         })).resolves.toBe(true);
 
         const options = micVadNew.mock.calls[0]?.[0] as {
@@ -114,9 +111,13 @@ describe('createWebVadController', () => {
         expect(typeof options.resumeStream).toBe('function');
 
         await expect(options.getStream?.()).resolves.toBe(sharedStream);
-        expect(ensureActive).toHaveBeenCalled();
+        expect(micSession.getStream()).toBe(sharedStream);
         // pauseStream must NOT stop the shared stream.
         await expect(options.pauseStream?.(sharedStream)).resolves.toBeUndefined();
+        expect(browser.micTrack.stop).not.toHaveBeenCalled();
+        await controller.stopSession();
+        await micSession.teardown();
+        browser.restore();
     });
 
     it('applies the two-stage confirmMs false-start debounce: a sub-confirmMs speech segment is suppressed', async () => {

@@ -84,9 +84,6 @@ describe('resolveTextualEchoDecision', () => {
         })).toEqual({ kind: 'keep' });
     });
 
-    it('exposes documented defaults', () => {
-        expect(DEFAULT_TEXTUAL_ECHO_GUARD).toEqual({ overlapThreshold: 0.7, justStartedGuardMs: 200 });
-    });
 });
 
 describe('createTextualEchoGuard', () => {

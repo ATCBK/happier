@@ -5,7 +5,7 @@ import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1, type S
 import type { SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
 import { matchSessionBotFilterV1, matchSessionProjectFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { readSessionListRenderableOwnerMetadataView } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import { isSessionAccessOwner } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 import { readCurrentProjectAccountRows } from '@/sync/store/domains/projectAccountRows';
 import { workspaceRefResolutionContextV1 } from '@/sync/domains/workspaces/workspaceRefs';
@@ -15,6 +15,8 @@ import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sess
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { HappyError } from '@/utils/errors/errors';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 
 import {
   parseCursorKey as parseLegacyCursorKey,
@@ -120,81 +122,115 @@ export async function listSessionsForVoiceTool(params: Readonly<{
     if (params.signal?.aborted) return failure('tool_cancelled');
     if (params.view === 'awareness' && params.includeLastMessagePreview) return failure('invalid_parameters');
     try {
-      const page = await fetchSessionListQueryPageForHome(serverId, {
-        limit: params.limit ?? params.query?.limit,
-        // Ad-hoc Voice/Action reads share the canonical row parser/hydrator but never own
-        // ordinary, archived, or mounted-query membership.
-        membership: 'rowOnly',
-        source: params.query
-          ? { kind: 'query', body: params.query, allowV1Fallback: false }
-          : { kind: 'ordinary', path: '/v2/sessions', allowV1Fallback: true },
-        ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
-        signal: params.signal ?? new AbortController().signal,
-      });
-      // A page that resolves after this tool call was cancelled is not a stale Home:
-      // report the cancellation the caller actually caused.
-      if (params.signal?.aborted) return failure('tool_cancelled');
-      if (!page.current) return failure('stale_response');
-      const state = storage.getState();
-      const rows = page.sessionIds
-        .filter((sessionId) => page.isSessionCurrent?.(sessionId) !== false)
-        .map((sessionId) => findSessionListLookupSession(state, { serverId, sessionId })?.session);
-      if (rows.some((row) => !row)) return failure('invalid_response');
+      let cursor = params.cursor ?? params.query?.cursor;
+      let attentionCursor = params.query?.attentionCursor;
+      let previousPage: Awaited<ReturnType<typeof fetchSessionListQueryPageForHome>> | null = null;
+      const seenCursors = new Set<string>();
       let botFilterUnavailableCount = 0;
       let projectFilterUnavailableCount = 0;
-      const projectRows = readCurrentProjectAccountRows(state);
-      const sessions = rows.flatMap((row) => {
-        if (!row) return [];
-        if (params.project) {
-          if (!isSessionAccessOwner(row.access, row.accessLevel) || (row.owner && row.owner !== state.profileScope?.accountId)) return [];
-          const projectMatch = matchSessionProjectFilterV1(readSessionOwnerMetadataView(row), serverId, params.project,
-            projectRows?.status === 'ready' && projectRows.coverage === 'complete' ? projectRows.workspaceRefs : undefined, workspaceRefResolutionContextV1);
-          if (projectMatch === 'unavailable') projectFilterUnavailableCount += 1;
-          if (projectMatch !== 'match') return [];
+      let metadataUpgradeRequiredCount = 0;
+      for (;;) {
+        let page = await fetchSessionListQueryPageForHome(serverId, {
+          limit: params.limit ?? params.query?.limit,
+          // Ad-hoc Voice/Action reads share the canonical row parser/hydrator but never own
+          // ordinary, archived, or mounted-query membership.
+          membership: 'rowOnly',
+          source: params.query
+            ? { kind: 'query', body: { ...params.query, cursor, attentionCursor }, allowV1Fallback: false }
+            : { kind: 'ordinary', path: '/v2/sessions', allowV1Fallback: true },
+          ...(cursor !== undefined ? { cursor } : {}),
+          ...(attentionCursor !== undefined ? { attentionCursor } : {}),
+          signal: params.signal ?? new AbortController().signal,
+        });
+        // A page that resolves after this tool call was cancelled is not a stale Home:
+        // report the cancellation the caller actually caused.
+        if (params.signal?.aborted) return failure('tool_cancelled');
+        if (!page.current) return failure('stale_response');
+        if (previousPage && params.query) {
+          page = attentionCursor
+            ? { ...page, nextCursor: previousPage.nextCursor, hasNext: previousPage.hasNext }
+            : { ...page, attentionNextCursor: previousPage.attentionNextCursor,
+              attentionHasNext: previousPage.attentionHasNext };
         }
-        const match = matchSessionBotFilterV1(row.metadata, params.query?.bot);
-        if (match === 'unavailable') botFilterUnavailableCount += 1;
-        return match === 'match' ? [row] : [];
-      });
-      const metadataUpgradeRequiredCount = page.metadataUpgradeRequiredCount ?? 0;
-      if (params.view === 'awareness') {
-        const pageResult = {
+        previousPage = page;
+        const state = storage.getState();
+        const rows = page.sessionIds
+          .filter((sessionId) => page.isSessionCurrent?.(sessionId) !== false)
+          .map((sessionId) => findSessionListLookupSession(state, { serverId, sessionId })?.session);
+        if (rows.some((row) => !row)) return failure('invalid_response');
+        const projectRows = readCurrentProjectAccountRows(state);
+        const sessions = rows.flatMap((row) => {
+          if (!row) return [];
+          if (params.project) {
+            if (!isSessionAccessOwner(row.access, row.accessLevel) || (row.owner && row.owner !== state.profileScope?.accountId)) return [];
+            const projectMatch = matchSessionProjectFilterV1(row.metadataUnavailable ? null : readSessionListRenderableOwnerMetadataView(row), serverId, params.project,
+              projectRows?.status === 'ready' && projectRows.coverage === 'complete' ? projectRows.workspaceRefs : undefined, workspaceRefResolutionContextV1);
+            if (projectMatch === 'unavailable') projectFilterUnavailableCount += 1;
+            if (projectMatch !== 'match') return [];
+          }
+          const match = matchSessionBotFilterV1(row.metadata, params.query?.bot);
+          if (match === 'unavailable') botFilterUnavailableCount += 1;
+          return match === 'match' ? [row] : [];
+        });
+        metadataUpgradeRequiredCount += page.metadataUpgradeRequiredCount ?? 0;
+        if (params.project && sessions.length === 0) {
+          const nextCursor = page.hasNext ? page.nextCursor : null;
+          const nextAttentionCursor = !nextCursor && params.query && page.attentionHasNext
+            ? page.attentionNextCursor : null;
+          const continuation = nextCursor ?? nextAttentionCursor;
+          if (continuation) {
+            const key = JSON.stringify([nextCursor ? 'ordinary' : 'attention', continuation]);
+            if (seenCursors.has(key)) return failure('cursor_not_advancing');
+            seenCursors.add(key);
+            cursor = nextCursor ?? undefined;
+            attentionCursor = nextAttentionCursor ?? undefined;
+            continue;
+          }
+        }
+        if (params.view === 'awareness') {
+          const pageResult = {
+            ...(params.project ? { project: params.project, projectFilterUnavailableCount } : {}),
+            sessions: sessions.map((session) => {
+              const awareness = projectUiSessionAwareness(session, Date.now());
+              return isSessionAwarenessContentReadableV1(awareness.encryption)
+                ? { ...awareness, title: getSessionName(session, serverId) }
+                : awareness;
+            }),
+            nextCursor: page.nextCursor,
+            hasNext: page.hasNext,
+            ...(metadataUpgradeRequiredCount > 0 ? { metadataUpgradeRequiredCount } : {}),
+            ...(botFilterUnavailableCount > 0 ? { botFilterUnavailableCount } : {}),
+          };
+          // Lane 07 attention continuation is a strict-query fact: a strict query proves
+          // both page families, while an ordinary awareness read never queried that
+          // family and reports nothing for it (the CLI host does the same).
+          return params.query
+            ? buildSessionAwarenessListResultV1({
+                ...pageResult,
+                attentionNextCursor: page.attentionNextCursor ?? null,
+                attentionHasNext: page.attentionHasNext ?? false,
+              })
+            : buildSessionAwarenessListResultV1(pageResult);
+        }
+        const privacy = readVoicePrivacySettings(state.settings);
+        const result = {
           ...(params.project ? { project: params.project, projectFilterUnavailableCount } : {}),
-          sessions: sessions.map((session) => projectUiSessionAwareness(session, Date.now())),
+          ok: true as const,
+          sessions: sessions.map((session) => ({
+            id: session.id, active: session.active, presence: session.presence, updatedAt: session.updatedAt,
+            serverId,
+            ...(privacy.shareSessionSummary && session.metadata?.summaryText ? { title: session.metadata.summaryText } : {}),
+            ...(params.includeLastMessagePreview ? { lastMessagePreview: readRetainedPreview(state, serverId, session.id) } : {}),
+          })),
           nextCursor: page.nextCursor,
           hasNext: page.hasNext,
+          attentionNextCursor: page.attentionNextCursor ?? null,
+          attentionHasNext: page.attentionHasNext ?? false,
           ...(metadataUpgradeRequiredCount > 0 ? { metadataUpgradeRequiredCount } : {}),
           ...(botFilterUnavailableCount > 0 ? { botFilterUnavailableCount } : {}),
         };
-        // Lane 07 attention continuation is a strict-query fact: a strict query proves
-        // both page families, while an ordinary awareness read never queried that
-        // family and reports nothing for it (the CLI host does the same).
-        return params.query
-          ? buildSessionAwarenessListResultV1({
-              ...pageResult,
-              attentionNextCursor: page.attentionNextCursor ?? null,
-              attentionHasNext: page.attentionHasNext ?? false,
-            })
-          : buildSessionAwarenessListResultV1(pageResult);
+        return markSessionListQueryResultV1(result);
       }
-      const privacy = readVoicePrivacySettings(state.settings);
-      const result = {
-        ...(params.project ? { project: params.project, projectFilterUnavailableCount } : {}),
-        ok: true as const,
-        sessions: sessions.map((session) => ({
-          id: session.id, active: session.active, presence: session.presence, updatedAt: session.updatedAt,
-          serverId,
-          ...(privacy.shareSessionSummary && session.metadata?.summaryText ? { title: session.metadata.summaryText } : {}),
-          ...(params.includeLastMessagePreview ? { lastMessagePreview: readRetainedPreview(state, serverId, session.id) } : {}),
-        })),
-        nextCursor: page.nextCursor,
-        hasNext: page.hasNext,
-        attentionNextCursor: page.attentionNextCursor ?? null,
-        attentionHasNext: page.attentionHasNext ?? false,
-        ...(metadataUpgradeRequiredCount > 0 ? { metadataUpgradeRequiredCount } : {}),
-        ...(botFilterUnavailableCount > 0 ? { botFilterUnavailableCount } : {}),
-      };
-      return markSessionListQueryResultV1(result);
     } catch (error) {
       return failure(params.signal?.aborted ? 'tool_cancelled' : error instanceof HappyError && error.code ? error.code : 'network_error');
     }

@@ -1,175 +1,82 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { installVoiceStorageModuleMocks } from '@/voice/persistence/installVoiceStorageModuleMocks';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createSessionFixture } from '@/dev/testkit';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storage';
+import { selectVoiceTranscriptEntriesForConversationSession } from '@/voice/transcript/voiceTranscriptSelectors';
+import { appendVoiceTargetSessionSwitchNote } from './appendVoiceTargetSessionSwitchNote';
 
-// Hydrated `sessions` fixtures below belong to the active Home's entity map, so the
-// qualified switch-note targets address that Home.
+const conversationSessionId = 'switch-note-carrier';
 const activeServerId = getActiveServerSnapshot().serverId;
+const previousTargetSessionAddress = { serverId: activeServerId, sessionId: 's1' };
+const targetSessionAddress = { serverId: activeServerId, sessionId: 's2' };
 
-const appendVoiceConversationNoteText = vi.fn();
-
-let state: any = {
-  settings: {
-    voice: {
-      privacy: {
-        shareSessionSummary: true,
-        shareFilePaths: true,
-      },
-    },
-  },
-  sessions: {
-    s1: { id: 's1', metadata: { summary: { text: 'Private summary A' } } },
-    s2: { id: 's2', metadata: { summary: { text: 'Private summary B' } } },
-  },
-  sessionListRowsByServerId: {},
-  ordinarySessionListMembershipByServerId: {},
-  sessionListIndexByServerId: {},
-  concurrentSessionListCacheByServerId: {},
-};
-
-installVoiceStorageModuleMocks({
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            storage: {
-                getState: () => state,
-            },
-        });
-    },
-});
-
-vi.mock('@/voice/transcript/voiceConversationTranscript', () => ({
-  appendVoiceConversationNoteText: (params: any) => appendVoiceConversationNoteText(params),
-}));
+function publishPrivacy(shareSessionSummary: boolean, shareFilePaths = true) {
+    storage.setState({ settings: settingsParse({ voice: { privacy: { shareSessionSummary, shareFilePaths } } }) });
+}
+function publishSessions(summaryA: string, summaryB: string) {
+    storage.setState({ sessions: {
+        s1: createSessionFixture({ id: 's1', serverId: activeServerId,
+            metadata: { ...createSessionFixture().metadata, path: '', summary: { text: summaryA, updatedAt: 1 } } }),
+        s2: createSessionFixture({ id: 's2', serverId: activeServerId,
+            metadata: { ...createSessionFixture().metadata, path: '', summary: { text: summaryB, updatedAt: 1 } } }),
+    } });
+}
+function readNote() {
+    const entries = selectVoiceTranscriptEntriesForConversationSession(storage.getState(), conversationSessionId);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.kind).toBe('note');
+    return entries[0]?.text;
+}
 
 describe('appendVoiceTargetSessionSwitchNote', () => {
-  beforeEach(() => {
-    vi.resetModules();
-    appendVoiceConversationNoteText.mockReset();
-    state.settings.voice.privacy.shareSessionSummary = true;
-    state.settings.voice.privacy.shareFilePaths = true;
-    state.sessions = {
-      s1: { id: 's1', metadata: { summary: { text: 'Private summary A' } } },
-      s2: { id: 's2', metadata: { summary: { text: 'Private summary B' } } },
-    };
-    state.sessionListRowsByServerId = {};
-    state.ordinarySessionListMembershipByServerId = {};
-    state.sessionListIndexByServerId = {};
-    state.concurrentSessionListCacheByServerId = {};
-  });
-
-  it('falls back to human-readable generic labels when voice privacy disables summary sharing', async () => {
-    state.settings.voice.privacy.shareSessionSummary = false;
-    const { appendVoiceTargetSessionSwitchNote } = await import('./appendVoiceTargetSessionSwitchNote');
-
-    appendVoiceTargetSessionSwitchNote({
-      conversationSessionId: 'carrier-s1',
-      previousTargetSessionAddress: { serverId: activeServerId, sessionId: 's1' },
-      targetSessionAddress: { serverId: activeServerId, sessionId: 's2' },
+    beforeEach(() => {
+        publishPrivacy(true);
+        publishSessions('Private summary A', 'Private summary B');
+        storage.setState({ sessionMessages: {}, sessionListRowsByServerId: {},
+            ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {},
+            concurrentSessionListCacheByServerId: {} });
     });
-
-    expect(appendVoiceConversationNoteText).toHaveBeenCalledWith({
-      conversationSessionId: 'carrier-s1',
-      text: 'Target session changed from the previous session to the current session',
+    it('projects a generic note when summary sharing is disabled', () => {
+        publishPrivacy(false);
+        appendVoiceTargetSessionSwitchNote({ conversationSessionId, previousTargetSessionAddress, targetSessionAddress });
+        expect(readNote()).toBe('Target session changed from the previous session to the current session');
+        expect(readNote()).not.toContain('Private summary');
     });
-    expect(appendVoiceConversationNoteText).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining('Private summary') }),
-    );
-  });
-
-  it('can use session summaries when summary sharing remains enabled', async () => {
-    const { appendVoiceTargetSessionSwitchNote } = await import('./appendVoiceTargetSessionSwitchNote');
-
-    appendVoiceTargetSessionSwitchNote({
-      conversationSessionId: 'carrier-s1',
-      previousTargetSessionAddress: { serverId: activeServerId, sessionId: 's1' },
-      targetSessionAddress: { serverId: activeServerId, sessionId: 's2' },
+    it('projects shared session summaries through the canonical note reader', () => {
+        appendVoiceTargetSessionSwitchNote({ conversationSessionId, previousTargetSessionAddress, targetSessionAddress });
+        expect(readNote()).toBe('Target session changed from Private summary A to Private summary B');
     });
-
-    expect(appendVoiceConversationNoteText).toHaveBeenCalledWith({
-      conversationSessionId: 'carrier-s1',
-      text: 'Target session changed from Private summary A to Private summary B',
+    it('redacts paths in summary labels before projecting the note', () => {
+        publishPrivacy(true, false);
+        publishSessions('Editing /Users/alice/SecretRepo/src/a.ts', 'Reviewing /Users/alice/SecretRepo/src/b.ts');
+        appendVoiceTargetSessionSwitchNote({ conversationSessionId, previousTargetSessionAddress, targetSessionAddress });
+        expect(readNote()).toBe('Target session changed from Editing <path_redacted> to Reviewing <path_redacted>');
     });
-  });
-
-  it('redacts file paths inside session-summary labels when file path sharing is disabled', async () => {
-    state.settings.voice.privacy.shareFilePaths = false;
-    state.sessions = {
-      ...state.sessions,
-      s1: { id: 's1', metadata: { summary: { text: 'Editing /Users/alice/SecretRepo/src/a.ts' } } },
-      s2: { id: 's2', metadata: { summary: { text: 'Reviewing /Users/alice/SecretRepo/src/b.ts' } } },
-    };
-    // The canonical testkit reader, like Zustand, admits a new snapshot identity.
-    state = { ...state };
-    const { appendVoiceTargetSessionSwitchNote } = await import('./appendVoiceTargetSessionSwitchNote');
-
-    appendVoiceTargetSessionSwitchNote({
-      conversationSessionId: 'carrier-s1',
-      previousTargetSessionAddress: { serverId: activeServerId, sessionId: 's1' },
-      targetSessionAddress: { serverId: activeServerId, sessionId: 's2' },
+    it('does not disclose lookup names when summary sharing is disabled', () => {
+        publishPrivacy(false);
+        storage.setState({ sessions: {}, sessionListRowsByServerId: { [activeServerId]: {
+            s1: createSessionFixture({ id: 's1', updatedAt: 1, metadata: { ...createSessionFixture().metadata,
+                name: 'Voice Target Alpha', summaryText: 'Private summary A', path: '/tmp/alpha' } }),
+            s2: createSessionFixture({ id: 's2', updatedAt: 2, metadata: { ...createSessionFixture().metadata,
+                name: 'Voice Tracked Beta', summaryText: 'Private summary B', path: '/tmp/beta' } }),
+        } }, ordinarySessionListMembershipByServerId: { [activeServerId]: ['s1', 's2'] },
+        sessionListIndexByServerId: { [activeServerId]: [
+            { type: 'session', sessionId: 's1', serverId: activeServerId, serverName: 'Active' },
+            { type: 'session', sessionId: 's2', serverId: activeServerId, serverName: 'Active' },
+        ] } });
+        appendVoiceTargetSessionSwitchNote({ conversationSessionId, previousTargetSessionAddress, targetSessionAddress });
+        expect(readNote()).toBe('Target session changed from the previous session to the current session');
     });
-
-    expect(appendVoiceConversationNoteText).toHaveBeenCalledWith({
-      conversationSessionId: 'carrier-s1',
-      text: 'Target session changed from Editing <path_redacted> to Reviewing <path_redacted>',
+    it('treats raw session-id labels as unresolved', () => {
+        publishPrivacy(false);
+        storage.setState({ sessions: {
+            s1: createSessionFixture({ id: 's1', serverId: activeServerId,
+                metadata: { ...createSessionFixture().metadata, path: '', name: 's1' } }),
+            s2: createSessionFixture({ id: 's2', serverId: activeServerId,
+                metadata: { ...createSessionFixture().metadata, path: '', name: 's2' } }),
+        } });
+        appendVoiceTargetSessionSwitchNote({ conversationSessionId, previousTargetSessionAddress, targetSessionAddress });
+        expect(readNote()).toBe('Target session changed from the previous session to the current session');
     });
-  });
-
-  it('does not disclose lookup session-list names when summary sharing is disabled', async () => {
-    state.settings.voice.privacy.shareSessionSummary = false;
-    state.sessions = {};
-    state.sessionListRowsByServerId = {
-      [activeServerId]: {
-        s1: {
-          id: 's1',
-          updatedAt: 1,
-          metadata: { name: 'Voice Target Alpha', summaryText: 'Private summary A', path: '/tmp/alpha' },
-        },
-        s2: {
-          id: 's2',
-          updatedAt: 2,
-          metadata: { name: 'Voice Tracked Beta', summaryText: 'Private summary B', path: '/tmp/beta' },
-        },
-      },
-    };
-    state.ordinarySessionListMembershipByServerId = { [activeServerId]: ['s1', 's2'] };
-    state.sessionListIndexByServerId = {
-      [activeServerId]: [
-        { type: 'session', sessionId: 's1', serverId: activeServerId, serverName: 'Active' },
-        { type: 'session', sessionId: 's2', serverId: activeServerId, serverName: 'Active' },
-      ],
-    };
-    const { appendVoiceTargetSessionSwitchNote } = await import('./appendVoiceTargetSessionSwitchNote');
-
-    appendVoiceTargetSessionSwitchNote({
-      conversationSessionId: 'carrier-s1',
-      previousTargetSessionAddress: { serverId: activeServerId, sessionId: 's1' },
-      targetSessionAddress: { serverId: activeServerId, sessionId: 's2' },
-    });
-
-    expect(appendVoiceConversationNoteText).toHaveBeenCalledWith({
-      conversationSessionId: 'carrier-s1',
-      text: 'Target session changed from the previous session to the current session',
-    });
-  });
-
-  it('treats raw session-id metadata labels as unresolved and falls back to generic labels', async () => {
-    state.settings.voice.privacy.shareSessionSummary = false;
-    state.sessions = {
-      s1: { id: 's1', metadata: { name: 's1' } },
-      s2: { id: 's2', metadata: { name: 's2' } },
-    };
-    const { appendVoiceTargetSessionSwitchNote } = await import('./appendVoiceTargetSessionSwitchNote');
-
-    appendVoiceTargetSessionSwitchNote({
-      conversationSessionId: 'carrier-s1',
-      previousTargetSessionAddress: { serverId: activeServerId, sessionId: 's1' },
-      targetSessionAddress: { serverId: activeServerId, sessionId: 's2' },
-    });
-
-    expect(appendVoiceConversationNoteText).toHaveBeenCalledWith({
-      conversationSessionId: 'carrier-s1',
-      text: 'Target session changed from the previous session to the current session',
-    });
-  });
 });

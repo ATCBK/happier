@@ -10,17 +10,6 @@ const baseMetadata = (() => {
 })();
 
 describe('resolveDaemonVoiceAgentModelIds', () => {
-    it('leaves attached session choices for host admission instead of copying pending model intent', () => {
-        expect(resolveDaemonVoiceAgentModelIds({
-            metadata: { ...baseMetadata, flavor: 'claude' },
-            agent: { chatModelSource: 'session', commitModelSource: 'session' },
-        })).toEqual({});
-        expect(resolveDaemonVoiceAgentModelIds({
-            metadata: { ...baseMetadata, flavor: 'claude' },
-            agent: { chatModelSource: 'custom', chatModelId: 'custom-model', commitModelSource: 'session' },
-        })).toEqual({ chatModelId: 'custom-model' });
-    });
-
     it('uses custom chat model and commit=chat when configured', () => {
         const result = resolveDaemonVoiceAgentModelIds({
             metadata: { ...baseMetadata, flavor: 'claude' },

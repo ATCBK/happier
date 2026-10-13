@@ -2,20 +2,26 @@ import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
+import { createSessionFixture } from '@/dev/testkit';
+import type { PartialOptions as ElevenLabsStartOptions } from '@elevenlabs/client';
+import {
+    getStorage, loadLocalVoiceEngineWithCompatState, registerLocalVoiceEngineHarnessHooks,
+    machineRpcWithServerScope, localVoiceHomeId, localVoiceSpeechOutputBoundary, replaceLocalVoiceSessionHttpSeed,
+    setLocalVoiceHttpResponder,
+} from './localVoiceEngine.testHarness';
 
-const ensureBound = vi.fn(async (_params: {
-    adapterId: string;
-    controlSessionId: string;
-    requestedTargetSessionId: string | null;
-}) => null);
-
-vi.mock('@/voice/binding/voiceConversationBindingRuntime', () => ({
-    voiceSessionBindingManager: {
-        ensureBound: (params: Parameters<typeof ensureBound>[0]) => ensureBound(params),
-    },
+// Only the external SDK carrier is held; generated provider activation,
+// preparation, ownership and published runtime transitions remain real.
+const elevenLabsSdk = vi.hoisted(() => ({ startSession: vi.fn<(options: ElevenLabsStartOptions) => Promise<unknown>>() }));
+vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: elevenLabsSdk.startSession } }));
+// The native provider installs its strategy on this third-party SDK entry
+// before calling the held carrier; the actual provider strategy stays real.
+vi.mock('@elevenlabs/client/internal', () => ({
+    setSetupStrategy: vi.fn(), createConnection: vi.fn(), setupWebRTCSession: vi.fn(),
 }));
-
-import { getStorage, loadLocalVoiceEngineWithCompatState, registerLocalVoiceEngineHarnessHooks } from './localVoiceEngine.testHarness';
 
 let localVoiceEngine: Awaited<ReturnType<typeof loadLocalVoiceEngineWithCompatState>>;
 
@@ -26,25 +32,48 @@ async function getLocalConversationSnapshot() {
 
 async function configureAgentMode(): Promise<void> {
     const storage = await getStorage();
+    const previousServerSeedIds = Object.keys(storage.getState().sessions);
+    const config = readLocalConversationVoiceSettings(storage.getState().settings.voice);
     storage.__setState({
         settings: {
             ...storage.getState().settings,
             voice: {
                 ...storage.getState().settings.voice,
                 providerId: 'local_conversation',
+                executionMachine: { mode: 'fixed', machineId: 'machine-1' },
                 providers: {
                     ...storage.getState().settings.voice.providers,
                     local_conversation: { schemaVersion: 1, config: {
-                        ...storage.getState().settings.voice.providers.local_conversation.config,
+                        ...config,
                         conversationMode: 'agent',
                         agent: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                            ...config.agent,
                             prewarmOnConnect: false,
                         },
                     } },
                 },
             },
         },
+        // Withhold the hidden carrier from the HTTP source so the real binding
+        // owner must prepare it through canonical Session creation.
+        sessions: { 'session-1': createSessionFixture({ id: 'session-1', serverId: localVoiceHomeId,
+            active: true, presence: 'online', metadata: { machineId: 'machine-1', path: '/workspace/project',
+                flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+            } }) },
+    });
+    for (const id of [...previousServerSeedIds, 'session-1']) replaceLocalVoiceSessionHttpSeed(id);
+}
+
+type MachineRequest = Readonly<{ method: string; payload: unknown; machineId: string; serverId: string }>;
+function interceptVoiceSpawn(beforeReply: (request: MachineRequest) => Promise<void>) {
+    const incumbent = machineRpcWithServerScope.getMockImplementation();
+    if (!incumbent) throw new Error('Missing canonical machine Socket boundary');
+    machineRpcWithServerScope.mockImplementation(async (request: MachineRequest) => {
+        if (request.method === RPC_METHODS.SESSION_SPAWN_NEW) {
+            SessionSpawnNewInputV2Schema.parse(request.payload);
+            await beforeReply(request);
+        }
+        return incumbent(request);
     });
 }
 
@@ -55,8 +84,6 @@ describe('local voice engine local conversation binding', () => {
     registerLocalVoiceEngineHarnessHooks();
 
     beforeEach(async () => {
-        ensureBound.mockReset();
-        ensureBound.mockResolvedValue(null);
         localVoiceEngine = await loadLocalVoiceEngineWithCompatState();
     }, 180_000);
 
@@ -65,11 +92,13 @@ describe('local voice engine local conversation binding', () => {
 
         await localVoiceEngine.toggleLocalVoiceTurn('session-1');
 
-        await vi.waitFor(() => {
-            expect(ensureBound).toHaveBeenCalledWith({
+        await vi.waitFor(async () => {
+            const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+            expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID)).toMatchObject({
                 adapterId: 'local_conversation',
                 controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                requestedTargetSessionId: 'session-1',
+                conversationSessionId: 'voice-home-session',
+                targetSessionAddress: { serverId: localVoiceHomeId, sessionId: 'session-1' },
             });
         });
     }, 60_000);
@@ -77,11 +106,10 @@ describe('local voice engine local conversation binding', () => {
     it('publishes connecting while the hidden Voice Home session is being prepared', async () => {
         await configureAgentMode();
         let resolveBinding!: () => void;
-        ensureBound.mockImplementationOnce(async () => {
+        interceptVoiceSpawn(async () => {
             await new Promise<void>((resolve) => {
                 resolveBinding = resolve;
             });
-            return null;
         });
 
         const start = localVoiceEngine.toggleLocalVoiceTurn('');
@@ -104,16 +132,19 @@ describe('local voice engine local conversation binding', () => {
             new Error('machine unavailable at /Users/private/repository'),
             { code: 'VOICE_AGENT_BACKEND_TARGET_UNAVAILABLE' },
         );
-        ensureBound.mockRejectedValueOnce(preparationFailure);
+        interceptVoiceSpawn(async () => { throw preparationFailure; });
 
-        await expect(localVoiceEngine.toggleLocalVoiceTurn('')).rejects.toBe(preparationFailure);
+        // The real Session creation Action sanitizes a transport exception to
+        // its public action_failed code; it does not forward a private backend
+        // code injected below the strict daemon response boundary.
+        await expect(localVoiceEngine.toggleLocalVoiceTurn('')).rejects.toMatchObject({ code: 'action_failed' });
 
         expect(await getLocalConversationSnapshot()).toMatchObject({
             adapterId: 'local_conversation',
             sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
             status: 'disconnected',
             errorCode: 'provider_error',
-            errorMessage: 'VOICE_AGENT_BACKEND_TARGET_UNAVAILABLE',
+            errorMessage: 'action_failed',
             errorRecoveryAction: 'retry',
         });
     }, 60_000);
@@ -121,11 +152,10 @@ describe('local voice engine local conversation binding', () => {
     it('does not start capture when Voice Home preparation settles after Stop', async () => {
         await configureAgentMode();
         let resolveBinding!: () => void;
-        ensureBound.mockImplementationOnce(async () => {
+        interceptVoiceSpawn(async () => {
             await new Promise<void>((resolve) => {
                 resolveBinding = resolve;
             });
-            return null;
         });
 
         const start = localVoiceEngine.toggleLocalVoiceTurn('');
@@ -133,6 +163,8 @@ describe('local voice engine local conversation binding', () => {
         await localVoiceEngine.stopLocalVoiceSession();
         resolveBinding();
         await start;
+
+        expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
 
         expect(await getLocalConversationSnapshot()).toMatchObject({
             adapterId: 'local_conversation',
@@ -145,30 +177,108 @@ describe('local voice engine local conversation binding', () => {
     it('does not overwrite a newer adapter owner when stale Voice Home preparation fails', async () => {
         await configureAgentMode();
         let rejectBinding!: (error: Error) => void;
-        ensureBound.mockImplementationOnce(async () => {
+        interceptVoiceSpawn(async () => {
             await new Promise<void>((_resolve, reject) => {
                 rejectBinding = reject;
             });
-            return null;
         });
 
         const start = localVoiceEngine.toggleLocalVoiceTurn('');
+        void start.catch(() => {});
         await vi.waitFor(() => expect(rejectBinding).toBeTypeOf('function'));
+        const providerId = 'happier.voice.elevenlabs/realtime-elevenlabs';
+        const storage = await getStorage();
+        const [{ writeVoiceProviderSettingsConfig }, { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS },
+            { createBuiltinVoiceAdapterAssembly }, { createSessionMetadataHttpBoundary },
+            { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG },
+            { SessionLookupByTagsRequestV2Schema, SessionLookupByTagsResponseV2Schema },
+            { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1 },
+            { answerVoiceRealtimePreparationHttpRequest }, { PROMPT_LIBRARY_ROWS_ROUTE_V1 }] = await Promise.all([
+            import('@/sync/domains/settings/voiceSettings'),
+            import('../../../../../packages/plugins/elevenlabs/src/protocol/voice/index'),
+            import('@/voice/adapters/registerBuiltinVoiceAdapters'),
+            import('@/dev/testkit/harness/sessionMetadataHttpBoundary'),
+            import('@/voice/persistence/voiceTranscriptHistorySession'),
+            import('@happier-dev/protocol/sessions/control/contract'),
+            import('@happier-dev/protocol'),
+            import('@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary'),
+            import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1'),
+        ]);
+        const voice = writeVoiceProviderSettingsConfig(storage.getState().settings.voice, providerId,
+            ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS);
+        storage.__setState({ settings: { ...storage.getState().settings, voice: { ...voice, providerId } } });
+        const history = createSessionFixture({ id: 'binding-provider-history', serverId: localVoiceHomeId,
+            encryptionMode: 'plain', active: false, metadata: { path: '/voice', host: 'test',
+                ...buildVoiceTranscriptHistorySessionMetadata() } });
+        const historyHttp = createSessionMetadataHttpBoundary(() => ({ [history.id]: history }));
+        const owner = createSessionOwnerMetadataV1({ metadata: history.metadata });
+        if (!owner.ok) throw new Error('Expected canonical history metadata owner');
+        historyHttp.createSessionFromPost(history.id, { method: 'POST', body: JSON.stringify({
+            tag: VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG, metadataLayoutVersion: 1,
+            sharedMetadata: { ciphertext: JSON.stringify(projectSessionSharedMetadataV1({ metadata: history.metadata, agentState: null })) },
+            ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata),
+            agentState: null, dataEncryptionKey: null, encryptionMode: 'plain',
+        }) });
+        setLocalVoiceHttpResponder(request => {
+            const init = { method: request.method,
+                ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) };
+            if (request.path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return answerVoiceRealtimePreparationHttpRequest(
+                request.url, storage.getState().settings) ?? undefined;
+            if (request.path === '/v1/voice/token') return Response.json({ allowed: true, token: 'binding-provider-token',
+                leaseId: 'binding-provider-lease', bindingNonce: 'binding-provider-nonce', expiresAtMs: Date.now() + 60_000 });
+            if (request.path === '/v1/voice/session/complete' || request.path === '/v1/voice/session/release') return Response.json({ ok: true });
+            if (request.path === '/v1/sessions' && request.method === 'POST') return historyHttp.createSessionFromPost(history.id, init);
+            if (request.path === '/v2/sessions/lookup-by-tags') {
+                const lookup = SessionLookupByTagsRequestV2Schema.parse(request.body);
+                if (!lookup.tags.includes(VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG)) return undefined;
+                const response = historyHttp.handle(`https://local-voice-actions.example.test/v2/sessions/${history.id}`);
+                if (!response) throw new Error('Expected persisted history HTTP response');
+                return response.json().then(body => Response.json(SessionLookupByTagsResponseV2Schema.parse({ sessions: [body.session] })));
+            }
+            if (request.path === `/v2/sessions/${history.id}` || request.path.startsWith(`/v2/sessions/${history.id}/`)) {
+                return historyHttp.handle(request.url, init) ?? undefined;
+            }
+            return undefined;
+        });
+        let releaseSdk!: () => void;
+        const sdkGate = new Promise<void>(resolve => { releaseSdk = resolve; });
+        elevenLabsSdk.startSession.mockImplementation(async () => {
+            await sdkGate;
+            return { getId: () => 'binding-provider-conversation', endSession: async () => {},
+                setMicMuted() {}, setVolume() {}, sendUserMessage() {}, sendContextualUpdate() {} };
+        });
+        const assembly = createBuiltinVoiceAdapterAssembly();
+        const newerAdapter = assembly.adapters.find(adapter => adapter.id === providerId);
+        if (!newerAdapter) throw new Error('Expected generated ElevenLabs adapter');
+        const { getVoiceAdapterRegistry, registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+        const previousAdapters = getVoiceAdapterRegistry().list();
+        registerVoiceAdapters(assembly.adapters);
         const { voiceConversationRuntimeMachine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
-        voiceConversationRuntimeMachine.transitionToConnecting({
-            adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-            controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-        });
-        rejectBinding(Object.assign(new Error('stale local failure'), {
-            code: 'VOICE_AGENT_BACKEND_TARGET_UNAVAILABLE',
-        }));
-        await start;
+        const newerStart = newerAdapter.start({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+            requestedTargetSessionAddress: null, initialContext: '' });
+        void newerStart.catch(() => {});
+        try {
+            await vi.waitFor(() => expect(elevenLabsSdk.startSession).toHaveBeenCalledOnce());
+            expect(newerAdapter.getSnapshot()).toMatchObject({ adapterId: providerId, status: 'connecting' });
+            rejectBinding(Object.assign(new Error('stale local failure'), {
+                code: 'VOICE_AGENT_BACKEND_TARGET_UNAVAILABLE',
+            }));
+            await start;
 
-        expect(voiceConversationRuntimeMachine.getSnapshot()).toMatchObject({
-            adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-            controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-            state: 'connecting',
-            error: null,
-        });
+            expect(voiceConversationRuntimeMachine.getSnapshot()).toMatchObject({
+                adapterId: providerId,
+                controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+                state: 'connecting',
+                error: null,
+            });
+        } finally {
+            rejectBinding(new Error('Binding fixture cleanup'));
+            releaseSdk();
+            await Promise.allSettled([start, newerStart]);
+            await newerAdapter.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+            await assembly.dispose();
+            registerVoiceAdapters(previousAdapters);
+            setLocalVoiceHttpResponder(null);
+        }
     }, 60_000);
 });

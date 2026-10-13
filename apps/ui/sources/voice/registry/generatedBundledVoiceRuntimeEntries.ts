@@ -117,9 +117,39 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             ]
           },
           "skills": {
-            "delivery": "none",
-            "liveReload": "unsupported",
-            "nativeDisable": "unsupported"
+            "delivery": "session_dir",
+            "liveReload": "supported",
+            "nativeDisable": "supported",
+            "nativeRoots": {
+              "plugin": [
+                [
+                  ".codex",
+                  "plugins",
+                  "cache",
+                  "*",
+                  "{plugin}",
+                  "*",
+                  "skills"
+                ]
+              ],
+              "project": [
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".codex",
+                  "skills"
+                ]
+              ]
+            },
+            "usageEvidence": "reported"
           },
           "structuredOutput": {
             "formats": [
@@ -134,6 +164,9 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "codex-acp"
+          ],
           "agentCliSystemTool": {
             "toolId": "codex-cli"
           },
@@ -599,6 +632,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],
@@ -839,6 +873,10 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
           "artifactId": "voice-runtime-web",
           "exportName": "activate"
         },
+        "description": {
+          "fallback": "Speak directly with the active Codex agent session.",
+          "key": "settingsVoice.mode.codexRealtimeSubtitle"
+        },
         "execution": {
           "agent": "codex",
           "kind": "experimental_agent_session_realtime"
@@ -1045,6 +1083,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [
       {
@@ -1078,6 +1117,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Filled in when Happier creates your agent.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Create an agent, or enter its ID above.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier Voice agent",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Talk with ElevenLabs voices.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Account",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversation",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voice",
@@ -1099,6 +1139,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Заполняется, когда Happier создаёт вашего агента.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Создайте агента или введите его ID выше.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Голосовой агент Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Разговаривайте с голосами ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Аккаунт",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Разговор",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Голос",
@@ -1120,6 +1161,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Uzupełniane, gdy Happier tworzy Twojego agenta.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Utwórz agenta lub wpisz powyżej jego ID.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agent głosowy Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Rozmawiaj głosami ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Konto",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Rozmowa",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Głos",
@@ -1141,6 +1183,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Se rellena cuando Happier crea tu agente.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crea un agente o introduce su ID arriba.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agente de voz de Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Habla con las voces de ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Cuenta",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversación",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voz",
@@ -1162,6 +1205,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Renseigné lorsque Happier crée ton agent.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crée un agent ou saisis son identifiant ci-dessus.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agent vocal Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Parle avec les voix ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Compte",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversation",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voix",
@@ -1183,6 +1227,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Compilato quando Happier crea il tuo agente.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crea un agente o inserisci il suo ID sopra.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agente vocale Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Parla con le voci di ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Account",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversazione",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voce",
@@ -1204,6 +1249,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Preenchido quando o Happier cria seu agente.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crie um agente ou informe seu ID acima.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agente de voz do Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Converse com as vozes da ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Conta",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversa",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voz",
@@ -1225,6 +1271,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "S’emplena quan Happier crea el teu agent.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crea un agent o introdueix-ne l’ID a sobre.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agent de veu de Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Parla amb les veus d’ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Compte",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversa",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Veu",
@@ -1246,6 +1293,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Wird ausgefüllt, wenn Happier deinen Agenten erstellt.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Erstelle einen Agenten oder gib oben seine ID ein.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier-Sprachagent",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Sprich mit den Stimmen von ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Konto",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Gespräch",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Stimme",
@@ -1267,6 +1315,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Happier 创建代理时会自动填写。",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "创建代理，或在上方输入它的 ID。",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier 语音代理",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "使用 ElevenLabs 语音交谈。",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "账户",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "对话",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "声音",
@@ -1288,6 +1337,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Happier 建立代理時會自動填入。",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "建立代理，或在上方輸入它的 ID。",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier 語音代理",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "使用 ElevenLabs 語音交談。",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "帳戶",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "對話",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "聲音",
@@ -1309,6 +1359,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Happierがエージェントを作成すると入力されます。",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "エージェントを作成するか、上にIDを入力してください。",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier音声エージェント",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "ElevenLabs の声で会話できます。",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "アカウント",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "会話",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "音声",
@@ -2066,6 +2117,10 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             }
           ]
         },
+        "description": {
+          "fallback": "Talk with ElevenLabs voices.",
+          "key": "settingsVoice.realtimeProviders.elevenLabs.description"
+        },
         "id": "realtime-elevenlabs",
         "kind": "conversation",
         "mark": {
@@ -2561,6 +2616,7 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [
       {
@@ -2585,7 +2641,80 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       "renderers": [],
       "settingsGroups": [],
       "settingsPages": [],
-      "translations": [],
+      "translations": [
+        {
+          "locale": "en",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "Uses your OpenAI account or API key"
+          }
+        },
+        {
+          "locale": "ru",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "Использует ваш аккаунт OpenAI или API-ключ"
+          }
+        },
+        {
+          "locale": "pl",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "Korzysta z Twojego konta OpenAI lub klucza API"
+          }
+        },
+        {
+          "locale": "es",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "Usa tu cuenta de OpenAI o tu clave API"
+          }
+        },
+        {
+          "locale": "fr",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "Utilise ton compte OpenAI ou ta clé API"
+          }
+        },
+        {
+          "locale": "it",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "Usa il tuo account OpenAI o la tua chiave API"
+          }
+        },
+        {
+          "locale": "pt",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "Usa a tua conta OpenAI ou chave API"
+          }
+        },
+        {
+          "locale": "ca",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "Fa servir el teu compte d’OpenAI o la teva clau API"
+          }
+        },
+        {
+          "locale": "de",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "Nutzt dein OpenAI-Konto oder deinen API-Schlüssel"
+          }
+        },
+        {
+          "locale": "zh-Hans",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "使用你的 OpenAI 账户或 API 密钥"
+          }
+        },
+        {
+          "locale": "zh-Hant",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "使用你的 OpenAI 帳戶或 API 金鑰"
+          }
+        },
+        {
+          "locale": "ja",
+          "messages": {
+            "settingsVoice.realtimeProviders.openai.description": "OpenAIアカウントまたはAPIキーを使用"
+          }
+        }
+      ],
       "views": []
     },
     "voiceModelPacks": [],
@@ -2757,6 +2886,10 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
               }
             }
           ]
+        },
+        "description": {
+          "fallback": "Uses your OpenAI account or API key",
+          "key": "settingsVoice.realtimeProviders.openai.description"
         },
         "id": "realtime-openai",
         "kind": "conversation",
@@ -3111,6 +3244,7 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [
       {
@@ -3135,7 +3269,80 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       "renderers": [],
       "settingsGroups": [],
       "settingsPages": [],
-      "translations": [],
+      "translations": [
+        {
+          "locale": "en",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "Uses your xAI API key"
+          }
+        },
+        {
+          "locale": "ru",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "Использует ваш API-ключ xAI"
+          }
+        },
+        {
+          "locale": "pl",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "Używa Twojego klucza API xAI"
+          }
+        },
+        {
+          "locale": "es",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "Usa tu clave API de xAI"
+          }
+        },
+        {
+          "locale": "fr",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "Utilise ta clé API xAI"
+          }
+        },
+        {
+          "locale": "it",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "Usa la tua chiave API xAI"
+          }
+        },
+        {
+          "locale": "pt",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "Usa sua chave de API xAI"
+          }
+        },
+        {
+          "locale": "ca",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "Fa servir la teva clau API d’xAI"
+          }
+        },
+        {
+          "locale": "de",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "Nutzt deinen xAI-API-Schlüssel"
+          }
+        },
+        {
+          "locale": "zh-Hans",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "使用你的 xAI API 密钥"
+          }
+        },
+        {
+          "locale": "zh-Hant",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "使用你的 xAI API 金鑰"
+          }
+        },
+        {
+          "locale": "ja",
+          "messages": {
+            "settingsVoice.realtimeProviders.xai.description": "xAIのAPIキーを使用します"
+          }
+        }
+      ],
       "views": []
     },
     "voiceModelPacks": [],
@@ -3304,6 +3511,10 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
               ]
             }
           ]
+        },
+        "description": {
+          "fallback": "Uses your xAI API key",
+          "key": "settingsVoice.realtimeProviders.xai.description"
         },
         "id": "realtime-grok",
         "kind": "conversation",

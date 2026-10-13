@@ -18,7 +18,6 @@ import {
 } from './externalVoiceProviderRegistrations';
 function contribution(
   providerId: string,
-  overrides: Partial<VoiceUiRuntimeContribution> = {},
 ): VoiceUiRuntimeContribution {
   return {
     kind: 'voice.speech-engine.v1',
@@ -29,8 +28,7 @@ function contribution(
     roles: ['dictation_stt', 'conversation_stt'],
     requirements: [],
     supportedPlatforms: ['web', 'ios', 'android'],
-    ...overrides,
-  } as VoiceUiRuntimeContribution;
+  };
 }
 
 function bundledSpeechContribution(
@@ -71,6 +69,25 @@ function bundledSpeechContribution(
 }
 
 describe('voice provider registry', () => {
+  it.each([undefined, { key: 'voice.service.description', fallback: 'Talk with this service.' }])(
+    'projects optional service descriptions separately from selection options (%j)', (description) => {
+    const pluginId = 'fixture.conversation';
+    const providerId = `${pluginId}/voice`;
+    const declaration = VoiceProviderContributionSchema.parse({
+      id: 'voice', title: 'Fixture voice', kind: 'conversation', roles: ['realtime_conversation'], platforms: ['web'],
+      ...(description ? { description } : {}),
+      capabilities: { turn: { cancelResponse: false, bargeIn: false }, tools: { effectCalls: 'none' } },
+      client: { artifactId: 'voice', exportName: 'activate' },
+    });
+    const registry = createVoiceProviderRegistry({
+      bundledContributions: [{ pluginId, providerId, declaration }],
+      bundledPresentations: [{ providerId, settingsSectionId: providerId,
+        selectionOptions: [{ id: 'default', modeId: 'default', order: 1, titleKey: 'Fixture voice' }] }],
+    });
+    expect(projectVoiceProviderSelectionRows({ providerId, providers: {} }, registry)[0]?.subtitleKey).toBe('');
+    expect(registry.get(providerId)).toMatchObject(description ? { description } : {});
+    if (!description) expect(registry.get(providerId)).not.toHaveProperty('description');
+  });
   it('reuses immutable bundled descriptors across default registry consumers without retaining config validation results', () => {
     const registries = Array.from({ length: 40 }, () => createDefaultVoiceProviderRegistry());
     const providerId = 'happier.voice.elevenlabs/realtime-elevenlabs';
@@ -278,23 +295,35 @@ describe('voice provider registry', () => {
   });
 
   it('projects only the canonical effective source into bundled BYO provider readiness', () => {
-    const entry = {
-      kind: 'voice.conversation-provider.v1' as const,
-      declaration: {
-        kind: 'conversation' as const,
-        credentials: {
+    const declaration = VoiceProviderContributionSchema.parse({
+      id: 'credential-readiness', title: 'Credential readiness', kind: 'conversation',
+      roles: ['realtime_conversation'], platforms: ['web'],
+      capabilities: { turn: { cancelResponse: false, bargeIn: false } },
+      client: { artifactId: 'voice-runtime', exportName: 'activate' },
+      credentials: {
           slot: { id: 'api_key', purpose: 'voice.client-auth', title: 'Credential' },
           requirement: { kind: 'always' as const },
           sources: [
-            { kind: 'savedSecret' as const, secretKinds: ['apiKey' as const] },
+            { kind: 'savedSecret' as const, secretKinds: ['apiKey' as const], rawGrants: [{
+              realm: 'web', phase: 'connection', request: { kind: 'httpHeaders',
+                origin: 'https://voice.example.test', headerNames: ['authorization'] },
+            }] },
             {
               kind: 'connectedAccount' as const,
               service: { pluginId: 'fixture.accounts', localId: 'work' },
+              rawGrants: [{ realm: 'web', phase: 'connection', request: { kind: 'httpHeaders',
+                origin: 'https://voice.example.test', headerNames: ['authorization'] },
+              }],
             },
           ],
-        },
       },
-    } as Parameters<typeof projectVoiceProviderCredentialReadiness>[0];
+    });
+    const providerId = 'fixture.accounts/credential-readiness';
+    const entry = createVoiceProviderRegistry({
+      bundledContributions: [{ pluginId: 'fixture.accounts', providerId, declaration }],
+      bundledPresentations: [{ providerId, settingsSectionId: providerId }],
+    }).get(providerId);
+    if (!entry) throw new Error('Credential readiness declaration was not projected');
     const readyContext = {
       sourceSelection: { kind: 'savedSecret' as const, connectedAccountEligibility: 'unusable' as const },
       savedSecret: { status: 'ready' as const },

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 import {
     readReanimatedFrameCallbacks,
@@ -22,14 +23,22 @@ import {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const visibility = vi.hoisted(() => ({ reduced: false, focused: true }));
+const appState = await vi.hoisted(async () => {
+    const { createReactNativeAppStateEmitter } = await import('@/dev/testkit/runtime/reactNativeRuntime');
+    return createReactNativeAppStateEmitter();
+});
+vi.mock('react-native', async () => {
+    const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+    const native = await createReactNativeNativeMock({ platformOS: 'ios' });
+    // Keep the emitter's live currentState getter; the native factory's generic
+    // object merge otherwise samples it once and freezes background state.
+    return { ...native, AppState: appState.appState };
+});
 // Native Reanimated reacts to SharedValue changes even when React and the frame clock are paused.
 vi.mock('react-native-reanimated', async () => {
     const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
     return createReanimatedModuleMock({ reactiveDerivedValues: true });
 });
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({ useReducedMotionPreference: () => visibility.reduced }));
-vi.mock('@/utils/runtime/useHostActivelyViewed', () => ({ useHostActivelyFocused: () => visibility.focused }));
 
 const LISTENING: VoiceEnergyState = { luminosity: 0.62, energized: true, direction: 'inward' };
 const ENDED: VoiceEnergyState = { luminosity: 0.18, energized: false, direction: 'none' };
@@ -71,8 +80,8 @@ describe('VoiceEnergyProvider audio bridge', () => {
         resetReanimatedFrameCallbacks();
         energy = null;
         elapsedMs = 0;
-        visibility.reduced = false;
-        visibility.focused = true;
+        setReducedMotionPreferenceOverride(false);
+        appState.emit('active');
     });
 
     afterEach(() => {
@@ -81,6 +90,7 @@ describe('VoiceEnergyProvider audio bridge', () => {
             tree?.unmount();
         });
         tree = null;
+        setReducedMotionPreferenceOverride(null);
     });
 
     function openWriter(channel: 'input' | 'output'): VoiceRuntimeLevelWriter {
@@ -178,13 +188,14 @@ describe('VoiceEnergyProvider audio bridge', () => {
 
     it('does not fabricate a reduced-motion amplitude or hidden presentation work', () => {
         const input = openWriter('input');
-        visibility.reduced = true;
+        setReducedMotionPreferenceOverride(true);
         mount();
         expect(energy!.level.get()).toBe(0);
         expect(frameRecord().handle.isActive).toBe(false);
-        visibility.reduced = false;
-        visibility.focused = false;
-        act(() => { tree!.update(scene(true)); });
+        act(() => {
+            setReducedMotionPreferenceOverride(false);
+            appState.emit('background');
+        });
         drive(input, 1);
         expect(frameRecord().handle.isActive).toBe(false);
         expect(energy!.level.get()).toBe(0);
@@ -217,16 +228,14 @@ describe('VoiceEnergyProvider audio bridge', () => {
         drive(input, 1);
         runFrames(90);
         const lastVisibleClock = energy!.clock.get();
-        visibility.focused = false;
-        act(() => { tree!.update(scene(true)); });
+        act(() => { appState.emit('background'); });
         expect(frameRecord().handle.isActive).toBe(false);
         expect(energy!.level.get()).toBe(0);
         runFrames(60);
         expect(energy!.clock.get()).toBe(lastVisibleClock);
         expect(voiceRuntimeLevelStore.getSnapshot().inputLevel).toBeGreaterThan(0.99);
 
-        visibility.focused = true;
-        act(() => { tree!.update(scene(true)); });
+        act(() => { appState.emit('active'); });
         expect(frameRecord().handle.isActive).toBe(true);
         runFrames(90);
         expect(energy!.level.get()).toBeGreaterThan(0.95);

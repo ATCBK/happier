@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createWebPcmCapture } from './WebPcmCapture.web';
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { installVoiceWebRtcBrowserBoundary } = await import('@/dev/testkit/harness/voiceWebRtcHarness');
+const browsers: Array<ReturnType<typeof installVoiceWebRtcBrowserBoundary>> = [];
 
 type ProcessEvent = Readonly<{
   inputBuffer: Readonly<{ sampleRate: number; numberOfChannels: number; getChannelData(channel: number): Float32Array }>;
@@ -11,15 +15,6 @@ function createProcessor() {
   return {
     connect: vi.fn(), disconnect: vi.fn(),
     onaudioprocess: null as ((event: ProcessEvent) => void) | null,
-  };
-}
-
-function createTrack() {
-  const listeners = new Set<() => void>();
-  return {
-    addEventListener: vi.fn((_type: string, listener: () => void) => listeners.add(listener)),
-    removeEventListener: vi.fn((_type: string, listener: () => void) => listeners.delete(listener)),
-    end: () => { for (const listener of listeners) listener(); },
   };
 }
 
@@ -36,6 +31,7 @@ function createContext(input: Readonly<{
     state: input.state ?? 'running',
     destination: {},
     resume: vi.fn(async () => { context.state = 'running'; }),
+    close: vi.fn(async () => {}),
     createMediaStreamSource: vi.fn(() => source),
     createScriptProcessor: vi.fn(() => processor),
     ...(input.worklet ? { audioWorklet: { addModule: input.addModule ?? vi.fn(async () => {}) } } : {}),
@@ -50,16 +46,23 @@ function processEvent(samples: Float32Array, sampleRate = 48_000): ProcessEvent 
   };
 }
 
-function createMic(context: unknown, track = createTrack()) {
-  const stream = { getAudioTracks: () => [track] } as unknown as MediaStream;
-  return {
-    mic: {
-      ensureActive: vi.fn(async () => {}), isMuted: vi.fn(() => false),
-      getStream: vi.fn<() => MediaStream | null>(() => stream),
-      getAudioContext: vi.fn<() => AudioContext | null>(() => context as AudioContext),
-    },
-    track,
-  };
+function createMic(context: unknown) {
+  // Only MediaDevices/Web Audio are synthetic; MicSession is the shipped owner.
+  const browser = installVoiceWebRtcBrowserBoundary({ createAudioContext: () => context as AudioContext | null });
+  browsers.push(browser);
+  // Allocate the physical first reply without reading a pre-acquisition getter;
+  // later SDK acquisitions still receive fresh tracks from the canonical port.
+  const firstCapture = browser.allocateCapture();
+  const acquire = vi.mocked(navigator.mediaDevices.getUserMedia).getMockImplementation();
+  if (!acquire) throw new Error('Browser MediaDevices boundary missing');
+  let first = true;
+  vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(async constraints => {
+    if (first) { first = false; return firstCapture.stream; }
+    return await acquire(constraints);
+  });
+  const track = Object.assign(firstCapture.track, { end: () => firstCapture.track.dispatchEvent(new Event('ended')) });
+  vi.spyOn(track, 'removeEventListener');
+  return { mic: browser.micSession, track };
 }
 
 function installWorklet() {
@@ -74,7 +77,13 @@ function installWorklet() {
 }
 
 describe('WebPcmCapture', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(async () => {
+    for (const browser of browsers.splice(0).reverse()) {
+      await browser.micSession.teardown();
+      browser.restore();
+    }
+    vi.unstubAllGlobals();
+  });
 
   it.each(['failure', 'cancel'] as const)('does not report a successful graceful drain after accepted callback %s', async (action) => {
     const { context, processor } = createContext({ sampleRate: 16_000 });
@@ -144,16 +153,18 @@ describe('WebPcmCapture', () => {
     await capture.stop();
   });
 
-  it('settles stop and re-arms a fresh start when a mic acquisition never resolves', async () => {
+  it('settles capture stop while its mic owner retires an unanswered acquisition before retry', async () => {
     const { context } = createContext({ worklet: true });
     installWorklet();
     const { mic } = createMic(context);
     let acquisitions = 0;
-    mic.ensureActive = vi.fn(async () => {
+    const acquire = vi.mocked(navigator.mediaDevices.getUserMedia).getMockImplementation();
+    if (!acquire) throw new Error('Browser MediaDevices boundary missing');
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(async constraints => {
       acquisitions += 1;
-      // The first acquisition models an unanswered permission prompt: the
-      // browser never settles it and no teardown of this capture can.
-      if (acquisitions === 1) await new Promise<void>(() => {});
+      // An unanswered browser permission prompt cannot be settled by capture.
+      if (acquisitions === 1) return await new Promise<MediaStream>(() => {});
+      return await acquire(constraints);
     });
     const capture = createWebPcmCapture({
       mic, format: { sampleRate: 24_000, channels: 1, encoding: 'pcm16le' }, chunkMs: 20,
@@ -169,6 +180,7 @@ describe('WebPcmCapture', () => {
     await vi.waitFor(() => expect(stopped).toBe(true));
     expect(capture.isActive()).toBe(false);
 
+    await mic.teardown();
     await capture.start();
     expect(mic.ensureActive).toHaveBeenCalledTimes(2);
     expect(capture.isActive()).toBe(true);
@@ -238,11 +250,16 @@ describe('WebPcmCapture', () => {
   });
 
   it('reports resume failure and fails closed before capture nodes are connected', async () => {
-    const { context, source } = createContext({ state: 'suspended' });
-    context.resume.mockRejectedValueOnce(new Error('resume denied'));
+    const { context, source } = createContext();
+    const { mic } = createMic(context);
+    await mic.ensureActive();
+    context.state = 'suspended';
+    // Both the mic and capture owners may try the browser's resume operation;
+    // a sustained native denial must fail capture without connected nodes.
+    context.resume.mockRejectedValue(new Error('resume denied'));
     const onError = vi.fn();
     const capture = createWebPcmCapture({
-      mic: createMic(context).mic,
+      mic,
       format: { sampleRate: 16_000, channels: 1, encoding: 'pcm16le' },
       chunkMs: 20,
       fallback: 'allow_script_processor',
@@ -368,7 +385,7 @@ describe('WebPcmCapture', () => {
   it('reports microphone acquisition failure separately from later capture setup', async () => {
     const { context } = createContext();
     const { mic } = createMic(context);
-    mic.ensureActive.mockRejectedValueOnce(new Error('permission denied'));
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValueOnce(new Error('permission denied'));
     const onError = vi.fn();
     const capture = createWebPcmCapture({
       mic,
@@ -383,9 +400,7 @@ describe('WebPcmCapture', () => {
   });
 
   it('reports missing stream or audio context separately from microphone acquisition', async () => {
-    const { context } = createContext();
-    const { mic } = createMic(context);
-    mic.getStream.mockReturnValueOnce(null);
+    const { mic } = createMic(null);
     const onError = vi.fn();
     const capture = createWebPcmCapture({
       mic,

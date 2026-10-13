@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 import { createSessionFixture } from '@/dev/testkit';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
@@ -8,7 +9,6 @@ import {
   restoreServerAccountForTest,
 } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { storage } from '@/sync/domains/state/storage';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
 import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
@@ -28,10 +28,11 @@ installDisconnectedServerSocketBoundary();
 
 const sdk = vi.hoisted(() => ({ startSession: vi.fn(), endSession: vi.fn() }));
 vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: sdk.startSession } }));
-// The native/browser audio-mode adapter is an OS boundary; all host custody stays real.
-vi.mock('@/voice/runtime/voiceAudioMode', () => ({
-  acquireVoiceBackgroundCallAudioMode: async () => ({ release: async () => undefined }),
-}));
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: sdk.startSession } }));
+vi.mock('react-native', async () => (
+  await import('@/dev/testkit/mocks/reactNative')
+).createReactNativeWebMock());
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
 
 await loadSyncSingletonForTests();
 
@@ -100,12 +101,15 @@ describe('hosted ElevenLabs settlement through host teardown', () => {
         throw new Error(`Unexpected hosted request: ${path}`);
       },
     });
-    vi.spyOn(TokenStorage, 'getCredentials').mockResolvedValue(account.credentials);
     const voice = writeVoiceProviderSettingsConfig(
       initialSettings.voice, entry.providerId, ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
     );
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
+      voice: { ...voice, providerId: entry.providerId },
+    }, storage.getState().settings));
     storage.setState((state) => ({
-      ...state, settings: { ...state.settings, voice: { ...voice, providerId: entry.providerId } },
+      ...state,
       sessions: { ...state.sessions, 'hosted-session': createSessionFixture({
         id: 'hosted-session', serverId: account.home.id, encryptionMode: 'plain',
         active: false, metadata: { path: '/voice-history', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() },
@@ -188,13 +192,19 @@ describe('hosted ElevenLabs settlement through host teardown', () => {
     await expect(retiring.dispose()).rejects.toThrow();
     expect(sdk.endSession).toHaveBeenCalledTimes(1);
     expect(getCurrentBundledConversationRuntimeHost()).toBe(replacementHost);
-    vi.mocked(TokenStorage.getCredentials).mockResolvedValue({ token: 'another-account' });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const replacementCredentials = { token: 'another-account' };
+    const credentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback(
+      account.home.serverUrl, { serverId: account.home.id }, replacementCredentials,
+    );
+    if (!credentialWrite) throw new Error('Replacement device credentials could not be stored');
     completionFailures = 0;
     // No manually retained runtime is the retry owner: the existing generation
     // subscription must keep the failed activation cleanup reachable.
     const retryGeneration = createBuiltinVoiceAdapterAssembly({ bundledEntries: [] });
     const retryHost = getCurrentBundledConversationRuntimeHost();
     try {
+      expect(await TokenStorage.getCredentials()).toEqual(replacementCredentials);
       await vi.waitFor(() => expect(settlements).toBe(1));
       await retiring.dispose();
       await retiring.dispose();
@@ -204,6 +214,7 @@ describe('hosted ElevenLabs settlement through host teardown', () => {
     } finally {
       await retryGeneration.dispose();
       await replacement.dispose();
+      await credentialWrite.rollback();
     }
   });
 });

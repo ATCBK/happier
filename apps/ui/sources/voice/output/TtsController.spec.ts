@@ -128,9 +128,9 @@ describe('createTtsPlaybackController — ordered ack\'d playback queue', () => 
     });
 
     it('exposes a monotonically increasing epoch per speak() and ignores stale enqueues after abort', async () => {
-        const played: Array<{ epoch: number; index: number }> = [];
+        const played: number[] = [];
         const controller = createTtsPlaybackController({
-            playChunk: async () => {},
+            playChunk: async (value) => { played.push(value.chunkIndex); },
         });
 
         const first = controller.speak();
@@ -142,6 +142,9 @@ describe('createTtsPlaybackController — ordered ack\'d playback queue', () => 
 
         const second = controller.speak();
         expect(second.epoch).toBeGreaterThan(first.epoch);
+        controller.enqueue(chunk('g-current', 0, true));
+        await second.done;
+        expect(played).toEqual([0]);
     });
 
     it('bounds prefetch: does not request more than ~2 chunks ahead via onPrefetch', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -38,26 +38,17 @@ function createVoiceConversationMetadata(binding: Readonly<{
 }
 
 function createTestSession(id: string, metadata: Record<string, unknown> | null): Session {
-    return {
+    return createSessionFixture({
         id,
         serverId: activeServerId,
-        seq: 0,
-        createdAt: 0,
-        updatedAt: 0,
         active: true,
-        activeAt: 0,
         metadata: {
+            ...createSessionFixture().metadata,
             path: '',
             host: '',
             ...(metadata ?? {}),
         },
-        metadataVersion: 0,
-        agentState: null,
-        agentStateVersion: 0,
-        thinking: false,
-        thinkingAt: 0,
-        presence: 'online',
-    };
+    });
 }
 
 describe('VoiceConversationBindingResolver', () => {

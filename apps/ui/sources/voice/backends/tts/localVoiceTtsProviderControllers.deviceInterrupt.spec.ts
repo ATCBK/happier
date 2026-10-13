@@ -1,109 +1,90 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SpeechOptions } from 'expo-speech';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { readLocalDirectVoiceSettings } from '@/sync/domains/settings/voiceSettings';
+import { createDefaultLocalVoiceTtsProviderControllers, type LocalVoiceTtsRequest } from './localVoiceTtsProviderControllers';
 
-const speakDeviceTextSpy = vi.fn(async (_text: string, _onStart?: () => void, _opts?: unknown) => undefined);
-const stopDeviceSpeechSpy = vi.fn();
+const speech = vi.hoisted(() => ({ speak: vi.fn<(text: string, options: SpeechOptions) => void>(), stop: vi.fn() }));
 
+// Expo Speech is the native/browser SDK boundary. The provider, speech owner,
+// playback stopper and audio-mode acquisition stay real.
+vi.mock('expo-speech', () => ({ speak: speech.speak, stop: speech.stop }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({ Platform: { OS: 'ios' } });
+    return createReactNativeWebMock({ Platform: { OS: 'web' } });
 });
 
-vi.mock('@/voice/local/speakDeviceText', () => ({
-    speakDeviceText: (text: string, onStart?: () => void, opts?: unknown) => speakDeviceTextSpy(text, onStart, opts),
-    stopDeviceSpeech: () => stopDeviceSpeechSpy(),
-}));
-
-vi.mock('@/voice/credentials/bundledSpeechClient', () => ({
-    bundledSpeechDaemonClient: { transcribe: vi.fn(), synthesize: vi.fn() },
-}));
-vi.mock('@/voice/output/KokoroTtsController', () => ({ speakKokoroText: vi.fn() }));
-
-import { createDefaultLocalVoiceTtsProviderControllers } from './localVoiceTtsProviderControllers';
-
-function baseCtx(over: Partial<Record<string, unknown>> = {}) {
+function request(overrides: Partial<LocalVoiceTtsRequest> = {}): LocalVoiceTtsRequest {
+    const config = readLocalDirectVoiceSettings(settingsDefaults.voice);
     return {
         sessionId: 's1',
         text: 'hello there',
-        settings: {},
-        tts: { provider: 'device' },
-        networkTimeoutMs: 15_000,
+        settings: settingsDefaults,
+        tts: { ...config.tts, provider: 'device' },
+        networkTimeoutMs: config.networkTimeoutMs,
         onSpeaking: vi.fn(),
-        registerPlaybackStopper: (_stopper: () => void) => () => {},
-        ...over,
-    } as any;
+        registerPlaybackStopper: () => () => {},
+        ...overrides,
+    };
 }
 
 describe('device TTS provider controller', () => {
-    it('passes an abort signal into speakDeviceText that fires when the playback stopper runs', async () => {
-        speakDeviceTextSpy.mockReset();
-        let capturedSignal: AbortSignal | null = null;
-        speakDeviceTextSpy.mockImplementationOnce(async (_t, _onStart, opts: any) => {
-            capturedSignal = opts?.signal ?? null;
-        });
+    beforeEach(() => { speech.speak.mockReset(); speech.stop.mockReset(); });
 
-        let registeredStopper: (() => void) | null = null;
-        const controllers = createDefaultLocalVoiceTtsProviderControllers();
-        await controllers.get('device')!.speak(baseCtx({
-            registerPlaybackStopper: (stopper: () => void) => {
-                registeredStopper = stopper;
-                return () => {};
-            },
+    it('stops active device speech once when playback is interrupted and releases the stopper', async () => {
+        let interrupt = () => { throw new Error('Playback stopper was not registered'); };
+        const clearStopper = vi.fn();
+        const onSpeaking = vi.fn();
+        const speaking = createDefaultLocalVoiceTtsProviderControllers().get('device')!.speak(request({
+            onSpeaking,
+            registerPlaybackStopper: stopper => { interrupt = stopper; return clearStopper; },
         }));
+        await vi.waitFor(() => expect(speech.speak).toHaveBeenCalled());
+        const options = speech.speak.mock.calls[0][1];
+        expect(onSpeaking).not.toHaveBeenCalled();
+        options.onStart?.();
+        expect(onSpeaking).toHaveBeenCalledOnce();
 
-        expect(capturedSignal).toBeInstanceOf(AbortSignal);
-        expect(capturedSignal!.aborted).toBe(false);
-        registeredStopper!();
-        expect(capturedSignal!.aborted).toBe(true);
-        expect(stopDeviceSpeechSpy).not.toHaveBeenCalled();
+        interrupt();
+        await speaking;
+
+        expect(speech.stop).toHaveBeenCalledOnce();
+        expect(clearStopper).toHaveBeenCalledOnce();
+        // A late SDK completion cannot emit a second speaking transition.
+        options.onStart?.();
+        options.onDone?.();
+        expect(onSpeaking).toHaveBeenCalledOnce();
     });
 
-    it('skips device speech when the stopper fires before synth (pre-interrupt)', async () => {
-        speakDeviceTextSpy.mockReset();
-        // Real speakDeviceText behavior: when signal already aborted, it returns without speaking.
-        speakDeviceTextSpy.mockImplementation(async (_t, onStart: any, opts: any) => {
-            if (opts?.signal?.aborted) return;
-            onStart?.();
-        });
-
+    it('skips the speech SDK when interrupted before synthesis and does not publish speaking', async () => {
         const onSpeaking = vi.fn();
-        const controllers = createDefaultLocalVoiceTtsProviderControllers();
-        await controllers.get('device')!.speak(baseCtx({
+        await createDefaultLocalVoiceTtsProviderControllers().get('device')!.speak(request({
             onSpeaking,
-            // Fire the stopper synchronously on registration (mirrors a pending interrupt).
-            registerPlaybackStopper: (stopper: () => void) => {
-                stopper();
-                return () => {};
-            },
+            registerPlaybackStopper: stopper => { stopper(); return () => {}; },
         }));
 
-        expect(speakDeviceTextSpy).toHaveBeenCalledTimes(1);
-        const opts = speakDeviceTextSpy.mock.calls[0]?.[2] as any;
-        expect(opts?.signal?.aborted).toBe(true);
-        // No speaking transition because we never started audio.
+        expect(speech.speak).not.toHaveBeenCalled();
+        expect(speech.stop).not.toHaveBeenCalled();
         expect(onSpeaking).not.toHaveBeenCalled();
     });
 
-    it('emits tts_failed (recoverable) via onTtsFailed when device synth throws', async () => {
-        speakDeviceTextSpy.mockReset();
-        speakDeviceTextSpy.mockRejectedValueOnce(new Error('device_synth_boom'));
-
+    it('publishes a recoverable failure when the speech SDK fails before audio starts', async () => {
+        speech.speak.mockImplementationOnce((_text, options) => options.onError?.(new Error('device_synth_boom')));
         const onTtsFailed = vi.fn();
-        const controllers = createDefaultLocalVoiceTtsProviderControllers();
-        await controllers.get('device')!.speak(baseCtx({ onTtsFailed }));
+        const onSpeaking = vi.fn();
+        await createDefaultLocalVoiceTtsProviderControllers().get('device')!.speak(request({ onTtsFailed, onSpeaking }));
 
-        expect(onTtsFailed).toHaveBeenCalledTimes(1);
-        const err = onTtsFailed.mock.calls[0]?.[0];
-        expect(err.kind).toBe('tts_failed');
-        expect(err.recoverable).toBe(true);
+        expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({ kind: 'tts_failed', recoverable: true,
+            reason: 'device_synth_boom' }));
+        expect(onSpeaking).not.toHaveBeenCalled();
     });
 
-    it('does not emit tts_failed when the failure is an abort (interrupt)', async () => {
-        speakDeviceTextSpy.mockReset();
-        speakDeviceTextSpy.mockRejectedValueOnce(Object.assign(new Error('turn_aborted'), { name: 'AbortError' }));
-
+    it('does not publish a TTS failure for an SDK abort', async () => {
+        speech.speak.mockImplementationOnce((_text, options) => options.onError?.(
+            Object.assign(new Error('turn_aborted'), { name: 'AbortError' }),
+        ));
         const onTtsFailed = vi.fn();
-        const controllers = createDefaultLocalVoiceTtsProviderControllers();
-        await controllers.get('device')!.speak(baseCtx({ onTtsFailed }));
+        await createDefaultLocalVoiceTtsProviderControllers().get('device')!.speak(request({ onTtsFailed }));
 
         expect(onTtsFailed).not.toHaveBeenCalled();
     });

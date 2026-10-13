@@ -1,5 +1,7 @@
 import React from 'react';
-import { PluginContributesV2Schema } from '@happier-dev/protocol';
+import { act } from 'react-test-renderer';
+import 'fake-indexeddb/auto';
+import { PluginContributesV2Schema, createVoiceProviderRecipientContractFromCredentialsV1 } from '@happier-dev/protocol';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { renderScreen as renderTestScreen } from '@/dev/testkit';
@@ -12,15 +14,25 @@ import { VoiceCredentialItem } from '@/voice/credentials/CredentialItem';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storageStore';
+import { ModalProvider } from '@/modal/ModalProvider';
+import { t } from '@/text';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
 
 import { VoiceCredentialSourceField } from './realtime/VoiceCredentialSourceField';
+import { VoiceServiceGallery } from './VoiceServiceGallery';
+import { createAccountVoiceOperationService } from '@/voice/credentials/accountVoiceOperationService';
+import { resolveAccountVoiceCredentialStatus } from '@/voice/credentials/accountVoiceCredential';
+import { resolveSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 async function renderScreen(...input: Parameters<typeof renderTestScreen>) {
   await refreshSavedSecretCatalog(account.scope);
-  return renderTestScreen(...input);
+  return renderTestScreen(input[0], {
+    ...input[1],
+    wrapper: ({ children }) => <ModalProvider>{children}</ModalProvider>,
+  });
 }
 const settingsBoundary = {
   get settings() { return storage.getState().settings; },
@@ -31,15 +43,18 @@ vi.mock('socket.io-client', async (importOriginal) => (
 ).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 beforeEach(async () => {
+  nativeAlert.mockClear();
   account = await createVoiceSettingsAccountTestHarness(settingsDefaults);
   onTestFinished(account.dispose);
 });
 
-vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+const nativeAlert = vi.hoisted(() => vi.fn<typeof import('react-native').Alert.alert>());
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
+  { platformOS: 'ios' }, { Alert: { alert: nativeAlert },
+    useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }) },
+));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
-vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 
 type RawCredentialSourceFixture =
@@ -49,6 +64,7 @@ type RawCredentialSourceFixture =
 async function activateRawCredentialOnlyProvider(
   pluginId: string,
   sources: readonly RawCredentialSourceFixture[],
+  packageLocator?: string,
 ) {
   const declaration = PluginContributesV2Schema.parse({
     voiceProviders: [{
@@ -155,12 +171,20 @@ async function activateRawCredentialOnlyProvider(
     }],
   }).voiceProviders[0]!;
   if (declaration.kind !== 'conversation') throw new Error('expected conversation declaration');
+  const recipientContract = packageLocator && declaration.credentials?.hostMediated
+    ? createVoiceProviderRecipientContractFromCredentialsV1({
+        package: { pluginId, source: { kind: 'package', locator: packageLocator } },
+        publisher: { trust: 'verified', identity: 'package:acme.review-voice' },
+        contribution: { pluginId, localId: declaration.id },
+        credentials: { slot: declaration.credentials.slot, hostMediated: declaration.credentials.hostMediated },
+      }) : null;
 
   const scope = createExternalVoiceProviderActivationScope({
     pluginId,
     occurrenceId: `${pluginId}-occurrence-1`,
     declarations: [declaration],
     hostPlatform: 'web',
+    ...(recipientContract ? { recipientContractsByLocalId: { [declaration.id]: recipientContract } } : {}),
   });
   const hostLease = createBundledConversationRuntimeHostLease();
   scope.api.voiceProviders.register('conversation', {
@@ -198,6 +222,7 @@ async function activateRawCredentialOnlyProvider(
 
   return Object.freeze({
     declaration,
+    recipientContract,
     contribution: Object.freeze({ pluginId, localId: declaration.id }),
     providerId: `${pluginId}/${declaration.id}`,
     async cleanup() {
@@ -208,6 +233,76 @@ async function activateRawCredentialOnlyProvider(
 }
 
 describe('VoiceProviderSection raw credential review reachability', () => {
+  it('retains the Account resource but requires review before an external package change can use its credential', async () => {
+    const pluginId = 'acme.review-voice';
+    const sources = [{ kind: 'savedSecret', access: 'mediated' }] as const;
+    const original = await activateRawCredentialOnlyProvider(pluginId, sources, 'acme-review-voice@1.0.0');
+    onTestFinished(original.cleanup);
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    account.replaceSettings(settingsParse({ voice: { providerId: original.providerId,
+      providers: { [original.providerId]: { schemaVersion: 1, config: {} } } } }));
+    const { VoiceProviderSection } = await import('./VoiceProviderSection');
+    const section = () => <VoiceProviderSection voice={settingsParse(account.settings).voice}
+      setVoice={account.replaceVoice} happierVoiceSupported platformOs="web" />;
+    const screen = await renderScreen(section());
+    const credential = screen.tree.findAllByType(VoiceCredentialItem)[0]!;
+    const enter = credential.findAll(node => node.props.title === t('settingsVoice.externalCredentials.apiKeyTitle')
+      && typeof node.props.onPress === 'function')[0]!;
+    await act(async () => enter.props.onPress());
+    await vi.waitFor(() => expect(screen.findHostByTestId('web-prompt-input')).not.toBeNull());
+    act(() => screen.changeTextByTestId('web-prompt-input', 'test-only-recipient-key'));
+    await screen.pressByTestIdAsync('web-prompt-confirm');
+    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0])
+      .toBe(t('settingsVoice.local.voiceCredential.plainStorageTitle')));
+    await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
+    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0])
+      .toBe(t('settingsVoice.externalCredentials.recipientApprovalTitle')));
+    await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
+    await vi.waitFor(() => expect(account.resources, JSON.stringify({
+      alerts: nativeAlert.mock.calls.map(([title, message]) => ({ title, message })),
+      routes: account.request.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)).pathname),
+    })).toHaveLength(1));
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain(t('settingsVoice.local.voiceCredential.setOnAccount')));
+    expect(account.promotions).toHaveLength(1);
+    const retainedRef = account.resources[0]!.entry.ref;
+    expect(account.settings.voiceSettingsV1.credentialBindings).toHaveLength(1);
+    const priorApproval = account.settings.voiceSettingsV1.credentialBindings[0]!.approvedRecipientContractDigest;
+    expect(priorApproval).toEqual(expect.any(String));
+    await act(async () => original.cleanup());
+    const changed = await activateRawCredentialOnlyProvider(pluginId, sources, 'acme-review-voice@2.0.0');
+    onTestFinished(changed.cleanup);
+    await refreshSavedSecretCatalog(account.scope);
+    await screen.update(section());
+    const entry = createDefaultVoiceProviderRegistry().get(changed.providerId);
+    expect(entry?.accountCredentialSlot?.recipientContract).toEqual(changed.recipientContract);
+    expect(entry?.accountCredentialSlot?.recipientContractDigest).not.toBe(
+      priorApproval,
+    );
+    expect(resolveAccountVoiceCredentialStatus({ settings: account.settings, contribution: changed.contribution,
+      credentialSlotId: changed.declaration.credentials!.slot.id,
+      requiredRecipientContractDigest: entry?.accountCredentialSlot?.recipientContractDigest,
+      resolveSavedSecret: ref => resolveSavedSecretReference(account.scope, account.settings.secrets, ref),
+    })).toMatchObject({ status: 'review_required', reference: { secretId: retainedRef } });
+    const gallery = screen.tree.findAllByType(VoiceServiceGallery)[0]!;
+    expect(gallery.props.tiles.find((tile: Readonly<{ id: string }>) => tile.id === changed.providerId)?.status.detail)
+      .toBe(t('settingsVoice.externalCredentials.reviewRequired'));
+    expect(screen.getTextContent()).toContain(t('settingsVoice.externalCredentials.reviewRequired'));
+    expect(account.resources).toHaveLength(1);
+    expect(account.resources[0]!.entry.ref).toBe(retainedRef);
+    const vendorRequest = vi.fn<typeof globalThis.fetch>();
+    if (!changed.recipientContract) throw new Error('expected verified external recipient contract');
+    const controller = new AbortController();
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('expected the current Account lifetime');
+    const operation = createAccountVoiceOperationService({ providerId: changed.providerId,
+      contribution: changed.contribution, declaration: changed.declaration, phase: 'connection',
+      recipientContract: changed.recipientContract, signal: controller.signal,
+      isCurrent: lifetime.isCurrent, fetch: vendorRequest });
+    await expect(operation.request({ operationId: 'client-auth', parameters: {}, signal: controller.signal })).rejects.toMatchObject({
+      code: 'credential_access_review_required',
+    });
+    expect(vendorRequest).not.toHaveBeenCalled();
+  }, 120_000);
   it.each([
     {
       label: 'raw-only SavedSecret',
@@ -325,12 +420,12 @@ describe('VoiceProviderSection raw credential review reachability', () => {
 
     const { VoiceProviderSection } = await import('./VoiceProviderSection');
     const { tree } = await renderScreen(<VoiceProviderSection
-      voice={{
+      voice={settingsParse({ voice: {
         providerId: fixture.providerId,
         providers: {
           [fixture.providerId]: { schemaVersion: 1, config: {} },
         },
-      } as any}
+      } }).voice}
       setVoice={vi.fn()}
       happierVoiceSupported={true}
       platformOs="web"
@@ -356,20 +451,20 @@ describe('VoiceProviderSection raw credential review reachability', () => {
       expect(sourceSelectors[0]?.props.declaration).toStrictEqual(fixture.declaration);
     }
     const externalCredentialGroups = tree.findAllByType(ItemGroup).filter((group) => (
-      group.props.description === 'settingsVoice.externalCredentials.rawFooter'
-      || group.props.description === 'settingsVoice.externalCredentials.footer'
+      group.props.description === t('settingsVoice.externalCredentials.rawFooter')
+      || group.props.description === t('settingsVoice.externalCredentials.footer')
     ));
     expect(externalCredentialGroups).toHaveLength(1);
     expect(externalCredentialGroups[0]?.props.description).toBe(
       expectedRawCopy
-        ? 'settingsVoice.externalCredentials.rawFooter'
-        : 'settingsVoice.externalCredentials.footer',
+        ? t('settingsVoice.externalCredentials.rawFooter')
+        : t('settingsVoice.externalCredentials.footer'),
     );
     if (selectedSource === 'savedSecret') {
       expect(savedSecretEntries[0]?.props.promptDescription).toBe(
         expectedRawCopy
-          ? 'settingsVoice.externalCredentials.rawPromptDescription'
-          : 'settingsVoice.externalCredentials.promptDescription',
+          ? t('settingsVoice.externalCredentials.rawPromptDescription')
+          : t('settingsVoice.externalCredentials.promptDescription'),
       );
     }
   }, 120_000);

@@ -93,7 +93,7 @@ export const VoiceOrb = React.memo(function VoiceOrb(props: Readonly<{
                     style={[styles.captionSlot, captionSide]}
                     {...VOICE_PRESENCE_NO_DRAG_PROPS}
                 >
-                    <CompanionNoDragRegion {...VOICE_PRESENCE_NO_DRAG_PROPS}>
+                    <CompanionNoDragRegion style={styles.noDrag} {...VOICE_PRESENCE_NO_DRAG_PROPS}>
                     <Pressable
                         testID={`${testID}-options`}
                         accessibilityRole="button"
@@ -105,11 +105,11 @@ export const VoiceOrb = React.memo(function VoiceOrb(props: Readonly<{
                         {/* The chip is the options target and keeps saying what the call is doing
                             (lab: "Speaking 2:14"); its accessible name is "Voice options". */}
                         <GlassPanel radius={13} shadowLevel={2} innerShadow={false} style={styles.caption}>
-                            {voice.live && voice.targetSessionAddress ? (
-                                // Talking to a Session (lab `b-voice O`): its avatar · name · the call's clock.
+                            {voice.targetSessionAddress ? (
+                                // The same admitted name remains after End, with the ended status in place of a live clock.
                                 <View style={styles.targetCaption}>
                                     <VoiceTargetIdentity address={voice.targetSessionAddress} size="pill" testID="voice-orb-target" />
-                                    {readVoiceElapsedStartedAt(voice) !== null ? (
+                                    {!voice.live ? <VoiceStatusLine voice={voice} size="pill" /> : readVoiceElapsedStartedAt(voice) !== null ? (
                                         <VoiceElapsed startedAt={readVoiceElapsedStartedAt(voice)!} fontSize={12.5} lineHeight={16} />
                                     ) : null}
                                 </View>
@@ -148,9 +148,11 @@ export const VoiceOrb = React.memo(function VoiceOrb(props: Readonly<{
 
 const stylesheet = StyleSheet.create({
     captionSlot: { position: 'absolute', top: 0, width: VOICE_ORB_CAPTION_WIDTH, flexDirection: 'row' },
-    options: { minHeight: VOICE_ORB_BODY_SIZE, minWidth: VOICE_ORB_BODY_SIZE, justifyContent: 'center' },
-    caption: { height: 26, paddingHorizontal: 10, justifyContent: 'center' },
-    targetCaption: { flexDirection: 'row', alignItems: 'center', gap: 7, minWidth: 0 },
+    // The caption slot is a fixed 168 px: the chip shrinks inside it so a long name ellipsizes.
+    noDrag: { flexShrink: 1, minWidth: 0 },
+    options: { minHeight: VOICE_ORB_BODY_SIZE, minWidth: 0, flexShrink: 1, justifyContent: 'center' },
+    caption: { height: 26, paddingHorizontal: 10, justifyContent: 'center', flexShrink: 1, minWidth: 0 },
+    targetCaption: { flexDirection: 'row', alignItems: 'center', gap: 7, minWidth: 0, flexShrink: 1 },
     body: {
         width: VOICE_ORB_BODY_SIZE,
         height: VOICE_ORB_BODY_SIZE,

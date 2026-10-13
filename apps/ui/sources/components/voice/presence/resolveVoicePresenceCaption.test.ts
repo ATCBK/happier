@@ -1,12 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({
-    translate: (key, params) =>
-      params ? `${key}:${JSON.stringify(params)}` : key,
-  });
+const previousLanguage = getPreferredLanguage();
+beforeEach(async () => {
+  await preloadTranslations('en');
+  setPreferredLanguageFromSettings('en');
 });
+afterEach(() => setPreferredLanguageFromSettings(previousLanguage));
 
 const { resolveVoiceCompactLine, resolveVoicePresenceCaption } =
   await import('./resolveVoicePresenceCaption');
@@ -20,20 +20,20 @@ describe('Voice presence captions for a bound Session target', () => {
         { ...base, surfaceState: 'connecting' },
         'Release captain',
       ),
-    ).toBe('sessionVoice.preparing:{"name":"Release captain"}');
+    ).toBe(t('sessionVoice.preparing', { name: 'Release captain' }));
     expect(
       resolveVoicePresenceCaption(
         { ...base, surfaceState: 'connecting' },
         null,
       ),
-    ).toBe('voicePresence.captions.connecting');
+    ).toBe(t('voicePresence.captions.connecting'));
     // Muted still wins over the target's preparation line.
     expect(
       resolveVoicePresenceCaption(
         { ...base, muted: true, surfaceState: 'connecting' },
         'Release captain',
       ),
-    ).toBe('voicePresence.captions.muted');
+    ).toBe(t('voicePresence.captions.muted'));
   });
 
   it('names the target as the compact line while nothing has been said, and keeps the last words once spoken', () => {
@@ -45,7 +45,7 @@ describe('Voice presence captions for a bound Session target', () => {
       ),
     ).toEqual({
       kind: 'caption',
-      text: 'sessionVoice.talkingTo:{"name":"Release captain"}',
+      text: t('sessionVoice.talkingTo', { name: 'Release captain' }),
     });
     expect(
       resolveVoiceCompactLine(
@@ -61,6 +61,16 @@ describe('Voice presence captions for a bound Session target', () => {
         null,
         null,
       ),
-    ).toEqual({ kind: 'caption', text: 'voicePresence.captions.speaking' });
+    ).toEqual({ kind: 'caption', text: t('voicePresence.captions.speaking') });
+  });
+
+  it('names an ended call\'s target plainly instead of saying Voice is still talking to it', () => {
+    expect(
+      resolveVoiceCompactLine(
+        { ...base, live: false, surfaceState: 'idle' },
+        null,
+        'Release captain',
+      ),
+    ).toEqual({ kind: 'caption', text: 'Release captain' });
   });
 });

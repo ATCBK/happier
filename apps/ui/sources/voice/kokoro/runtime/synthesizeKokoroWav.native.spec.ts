@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import type { ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 
 import {
   prepareKokoroTts,
@@ -6,20 +8,127 @@ import {
   streamKokoroWavSentences,
   synthesizeKokoroWav,
 } from '@/voice/kokoro/runtime/synthesizeKokoroWav.native';
-import { createMemFs } from '@/voice/modelPacks/installerTestFs';
+import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
+import { ensureModelPackInstalled } from '@/voice/modelPacks/installer.native';
+import { filePathToUri } from '@/platform/fileUri';
+
+const nativeArtifactDownload = vi.hoisted(() => vi.fn());
+vi.mock('expo-file-system/legacy', () => ({
+  createDownloadResumable: nativeArtifactDownload,
+  FileSystemSessionType: { BACKGROUND: 0, FOREGROUND: 1 },
+}));
 
 const loadedNativeVoices = Array.from({ length: 3 }, (_, sid) => ({ id: `sid:${sid}`, title: `Speaker ${sid}`, sid }));
 
+type NativeFs = NonNullable<NonNullable<Parameters<typeof synthesizeKokoroWav>[1]>['fs']>;
+
+// Reuse the Expo filesystem boundary and the real installer to produce the pack
+// metadata consumed by synthesis. Only WAV reads/deletes use the per-case OS double.
+async function createInstalledKokoroFs(manifestInput: Omit<ModelPackManifest, 'files'>, wavFs: NativeFs) {
+  const { fs: memoryFs } = createMemFs();
+  class File extends memoryFs.File {
+    async arrayBuffer() {
+      return this.uri.startsWith('file:///tmp/') ? new wavFs.File(this.uri).arrayBuffer() : super.arrayBuffer();
+    }
+    delete() {
+      return this.uri.startsWith('file:///tmp/') ? new wavFs.File(this.uri).delete() : super.delete();
+    }
+  }
+  const fs = { ...memoryFs, File, Paths: { ...memoryFs.Paths, cache: 'file:///tmp/' } };
+  const bytes = new Uint8Array([1]);
+  const manifest = { ...manifestInput, files: ['model.onnx', ...(manifestInput.frontend?.lexicon ? [manifestInput.frontend.lexicon] : [])]
+    .map(path => ({ path, url: `https://example.com/${path}`, sizeBytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex') })) };
+  const fetchImpl: typeof fetch = async input => new URL(String(input)).pathname.endsWith('manifest.json')
+    ? Response.json(manifest) : new Response(bytes);
+  const install = ensureModelPackInstalled({ packId: manifest.packId, mode: 'download_if_missing',
+    manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: new AbortController().signal },
+    { fs, fetch: fetchImpl, download: createMemNativeDownload(fs, fetchImpl) });
+  // The real Expo host yields between bounded disk chunks. Complete fixture
+  // installation before starting the native operation's controlled clock.
+  if (vi.isFakeTimers()) await vi.runAllTimersAsync();
+  await install;
+  return fs;
+}
+
+async function createNativeSentenceFixture(text: string, controller = new AbortController(), onSynthesis?: (sentence: string) => void) {
+  const wavs = new Map<string, ArrayBuffer>();
+  class File {
+    constructor(readonly uri: string) {}
+    async arrayBuffer() {
+      const bytes = wavs.get(this.uri);
+      if (!bytes) throw new Error('native_wav_missing');
+      return bytes;
+    }
+    delete() { wavs.delete(this.uri); }
+  }
+  const fs = await createInstalledKokoroFs({ packId: 'kokoro-sentence-stream', kind: 'tts_sherpa',
+      model: 'kokoro', version: 'v1', voices: [{ id: 'af_bella', title: 'Bella', sid: 2 }] }, { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } });
+  const synthesizeToWavFile = vi.fn(async ({ text: sentence, outWavPath }: { text: string; outWavPath: string | null }) => {
+    if (!outWavPath) throw new Error('native_wav_path_missing');
+    onSynthesis?.(sentence);
+    wavs.set(filePathToUri(outWavPath), new TextEncoder().encode(sentence).buffer);
+    return { wavPath: outWavPath, sampleRate: 24_000 };
+  });
+  const native = { initialize: vi.fn(async () => {}), listVoices: vi.fn(async () => loadedNativeVoices),
+    synthesizeToWavFile, cancel: vi.fn(async () => {}) };
+  const stream = streamKokoroWavSentences({ text, assetSetId: 'kokoro-sentence-stream',
+    voiceId: 'af_bella', speed: 1, timeoutMs: 5000, signal: controller.signal },
+    { kokoroNativeModule: native, fs, resolveOutWavPath: jobId => `file:///tmp/${jobId}.wav` });
+  return { stream, native, wavs };
+}
+
 describe('synthesizeKokoroWav (native)', () => {
+  it('streams one native WAV per sentence, in order, through the installed runtime', async () => {
+    const { stream, native, wavs } = await createNativeSentenceFixture('Alpha. Beta. Gamma.');
+    const out: string[] = [];
+    for await (const chunk of stream) {
+      out.push(chunk.sentenceText);
+      expect(chunk.wavBytes).toBeInstanceOf(ArrayBuffer);
+      expect(new TextDecoder().decode(chunk.wavBytes)).toBe(chunk.sentenceText);
+    }
+    expect(out).toEqual(['Alpha.', 'Beta.', 'Gamma.']);
+    expect(native.synthesizeToWavFile).toHaveBeenCalledTimes(3);
+    expect(native.initialize).toHaveBeenCalledOnce();
+    expect(wavs.size).toBe(0);
+  });
+
+  it('prefetches native synthesis of the next sentence while the current WAV is consumed', async () => {
+    const synthOrder: string[] = [];
+    const consumeOrder: string[] = [];
+    const { stream } = await createNativeSentenceFixture('One. Two. Three.', undefined, sentence => { synthOrder.push(sentence); });
+    const iterator = stream[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    if (first.done) throw new Error('first_sentence_missing');
+    consumeOrder.push(first.value.sentenceText);
+    await vi.waitFor(() => expect(synthOrder).toContain('Two.'));
+    const second = await iterator.next();
+    if (second.done) throw new Error('second_sentence_missing');
+    consumeOrder.push(second.value.sentenceText);
+    const third = await iterator.next();
+    if (third.done) throw new Error('third_sentence_missing');
+    consumeOrder.push(third.value.sentenceText);
+    expect((await iterator.next()).done).toBe(true);
+    expect(consumeOrder).toEqual(['One.', 'Two.', 'Three.']);
+  });
+
+  it('rejects sentence streaming on cancellation without synthesizing the remaining sentences', async () => {
+    const controller = new AbortController();
+    const { stream, native } = await createNativeSentenceFixture(
+      'First sentence here. Second sentence here. Third one here. Fourth one here.', controller,
+      sentence => { if (sentence.startsWith('Second')) controller.abort(); });
+    const seen: string[] = [];
+    await expect((async () => { for await (const chunk of stream) seen.push(chunk.sentenceText); })()).rejects.toThrow(/aborted/i);
+    expect(native.synthesizeToWavFile.mock.calls.length).toBeLessThan(4);
+    expect(seen).not.toContain('Second sentence here.');
+  });
   it('keeps unbounded native preparation pending until caller cancellation has retired its initialization', async () => {
     vi.useFakeTimers();
     try {
-      const { fs, files, root } = createMemFs();
       const packId = 'kokoro-unbounded-preparation';
-      files.set(`${root}/${packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest: {
+      const fs = await createInstalledKokoroFs({
         packId, kind: 'tts_sherpa', model: 'kokoro', version: 'v1', frontend: { lang: 'en' },
-        files: [{ path: 'model.onnx', url: 'https://example.com/model.onnx', sha256: 'a'.repeat(64), sizeBytes: 1 }],
-      } })));
+      }, { File: class {}, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } });
       let finishInitialization: (() => void) | undefined;
       let finishCancellation: (() => void) | undefined;
       const cancelInitialization = vi.fn(() => new Promise<void>((resolve) => { finishCancellation = resolve; }));
@@ -70,21 +179,20 @@ describe('synthesizeKokoroWav (native)', () => {
       timeoutMs: 5000, signal: new AbortController().signal,
     }, {
       kokoroNativeModule,
-      fs: { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } },
+      fs: await createInstalledKokoroFs({ packId: 'kokoro-bounded-test',
+          kind: 'tts_sherpa',
+          model: 'kokoro',
+          version: 'v1.1',
+          voices: [{ id: 'bad', title: 'Bad metadata', sid: 1 }],
+          defaultVoiceId: 'bad' }, { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } }),
       resolveOutWavPath: () => 'file:///tmp/out.wav',
-      ensureInstalled: async () => ({
-        packDirUri: 'file:///docs/kokoro-bounded-test',
-        manifest: {
-          packId: 'kokoro-bounded-test', kind: 'tts_sherpa', model: 'kokoro', version: 'v1.1', files: [],
-          voices: [{ id: 'bad', title: 'Bad metadata', sid: 1 }], defaultVoiceId: 'bad',
-        },
-      }),
     })).rejects.toThrow('kokoro_voice_unavailable');
     expect(kokoroNativeModule.synthesizeToWavFile).not.toHaveBeenCalled();
   });
 
   it('rejects preparation of an unavailable built-in publication before install or network work', async () => {
-    const ensureInstalled = vi.fn();
+    const { fs, files } = createMemFs();
+    const readPack = vi.spyOn(fs.File.prototype, 'text');
     const kokoroNativeModule = {
       initialize: vi.fn(),
       listVoices: vi.fn(),
@@ -100,27 +208,25 @@ describe('synthesizeKokoroWav (native)', () => {
       },
       {
         kokoroNativeModule,
-        ensureInstalled,
-        resolveManifestUrl: () => 'https://example.com/broken-manifest.json',
-        fs: { File: class {}, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
+        fs: { ...fs, Paths: { ...fs.Paths, cache: 'file:///tmp/' } },
       },
     )).rejects.toThrow('model_pack_publication_unavailable');
 
-    expect(ensureInstalled).not.toHaveBeenCalled();
+    expect(readPack).not.toHaveBeenCalled();
+    expect(nativeArtifactDownload).not.toHaveBeenCalled();
+    expect(files.size).toBe(0);
     expect(kokoroNativeModule.initialize).not.toHaveBeenCalled();
   });
 
   it('rejects direct synthesis, streaming, and prewarm for an installed unavailable publication', async () => {
-    const ensureInstalled = vi.fn(async () => ({
-      packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-unavailable',
-      manifest: {
+    const fs = await createInstalledKokoroFs({
         packId: 'kokoro-en-v0_19',
         kind: 'tts_sherpa',
         model: 'kokoro',
         version: 'installed-before-publication-was-disabled',
-        files: [],
-      } as any,
-    }));
+    }, { File: class {
+        }, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } });
+    const readPack = vi.spyOn(fs.File.prototype, 'text');
     const kokoroNativeModule = {
       initialize: vi.fn(async () => {
         throw new Error('unavailable_pack_reached_native_runtime');
@@ -139,9 +245,7 @@ describe('synthesizeKokoroWav (native)', () => {
     };
     const overrides = {
       kokoroNativeModule,
-      ensureInstalled,
-      resolveManifestUrl: () => 'https://example.com/previously-installed-manifest.json',
-      fs: { File: class {}, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
+      fs,
     };
 
     await expect(synthesizeKokoroWav(opts, overrides))
@@ -151,39 +255,14 @@ describe('synthesizeKokoroWav (native)', () => {
     await expect(prewarmKokoroRuntime(opts, overrides))
       .rejects.toThrow('model_pack_publication_unavailable');
 
-    expect(ensureInstalled).not.toHaveBeenCalled();
+    expect(readPack).not.toHaveBeenCalled();
+    expect(nativeArtifactDownload).not.toHaveBeenCalled();
     expect(kokoroNativeModule.initialize).not.toHaveBeenCalled();
     expect(kokoroNativeModule.synthesizeToWavFile).not.toHaveBeenCalled();
   });
 
   it('throws when the model pack is not installed', async () => {
-    const fileDelete = vi.fn().mockResolvedValue(undefined);
-    class Directory {
-      uri: string;
-      exists = false;
-      constructor(..._uris: any[]) {
-        this.uri = 'file:///docs/happier/voice/kokoro/kokoro-test';
-      }
-      create() {}
-    }
-    class File {
-      uri: string;
-      exists = false;
-      constructor(...uris: any[]) {
-        this.uri = typeof uris[0] === 'string' ? uris[0] : 'file:///tmp/out.wav';
-      }
-      async arrayBuffer() {
-        return new Uint8Array([1]).buffer;
-      }
-      async text() {
-        return '';
-      }
-      create() {}
-      delete = fileDelete;
-      async bytes() {
-        return new Uint8Array([1]);
-      }
-    }
+    const { fs } = createMemFs();
 
     const kokoroNativeModule = {
       initialize: vi.fn().mockResolvedValue(undefined),
@@ -204,11 +283,7 @@ describe('synthesizeKokoroWav (native)', () => {
         },
         {
           kokoroNativeModule,
-          fs: {
-            File,
-            Directory,
-            Paths: { cache: 'file:///tmp/', document: 'file:///docs/' },
-          } as any,
+          fs: { ...fs, Paths: { ...fs.Paths, cache: 'file:///tmp/' } },
           resolveOutWavPath: () => 'file:///tmp/out.wav',
         },
       ),
@@ -253,26 +328,19 @@ describe('synthesizeKokoroWav (native)', () => {
       },
       {
         kokoroNativeModule,
-        fs: {
-          File,
-          Paths: { cache: 'file:///tmp/', document: 'file:///docs/' },
-          deleteAsync: () => {
-            throw new Error('deprecated_deleteAsync_called');
-          },
-        } as any,
-        resolveOutWavPath: () => 'file:///tmp/out.wav',
-        ensureInstalled: async () => ({
-          packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-test',
-          manifest: {
-            packId: 'kokoro-test',
+        fs: await createInstalledKokoroFs({ packId: 'kokoro-test',
             kind: 'tts_sherpa',
             model: 'kokoro',
             version: '1.0.0',
             frontend: { lang: 'en-us', lexicon: 'lexicon.txt' },
-            voices: [{ id: 'af_bella', title: 'Bella', sid: 2 }],
-            files: [],
-          } as any,
-        }),
+            voices: [{ id: 'af_bella', title: 'Bella', sid: 2 }] }, {
+            File,
+            Paths: { cache: 'file:///tmp/', document: 'file:///docs/' },
+            deleteAsync: () => {
+                throw new Error('deprecated_deleteAsync_called');
+            },
+        } as any),
+        resolveOutWavPath: () => 'file:///tmp/out.wav',
       },
     );
 
@@ -305,17 +373,13 @@ describe('synthesizeKokoroWav (native)', () => {
       synthesizeToWavFile: vi.fn().mockResolvedValue({ wavPath: 'file:///tmp/out.wav', sampleRate: 24000 }),
       cancel: vi.fn().mockResolvedValue(undefined),
     };
-    const ensureInstalled = vi.fn().mockResolvedValue({
-      packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-82m-v1.0-onnx-q8-wasm',
-      manifest: {
+    const fs = await createInstalledKokoroFs({
         packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
         kind: 'tts_sherpa',
         model: 'kokoro',
         version: 'kokoro-int8-multi-lang-v1_1',
         voices: [{ id: 'af_bella', title: 'Bella', sid: 2 }],
-        files: [],
-      } as any,
-    });
+    }, { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } });
 
     await synthesizeKokoroWav(
       {
@@ -328,18 +392,15 @@ describe('synthesizeKokoroWav (native)', () => {
       },
       {
         kokoroNativeModule,
-        fs: { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
+        fs,
         resolveOutWavPath: () => 'file:///tmp/out.wav',
-        ensureInstalled,
       },
     );
 
-    expect(ensureInstalled).toHaveBeenCalledWith(
+    expect(kokoroNativeModule.initialize).toHaveBeenCalledWith(
       expect.objectContaining({
-        packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
-        mode: 'require_installed',
+        assetsDir: '/docs/happier/voice/modelPacks/kokoro-82m-v1.0-onnx-q8-wasm',
       }),
-      expect.anything(),
     );
     expect(kokoroNativeModule.initialize).toHaveBeenCalledOnce();
     expect(kokoroNativeModule.synthesizeToWavFile).toHaveBeenCalledOnce();
@@ -363,18 +424,13 @@ describe('synthesizeKokoroWav (native)', () => {
       synthesizeToWavFile: vi.fn().mockResolvedValue({ wavPath: 'file:///tmp/out.wav', sampleRate: 24000 }),
       cancel: vi.fn().mockResolvedValue(undefined),
     };
-    const ensureInstalled = vi.fn().mockResolvedValue({
-      packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-82m-v1.0-onnx-fp32-wasm',
-      manifest: {
+    const fs = await createInstalledKokoroFs({
         packId: 'kokoro-82m-v1.0-onnx-fp32-wasm',
         kind: 'tts_sherpa',
         model: 'kokoro',
         version: '1.0.0',
         voices: [{ id: 'af_bella', title: 'Bella', sid: 2 }],
-        files: [],
-      } as any,
-    });
-    const resolveManifestUrl = vi.fn(() => 'https://example.com/kokoro-82m-v1.0-onnx-fp32-wasm__manifest.json');
+    }, { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } });
 
     await synthesizeKokoroWav(
       {
@@ -387,17 +443,13 @@ describe('synthesizeKokoroWav (native)', () => {
       },
       {
         kokoroNativeModule,
-        fs: { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
+        fs,
         resolveOutWavPath: () => 'file:///tmp/out.wav',
-        ensureInstalled,
-        resolveManifestUrl,
       },
     );
 
-    expect(resolveManifestUrl).toHaveBeenCalledWith('kokoro-82m-v1.0-onnx-fp32-wasm');
-    expect(ensureInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({ packId: 'kokoro-82m-v1.0-onnx-fp32-wasm' }),
-      expect.anything(),
+    expect(kokoroNativeModule.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({ assetsDir: '/docs/happier/voice/modelPacks/kokoro-82m-v1.0-onnx-fp32-wasm' }),
     );
   });
 
@@ -443,12 +495,12 @@ describe('synthesizeKokoroWav (native)', () => {
       },
       {
         kokoroNativeModule,
-        fs: { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
+        fs: await createInstalledKokoroFs({ packId: 'kokoro-test',
+            kind: 'tts_sherpa',
+            model: 'kokoro',
+            version: '1.0.0',
+            voices: [{ id: 'af_bella', title: 'Bella', sid: 2 }] }, { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any),
         resolveOutWavPath: () => 'file:///tmp/out.wav',
-        ensureInstalled: async () => ({
-          packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-test',
-          manifest: { packId: 'kokoro-test', kind: 'tts_sherpa', model: 'kokoro', version: '1.0.0', voices: [{ id: 'af_bella', title: 'Bella', sid: 2 }], files: [] } as any,
-        }),
       },
     );
 
@@ -488,11 +540,11 @@ describe('synthesizeKokoroWav (native)', () => {
         },
         {
           kokoroNativeModule,
-          fs: { File: class {}, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
-          ensureInstalled: async () => ({
-            packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-init-cleanup-success',
-            manifest: { packId: 'kokoro-init-cleanup-success', kind: 'tts_sherpa', model: 'kokoro', version: '1.0.0', files: [] } as any,
-          }),
+          fs: await createInstalledKokoroFs({ packId: 'kokoro-init-cleanup-success',
+              kind: 'tts_sherpa',
+              model: 'kokoro',
+              version: '1.0.0' }, { File: class {
+              }, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any),
         },
       );
 
@@ -540,11 +592,11 @@ describe('synthesizeKokoroWav (native)', () => {
         },
         {
           kokoroNativeModule,
-          fs: { File: class {}, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
-          ensureInstalled: async () => ({
-            packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-init-abort-race',
-            manifest: { packId: 'kokoro-init-abort-race', kind: 'tts_sherpa', model: 'kokoro', version: '1.0.0', files: [] } as any,
-          }),
+          fs: await createInstalledKokoroFs({ packId: 'kokoro-init-abort-race',
+              kind: 'tts_sherpa',
+              model: 'kokoro',
+              version: '1.0.0' }, { File: class {
+              }, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any),
         },
       );
 
@@ -578,11 +630,11 @@ describe('synthesizeKokoroWav (native)', () => {
         },
         {
           kokoroNativeModule,
-          fs: { File: class {}, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
-          ensureInstalled: async () => ({
-            packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-init-abort-race',
-            manifest: { packId: 'kokoro-init-abort-race', kind: 'tts_sherpa', model: 'kokoro', version: '1.0.0', files: [] } as any,
-          }),
+          fs: await createInstalledKokoroFs({ packId: 'kokoro-init-abort-race',
+              kind: 'tts_sherpa',
+              model: 'kokoro',
+              version: '1.0.0' }, { File: class {
+              }, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any),
         },
       );
       expect(publishedAdmissions).toEqual([expect.any(String)]);
@@ -622,11 +674,11 @@ describe('synthesizeKokoroWav (native)', () => {
         },
         {
           kokoroNativeModule,
-          fs: { File: class {}, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
-          ensureInstalled: async () => ({
-            packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-init-slow-release',
-            manifest: { packId: 'kokoro-init-slow-release', kind: 'tts_sherpa', model: 'kokoro', version: '1.0.0', files: [] } as any,
-          }),
+          fs: await createInstalledKokoroFs({ packId: 'kokoro-init-slow-release',
+              kind: 'tts_sherpa',
+              model: 'kokoro',
+              version: '1.0.0' }, { File: class {
+              }, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any),
         },
       );
 
@@ -692,19 +744,12 @@ describe('synthesizeKokoroWav (native)', () => {
         },
         {
           kokoroNativeModule,
-          fs: { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
-          resolveOutWavPath: () => 'file:///tmp/out.wav',
-          ensureInstalled: async () => ({
-            packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-timeout-cleanup-test',
-            manifest: {
-              packId: 'kokoro-timeout-cleanup-test',
+          fs: await createInstalledKokoroFs({ packId: 'kokoro-timeout-cleanup-test',
               kind: 'tts_sherpa',
               model: 'kokoro',
               version: '1.0.0',
-              voices: [{ id: 'af_bella', title: 'Bella', sid: 0 }],
-              files: [],
-            } as any,
-          }),
+              voices: [{ id: 'af_bella', title: 'Bella', sid: 0 }] }, { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any),
+          resolveOutWavPath: () => 'file:///tmp/out.wav',
         },
       );
 
@@ -774,12 +819,11 @@ describe('synthesizeKokoroWav (native)', () => {
       },
       {
         kokoroNativeModule,
-        fs: { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
+        fs: await createInstalledKokoroFs({ packId: 'kokoro-test-v0',
+            kind: 'tts_sherpa',
+            model: 'kokoro',
+            version: '1.0.0' }, { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any),
         resolveOutWavPath: () => 'file:///tmp/out.wav',
-        ensureInstalled: async () => ({
-          packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-test-v0',
-          manifest: { packId: 'kokoro-test-v0', kind: 'tts_sherpa', model: 'kokoro', version: '1.0.0', files: [] } as any,
-        }),
       },
     );
 
@@ -790,6 +834,12 @@ describe('synthesizeKokoroWav (native)', () => {
 
   it('forwards model pack download progress (including file) during prepare', async () => {
     const onProgress = vi.fn();
+    const { fs, files } = createMemFs();
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const manifest = { packId: 'kokoro-test', kind: 'tts_sherpa', model: 'kokoro', version: '1.0.0',
+      voices: [{ id: 'af_bella', title: 'Bella', sid: 0 }],
+      files: [{ path: 'onnx/model_quantized.onnx', url: 'https://example.com/model.onnx', sizeBytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex') }] };
 
     const kokoroNativeModule = {
       initialize: vi.fn().mockResolvedValue(undefined),
@@ -798,29 +848,23 @@ describe('synthesizeKokoroWav (native)', () => {
       cancel: vi.fn().mockResolvedValue(undefined),
     };
 
-    const ensureInstalled = vi.fn().mockImplementation(async (opts: any) => {
-      opts?.onProgress?.({ loaded: 1, total: 4, file: 'onnx/model_quantized.onnx' });
-      return {
-        packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-test',
-        manifest: {
-          packId: 'kokoro-test',
-          kind: 'tts_sherpa',
-          model: 'kokoro',
-          version: '1.0.0',
-          voices: [{ id: 'af_bella', title: 'Bella', sid: 0 }],
-          files: [],
-        } as any,
-      };
+    nativeArtifactDownload.mockImplementation((url: string, uri: string, options: unknown,
+      progress: (value: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => void) => ({
+      async downloadAsync() {
+        progress({ totalBytesWritten: 1, totalBytesExpectedToWrite: bytes.length });
+        files.set(uri, bytes);
+        progress({ totalBytesWritten: bytes.length, totalBytesExpectedToWrite: bytes.length });
+        return { uri, status: 200, headers: {}, mimeType: null };
+      },
+      async pauseAsync() { return { url, fileUri: uri, options }; },
+      async cancelAsync() {},
+    }));
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      if (!new URL(String(input)).pathname.endsWith('manifest.json')) throw new Error('artifact_fetch_crossed_js_boundary');
+      return Response.json(manifest);
     });
-
-    class File {
-      uri: string;
-      constructor(...uris: any[]) {
-        this.uri = typeof uris[0] === 'string' ? uris[0] : 'file:///tmp/out.wav';
-      }
-    }
-
-    await prepareKokoroTts(
+    try {
+      await prepareKokoroTts(
       {
         assetSetId: 'kokoro-test',
         timeoutMs: 5000,
@@ -829,13 +873,16 @@ describe('synthesizeKokoroWav (native)', () => {
       },
       {
         kokoroNativeModule,
-        ensureInstalled,
-        resolveManifestUrl: () => 'https://example.com/manifest.json',
-        fs: { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
+        fs: { ...fs, Paths: { ...fs.Paths, cache: 'file:///tmp/' } },
       },
     );
 
     expect(onProgress).toHaveBeenCalledWith({ loaded: 1, total: 4, file: 'onnx/model_quantized.onnx' });
+    expect(files.get('file:///docs/happier/voice/modelPacks/kokoro-test/onnx/model_quantized.onnx')).toEqual(bytes);
+    } finally {
+      vi.unstubAllGlobals();
+      nativeArtifactDownload.mockReset();
+    }
   });
 
   it('does not poison the speaker-count cache when the first lookup fails (retry succeeds)', async () => {
@@ -874,18 +921,11 @@ describe('synthesizeKokoroWav (native)', () => {
     // sibling test.
     const overrides = {
       kokoroNativeModule,
-      fs: { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any,
-      resolveOutWavPath: () => 'file:///tmp/out.wav',
-      ensureInstalled: async () => ({
-        packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-cache-poison-test',
-        manifest: {
-          packId: 'kokoro-cache-poison-test',
+      fs: await createInstalledKokoroFs({ packId: 'kokoro-cache-poison-test',
           kind: 'tts_sherpa',
           model: 'kokoro',
-          version: '1.0.0',
-          files: [],
-        } as any,
-      }),
+          version: '1.0.0' }, { File, Paths: { cache: 'file:///tmp/', document: 'file:///docs/' } } as any),
+      resolveOutWavPath: () => 'file:///tmp/out.wav',
     };
 
     const baseOpts = {

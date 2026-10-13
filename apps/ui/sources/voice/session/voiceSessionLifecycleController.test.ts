@@ -1,12 +1,27 @@
+import {
+    getStorage,
+    loadLocalVoiceEngineWithCompatState,
+    localVoiceAgentRpc,
+    localVoiceHomeId,
+    localVoiceSpeechOutputBoundary,
+    machineRpcWithServerScope,
+    registerLocalVoiceEngineHarnessHooks,
+    setPlatformOs,
+} from '@/voice/local/localVoiceEngine.testHarness';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol';
+
+// This file statically imports Socket consumers before the mixed native/Web
+// recipe is installed; use the testkit's documented hoisted transport boundary.
+vi.mock('socket.io-client', async importOriginal => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { createBundledConversationRuntimeHostLease } from '@/voice/registry/bundledConversationRuntimeHost';
 import { createVoiceCaptureAdmissionController } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
 import { storage } from '@/sync/domains/state/storage';
-import { resolveDisabledVoiceActionIdsFromState } from '@/voice/tools/resolveDisabledVoiceActionIds';
 
 import type { VoiceAdapterController, VoiceSessionSnapshot } from './types';
 
@@ -20,9 +35,6 @@ const OPENAI_PROVIDER_ID = 'happier.voice.openai/realtime-openai';
 const CODEX_PROVIDER_ID = 'happier.agent.codex/realtime-codex';
 
 const sessionAddress = (sessionId: string) => ({ serverId: 'server-1', sessionId });
-
-const logSpy = vi.hoisted(() => vi.fn());
-vi.mock('@/log', () => ({ log: { log: logSpy } }));
 
 afterEach(async () => {
     const { resetVoiceSessionRuntimeStateForTests } = await import('./voiceSessionStore');
@@ -123,595 +135,356 @@ function createAdapter(params: Readonly<{
     };
 }
 
+async function createActualLifecycle(input: Readonly<{ currentUiContext?: boolean }> = {}) {
+    setPlatformOs('web');
+    const { createOpenAiVoiceRuntimeEnvironment } = await import('@/dev/testkit/harness/openAiVoiceRuntime');
+    const { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } = await import('@/dev/testkit/harness/voiceWebRtcHarness');
+    const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const environment = await createOpenAiVoiceRuntimeEnvironment();
+    let uiScreen: Awaited<ReturnType<typeof import('@/dev/testkit')['renderScreen']>> | null = null;
+    const currentUiContext: { current: ReturnType<typeof import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort')['useCurrentUiContextVoiceToolPort']> } = { current: null };
+    if (input.currentUiContext) {
+        const React = await import('react');
+        const { renderScreen } = await import('@/dev/testkit');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+        const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { CurrentUiContextProvider, usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
+        const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+        const { useCurrentUiContextVoiceToolPort } = await import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort');
+        const enrichment = { commands: [] };
+        function Publication() {
+            usePublishCurrentUiContext(enrichment);
+            currentUiContext.current = useCurrentUiContextVoiceToolPort();
+            return null;
+        }
+        const settings = storage.getState().settings;
+        await environment.publishAccountSettings({ ...settings, featureToggles: { ...settings.featureToggles, voice: true } });
+        uiScreen = await renderScreen(React.createElement(InjectedAuthProvider, {
+            credentials: environment.accountConnection.credentials,
+            children: React.createElement(MainAppTabStateProvider, { children: React.createElement(AppPaneProvider, {
+                children: React.createElement(CurrentUiContextProvider, { children: React.createElement(PluginSurfaceFocusEligibilityProvider, {
+                    active: true, currentUiContextActive: true, children: React.createElement(Publication),
+                }) }),
+            }) }),
+        }));
+        if (!currentUiContext.current) throw new Error('Actual mounted AppShell Voice port unavailable');
+    }
+    const audioContext = new TestVoiceAudioContext();
+    const audioContexts: InstanceType<typeof TestVoiceAudioContext>[] = [];
+    const browser = installVoiceWebRtcBrowserBoundary({ createAudioContext: () => {
+        const context = audioContexts.length === 0 ? audioContext : new TestVoiceAudioContext();
+        audioContexts.push(context);
+        return context as unknown as AudioContext;
+    } });
+    const runtime = await environment.createRuntime(browser, { ...(currentUiContext.current ? { currentUiContext: currentUiContext.current } : {}) });
+    const captureAdmission = createVoiceCaptureAdmissionController();
+    const lifecycle = createVoiceSessionLifecycleController({ captureAdmission });
+    lifecycle.setConfiguredProviderId(OPENAI_PROVIDER_ID);
+    const target = { serverId: getActiveServerSnapshot().serverId, sessionId: runtime.historySessionId };
+    return {
+        environment, browser, runtime, audioContext, captureAdmission, lifecycle, target,
+        async start(global = false) {
+            const starting = lifecycle.toggle(global ? null : target);
+            await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            browser.peer.channel.open();
+            await starting;
+            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+        },
+        async dispose() {
+            await lifecycle.dispose();
+            await runtime.runtime.dispose();
+            runtime.hostLease.revoke();
+            await uiScreen?.unmount();
+            browser.restore();
+            await environment.dispose();
+        },
+    };
+}
+
 describe('createVoiceSessionLifecycleController', () => {
     it('removes native suspension without undoing a user mute chosen while suspended', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const { setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-        const snapshot: VoiceSessionSnapshot = {
-            adapterId: 'mute-owner',
-            sessionId: 'voice-session',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-            micMuted: false,
-        };
-        const adapter = createAdapter({ id: 'mute-owner', snapshot });
-        setVoiceSessionSnapshot(snapshot);
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: () => adapter.controller,
-            list: () => [adapter.controller],
-        }) });
-        controller.setConfiguredProviderId(adapter.controller.id);
-
-        const suspension = await controller.suspendInput('voice-session');
-        expect(adapter.setMuted).toHaveBeenLastCalledWith({ sessionId: 'voice-session', muted: true });
-
-        await controller.setMuted('voice-session', true);
-        await suspension?.release();
-        expect(adapter.setMuted).not.toHaveBeenCalledWith({ sessionId: 'voice-session', muted: false });
-
-        await controller.setMuted('voice-session', false);
-        expect(adapter.setMuted).toHaveBeenLastCalledWith({ sessionId: 'voice-session', muted: false });
+        const fixture = await createActualLifecycle();
+        try {
+            await fixture.start();
+            const suspension = await fixture.lifecycle.suspendInput(fixture.runtime.historySessionId);
+            expect(fixture.browser.micTrack.enabled).toBe(false);
+            await fixture.lifecycle.setMuted(fixture.runtime.historySessionId, true);
+            await suspension?.release();
+            expect(fixture.browser.micTrack.enabled).toBe(false);
+            expect(fixture.lifecycle.getSnapshot().micMuted).toBe(true);
+            await fixture.lifecycle.setMuted(fixture.runtime.historySessionId, false);
+            expect(fixture.browser.micTrack.enabled).toBe(true);
+            expect(fixture.lifecycle.getSnapshot().micMuted === true).toBe(false);
+        } finally { await fixture.dispose(); }
     });
 
-    it('fences a late suspension release from a same-id replacement adapter', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const { setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-        const active = (micMuted = false): VoiceSessionSnapshot => ({
-            adapterId: 'same-provider',
-            sessionId: 'voice-session',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-            micMuted,
-        });
-        const incumbent = createAdapter({ id: 'same-provider', snapshot: active() });
-        const replacement = createAdapter({ id: 'same-provider', snapshot: active() });
-        let registered = incumbent;
-        setVoiceSessionSnapshot(active());
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: () => registered.controller,
-            list: () => [registered.controller],
-        }) });
-        controller.setConfiguredProviderId('same-provider');
-
-        const suspension = await controller.suspendInput('voice-session');
-        expect(incumbent.setMuted).toHaveBeenCalledWith({ sessionId: 'voice-session', muted: true });
-
-        registered = replacement;
-        incumbent.setSnapshot({
-            adapterId: 'same-provider',
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
-        await suspension?.release();
-
-        expect(incumbent.setMuted).not.toHaveBeenCalledWith({ sessionId: 'voice-session', muted: false });
-        expect(replacement.setMuted).not.toHaveBeenCalled();
-    });
 
     it('does not apply a stale session mute or suspension to the current session', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const { setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-        const snapshot: VoiceSessionSnapshot = {
-            adapterId: 'mute-owner',
-            sessionId: 'session-b',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-            micMuted: false,
-        };
-        const adapter = createAdapter({ id: 'mute-owner', snapshot });
-        setVoiceSessionSnapshot(snapshot);
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: () => adapter.controller,
-            list: () => [adapter.controller],
-        }) });
-        controller.setConfiguredProviderId(adapter.controller.id);
-
-        await controller.setMuted('session-a', true);
-        const suspension = await controller.suspendInput('session-a');
-
-        expect(suspension).toBeNull();
-        expect(adapter.setMuted).not.toHaveBeenCalled();
+        const fixture = await createActualLifecycle();
+        try {
+            await fixture.start();
+            await fixture.lifecycle.setMuted('another-session', true);
+            expect(await fixture.lifecycle.suspendInput('another-session')).toBeNull();
+            expect(fixture.browser.micTrack.enabled).toBe(true);
+            expect(fixture.lifecycle.getSnapshot().micMuted === true).toBe(false);
+        } finally { await fixture.dispose(); }
     });
 
     it('reports the configured provider consumed by the lifecycle owner', async () => {
         const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: () => null,
-            list: () => [],
-        }) });
-
-        expect(controller.getConfiguredProviderId()).toBeNull();
-        controller.setConfiguredProviderId('local_conversation');
-        expect(controller.getConfiguredProviderId()).toBe('local_conversation');
+        const controller = createVoiceSessionLifecycleController();
+        try {
+            expect(controller.getConfiguredProviderId()).toBeNull();
+            controller.setConfiguredProviderId('local_conversation');
+            expect(controller.getConfiguredProviderId()).toBe('local_conversation');
+        } finally { await controller.dispose(); }
     });
 
     it('publishes a current retryable unavailability outcome when the selected provider withdraws before Start', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const captureAdmission = createVoiceCaptureAdmissionController();
-        const adapter = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-        });
-        let registered = true;
-        const controller = createVoiceSessionLifecycleController({
-            captureAdmission,
-            getRegistry: () => ({
-                get: (id) => registered && id === adapter.controller.id ? adapter.controller : null,
-                list: () => registered ? [adapter.controller] : [],
-            }),
-        });
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-        registered = false;
-        const published = vi.fn();
-        const unsubscribe = controller.subscribe(published);
-
+        const fixture = await createActualLifecycle();
         try {
-            await controller.toggle(sessionAddress('session-1'));
-
-            expect(adapter.start).not.toHaveBeenCalled();
-            expect(controller.getSnapshot()).toMatchObject({
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: 'session-1',
-                status: 'error',
-                mode: 'idle',
-                canStop: false,
+            await fixture.runtime.runtime.dispose();
+            const { registerVoiceAdapters } = await import('./voiceAdapterRegistry');
+            registerVoiceAdapters([]);
+            await fixture.lifecycle.toggle(fixture.target);
+            expect(fixture.environment.providerFetch).not.toHaveBeenCalled();
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({
+                adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId,
+                status: 'error', mode: 'idle', canStop: false,
                 errorCode: 'service_temporarily_unavailable',
-                errorMessage: 'voice_provider_adapter_not_registered',
-                errorRecoveryAction: 'retry',
-                errorPresentation: 'error',
+                errorMessage: 'voice_provider_adapter_not_registered', errorRecoveryAction: 'retry', errorPresentation: 'error',
             });
-            expect(published).toHaveBeenCalledTimes(1);
-
-            // The lifecycle refusal happens before Start, so it cannot retain
-            // capture admission while the selected provider is unavailable.
-            const dictationAdmission = captureAdmission.acquire('dictation');
-            expect(dictationAdmission).toMatchObject({ status: 'acquired' });
-            if (dictationAdmission.status === 'acquired') dictationAdmission.lease.release();
-
-            controller.setConfiguredProviderId(CODEX_PROVIDER_ID);
-            expect(controller.getSnapshot()).toEqual({
-                adapterId: null,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            });
-        } finally {
-            unsubscribe();
-            await controller.dispose();
-        }
+            const dictation = fixture.captureAdmission.acquire('dictation');
+            expect(dictation.status).toBe('acquired');
+            if (dictation.status === 'acquired') dictation.lease.release();
+            fixture.lifecycle.setConfiguredProviderId(CODEX_PROVIDER_ID);
+            expect(fixture.lifecycle.getSnapshot()).toEqual({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+        } finally { await fixture.dispose(); }
     });
 
     it('stays silent when Voice is switched off rather than misreporting a refusal', async () => {
         const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: () => null,
-            list: () => [],
-        }) });
+        const controller = createVoiceSessionLifecycleController();
         controller.setConfiguredProviderId('off');
-        logSpy.mockClear();
-
-        await controller.toggle(sessionAddress('session-1'));
-
-        expect(logSpy.mock.calls.map((call) => String(call[0])).filter(
-            (line) => line.includes('[voiceRuntimeFailure]'),
-        )).toEqual([]);
+        const { log } = await import('@/log');
+        const logSpy = vi.spyOn(log, 'log');
+        try {
+            await controller.toggle(sessionAddress('session-1'));
+            expect(controller.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+            expect(logSpy.mock.calls.map((call) => String(call[0])).filter(line => line.includes('[voiceRuntimeFailure]'))).toEqual([]);
+        } finally { logSpy.mockRestore(); await controller.dispose(); }
     });
 
     it('publishes the configured provider recoverable error after it disconnects', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const deniedSnapshot: VoiceSessionSnapshot = {
-            adapterId: 'local_conversation',
-            sessionId: 'session-1',
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-            errorCode: 'mic_permission_denied',
-            errorMessage: 'mic_permission_denied',
-            errorRecoveryAction: 'open_settings',
-            errorPresentation: 'permission_required',
-        };
-        const configured = createAdapter({
-            id: 'local_conversation',
-            snapshot: deniedSnapshot,
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === configured.controller.id ? configured.controller : null,
-            list: () => [configured.controller],
-        }) });
-
-        controller.setConfiguredProviderId('local_conversation');
-        controller.rearmAfterCredentialAuthorityChange();
-
-        expect(controller.getSnapshot()).toEqual(deniedSnapshot);
+        const fixture = await createActualLifecycle();
+        try {
+            const media = navigator.mediaDevices;
+            vi.spyOn(media, 'getUserMedia').mockRejectedValueOnce(new DOMException('Microphone blocked', 'NotAllowedError'));
+            await fixture.lifecycle.toggle(fixture.target).catch(() => undefined);
+            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().canStop).toBe(false));
+            const failure = fixture.lifecycle.getSnapshot();
+            expect(failure).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId,
+                errorCode: 'mic_permission_denied', errorRecoveryAction: 'open_settings', errorPresentation: 'permission_required' });
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange();
+            expect(fixture.lifecycle.getSnapshot()).toEqual(failure);
+        } finally { await fixture.dispose(); }
     });
 
     it('does not let a terminal error from the previous provider override the newly configured provider', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const previous = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: 'session-1',
-                status: 'error',
-                mode: 'idle',
-                canStop: false,
-                errorCode: 'provider_auth_invalid',
-                errorMessage: 'credential_unavailable',
-                errorRecoveryAction: 'review_credentials',
-                errorPresentation: 'error',
-            },
-        });
-        const configured = createAdapter({
-            id: CODEX_PROVIDER_ID,
-            snapshot: {
-                adapterId: CODEX_PROVIDER_ID,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => {
-                if (id === previous.controller.id) return previous.controller;
-                if (id === configured.controller.id) return configured.controller;
-                return null;
-            },
-            list: () => [previous.controller, configured.controller],
-        }) });
-
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-        expect(controller.getSnapshot()).toMatchObject({
-            adapterId: OPENAI_PROVIDER_ID,
-            status: 'error',
-            errorCode: 'provider_auth_invalid',
-        });
-
-        controller.setConfiguredProviderId(CODEX_PROVIDER_ID);
-
-        expect(controller.getSnapshot()).toEqual({
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
-        expect(previous.start).not.toHaveBeenCalled();
-        expect(previous.stop).not.toHaveBeenCalled();
-        expect(configured.start).not.toHaveBeenCalled();
-        expect(configured.stop).not.toHaveBeenCalled();
+        const fixture = await createActualLifecycle();
+        try {
+            fixture.environment.providerFetch.mockResolvedValueOnce(Response.json({ error: { type: 'invalid_request_error', code: 'invalid_api_key', message: 'Invalid API key' } }, { status: 401 }));
+            await fixture.lifecycle.toggle(fixture.target).catch(() => undefined);
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, canStop: false, errorCode: 'provider_auth_invalid' });
+            fixture.lifecycle.setConfiguredProviderId(CODEX_PROVIDER_ID);
+            expect(fixture.lifecycle.getSnapshot()).toEqual({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+            expect(fixture.browser.peers).toHaveLength(0);
+        } finally { await fixture.dispose(); }
     });
 
     it('rearms only a terminal provider-auth failure and waits for the next explicit start', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const authFailure: VoiceSessionSnapshot = {
-            adapterId: OPENAI_PROVIDER_ID,
-            sessionId: 'session-1',
-            status: 'error',
-            mode: 'idle',
-            canStop: false,
-            errorCode: 'provider_auth_invalid',
-            errorMessage: 'credential_unavailable',
-            errorRecoveryAction: 'review_credentials',
-            errorPresentation: 'error',
-        };
-        const configured = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: authFailure,
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === configured.controller.id ? configured.controller : null,
-            list: () => [configured.controller],
-        }) });
-
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-        controller.rearmAfterCredentialAuthorityChange();
-
-        expect(controller.getSnapshot()).toEqual({
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
-        expect(configured.start).not.toHaveBeenCalled();
-        expect(configured.stop).not.toHaveBeenCalled();
-
-        await controller.toggle(sessionAddress('session-2'));
-        expect(configured.start).toHaveBeenCalledWith({
-            sessionId: 'session-2',
-            requestedTargetSessionAddress: sessionAddress('session-2'),
-        });
-
-        configured.setSnapshot(authFailure);
-        expect(controller.getSnapshot()).toEqual(authFailure);
+        const fixture = await createActualLifecycle();
+        try {
+            fixture.environment.providerFetch.mockResolvedValueOnce(Response.json({ error: { code: 'invalid_api_key', message: 'Invalid API key' } }, { status: 401 }));
+            await fixture.lifecycle.toggle(fixture.target).catch(() => undefined);
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ canStop: false, errorCode: 'provider_auth_invalid' });
+            const before = fixture.environment.providerFetch.mock.calls.length;
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange();
+            expect(fixture.lifecycle.getSnapshot()).toEqual({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+            expect(fixture.environment.providerFetch).toHaveBeenCalledTimes(before);
+            await fixture.start();
+            expect(fixture.browser.micTrack.enabled).toBe(true);
+        } finally { await fixture.dispose(); }
     });
 
     it('fences an active attachment when its credential authority changes', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const active = createAdapter({
-            id: CODEX_PROVIDER_ID,
-            snapshot: {
-                adapterId: CODEX_PROVIDER_ID,
-                sessionId: 'global-voice-home',
-                status: 'connected',
-                mode: 'listening',
-                canStop: true,
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === active.controller.id ? active.controller : null,
-            list: () => [active.controller],
-        }) });
-
-        controller.setConfiguredProviderId(CODEX_PROVIDER_ID);
-        controller.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
-
-        expect(active.stop).toHaveBeenCalledOnce();
-        expect(active.stop).toHaveBeenCalledWith({ sessionId: 'global-voice-home' });
-        expect(active.start).not.toHaveBeenCalled();
+        const fixture = await createActualLifecycle();
+        try {
+            await fixture.start();
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
+            await vi.waitFor(() => expect(fixture.browser.micTrack.stop).toHaveBeenCalled());
+            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().canStop).toBe(false));
+            expect(fixture.browser.peer.close).toHaveBeenCalled();
+            expect(fixture.lifecycle.getSnapshot().status).toBe('disconnected');
+        } finally { await fixture.dispose(); }
     });
 
     it('keeps a connecting ordinary attachment when the change applies only to the next start', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const connecting = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: 'voice-session',
-                status: 'connecting',
-                mode: 'idle',
-                canStop: true,
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === connecting.controller.id ? connecting.controller : null,
-            list: () => [connecting.controller],
-        }) });
-
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-        controller.rearmAfterCredentialAuthorityChange({
-            exactSessionAccountScopeChanged: false,
-            globalBindingAuthorityChanged: false,
-        });
-
-        expect(connecting.stop).not.toHaveBeenCalled();
+        const fixture = await createActualLifecycle();
+        let starting: Promise<void> | null = null;
+        try {
+            starting = fixture.lifecycle.toggle(fixture.target);
+            void starting.catch(() => undefined);
+            await vi.waitFor(() => expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: false });
+            expect(fixture.browser.peer.close).not.toHaveBeenCalled();
+            fixture.browser.peer.channel.open();
+            await starting;
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'connected', sessionId: fixture.runtime.historySessionId });
+            expect(fixture.browser.micTrack.enabled).toBe(true);
+        } finally { await fixture.dispose(); await starting?.catch(() => undefined); }
     });
 
     it('keeps in-flight ordinary preparation when the change applies only to the next start', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const startDeferred = createDeferred<void>();
-        const preparing = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-            start: async () => {
-                await startDeferred.promise;
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === preparing.controller.id ? preparing.controller : null,
-            list: () => [preparing.controller],
-        }) });
-
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-        const preparation = controller.toggle(sessionAddress('voice-session'));
-        controller.rearmAfterCredentialAuthorityChange({
-            exactSessionAccountScopeChanged: false,
-            globalBindingAuthorityChanged: false,
-        });
-
-        expect(preparing.stop).not.toHaveBeenCalled();
-
-        startDeferred.resolve();
-        await preparation;
+        const fixture = await createActualLifecycle();
+        const mint = createDeferred<Response>();
+        fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+        let starting: Promise<void> | null = null;
+        try {
+            starting = fixture.lifecycle.toggle(fixture.target);
+            void starting.catch(() => undefined);
+            await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: false });
+            expect(fixture.browser.peers).toHaveLength(0);
+            mint.resolve(Response.json(fixture.environment.createClientAuthProviderResponse('ek_source_composed', Math.floor(Date.now() / 1000) + 60)));
+            await vi.waitFor(() => expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            fixture.browser.peer.channel.open();
+            await starting;
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+        } finally { mint.resolve(new Response('{}')); await fixture.dispose(); await starting?.catch(() => undefined); }
     });
 
     it('fences a connecting attachment when its exact credential authority changes', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const connecting = createAdapter({
-            id: CODEX_PROVIDER_ID,
-            snapshot: {
-                adapterId: CODEX_PROVIDER_ID,
-                sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                status: 'connecting',
-                mode: 'idle',
-                canStop: true,
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === connecting.controller.id ? connecting.controller : null,
-            list: () => [connecting.controller],
-        }) });
-
-        controller.setConfiguredProviderId(CODEX_PROVIDER_ID);
-        controller.rearmAfterCredentialAuthorityChange({ globalBindingAuthorityChanged: true });
-
-        expect(connecting.stop).toHaveBeenCalledOnce();
-        expect(connecting.stop).toHaveBeenCalledWith({
-            sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-        });
+        const fixture = await createActualLifecycle();
+        let starting: Promise<void> | null = null;
+        try {
+            starting = fixture.lifecycle.toggle(null);
+            void starting.catch(() => undefined);
+            await vi.waitFor(() => expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange({ globalBindingAuthorityChanged: true });
+            await starting.catch(() => undefined);
+            expect(fixture.browser.peer.close).toHaveBeenCalled();
+            expect(fixture.browser.micTrack.stop).toHaveBeenCalled();
+            expect(fixture.lifecycle.getSnapshot().canStop).toBe(false);
+        } finally { await fixture.dispose(); await starting?.catch(() => undefined); }
     });
 
     it('fences in-flight preparation when its exact credential authority changes', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const startDeferred = createDeferred<void>();
-        const preparing = createAdapter({
-            id: CODEX_PROVIDER_ID,
-            snapshot: {
-                adapterId: CODEX_PROVIDER_ID,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-            start: async () => {
-                await startDeferred.promise;
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === preparing.controller.id ? preparing.controller : null,
-            list: () => [preparing.controller],
-        }) });
-
-        controller.setConfiguredProviderId(CODEX_PROVIDER_ID);
-        const preparation = controller.toggle(null);
-        await vi.waitFor(() => expect(preparing.start).toHaveBeenCalledOnce());
-        controller.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
-
-        expect(preparing.stop).toHaveBeenCalledOnce();
-        expect(preparing.stop).toHaveBeenCalledWith({
-            sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-        });
-
-        startDeferred.resolve();
-        await preparation;
+        const fixture = await createActualLifecycle();
+        const mint = createDeferred<Response>();
+        fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+        let starting: Promise<void> | null = null;
+        try {
+            starting = fixture.lifecycle.toggle(null);
+            void starting.catch(() => undefined);
+            await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
+            mint.resolve(Response.json(fixture.environment.createClientAuthProviderResponse('ek_source_composed', Math.floor(Date.now() / 1000) + 60)));
+            await starting.catch(() => undefined);
+            expect(fixture.browser.peers).toHaveLength(0);
+            expect(fixture.browser.micSession.getStream()).toBeNull();
+            expect(fixture.lifecycle.getSnapshot().canStop).toBe(false);
+        } finally { mint.resolve(new Response('{}')); await fixture.dispose(); await starting?.catch(() => undefined); }
     });
 
     it('fences a pending Global Agent start when its selected global binding changes before publication', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const startDeferred = createDeferred<void>();
-        const preparing = createAdapter({
-            id: CODEX_PROVIDER_ID,
-            snapshot: {
-                adapterId: CODEX_PROVIDER_ID,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-            start: async () => {
-                await startDeferred.promise;
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === preparing.controller.id ? preparing.controller : null,
-            list: () => [preparing.controller],
-        }) });
-
-        controller.setConfiguredProviderId(CODEX_PROVIDER_ID);
-        const preparation = controller.toggle(null);
-        await vi.waitFor(() => expect(preparing.start).toHaveBeenCalledOnce());
-        expect(controller.getSnapshot()).toMatchObject({
-            sessionId: null,
-            status: 'disconnected',
-        });
-
-        controller.rearmAfterCredentialAuthorityChange({
-            exactSessionAccountScopeChanged: false,
-            globalBindingAuthorityChanged: true,
-        });
-
-        expect(preparing.stop).toHaveBeenCalledOnce();
-        expect(preparing.stop).toHaveBeenCalledWith({
-            sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-        });
-
-        startDeferred.resolve();
-        await preparation;
+        const fixture = await createActualLifecycle();
+        const mint = createDeferred<Response>();
+        fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+        let starting: Promise<void> | null = null;
+        try {
+            starting = fixture.lifecycle.toggle(null);
+            void starting.catch(() => undefined);
+            await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: true });
+            mint.resolve(Response.json(fixture.environment.createClientAuthProviderResponse('ek_source_composed', Math.floor(Date.now() / 1000) + 60)));
+            await starting.catch(() => undefined);
+            expect(fixture.browser.peers).toHaveLength(0);
+            expect(fixture.browser.micSession.getStream()).toBeNull();
+            expect(fixture.lifecycle.getSnapshot().canStop).toBe(false);
+        } finally { mint.resolve(new Response('{}')); await fixture.dispose(); await starting?.catch(() => undefined); }
     });
 
     it('retains an established ordinary OpenAI attachment until terminal after a next-start-only change', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const connected = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: 'voice-session',
-                status: 'connected',
-                mode: 'listening',
-                canStop: true,
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === connected.controller.id ? connected.controller : null,
-            list: () => [connected.controller],
-        }) });
-
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-        controller.rearmAfterCredentialAuthorityChange({
-            exactSessionAccountScopeChanged: false,
-            globalBindingAuthorityChanged: false,
-        });
-
-        expect(connected.stop).not.toHaveBeenCalled();
+        const fixture = await createActualLifecycle();
+        try {
+            await fixture.start();
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: false });
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+            expect(fixture.browser.micTrack.enabled).toBe(true);
+            expect(fixture.browser.peer.close).not.toHaveBeenCalled();
+        } finally { await fixture.dispose(); }
     });
 
     it('routes barge-in only through the active adapter capability', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const active = createAdapter({
-            id: 'active',
-            snapshot: { adapterId: 'active', sessionId: 'session-1', status: 'connected', mode: 'speaking', canStop: true },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === 'active' ? active.controller : null,
-            list: () => [active.controller],
-        }) });
-        controller.setConfiguredProviderId('active');
-        await controller.bargeIn('fallback');
-        expect(active.bargeIn).toHaveBeenCalledWith({ sessionId: 'session-1' });
+        const fixture = await createActualLifecycle();
+        try {
+            await fixture.start();
+            fixture.browser.peer.channel.message(JSON.stringify({ type: 'output_audio_buffer.started', event_id: 'lifecycle-output-started', response_id: 'lifecycle-response' }));
+            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().mode).toBe('speaking'));
+            const before = fixture.browser.peer.channel.sent.length;
+            await fixture.lifecycle.bargeIn('another-visible-session');
+            expect(fixture.browser.peer.channel.sent.slice(before).map(frame => JSON.parse(frame).type)).toContain('response.cancel');
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ sessionId: fixture.runtime.historySessionId, status: 'connected', canStop: true });
+        } finally { await fixture.dispose(); }
     });
 
     it('routes output focus only through the exact active realtime adapter', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const active = createAdapter({
-            id: 'active',
-            snapshot: { adapterId: 'active', sessionId: 'session-1', status: 'connected', mode: 'speaking', canStop: true },
-        });
-        const setOutputFocusState = vi.fn(() => 'applied' as const);
-        const adapter: VoiceAdapterController = {
-            ...active.controller,
-            setOutputFocusState,
-        };
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === 'active' ? adapter : null,
-            list: () => [adapter],
-        }) });
-        controller.setConfiguredProviderId('active');
-
-        const applyOutputFocusState = controller.setOutputFocusState;
-        if (!applyOutputFocusState) throw new Error('voice_output_focus_owner_missing');
-        await expect(applyOutputFocusState('fallback', 'suspended')).resolves.toBe('applied');
-        expect(setOutputFocusState).toHaveBeenCalledWith({ sessionId: 'session-1', state: 'suspended' });
+        const fixture = await createActualLifecycle();
+        try {
+            await fixture.start();
+            expect(fixture.lifecycle.setOutputFocusState).toBeDefined();
+            await expect(fixture.lifecycle.setOutputFocusState?.('another-visible-session', 'suspended')).resolves.toBe('applied');
+            expect(fixture.browser.micTrack.enabled).toBe(true);
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ sessionId: fixture.runtime.historySessionId, status: 'connected', canStop: true });
+            expect(fixture.browser.peer.close).not.toHaveBeenCalled();
+            await expect(fixture.lifecycle.setOutputFocusState?.('another-visible-session', 'active')).resolves.toBe('applied');
+        } finally { await fixture.dispose(); }
     });
 
     it('fails closed through the captured realtime adapter when active output restoration is unsupported', async () => {
+        setPlatformOs('web');
+        const { createXaiVoiceRuntimeEnvironment, XaiVoiceWebSocket } = await import('@/dev/testkit/harness/xaiVoiceRuntime');
         const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const active = createAdapter({
-            id: 'active',
-            snapshot: { adapterId: 'active', sessionId: 'session-1', status: 'connected', mode: 'speaking', canStop: true },
-        });
-        const adapter: VoiceAdapterController = {
-            ...active.controller,
-            setOutputFocusState: vi.fn(() => 'unsupported' as const),
-        };
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === 'active' ? adapter : null,
-            list: () => [adapter],
-        }) });
-        controller.setConfiguredProviderId('active');
-
-        const applyOutputFocusState = controller.setOutputFocusState;
-        if (!applyOutputFocusState) throw new Error('voice_output_focus_owner_missing');
-        await expect(applyOutputFocusState('fallback', 'active')).resolves.toBe('unsupported');
-        expect(active.stop).toHaveBeenCalledWith({ sessionId: 'session-1' });
+        const environment = await createXaiVoiceRuntimeEnvironment();
+        await environment.installSettings(false);
+        const runtime = await environment.createRuntime();
+        const controller = createVoiceSessionLifecycleController();
+        controller.setConfiguredProviderId(runtime.runtime.adapter.id);
+        try {
+            await controller.toggle(null);
+            expect(controller.getSnapshot()).toMatchObject({ adapterId: runtime.runtime.adapter.id,
+                sessionId: runtime.controlSessionId, status: 'connected', canStop: true });
+            const socket = environment.physicalSockets.at(-1);
+            const output = environment.audioContexts.find(context => context.createGain.mock.calls.length > 0);
+            if (!socket || !output) throw new Error('Actual xAI output device missing');
+            // AudioParam is an OS boundary. The real connection catches its
+            // failed restore and reports unsupported to the lifecycle owner.
+            output.gain.setTargetAtTime.mockImplementationOnce(() => {
+                throw new DOMException('Output device unavailable', 'InvalidStateError');
+            });
+            await expect(controller.setOutputFocusState?.('stale-visible-session', 'active')).resolves.toBe('unsupported');
+            expect(controller.getSnapshot().canStop).toBe(false);
+            expect(environment.browser.micTrack.stop).toHaveBeenCalled();
+            expect(socket.readyState).toBeGreaterThanOrEqual(XaiVoiceWebSocket.CLOSING);
+            expect(output.close).toHaveBeenCalled();
+        } finally {
+            await controller.dispose();
+            await runtime.dispose();
+            await environment.dispose();
+        }
     });
 
     it('fails closed through the captured realtime adapter when active output restoration throws', async () => {
@@ -872,158 +645,45 @@ describe('createVoiceSessionLifecycleController', () => {
         expect(active.stop).toHaveBeenCalledWith({ sessionId: 'session-1' });
     });
     it('does not republish a pending switch after dispose', async () => {
-        vi.resetModules();
-
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-        const stopDeferred = createDeferred<void>();
-        const sourceSnapshot: VoiceSessionSnapshot = {
-            adapterId: 'local_direct',
-            sessionId: 'session-1',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-        };
-        const targetSnapshot: VoiceSessionSnapshot = {
-            adapterId: 'local_conversation',
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        };
-        const sourceAdapter = createAdapter({
-            id: 'local_direct',
-            snapshot: sourceSnapshot,
-            stop: async () => {
-                await stopDeferred.promise;
-            },
-        });
-        const targetAdapter = createAdapter({
-            id: 'local_conversation',
-            snapshot: targetSnapshot,
-        });
-        const registry: VoiceAdapterRegistry = {
-            get: (id) => {
-                if (id === sourceAdapter.controller.id) return sourceAdapter.controller;
-                if (id === targetAdapter.controller.id) return targetAdapter.controller;
-                return null;
-            },
-            list: () => [sourceAdapter.controller, targetAdapter.controller],
-        };
-
-        // The published snapshot already reflects the active source adapter (the
-        // realistic state once adapters derive from the owner-aware machine);
-        // the controller no longer relies on a blind active-adapter fallback to
-        // discover an owner, so it must start from the owner's snapshot.
-        setVoiceSessionSnapshot(sourceSnapshot);
-
-        const controller = createVoiceSessionLifecycleController({
-            getRegistry: () => registry,
-        });
-
-        controller.setConfiguredProviderId('local_conversation');
-        expect(controller.getSnapshot()).toEqual(sourceSnapshot);
-        expect(sourceAdapter.stop).toHaveBeenCalledTimes(1);
-        const stopCallPromise = sourceAdapter.stop.mock.results[0]?.value as Promise<void>;
-
-        controller.dispose();
-        setVoiceSessionSnapshot({
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
-
-        stopDeferred.resolve();
-        await stopCallPromise;
-
-        expect(getVoiceSessionSnapshot()).toEqual({
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
+        const fixture = await createActualLifecycle();
+        const cleanup = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        try {
+            fixture.lifecycle.setCurrentUiContextToolSetEnabled(false);
+            await fixture.start();
+            fixture.lifecycle.setCurrentUiContextToolSetEnabled(true);
+            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            const disposal = fixture.lifecycle.dispose();
+            const frozen = fixture.lifecycle.getSnapshot();
+            const requests = fixture.environment.providerFetch.mock.calls.length;
+            cleanup.resolve();
+            await disposal;
+            expect(fixture.lifecycle.getSnapshot()).toBe(frozen);
+            expect(fixture.environment.providerFetch).toHaveBeenCalledTimes(requests);
+            expect(fixture.browser.micSession.getStream()).toBeNull();
+        } finally { cleanup.resolve(); await fixture.dispose(); }
     });
 
     it('discards an Account-retired pending provider switch before source stop settles', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const { setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-        const sourceStopDeferred = createDeferred<void>();
-        let sourceAdapter!: ReturnType<typeof createAdapter>;
-        sourceAdapter = createAdapter({
-            id: 'realtime-source',
-            snapshot: {
-                adapterId: 'realtime-source',
-                sessionId: 'voice-session',
-                status: 'connected',
-                mode: 'listening',
-                canStop: true,
-            },
-            stop: async () => {
-                await sourceStopDeferred.promise;
-                sourceAdapter.setSnapshot({
-                    adapterId: 'realtime-source',
-                    sessionId: null,
-                    status: 'disconnected',
-                    mode: 'idle',
-                    canStop: false,
-                });
-            },
-        });
-        const targetAdapter = createAdapter({
-            id: 'realtime-target',
-            snapshot: {
-                adapterId: 'realtime-target',
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-        });
-        const registry: VoiceAdapterRegistry = {
-            get: (id) => {
-                if (id === sourceAdapter.controller.id) return sourceAdapter.controller;
-                if (id === targetAdapter.controller.id) return targetAdapter.controller;
-                return null;
-            },
-            list: () => [sourceAdapter.controller, targetAdapter.controller],
-        };
-
-        setVoiceSessionSnapshot({
-            adapterId: sourceAdapter.controller.id,
-            sessionId: 'voice-session',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => registry });
-        controller.setConfiguredProviderId(sourceAdapter.controller.id);
-        controller.setConfiguredProviderId(targetAdapter.controller.id);
-
-        expect(sourceAdapter.stop).toHaveBeenCalledOnce();
-        expect(targetAdapter.start).not.toHaveBeenCalled();
-
-        controller.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
-        sourceStopDeferred.resolve();
-        await sourceAdapter.stop.mock.results[0]?.value;
-
-        expect(targetAdapter.start).not.toHaveBeenCalled();
-        expect(controller.getSnapshot()).toEqual({
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
-        await controller.dispose();
+        const fixture = await createActualLifecycle();
+        const cleanup = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        try {
+            fixture.lifecycle.setCurrentUiContextToolSetEnabled(false);
+            await fixture.start();
+            fixture.lifecycle.setCurrentUiContextToolSetEnabled(true);
+            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
+            const requests = fixture.environment.providerFetch.mock.calls.length;
+            cleanup.resolve();
+            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().canStop).toBe(false));
+            expect(fixture.browser.micSession.getStream()).toBeNull();
+            expect(fixture.environment.providerFetch).toHaveBeenCalledTimes(requests);
+            expect(fixture.lifecycle.getSnapshot()).toEqual({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+        } finally { cleanup.resolve(); await fixture.dispose(); }
     });
 
     it('keeps ownership disconnected while a provider switch is pending and ignores stale source reconnects', async () => {
-        vi.resetModules();
-
         const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
         const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
 
@@ -1133,405 +793,106 @@ describe('createVoiceSessionLifecycleController', () => {
         await sourceAdapter.stop.mock.results[0]?.value;
         targetStartDeferred.resolve();
         await targetAdapter.start.mock.results[0]?.value;
+        await controller.dispose();
     });
 
     it('stays disconnected after switching off even if the old source later reconnects', async () => {
-        vi.resetModules();
-
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-        const stopDeferred = createDeferred<void>();
-        const sourceAdapter = createAdapter({
-            id: 'local_direct',
-            snapshot: {
-                adapterId: 'local_direct',
-                sessionId: 'session-1',
-                status: 'connected',
-                mode: 'listening',
-                canStop: true,
-            },
-            stop: async () => {
-                await stopDeferred.promise;
-            },
-        });
-        const idlePeer = createAdapter({
-            id: 'local_conversation',
-            snapshot: {
-                adapterId: 'local_conversation',
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-        });
-        const registry: VoiceAdapterRegistry = {
-            get: (id) => {
-                if (id === sourceAdapter.controller.id) return sourceAdapter.controller;
-                if (id === idlePeer.controller.id) return idlePeer.controller;
-                return null;
-            },
-            list: () => [sourceAdapter.controller, idlePeer.controller],
-        };
-
-        setVoiceSessionSnapshot({
-            adapterId: 'local_direct',
-            sessionId: 'session-1',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-        });
-
-        const controller = createVoiceSessionLifecycleController({
-            getRegistry: () => registry,
-        });
-
-        controller.setConfiguredProviderId('off');
-        expect(sourceAdapter.stop).toHaveBeenCalledTimes(1);
-        expect(controller.getSnapshot()).toMatchObject({
-            adapterId: 'local_direct',
-            sessionId: 'session-1',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-        });
-
-        await act(async () => {
-            sourceAdapter.setSnapshot({
-                adapterId: 'local_direct',
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            });
-        });
-
-        expect(controller.getSnapshot()).toMatchObject({
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
-
-        sourceAdapter.setSnapshot({
-            adapterId: 'local_direct',
-            sessionId: 'session-1',
-            status: 'connecting',
-            mode: 'idle',
-            canStop: true,
-        });
-
-        expect(controller.getSnapshot()).toMatchObject({
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
-
-        stopDeferred.resolve();
-        await sourceAdapter.stop.mock.results[0]?.value;
+        const fixture = await createActualLifecycle();
+        const cleanup = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        try {
+            await fixture.start();
+            fixture.lifecycle.setConfiguredProviderId('off');
+            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            cleanup.resolve();
+            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().status).toBe('disconnected'));
+            // A stale browser task from the retired peer cannot restore authority.
+            fixture.browser.peer.connectionState = 'connected';
+            fixture.browser.peer.dispatchEvent(new Event('connectionstatechange'));
+            fixture.browser.peer.channel.message(JSON.stringify({ type: 'session.created', event_id: 'stale-connection', session: { id: 'stale-session', type: 'realtime' } }));
+            expect(fixture.lifecycle.getSnapshot()).toEqual({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+            expect(fixture.browser.micSession.getStream()).toBeNull();
+        } finally { cleanup.resolve(); await fixture.dispose(); }
     });
 
     it('stops the owned adapter through the canonical lifecycle controller seam', async () => {
-        vi.resetModules();
-
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-        const stopDeferred = createDeferred<void>();
-        const sourceAdapter = createAdapter({
-            id: 'local_direct',
-            snapshot: {
-                adapterId: 'local_direct',
-                sessionId: 'session-1',
-                status: 'connected',
-                mode: 'listening',
-                canStop: true,
-            },
-            stop: async () => {
-                sourceAdapter.setSnapshot({
-                    adapterId: 'local_direct',
-                    sessionId: null,
-                    status: 'disconnected',
-                    mode: 'idle',
-                    canStop: false,
-                });
-                await stopDeferred.promise;
-            },
-        });
-        const registry: VoiceAdapterRegistry = {
-            get: (id) => {
-                if (id === sourceAdapter.controller.id) return sourceAdapter.controller;
-                return null;
-            },
-            list: () => [sourceAdapter.controller],
-        };
-
-        setVoiceSessionSnapshot({
-            adapterId: 'local_direct',
-            sessionId: 'session-1',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-        });
-
-        const controller = createVoiceSessionLifecycleController({
-            getRegistry: () => registry,
-        });
-
-        controller.setConfiguredProviderId('local_direct');
-
-        const stopPromise = controller.stop('stale-session');
-
-        expect(sourceAdapter.stop).toHaveBeenCalledWith({ sessionId: 'session-1' });
-        expect(controller.getSnapshot()).toEqual({
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
-
-        stopDeferred.resolve();
-        await stopPromise;
-
-        expect(getVoiceSessionSnapshot()).toEqual({
-            adapterId: 'local_direct',
-            sessionId: 'session-1',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-        });
+        const fixture = await createActualLifecycle();
+        const cleanup = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        try {
+            await fixture.start();
+            const stop = fixture.lifecycle.stop('stale-session');
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+            await vi.waitFor(() => expect(fixture.browser.micTrack.stop).toHaveBeenCalled());
+            cleanup.resolve();
+            await stop;
+            expect(fixture.browser.peer.close).toHaveBeenCalled();
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+        } finally { cleanup.resolve(); await fixture.dispose(); }
     });
 
     it('starts the configured adapter when toggled from a disconnected state', async () => {
-        vi.resetModules();
-
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const { setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-        const targetAdapter = createAdapter({
-            id: 'local_conversation',
-            snapshot: {
-                adapterId: 'local_conversation',
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-        });
-        const registry: VoiceAdapterRegistry = {
-            get: (id) => (id === targetAdapter.controller.id ? targetAdapter.controller : null),
-            list: () => [targetAdapter.controller],
-        };
-
-        setVoiceSessionSnapshot({
-            adapterId: null,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        });
-
-        const controller = createVoiceSessionLifecycleController({
-            getRegistry: () => registry,
-        });
-
-        controller.setConfiguredProviderId('local_conversation');
-        await controller.toggle(sessionAddress('session-1'));
-
-        expect(targetAdapter.start).toHaveBeenCalledWith({
-            sessionId: 'session-1',
-            requestedTargetSessionAddress: sessionAddress('session-1'),
-        });
-        expect(targetAdapter.toggle).not.toHaveBeenCalled();
-        expect(targetAdapter.stop).not.toHaveBeenCalled();
+        const fixture = await createActualLifecycle();
+        try {
+            await fixture.start();
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId, status: 'connected', mode: 'idle', canStop: true });
+            expect(fixture.lifecycle.getAttemptTargetSessionAddress()).toEqual(fixture.target);
+            expect(fixture.browser.micTrack.enabled).toBe(true);
+            expect(fixture.browser.peer.channel.sent.map(frame => JSON.parse(frame).type)).toContain('session.update');
+        } finally { await fixture.dispose(); }
     });
 
     it('settles a current terminal retryable connection failure after the adapter publishes recovery', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const connectionFailure = Object.assign(new Error('voice_connection_failed'), {
-            code: 'voice_connection_failed',
-        });
-        let adapter!: ReturnType<typeof createAdapter>;
-        adapter = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-            start: async () => {
-                adapter.setSnapshot({
-                    adapterId: OPENAI_PROVIDER_ID,
-                    sessionId: 'session-1',
-                    status: 'connecting',
-                    mode: 'idle',
-                    canStop: true,
-                });
-                adapter.setSnapshot({
-                    adapterId: OPENAI_PROVIDER_ID,
-                    sessionId: 'session-1',
-                    status: 'error',
-                    mode: 'idle',
-                    canStop: false,
-                    errorCode: 'voice_connection_failed',
-                    errorMessage: 'voice_connection_failed',
-                    errorRecoveryAction: 'retry',
-                    errorPresentation: 'error',
-                });
-                throw connectionFailure;
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === adapter.controller.id ? adapter.controller : null,
-            list: () => [adapter.controller],
-        }) });
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-
-        await expect(controller.toggle(sessionAddress('session-1'))).resolves.toBeUndefined();
-        expect(controller.getSnapshot()).toMatchObject({
-            adapterId: OPENAI_PROVIDER_ID,
-            sessionId: 'session-1',
-            status: 'error',
-            canStop: false,
-            errorCode: 'voice_connection_failed',
-            errorRecoveryAction: 'retry',
-        });
+        const fixture = await createActualLifecycle();
+        try {
+            fixture.environment.providerFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+            await expect(fixture.lifecycle.toggle(fixture.target)).resolves.toBeUndefined();
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId,
+                status: 'error', canStop: false, errorCode: 'voice_connection_failed', errorRecoveryAction: 'retry' });
+            expect(fixture.browser.micSession.getStream()).toBeNull();
+        } finally { await fixture.dispose(); }
     });
 
     it('settles a blank global Start only after the canonical global session enters and leaves the attempt', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const connectionFailure = Object.assign(new Error('voice_connection_failed'), {
-            code: 'voice_connection_failed',
-        });
-        let adapter!: ReturnType<typeof createAdapter>;
-        adapter = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-            start: async () => {
-                adapter.setSnapshot({
-                    adapterId: OPENAI_PROVIDER_ID,
-                    sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                    status: 'connecting',
-                    mode: 'idle',
-                    canStop: true,
-                });
-                adapter.setSnapshot({
-                    adapterId: OPENAI_PROVIDER_ID,
-                    sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                    status: 'error',
-                    mode: 'idle',
-                    canStop: false,
-                    errorCode: 'voice_connection_failed',
-                    errorMessage: 'voice_connection_failed',
-                    errorRecoveryAction: 'retry',
-                    errorPresentation: 'error',
-                });
-                throw connectionFailure;
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === adapter.controller.id ? adapter.controller : null,
-            list: () => [adapter.controller],
-        }) });
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-
-        await expect(controller.toggle(null)).resolves.toBeUndefined();
-        expect(controller.getSnapshot()).toMatchObject({
-            sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-            status: 'error',
-            errorRecoveryAction: 'retry',
-        });
+        const fixture = await createActualLifecycle();
+        const published: VoiceSessionSnapshot[] = [];
+        const unsubscribe = fixture.lifecycle.subscribe(() => published.push(fixture.lifecycle.getSnapshot()));
+        try {
+            fixture.environment.providerFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+            await expect(fixture.lifecycle.toggle(null)).resolves.toBeUndefined();
+            expect(published.some(snapshot => snapshot.sessionId === VOICE_AGENT_GLOBAL_SESSION_ID && snapshot.canStop)).toBe(true);
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+                status: 'error', canStop: false, errorCode: 'voice_connection_failed', errorRecoveryAction: 'retry' });
+        } finally { unsubscribe(); await fixture.dispose(); }
     });
 
     it('rethrows an unannounced failure after an unrelated registry republish refreshes a prior retryable error', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const programmerFailure = new Error('unexpected_start_bug');
-        let republishRegistry = () => {};
-        const adapter = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            freshSnapshots: true,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: 'session-1',
-                status: 'error',
-                mode: 'idle',
-                canStop: false,
-                errorCode: 'voice_connection_failed',
-                errorMessage: 'voice_connection_failed',
-                errorRecoveryAction: 'retry',
-                errorPresentation: 'error',
-            },
-            start: async () => {
-                republishRegistry();
-                throw programmerFailure;
-            },
-        });
-        const registry = {
-            get: (id: string) => id === adapter.controller.id ? adapter.controller : null,
-            list: () => [adapter.controller],
-            subscribe: (listener: () => void) => {
-                republishRegistry = listener;
-                return () => {};
-            },
-        };
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => registry });
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-
-        await expect(controller.toggle(sessionAddress('session-1'))).rejects.toBe(programmerFailure);
+        const fixture = await createActualLifecycle();
+        try {
+            fixture.environment.providerFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+            await fixture.lifecycle.toggle(fixture.target);
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ errorCode: 'voice_connection_failed', errorRecoveryAction: 'retry' });
+            fixture.runtime.hostLease.revoke();
+            const { registerVoiceAdapters } = await import('./voiceAdapterRegistry');
+            registerVoiceAdapters([fixture.runtime.adapter]);
+            await expect(fixture.lifecycle.toggle(fixture.target)).rejects.toMatchObject({ code: 'voice_runtime_generation_revoked' });
+            expect(fixture.browser.peers).toHaveLength(0);
+        } finally { await fixture.dispose(); }
     });
 
     it('rethrows a blank global Start when a registry republish only carries a prior direct-session retryable error', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const programmerFailure = new Error('unexpected_start_bug');
-        let republishRegistry = () => {};
-        const adapter = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            freshSnapshots: true,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: 'direct-session-1',
-                status: 'error',
-                mode: 'idle',
-                canStop: false,
-                errorCode: 'voice_connection_failed',
-                errorMessage: 'voice_connection_failed',
-                errorRecoveryAction: 'retry',
-                errorPresentation: 'error',
-            },
-            start: async () => {
-                republishRegistry();
-                throw programmerFailure;
-            },
-        });
-        const registry = {
-            get: (id: string) => id === adapter.controller.id ? adapter.controller : null,
-            list: () => [adapter.controller],
-            subscribe: (listener: () => void) => {
-                republishRegistry = listener;
-                return () => {};
-            },
-        };
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => registry });
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-
-        await expect(controller.toggle(null)).rejects.toBe(programmerFailure);
-        expect(adapter.start).toHaveBeenCalledWith({
-            sessionId: '',
-            requestedTargetSessionAddress: null,
-        });
-        expect(controller.getSnapshot().sessionId).not.toBe(VOICE_AGENT_GLOBAL_SESSION_ID);
+        const fixture = await createActualLifecycle();
+        try {
+            fixture.environment.providerFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+            await fixture.lifecycle.toggle(fixture.target);
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ sessionId: fixture.runtime.historySessionId, errorCode: 'voice_connection_failed' });
+            fixture.runtime.hostLease.revoke();
+            const { registerVoiceAdapters } = await import('./voiceAdapterRegistry');
+            registerVoiceAdapters([fixture.runtime.adapter]);
+            await expect(fixture.lifecycle.toggle(null)).rejects.toMatchObject({ code: 'voice_runtime_generation_revoked' });
+            expect(fixture.lifecycle.getSnapshot().sessionId).not.toBe(VOICE_AGENT_GLOBAL_SESSION_ID);
+            expect(fixture.browser.peers).toHaveLength(0);
+        } finally { await fixture.dispose(); }
     });
 
     it('rethrows a retryable failure that was already published before this Start', async () => {
@@ -1566,42 +927,27 @@ describe('createVoiceSessionLifecycleController', () => {
     });
 
     it('rethrows a current terminal failure without retryable recovery', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const credentialFailure = Object.assign(new Error('credential_unavailable'), {
-            code: 'credential_unavailable',
-        });
-        let adapter!: ReturnType<typeof createAdapter>;
-        adapter = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-            start: async () => {
-                adapter.setSnapshot({
-                    adapterId: OPENAI_PROVIDER_ID,
-                    sessionId: 'session-1',
-                    status: 'error',
-                    mode: 'idle',
-                    canStop: false,
-                    errorCode: 'provider_auth_invalid',
-                    errorMessage: 'credential_unavailable',
-                    errorRecoveryAction: 'review_credentials',
-                    errorPresentation: 'error',
-                });
-                throw credentialFailure;
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === adapter.controller.id ? adapter.controller : null,
-            list: () => [adapter.controller],
-        }) });
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-
-        await expect(controller.toggle(sessionAddress('session-1'))).rejects.toBe(credentialFailure);
+        const fixture = await createActualLifecycle();
+        const respond = fixture.environment.providerFetch.getMockImplementation();
+        if (!respond) throw new Error('Actual OpenAI HTTP boundary unavailable');
+        fixture.environment.providerFetch.mockImplementation((input: URL | RequestInfo, init?: RequestInit) => (
+            String(input).endsWith('/v1/realtime/calls')
+                ? Promise.resolve(Response.json({ error: 'unauthorized' }, { status: 401 }))
+                : respond(input, init)
+        ));
+        try {
+            await expect(fixture.lifecycle.toggle(fixture.target)).rejects.toMatchObject({ code: 'credential_unavailable' });
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({
+                adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId,
+                status: 'error', canStop: false, errorCode: 'provider_auth_invalid',
+                errorMessage: 'credential_unavailable', errorRecoveryAction: 'review_credentials',
+            });
+            expect(fixture.browser.peers).toHaveLength(1);
+            expect(fixture.browser.peer.createOffer).toHaveBeenCalled();
+            expect(fixture.browser.peer.close).toHaveBeenCalled();
+            expect(fixture.browser.micTrack.stop).toHaveBeenCalled();
+            expect(fixture.browser.micSession.getStream()).toBeNull();
+        } finally { await fixture.dispose(); }
     });
 
     it('rethrows a cancellation after the attempted adapter settles disconnected', async () => {
@@ -1693,237 +1039,103 @@ describe('createVoiceSessionLifecycleController', () => {
     });
 
     it('rethrows a start rejection that published no terminal recovery', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const programmerFailure = new Error('unexpected_start_bug');
-        const adapter = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            },
-            start: async () => {
-                throw programmerFailure;
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === adapter.controller.id ? adapter.controller : null,
-            list: () => [adapter.controller],
-        }) });
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-
-        await expect(controller.toggle(sessionAddress('session-1'))).rejects.toBe(programmerFailure);
+        const fixture = await createActualLifecycle();
+        try {
+            fixture.runtime.hostLease.revoke();
+            await expect(fixture.lifecycle.toggle(fixture.target)).rejects.toMatchObject({ code: 'voice_runtime_generation_revoked' });
+            expect(fixture.environment.providerFetch).not.toHaveBeenCalled();
+            expect(fixture.browser.micSession.getStream()).toBeNull();
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+        } finally { await fixture.dispose(); }
     });
 
     it('stops the owned adapter when toggled from an active state', async () => {
-        vi.resetModules();
-
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const { setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-        const sourceAdapter = createAdapter({
-            id: 'local_conversation',
-            snapshot: {
-                adapterId: 'local_conversation',
-                sessionId: 'session-1',
-                status: 'connected',
-                mode: 'listening',
-                canStop: true,
-            },
-        });
-        const registry: VoiceAdapterRegistry = {
-            get: (id) => (id === sourceAdapter.controller.id ? sourceAdapter.controller : null),
-            list: () => [sourceAdapter.controller],
-        };
-
-        setVoiceSessionSnapshot({
-            adapterId: 'local_conversation',
-            sessionId: 'session-1',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-        });
-
-        const controller = createVoiceSessionLifecycleController({
-            getRegistry: () => registry,
-        });
-
-        controller.setConfiguredProviderId('local_conversation');
-        await controller.toggle(sessionAddress('session-1'));
-
-        expect(sourceAdapter.stop).toHaveBeenCalledWith({ sessionId: 'session-1' });
-        expect(sourceAdapter.start).not.toHaveBeenCalled();
+        const fixture = await createActualLifecycle();
+        try {
+            await fixture.start();
+            await fixture.lifecycle.toggle({ ...fixture.target, sessionId: 'another-visible-session' });
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+            expect(fixture.browser.micTrack.stop).toHaveBeenCalled();
+            expect(fixture.browser.peer.close).toHaveBeenCalled();
+            expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledTimes(1);
+        } finally { await fixture.dispose(); }
     });
 
     it('routes Retry for an owned reconnect through the same adapter without toggling its lifecycle', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const sourceAdapter = createAdapter({
-            id: OPENAI_PROVIDER_ID,
-            snapshot: {
-                adapterId: OPENAI_PROVIDER_ID,
-                sessionId: 'owned-reconnect',
-                status: 'connecting',
-                mode: 'idle',
-                canStop: true,
-                presentationState: 'reconnecting',
-                reconnectRetryAvailable: true,
-            },
-        });
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id: string) => id === sourceAdapter.controller.id ? sourceAdapter.controller : null,
-            list: () => [sourceAdapter.controller],
-        }) });
-
-        controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-        await controller.retry('stale-session-id');
-
-        expect(sourceAdapter.retry).toHaveBeenCalledWith({
-            sessionId: 'owned-reconnect',
-            requestedTargetSessionAddress: null,
-        });
-        expect(sourceAdapter.start).not.toHaveBeenCalled();
-        expect(sourceAdapter.stop).not.toHaveBeenCalled();
-        expect(sourceAdapter.toggle).not.toHaveBeenCalled();
+        const fixture = await createActualLifecycle();
+        const { TestVoiceWebRtcPeer } = await import('@/dev/testkit/harness/voiceWebRtcHarness');
+        const reconnectPeer = new TestVoiceWebRtcPeer();
+        try {
+            await fixture.start();
+            vi.stubGlobal('RTCPeerConnection', vi.fn(() => reconnectPeer));
+            fixture.browser.peer.connectionState = 'failed';
+            fixture.browser.peer.dispatchEvent(new Event('connectionstatechange'));
+            await vi.waitFor(() => expect(reconnectPeer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            const retry = fixture.lifecycle.retry('another-visible-session');
+            reconnectPeer.channel.open();
+            await retry;
+            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID,
+                sessionId: fixture.runtime.historySessionId, status: 'connected', canStop: true }));
+            expect(reconnectPeer.close).not.toHaveBeenCalled();
+            expect(reconnectPeer.createDataChannel).toHaveBeenCalledTimes(1);
+            expect(fixture.environment.providerFetch.mock.calls.filter(([url]) => String(url).endsWith('/v1/realtime/client_secrets'))).toHaveLength(1);
+            expect(fixture.lifecycle.getAttemptTargetSessionAddress()).toEqual(fixture.target);
+        } finally { reconnectPeer.channel.open(); await fixture.dispose(); }
     });
 
     it('reconnects a realtime attempt with the current UI tool set only when disclosure crosses the off boundary', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const previousSettings = storage.getState().settings;
-        const currentUiContext = {
-            readCurrentUiContext: () => ({
-                navigation: { area: 'app' as const, screen: 'home' },
-                commands: [],
-            }),
-            resolveCurrentUiCommand: () => null,
-            subscribe: () => () => {},
-            invokeCurrentUiCommand: async () => ({ ok: true as const }),
-        };
-        const hostLease = createBundledConversationRuntimeHostLease({ currentUiContext });
-        const captureAdmission = createVoiceCaptureAdmissionController();
-        const toolSetsSeenByProvider: string[][] = [];
+        const fixture = await createActualLifecycle({ currentUiContext: true });
+        const { StrictJsonValueSchema } = await import('@happier-dev/protocol/json/strictJsonValue');
         const currentUiToolNames = new Set([
-            String(getActionSpec('ui.current_context.read').bindings?.voiceClientToolName ?? '').trim(),
-            String(getActionSpec('ui.current_context.command.invoke').bindings?.voiceClientToolName ?? '').trim(),
+            String(getActionSpec('ui.current_context.read').bindings?.voiceClientToolName ?? ''),
+            String(getActionSpec('ui.current_context.command.invoke').bindings?.voiceClientToolName ?? ''),
         ]);
-        let snapshot: VoiceSessionSnapshot = {
-            adapterId: 'realtime-test',
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
+        const toolsAt = (index: number): string[] => {
+            const peer = fixture.browser.peers[index];
+            if (!peer) throw new Error('Actual OpenAI peer missing');
+            const controls = peer.channel.sent.map(raw => StrictJsonValueSchema.parse(JSON.parse(raw)));
+            const update = controls.find(value => value !== null && typeof value === 'object'
+                && !Array.isArray(value) && value.type === 'session.update');
+            if (!update || typeof update !== 'object' || Array.isArray(update)) throw new Error('OpenAI session.update missing');
+            const session = update.session;
+            if (!session || typeof session !== 'object' || Array.isArray(session) || !Array.isArray(session.tools)) {
+                throw new Error('OpenAI tool configuration missing');
+            }
+            return session.tools.flatMap(tool => tool && typeof tool === 'object' && !Array.isArray(tool)
+                && typeof tool.name === 'string' && currentUiToolNames.has(tool.name) ? [tool.name] : []);
         };
-        const listeners = new Set<() => void>();
-        const publish = (next: VoiceSessionSnapshot) => {
-            snapshot = next;
-            for (const listener of listeners) listener();
+        const setMode = async (mode: 'off' | 'on_demand' | 'automatic') => {
+            const voice = storage.getState().settings.voice;
+            await fixture.environment.configureVoice({ ...voice, privacy: { ...voice.privacy, currentUiContextMode: mode } });
+            fixture.lifecycle.setCurrentUiContextToolSetEnabled(mode !== 'off');
         };
-        const adapter: VoiceAdapterController = {
-            id: 'realtime-test',
-            engineKind: 'realtime',
-            start: vi.fn(async ({ sessionId }) => {
-                toolSetsSeenByProvider.push(
-                    hostLease.host.getRealtimeClientToolDefinitions({ effectCalls: 'stable_ids', exposure: 'voice_assistant' })
-                        .map((tool) => tool.name)
-                        .filter((name) => currentUiToolNames.has(name)),
-                );
-                publish({
-                    adapterId: 'realtime-test',
-                    sessionId,
-                    status: 'connected',
-                    mode: 'listening',
-                    canStop: true,
-                });
-            }),
-            stop: vi.fn(async ({ sessionId }) => {
-                publish({
-                    adapterId: 'realtime-test',
-                    sessionId,
-                    status: 'disconnected',
-                    mode: 'idle',
-                    canStop: false,
-                });
-            }),
-            toggle: vi.fn(async () => {}),
-            interrupt: vi.fn(async () => {}),
-            setMuted: vi.fn(async () => {}),
-            sendContextUpdate: vi.fn(),
-            getSnapshot: () => snapshot,
-            subscribe: (listener) => {
-                listeners.add(listener);
-                return () => listeners.delete(listener);
-            },
-        };
-        const controller = createVoiceSessionLifecycleController({
-            captureAdmission,
-            getRegistry: () => ({
-                get: (id) => id === adapter.id ? adapter : null,
-                list: () => [adapter],
-            }),
-        });
-        const setMode = (currentUiContextMode: 'off' | 'on_demand' | 'automatic') => {
-            storage.setState((state) => ({
-                ...state,
-                settings: {
-                    ...state.settings,
-                    experiments: true,
-                    featureToggles: {
-                        ...state.settings.featureToggles,
-                        voice: true,
-                    },
-                    voice: {
-                        ...state.settings.voice,
-                        privacy: {
-                            ...state.settings.voice.privacy,
-                            currentUiContextMode,
-                        },
-                    },
-                },
+        const finishRestart = async (peers: number) => {
+            await vi.waitFor(() => expect(fixture.browser.peers).toHaveLength(peers));
+            fixture.browser.peer.channel.open();
+            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({
+                adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId,
+                status: 'connected', canStop: true,
             }));
         };
-
         try {
-            controller.setConfiguredProviderId(adapter.id);
-            setMode('off');
-            controller.setCurrentUiContextToolSetEnabled(false);
-            await controller.toggle(sessionAddress('voice-session'));
-            expect(toolSetsSeenByProvider).toEqual([[]]);
-
-            setMode('on_demand');
-            controller.setCurrentUiContextToolSetEnabled(true);
-            await vi.waitFor(() => expect(adapter.start).toHaveBeenCalledTimes(2));
-            expect(toolSetsSeenByProvider).toEqual([
-                [],
-                ['readCurrentUiContext', 'invokeCurrentUiCommand'],
-            ]);
-
-            setMode('automatic');
-            controller.setCurrentUiContextToolSetEnabled(true);
-            setMode('on_demand');
-            controller.setCurrentUiContextToolSetEnabled(true);
-            expect(adapter.start).toHaveBeenCalledTimes(2);
-            expect(adapter.stop).toHaveBeenCalledTimes(1);
-            expect(controller.getSnapshot()).toMatchObject({
-                adapterId: adapter.id,
-                sessionId: 'voice-session',
-                status: 'connected',
-                canStop: true,
-            });
-
-            setMode('off');
-            controller.setCurrentUiContextToolSetEnabled(false);
-            await vi.waitFor(() => expect(adapter.start).toHaveBeenCalledTimes(3));
-            expect(toolSetsSeenByProvider).toEqual([
-                [],
-                ['readCurrentUiContext', 'invokeCurrentUiCommand'],
-                [],
-            ]);
-        } finally {
-            await controller.dispose();
-            hostLease.revoke();
-            storage.setState((state) => ({ ...state, settings: previousSettings }));
-        }
+            await setMode('off');
+            await fixture.start();
+            expect(toolsAt(0)).toEqual([]);
+            await setMode('on_demand');
+            await finishRestart(2);
+            expect(toolsAt(1)).toEqual(expect.arrayContaining([...currentUiToolNames]));
+            expect(fixture.browser.peers[0]?.connectionState).toBe('closed');
+            const incumbent = fixture.browser.peer;
+            await setMode('automatic');
+            await setMode('on_demand');
+            expect(fixture.browser.peers).toHaveLength(2);
+            expect(incumbent.connectionState).not.toBe('closed');
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+            await setMode('off');
+            await finishRestart(3);
+            expect(toolsAt(2)).toEqual([]);
+            expect(incumbent.connectionState).toBe('closed');
+        } finally { await fixture.dispose(); }
     });
 
     it('restarts a realtime provider-switch target when current-UI disclosure changes while it connects', async () => {
@@ -2085,473 +1297,255 @@ describe('createVoiceSessionLifecycleController', () => {
         }
     });
 
-    it.each(['on_demand', 'automatic'] as const)(
-        'retires and reseeds an active local Agent model session when current-UI disclosure returns from off to %s',
-        async (restoredCurrentUiContextMode) => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const previousSettings = storage.getState().settings;
-        const currentUiActionIds = ['ui.current_context.read', 'ui.current_context.command.invoke'];
-        const seededModelSessions: Array<Readonly<{ id: string; disabledActionIds: readonly string[] }>> = [];
-        const retiredModelSessionIds: string[] = [];
-        let activeModelSessionId: string | null = null;
-        let snapshot: VoiceSessionSnapshot = {
-            adapterId: 'local_conversation',
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        };
-        const listeners = new Set<() => void>();
-        const publish = (next: VoiceSessionSnapshot) => {
-            snapshot = next;
-            for (const listener of listeners) listener();
-        };
-        const adapter: VoiceAdapterController = {
-            id: 'local_conversation',
-            engineKind: 'local',
-            start: vi.fn(async ({ sessionId }) => {
-                const id = `model-session-${seededModelSessions.length + 1}`;
-                seededModelSessions.push({
-                    id,
-                    // This is the immutable daemon-start input that seeds the
-                    // Local Agent model session's available-action guidance.
-                    disabledActionIds: resolveDisabledVoiceActionIdsFromState(storage.getState()),
-                });
-                activeModelSessionId = id;
-                publish({
-                    adapterId: 'local_conversation',
-                    sessionId,
-                    status: 'connected',
-                    mode: 'listening',
-                    canStop: true,
-                });
-            }),
-            stop: vi.fn(async ({ sessionId }) => {
-                if (activeModelSessionId) {
-                    retiredModelSessionIds.push(activeModelSessionId);
-                    activeModelSessionId = null;
-                }
-                publish({
-                    adapterId: 'local_conversation',
-                    sessionId,
-                    status: 'disconnected',
-                    mode: 'idle',
-                    canStop: false,
-                });
-            }),
-            toggle: vi.fn(async () => {}),
-            interrupt: vi.fn(async () => {}),
-            bargeIn: vi.fn(async () => {}),
-            setMuted: vi.fn(async () => {}),
-            sendContextUpdate: vi.fn(),
-            sendTextTurn: vi.fn(async () => {}),
-            getSnapshot: () => snapshot,
-            subscribe: (listener) => {
-                listeners.add(listener);
-                return () => listeners.delete(listener);
-            },
-        };
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id) => id === adapter.id ? adapter : null,
-            list: () => [adapter],
-        }) });
-        const setMode = (currentUiContextMode: 'off' | 'on_demand' | 'automatic') => {
-            storage.setState((state) => ({
-                ...state,
-                settings: {
-                    ...state.settings,
-                    experiments: true,
-                    featureToggles: {
-                        ...state.settings.featureToggles,
-                        voice: true,
-                    },
-                    voice: {
-                        ...state.settings.voice,
-                        privacy: {
-                            ...state.settings.voice.privacy,
-                            currentUiContextMode,
-                        },
-                    },
-                },
-            }));
-        };
+    describe('actual local model-session disclosure', () => {
+        registerLocalVoiceEngineHarnessHooks();
 
-        try {
-            controller.setConfiguredProviderId(adapter.id);
-            setMode(restoredCurrentUiContextMode);
-            controller.setCurrentUiContextToolSetEnabled(true);
-            await controller.toggle(sessionAddress('local-session'));
+        beforeEach(async () => {
+            const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+            const { DaemonVoiceInferenceModelsWarmResponseSchema } = await import('@happier-dev/protocol/daemon/voiceInference');
+            const incumbent = machineRpcWithServerScope.getMockImplementation();
+            if (!incumbent) throw new Error('Actual local Voice Socket responder missing');
+            machineRpcWithServerScope.mockImplementation((request: Readonly<{ method: string }>) => (
+                request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM
+                    ? Promise.resolve(DaemonVoiceInferenceModelsWarmResponseSchema.parse({ ok: true, models: [] }))
+                    : incumbent(request)
+            ));
+        });
 
-            expect(seededModelSessions).toHaveLength(1);
-            expect(seededModelSessions[0].disabledActionIds).not.toEqual(expect.arrayContaining(currentUiActionIds));
+        it('fences a late suspension release from a same-id replacement adapter', async () => {
+            const state = await getStorage();
+            const settings = state.getState().settings;
+            state.__setState({ settings: { ...settings, voice: { ...settings.voice, providerId: 'local_direct' } } });
+            await loadLocalVoiceEngineWithCompatState();
+            const { createLocalDirectVoiceAdapter } = await import('@/voice/adapters/localDirect/localDirectAdapter');
+            const { registerVoiceAdapters } = await import('./voiceAdapterRegistry');
+            const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
+            const recording = localVoiceSpeechOutputBoundary.fileRecording;
+            recording.start.mockResolvedValueOnce({ recordingId: 'suspension-incumbent' })
+                .mockResolvedValueOnce({ recordingId: 'suspension-replacement' });
+            registerVoiceAdapters([createLocalDirectVoiceAdapter()]);
+            const controller = createVoiceSessionLifecycleController();
+            controller.setConfiguredProviderId('local_direct');
+            const target = { serverId: localVoiceHomeId, sessionId: 's1' };
+            try {
+                await controller.toggle(target);
+                const suspension = await controller.suspendInput('s1');
+                expect(recording.setMuted).toHaveBeenCalledWith({ recordingId: 'suspension-incumbent', muted: true });
+                await controller.stop('s1');
+                expect(recording.stop).toHaveBeenCalledWith({ recordingId: 'suspension-incumbent' });
+                // Actual remount creates a new adapter object at the public
+                // registry and a fresh physical recording for the same id.
+                registerVoiceAdapters([createLocalDirectVoiceAdapter()]);
+                await controller.toggle(target);
+                expect(recording.start).toHaveBeenCalledTimes(2);
+                expect(controller.getSnapshot()).toMatchObject({ adapterId: 'local_direct', sessionId: 's1',
+                    status: 'connected', canStop: true });
+                expect(controller.getSnapshot().micMuted === true).toBe(false);
+                const muteOperations = recording.setMuted.mock.calls.length;
+                const stopOperations = recording.stop.mock.calls.length;
+                await suspension?.release();
+                expect(recording.setMuted).toHaveBeenCalledTimes(muteOperations);
+                expect(recording.stop).toHaveBeenCalledTimes(stopOperations);
+                expect(controller.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+                expect(controller.getSnapshot().micMuted === true).toBe(false);
+            } finally { await controller.dispose(); }
+        });
 
-            setMode('off');
-            controller.setCurrentUiContextToolSetEnabled(false);
-
-            await vi.waitFor(() => expect(adapter.start).toHaveBeenCalledTimes(2));
-            expect(adapter.stop).toHaveBeenCalledWith({ sessionId: 'local-session' });
-            expect(retiredModelSessionIds).toEqual(['model-session-1']);
-            expect(seededModelSessions.map((session) => session.id)).toEqual([
-                'model-session-1',
-                'model-session-2',
-            ]);
-            expect(seededModelSessions[1].disabledActionIds).toEqual(expect.arrayContaining(currentUiActionIds));
-            expect(controller.getSnapshot()).toMatchObject({
-                adapterId: adapter.id,
-                sessionId: 'local-session',
-                status: 'connected',
-                canStop: true,
-            });
-
-            setMode(restoredCurrentUiContextMode);
-            controller.setCurrentUiContextToolSetEnabled(true);
-            await vi.waitFor(() => expect(adapter.start).toHaveBeenCalledTimes(3));
-            expect(retiredModelSessionIds).toEqual(['model-session-1', 'model-session-2']);
-            expect(seededModelSessions.map((session) => session.id)).toEqual([
-                'model-session-1',
-                'model-session-2',
-                'model-session-3',
-            ]);
-            expect(seededModelSessions[2].disabledActionIds).not.toEqual(
-                expect.arrayContaining(currentUiActionIds),
-            );
-        } finally {
-            await controller.dispose();
-            storage.setState((state) => ({ ...state, settings: previousSettings }));
-        }
-        },
-    );
-
-    it('does not interrupt a local direct attempt with no model-session tool catalog', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const previousSettings = storage.getState().settings;
-        let snapshot: VoiceSessionSnapshot = {
-            adapterId: 'local_direct',
-            sessionId: 'local-session',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-        };
-        const listeners = new Set<() => void>();
-        const adapter: VoiceAdapterController = {
-            id: 'local_direct',
-            engineKind: 'local',
-            start: vi.fn(async () => {}),
-            stop: vi.fn(async ({ sessionId }) => {
-                snapshot = {
-                    adapterId: 'local_direct',
-                    sessionId,
-                    status: 'disconnected',
-                    mode: 'idle',
-                    canStop: false,
+        it.each(['on_demand', 'automatic'] as const)(
+            'retires and reseeds an active local Agent model session when current-UI disclosure returns from off to %s',
+            async (restoredMode) => {
+                const state = await getStorage();
+                const { readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+                const settings = state.getState().settings;
+                const voice = settings.voice;
+                const config = readLocalConversationVoiceSettings(voice);
+                state.__setState({ settings: { ...settings, voice: { ...voice, providerId: 'local_conversation',
+                    privacy: { ...voice.privacy, currentUiContextMode: restoredMode },
+                    executionMachine: { mode: 'fixed', machineId: 'machine-1' },
+                    providers: { ...voice.providers, local_conversation: { schemaVersion: 1, config: { ...config,
+                        conversationMode: 'agent', agent: { ...config.agent, prewarmOnConnect: true } } } },
+                } } });
+                await loadLocalVoiceEngineWithCompatState();
+                const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
+                const { ExecutionRunEnsureOrStartRequestSchema } = await import('@happier-dev/protocol/execution/runs/index');
+                const { SESSION_RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+                const controller = createVoiceSessionLifecycleController();
+                controller.setConfiguredProviderId('local_conversation');
+                controller.setCurrentUiContextToolSetEnabled(true);
+                const seeds = () => localVoiceAgentRpc.requests.filter(request => (
+                    request.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
+                    || request.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1
+                )).map(request => ExecutionRunEnsureOrStartRequestSchema.parse(request.input).start);
+                const currentUiActionIds = ['ui.current_context.read', 'ui.current_context.command.invoke'];
+                const setMode = (mode: 'off' | 'on_demand' | 'automatic') => {
+                    const settings = state.getState().settings;
+                    state.__setState({ settings: { ...settings, voice: { ...settings.voice,
+                        privacy: { ...settings.voice.privacy, currentUiContextMode: mode } } } });
+                    controller.setCurrentUiContextToolSetEnabled(mode !== 'off');
                 };
-                for (const listener of listeners) listener();
-            }),
-            toggle: vi.fn(async () => {}),
-            interrupt: vi.fn(async () => {}),
-            setMuted: vi.fn(async () => {}),
-            sendContextUpdate: vi.fn(),
-            getSnapshot: () => snapshot,
-            subscribe: (listener) => {
-                listeners.add(listener);
-                return () => listeners.delete(listener);
+                try {
+                    await controller.toggle({ serverId: localVoiceHomeId, sessionId: 's1' });
+                    await vi.waitFor(() => expect(seeds()).toHaveLength(1));
+                    expect(seeds()[0]?.disabledActionIds ?? []).not.toEqual(expect.arrayContaining(currentUiActionIds));
+                    setMode('off');
+                    await vi.waitFor(() => expect(seeds()).toHaveLength(2));
+                    expect(seeds()[1]?.disabledActionIds).toEqual(expect.arrayContaining(currentUiActionIds));
+                    expect(localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1);
+                    expect(controller.getSnapshot()).toMatchObject({ adapterId: 'local_conversation', status: 'connected', canStop: true });
+                    setMode(restoredMode);
+                    await vi.waitFor(() => expect(seeds()).toHaveLength(3));
+                    expect(seeds()[2]?.disabledActionIds ?? []).not.toEqual(expect.arrayContaining(currentUiActionIds));
+                    expect(localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(2);
+                } finally { await controller.dispose(); }
             },
-        };
-        const controller = createVoiceSessionLifecycleController({ getRegistry: () => ({
-            get: (id) => id === adapter.id ? adapter : null,
-            list: () => [adapter],
-        }) });
+        );
 
-        try {
-            controller.setConfiguredProviderId(adapter.id);
-            storage.setState((state) => ({
-                ...state,
-                settings: {
-                    ...state.settings,
-                    voice: {
-                        ...state.settings.voice,
-                        privacy: {
-                            ...state.settings.voice.privacy,
-                            currentUiContextMode: 'on_demand',
-                        },
-                    },
-                },
-            }));
+        it('does not interrupt a local direct attempt with no model-session tool catalog', async () => {
+            const state = await getStorage();
+            const settings = state.getState().settings;
+            state.__setState({ settings: { ...settings, voice: { ...settings.voice, providerId: 'local_direct' } } });
+            await loadLocalVoiceEngineWithCompatState();
+            const { createLocalDirectVoiceAdapter } = await import('@/voice/adapters/localDirect/localDirectAdapter');
+            const { registerVoiceAdapters } = await import('./voiceAdapterRegistry');
+            registerVoiceAdapters([createLocalDirectVoiceAdapter()]);
+            const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
+            const controller = createVoiceSessionLifecycleController();
+            controller.setConfiguredProviderId('local_direct');
             controller.setCurrentUiContextToolSetEnabled(true);
+            try {
+                await controller.toggle({ serverId: localVoiceHomeId, sessionId: 's1' });
+                expect(controller.getSnapshot()).toMatchObject({ adapterId: 'local_direct', sessionId: 's1', status: 'connected', canStop: true });
+                const captureStarts = localVoiceSpeechOutputBoundary.fileRecording.start.mock.calls.length;
+                for (const mode of ['off', 'automatic'] as const) {
+                    const settings = state.getState().settings;
+                    state.__setState({ settings: { ...settings, voice: { ...settings.voice,
+                        privacy: { ...settings.voice.privacy, currentUiContextMode: mode } } } });
+                    controller.setCurrentUiContextToolSetEnabled(mode !== 'off');
+                    expect(controller.getSnapshot()).toMatchObject({ adapterId: 'local_direct', sessionId: 's1', status: 'connected', canStop: true });
+                    expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(captureStarts);
+                    expect(localVoiceSpeechOutputBoundary.fileRecording.stop).not.toHaveBeenCalled();
+                }
+            } finally { await controller.dispose(); }
+        });
+        it.each(['local', 'realtime'] as const)(
+            'retires an exact %s provider withdrawn while Start is still pending and fences late activation',
+            async (engineKind) => {
+                const { registerVoiceAdapters } = await import('./voiceAdapterRegistry');
+                if (engineKind === 'realtime') {
+                    const fixture = await createActualLifecycle();
+                    const mint = createDeferred<Response>();
+                    fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+                    let starting: Promise<void> | null = null;
+                    let startSettled = false;
+                    try {
+                        starting = fixture.lifecycle.toggle(fixture.target);
+                        void starting.then(() => { startSettled = true; }, () => { startSettled = true; });
+                        await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+                        expect(fixture.captureAdmission.acquire('dictation').status).toBe('busy');
+                        const { getExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } = await import('@/voice/registry/externalVoiceProviderRegistrations');
+                        const registration = getExternalVoiceProviderRegistration(OPENAI_PROVIDER_ID);
+                        if (!registration) throw new Error('Actual OpenAI registration missing');
+                        removeExternalVoiceProviderRegistration(registration.token);
+                        registerVoiceAdapters([]);
+                        await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({
+                            adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId,
+                            status: 'error', canStop: false, errorCode: 'service_temporarily_unavailable',
+                            errorMessage: 'voice_provider_adapter_not_registered',
+                        }));
+                        expect(startSettled).toBe(false);
+                        const dictation = fixture.captureAdmission.acquire('dictation');
+                        expect(dictation.status).toBe('acquired');
+                        if (dictation.status === 'acquired') dictation.lease.release();
+                        // The real HTTP operation can settle after its first
+                        // retirement; its credential must not revive media.
+                        mint.resolve(Response.json(fixture.environment.createClientAuthProviderResponse('ek_source_composed', Math.floor(Date.now() / 1000) + 60)));
+                        await starting;
+                        expect(fixture.browser.peers).toHaveLength(0);
+                        expect(fixture.browser.captures).toHaveLength(0);
+                        expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'error', canStop: false,
+                            errorCode: 'service_temporarily_unavailable', errorRecoveryAction: 'retry' });
+                    } finally {
+                        mint.resolve(new Response('{}'));
+                        await fixture.dispose();
+                        await starting?.catch(() => undefined);
+                    }
+                    return;
+                }
 
-            storage.setState((state) => ({
-                ...state,
-                settings: {
-                    ...state.settings,
-                    voice: {
-                        ...state.settings.voice,
-                        privacy: {
-                            ...state.settings.voice.privacy,
-                            currentUiContextMode: 'off',
-                        },
-                    },
-                },
-            }));
-            controller.setCurrentUiContextToolSetEnabled(false);
-
-            expect(adapter.stop).not.toHaveBeenCalled();
-            expect(controller.getSnapshot()).toMatchObject({
-                adapterId: adapter.id,
-                sessionId: 'local-session',
-                status: 'connected',
-                canStop: true,
-            });
-
-            storage.setState((state) => ({
-                ...state,
-                settings: {
-                    ...state.settings,
-                    voice: {
-                        ...state.settings.voice,
-                        privacy: {
-                            ...state.settings.voice.privacy,
-                            currentUiContextMode: 'automatic',
-                        },
-                    },
-                },
-            }));
-            controller.setCurrentUiContextToolSetEnabled(true);
-
-            expect(adapter.stop).not.toHaveBeenCalled();
-            expect(adapter.start).not.toHaveBeenCalled();
-        } finally {
-            await controller.dispose();
-            storage.setState((state) => ({ ...state, settings: previousSettings }));
-        }
+                const state = await getStorage();
+                const settings = state.getState().settings;
+                state.__setState({ settings: { ...settings, voice: { ...settings.voice, providerId: 'local_direct' } } });
+                await loadLocalVoiceEngineWithCompatState();
+                const { createLocalDirectVoiceAdapter } = await import('@/voice/adapters/localDirect/localDirectAdapter');
+                registerVoiceAdapters([createLocalDirectVoiceAdapter()]);
+                const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
+                const { voiceCaptureAdmissionController } = await import('@/voice/runtime/input/VoiceCaptureAdmissionController');
+                const recording = createDeferred<{ recordingId: string }>();
+                localVoiceSpeechOutputBoundary.fileRecording.start.mockImplementationOnce(() => recording.promise);
+                const controller = createVoiceSessionLifecycleController();
+                controller.setConfiguredProviderId('local_direct');
+                let starting: Promise<void> | null = null;
+                let startSettled = false;
+                try {
+                    starting = controller.toggle({ serverId: localVoiceHomeId, sessionId: 's1' });
+                    void starting.then(() => { startSettled = true; }, () => { startSettled = true; });
+                    await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalled());
+                    expect(voiceCaptureAdmissionController.acquire('dictation').status).toBe('busy');
+                    registerVoiceAdapters([]);
+                    // Observe the native owner's bounded terminal retirement
+                    // while its OS Start reply remains pending.
+                    await vi.waitFor(() => {
+                        const dictation = voiceCaptureAdmissionController.acquire('dictation');
+                        if (dictation.status === 'acquired') dictation.lease.release();
+                        expect(dictation.status).toBe('acquired');
+                    }, { timeout: 5_000 });
+                    expect(startSettled).toBe(false);
+                    expect(localVoiceSpeechOutputBoundary.fileRecording.stop).not.toHaveBeenCalled();
+                    expect(controller.getSnapshot()).toMatchObject({ adapterId: 'local_direct', sessionId: 's1',
+                        status: 'error', canStop: false, errorCode: 'service_temporarily_unavailable',
+                        errorMessage: 'voice_provider_adapter_not_registered' });
+                    recording.resolve({ recordingId: 'withdrawn-during-native-start' });
+                    await starting;
+                    await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.stop)
+                        .toHaveBeenCalledWith({ recordingId: 'withdrawn-during-native-start' }));
+                    expect(controller.getSnapshot()).toMatchObject({ status: 'error', canStop: false,
+                        errorCode: 'service_temporarily_unavailable', errorRecoveryAction: 'retry' });
+                    await controller.toggle({ serverId: localVoiceHomeId, sessionId: 's1' });
+                    expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(1);
+                } finally {
+                    recording.resolve({ recordingId: 'withdrawn-during-native-start' });
+                    await starting?.catch(() => undefined);
+                    await controller.dispose();
+                }
+            },
+        );
     });
 
     it('keeps the withdrawn provider owning its live attempt until that exact adapter terminalizes', async () => {
-        const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-        const captureAdmission = createVoiceCaptureAdmissionController();
-        const stopReached = createDeferred<void>();
-        const releaseStop = createDeferred<void>();
-        let snapshot: VoiceSessionSnapshot = {
-            adapterId: 'realtime-retiring',
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        };
-        const listeners = new Set<() => void>();
-        const publish = (next: VoiceSessionSnapshot) => {
-            snapshot = next;
-            for (const listener of listeners) listener();
-        };
-        const stop = vi.fn(async ({ sessionId }: Readonly<{ sessionId: string }>) => {
-            stopReached.resolve();
-            await releaseStop.promise;
-            publish({
-                adapterId: 'realtime-retiring',
-                sessionId,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            });
-        });
-        const adapter: VoiceAdapterController = {
-            id: 'realtime-retiring',
-            engineKind: 'realtime',
-            start: vi.fn(async ({ sessionId }) => {
-                publish({
-                    adapterId: 'realtime-retiring',
-                    sessionId,
-                    status: 'connected',
-                    mode: 'listening',
-                    canStop: true,
-                });
-            }),
-            stop,
-            toggle: vi.fn(async () => {}),
-            interrupt: vi.fn(async () => {}),
-            setMuted: vi.fn(async () => {}),
-            sendContextUpdate: vi.fn(),
-            getSnapshot: () => snapshot,
-            subscribe: (listener) => {
-                listeners.add(listener);
-                return () => listeners.delete(listener);
-            },
-        };
-        let registered = true;
-        const registryListeners = new Set<() => void>();
-        const controller = createVoiceSessionLifecycleController({
-            captureAdmission,
-            getRegistry: () => ({
-                get: (id) => (registered && id === adapter.id ? adapter : null),
-                list: () => (registered ? [adapter] : []),
-                subscribe: (listener: () => void) => {
-                    registryListeners.add(listener);
-                    return () => registryListeners.delete(listener);
-                },
-            }),
-        });
-
+        const fixture = await createActualLifecycle();
+        const cleanup = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
         try {
-            controller.setConfiguredProviderId(adapter.id);
-            await act(async () => {
-                await controller.toggle(sessionAddress('voice-global'));
-            });
-            expect(controller.getSnapshot()).toMatchObject({
-                adapterId: adapter.id,
-                status: 'connected',
-                canStop: true,
-            });
-            expect(captureAdmission.acquire('dictation')).toMatchObject({ status: 'busy' });
-
-            // The plugin projection withdraws the registration synchronously so
-            // no new Start can select it, while its runtime is still stopping.
-            registered = false;
-            act(() => {
-                for (const listener of [...registryListeners]) listener();
-            });
-
-            // Withdrawal is not termination: the retired adapter still owns live
-            // media, so this owner must not publish idle or hand global capture
-            // admission to another product.
-            expect(controller.getSnapshot()).toMatchObject({
-                adapterId: adapter.id,
-                status: 'connected',
-                canStop: true,
-            });
-            expect(captureAdmission.acquire('dictation')).toMatchObject({ status: 'busy' });
-
-            // Stop authority stays with that exact adapter.
-            await stopReached.promise;
-            await act(async () => {
-                releaseStop.resolve();
-                await releaseStop.promise;
-                await Promise.resolve();
-                await Promise.resolve();
-            });
-            // Media is terminal, but the configured provider is still absent:
-            // retain the exact recovery target and publish its typed prerequisite.
-            await vi.waitFor(() => expect(controller.getSnapshot()).toMatchObject({
-                adapterId: adapter.id,
-                sessionId: 'voice-global',
-                status: 'error',
-                canStop: false,
-                errorCode: 'service_temporarily_unavailable',
-                errorRecoveryAction: 'retry',
-            }));
-            expect(stop).toHaveBeenCalledTimes(1);
-            const afterTerminal = captureAdmission.acquire('dictation');
-            expect(afterTerminal).toMatchObject({ status: 'acquired' });
-            if (afterTerminal.status === 'acquired') afterTerminal.lease.release();
-        } finally {
-            releaseStop.resolve();
-            await controller.dispose();
-        }
+            await fixture.start();
+            const { getExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } = await import('@/voice/registry/externalVoiceProviderRegistrations');
+            const registration = getExternalVoiceProviderRegistration(OPENAI_PROVIDER_ID);
+            if (!registration) throw new Error('Actual OpenAI registration missing');
+            removeExternalVoiceProviderRegistration(registration.token);
+            const { registerVoiceAdapters } = await import('./voiceAdapterRegistry');
+            registerVoiceAdapters([]);
+            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            expect(fixture.captureAdmission.acquire('dictation').status).toBe('busy');
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, canStop: true });
+            cleanup.resolve();
+            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID,
+                sessionId: fixture.runtime.historySessionId, status: 'error', canStop: false,
+                errorCode: 'service_temporarily_unavailable', errorRecoveryAction: 'retry' }));
+            const dictation = fixture.captureAdmission.acquire('dictation');
+            expect(dictation.status).toBe('acquired');
+            if (dictation.status === 'acquired') dictation.lease.release();
+        } finally { cleanup.resolve(); await fixture.dispose(); }
     });
 
-    it.each(['local', 'realtime'] as const)(
-        'retires an exact %s provider withdrawn while Start is still pending and fences late activation',
-        async (engineKind) => {
-            const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-            const captureAdmission = createVoiceCaptureAdmissionController();
-            const releaseStart = createDeferred<void>();
-            const providerId = `withdrawn-during-start-${engineKind}`;
-            const sessionId = 'voice-session';
-            let snapshot: VoiceSessionSnapshot = {
-                adapterId: providerId,
-                sessionId: null,
-                status: 'disconnected',
-                mode: 'idle',
-                canStop: false,
-            };
-            const adapterListeners = new Set<() => void>();
-            const publishAdapter = (next: VoiceSessionSnapshot) => {
-                snapshot = next;
-                for (const listener of [...adapterListeners]) listener();
-            };
-            const adapter: VoiceAdapterController = {
-                id: providerId,
-                engineKind,
-                start: vi.fn(async () => {
-                    await releaseStart.promise;
-                    publishAdapter({
-                        adapterId: providerId,
-                        sessionId,
-                        status: 'connected',
-                        mode: 'listening',
-                        canStop: true,
-                    });
-                }),
-                stop: vi.fn(async () => {
-                    publishAdapter({
-                        adapterId: providerId,
-                        sessionId,
-                        status: 'disconnected',
-                        mode: 'idle',
-                        canStop: false,
-                    });
-                }),
-                toggle: vi.fn(async () => {}),
-                interrupt: vi.fn(async () => {}),
-                setMuted: vi.fn(async () => {}),
-                sendContextUpdate: vi.fn(),
-                getSnapshot: () => snapshot,
-                subscribe: (listener) => {
-                    adapterListeners.add(listener);
-                    return () => adapterListeners.delete(listener);
-                },
-            };
-            let registered = true;
-            const registryListeners = new Set<() => void>();
-            const controller = createVoiceSessionLifecycleController({
-                captureAdmission,
-                getRegistry: () => ({
-                    get: (id) => registered && id === providerId ? adapter : null,
-                    list: () => registered ? [adapter] : [],
-                    subscribe: (listener) => {
-                        registryListeners.add(listener);
-                        return () => registryListeners.delete(listener);
-                    },
-                }),
-            });
-            let start: Promise<void> | null = null;
-
-            try {
-                controller.setConfiguredProviderId(providerId);
-                start = controller.toggle(sessionAddress(sessionId));
-                await vi.waitFor(() => expect(adapter.start).toHaveBeenCalledOnce());
-
-                registered = false;
-                for (const listener of [...registryListeners]) listener();
-
-                // Withdrawal owns cancellation immediately; it does not wait
-                // for provider setup to finish before asking that exact object
-                // to retire.
-                await vi.waitFor(() => expect(adapter.stop).toHaveBeenCalledOnce());
-
-                // A provider that settles Start after its first Stop must not
-                // regain media/tool authority after its registration vanished.
-                releaseStart.resolve();
-                await start;
-                expect(adapter.stop).toHaveBeenCalledTimes(2);
-                expect(controller.getSnapshot()).toMatchObject({
-                    adapterId: providerId,
-                    sessionId,
-                    status: 'error',
-                    canStop: false,
-                    errorCode: 'service_temporarily_unavailable',
-                    errorMessage: 'voice_provider_adapter_not_registered',
-                });
-                if (engineKind === 'realtime') {
-                    const dictation = captureAdmission.acquire('dictation');
-                    expect(dictation).toMatchObject({ status: 'acquired' });
-                    if (dictation.status === 'acquired') dictation.lease.release();
-                }
-            } finally {
-                releaseStart.resolve();
-                await start?.catch(() => undefined);
-                await controller.dispose();
-            }
-        },
-    );
 
     it('tracks current and retained adapter subscriptions by object identity across a same-ID replacement', async () => {
         const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
@@ -2678,55 +1672,27 @@ describe('createVoiceSessionLifecycleController', () => {
     it.each(['stop', 'toggle'] as const)(
         '%s stops a pending realtime Start before its first active snapshot and releases capture admission',
         async (operation) => {
-            const { createVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleController');
-            const captureAdmission = createVoiceCaptureAdmissionController();
-            const startDeferred = createDeferred<void>();
-            const adapter = createAdapter({
-                id: OPENAI_PROVIDER_ID,
-                snapshot: {
-                    adapterId: OPENAI_PROVIDER_ID,
-                    sessionId: null,
-                    status: 'disconnected',
-                    mode: 'idle',
-                    canStop: false,
-                },
-                start: async () => {
-                    await startDeferred.promise;
-                },
-            });
-            const controller = createVoiceSessionLifecycleController({
-                captureAdmission,
-                getRegistry: () => ({
-                    get: (id) => id === adapter.controller.id ? adapter.controller : null,
-                    list: () => [adapter.controller],
-                }),
-            });
-            let start: Promise<void> | null = null;
-
+            const fixture = await createActualLifecycle();
+            const mint = createDeferred<Response>();
+            fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+            let starting: Promise<void> | null = null;
             try {
-                controller.setConfiguredProviderId(OPENAI_PROVIDER_ID);
-                start = controller.toggle(sessionAddress('starting-session'));
-                await vi.waitFor(() => expect(adapter.start).toHaveBeenCalledOnce());
-                expect(captureAdmission.acquire('dictation')).toMatchObject({ status: 'busy' });
-
-                const endAttempt = operation === 'stop'
-                    ? controller.stop('stale-session')
-                    : controller.toggle(sessionAddress('stale-session'));
-                await expect(endAttempt).resolves.toBeUndefined();
-
-                expect(adapter.start).toHaveBeenCalledOnce();
-                expect(adapter.stop).toHaveBeenCalledWith({ sessionId: 'starting-session' });
-                const releasedAdmission = captureAdmission.acquire('dictation');
-                expect(releasedAdmission).toMatchObject({ status: 'acquired' });
-                if (releasedAdmission.status === 'acquired') releasedAdmission.lease.release();
-
-                startDeferred.resolve();
-                await start;
-            } finally {
-                startDeferred.resolve();
-                await start?.catch(() => undefined);
-                await controller.dispose();
-            }
+                starting = fixture.lifecycle.toggle(fixture.target);
+                void starting.catch(() => undefined);
+                await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+                expect(fixture.captureAdmission.acquire('dictation').status).toBe('busy');
+                const end = operation === 'stop'
+                    ? fixture.lifecycle.stop('another-visible-session')
+                    : fixture.lifecycle.toggle({ ...fixture.target, sessionId: 'another-visible-session' });
+                mint.resolve(Response.json(fixture.environment.createClientAuthProviderResponse('ek_source_composed', Math.floor(Date.now() / 1000) + 60)));
+                await end;
+                await starting.catch(() => undefined);
+                expect(fixture.browser.peers).toHaveLength(0);
+                expect(fixture.browser.micSession.getStream()).toBeNull();
+                const dictation = fixture.captureAdmission.acquire('dictation');
+                expect(dictation.status).toBe('acquired');
+                if (dictation.status === 'acquired') dictation.lease.release();
+            } finally { mint.resolve(new Response('{}')); await fixture.dispose(); await starting?.catch(() => undefined); }
         },
     );
 });

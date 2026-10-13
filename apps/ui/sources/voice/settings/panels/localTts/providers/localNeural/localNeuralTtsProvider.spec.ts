@@ -1,149 +1,126 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { createDeferred, createMachineFixture } from '@/dev/testkit';
 import type { VoiceLocalTtsSettings } from '@/sync/domains/settings/voiceLocalTtsSettings';
 import { voiceSettingsDefaults } from '@/sync/domains/settings/voiceSettings';
+import { createVoiceSettingsAccountTestHarness } from '../../../voiceSettingsAccountTestHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storage';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { DaemonVoiceInferenceTtsStreamStartRequestSchema } from '@happier-dev/protocol/daemon/voiceInference';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+// These local speech tests never start the unavailable vendor web conversation SDK.
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: () => { throw new Error('Unexpected ElevenLabs conversation start'); } } }));
 
-const speakKokoroTextSpy = vi.fn().mockResolvedValue(undefined);
-const daemonSpeakSpy = vi.fn().mockResolvedValue(undefined);
-const platformOsMock = vi.hoisted(() => ({ value: 'ios' }));
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
+const boundary = createVoiceSpeechOutputBoundary({ getAccount: () => ({
+  home: { id: account.scope.serverId, serverUrl: getActiveServerSnapshot().serverUrl }, credentials: account.credentials,
+}) });
+const { localNeuralTtsProviderSpec } = await import('./localNeuralTtsProvider');
 
-vi.mock('react-native', async () => {
-  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-  return createReactNativeWebMock({
-    Platform: {
-      get OS() {
-        return platformOsMock.value;
-      },
-    },
-  });
-});
+function tts(execution: 'auto' | 'device'): VoiceLocalTtsSettings {
+  return { provider: 'local_neural',
+    localNeural: { model: 'kokoro', assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', voiceId: 'af_heart', speed: 1, execution },
+    autoSpeakReplies: true, bargeInEnabled: true };
+}
 
-vi.mock('@/voice/output/KokoroTtsController', () => ({
-  speakKokoroText: (...args: any[]) => speakKokoroTextSpy(...args),
-}));
-
-vi.mock('@/voice/runtime/daemonInference/DaemonTtsController', () => ({
-  DaemonTtsController: vi.fn().mockImplementation(() => ({
-    speak: (...args: any[]) => daemonSpeakSpy(...args),
-  })),
-}));
-
-vi.mock('@/voice/runtime/daemonInference/daemonVoiceInferencePolicy', () => ({
-  resolveLocalNeuralExecutionPolicy: (params: { requestedExecution?: string | null }) => {
-    const requestedExecution = params.requestedExecution ?? 'auto';
-    const selectableExecution = requestedExecution;
-    return {
-      allowDeviceSelection: platformOsMock.value !== 'web',
-      preferredExecution: selectableExecution === 'auto'
-        ? platformOsMock.value === 'web'
-          ? 'daemon'
-          : 'device'
-        : selectableExecution,
-      requestedExecution,
-      selectableExecution,
-    };
-  },
-  resolveDaemonVoiceInferenceExecution: async (params: { requestedExecution?: string | null }) => {
-    const requestedExecution = params.requestedExecution ?? 'auto';
-    if (requestedExecution !== 'auto') return requestedExecution;
-    return platformOsMock.value === 'web' ? 'daemon' : 'device';
-  },
-}));
-
-vi.mock('@/voice/settings/panels/localTts/LocalNeuralTtsSettings', () => ({
-  LocalNeuralTtsSettings: () => null,
-}));
+// Restore credentials through the SDK storage for the platform under test.
+async function restoreAccount() {
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({
+      experiments: true, featureToggles: { 'voice.agent': true, 'execution.runs': true, 'voice.daemonInference': true },
+      voice: { ...voiceSettingsDefaults, executionMachine: { mode: 'fixed', machineId: 'tts-machine', autoMachineId: null } },
+    }), { features: createRootLayoutFeaturesResponse({ features: {
+      execution: { runs: { enabled: true } },
+      machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+    }, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+      maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000, maxDurationMs: 60_000,
+      maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1,
+    } } } } } }) });
+    const accountHttp = account.request.getMockImplementation();
+    if (!accountHttp) throw new Error('Account HTTP boundary missing');
+    account.request.mockImplementation(async (url, init) => boundary.answerMachineHttpRequest(url, 'tts-machine', account.scope.accountId)
+      ?? accountHttp(url, init));
+    const machine = createMachineFixture({ id: 'tts-machine', activeAt: Date.now() });
+    storage.getState().applyMachines([machine], true, { sourceServerId: account.scope.serverId });
+}
 
 describe('localNeuralTtsProviderSpec', () => {
   const envKey = 'EXPO_PUBLIC_KOKORO_OPERATION_TIMEOUT_MS';
   let priorEnv: string | undefined;
 
-  beforeEach(() => {
-    vi.resetModules();
-    speakKokoroTextSpy.mockClear();
-    daemonSpeakSpy.mockClear();
-    platformOsMock.value = 'ios';
+  beforeEach(async () => {
+    const reset = boundary.reset();
+    boundary.platform.value = 'ios';
+    const manifest = parseModelPackManifest({ packId: 'kokoro-82m-v1.0-onnx-q8-wasm', kind: 'tts_sherpa',
+      model: 'kokoro', version: '1', frontend: { lang: 'en' },
+      voices: [{ id: 'af_heart', title: 'Heart', sid: 0 }], defaultVoiceId: 'af_heart',
+      files: [{ path: 'model.onnx', url: 'https://example.test/model.onnx', sha256: 'a'.repeat(64), sizeBytes: 1 }] });
+    reset.filesystem.files.set(`${reset.filesystem.root}/${manifest.packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
     priorEnv = process.env[envKey];
     process.env[envKey] = '120000';
   });
 
-  afterEach(() => {
-    if (priorEnv === undefined) {
-      delete process.env[envKey];
-    } else {
-      process.env[envKey] = priorEnv;
-    }
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    boundary.disposeNativeSdkBridge();
+    await account?.dispose();
+    if (priorEnv === undefined) delete process.env[envKey];
+    else process.env[envKey] = priorEnv;
   });
+  afterAll(async () => { await boundary.disposeAudioSession(); });
 
   it('uses Kokoro operation timeout (not a fixed 60s floor) for Test TTS', async () => {
-    const { localNeuralTtsProviderSpec } = await import('./localNeuralTtsProvider');
-
-    const cfgTts: VoiceLocalTtsSettings = {
-      provider: 'local_neural',
-      localNeural: { model: 'kokoro', assetId: null, voiceId: null, speed: null, execution: 'auto' },
-      autoSpeakReplies: true,
-      bargeInEnabled: true,
-    };
-
-    await localNeuralTtsProviderSpec.test({
-      cfgTts,
-      voice: voiceSettingsDefaults,
-      networkTimeoutMs: 15_000,
-      sample: 'Hello',
-    });
-
-    expect(speakKokoroTextSpy).toHaveBeenCalled();
-    const arg = speakKokoroTextSpy.mock.calls[0]?.[0];
-    expect(arg?.timeoutMs).toBe(120_000);
+    await restoreAccount();
+    const initialized = createDeferred<void>();
+    const initialization = createDeferred<void>();
+    boundary.nativeInitialize.mockImplementationOnce(async () => { initialized.resolve(); await initialization.promise; });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let settled = false;
+    const result = localNeuralTtsProviderSpec.test({ cfgTts: tts('auto'), voice: voiceSettingsDefaults,
+      networkTimeoutMs: 15_000, sample: 'Hello' }).then(() => { settled = true; return null; }, error => { settled = true; return error; });
+    await initialized.promise;
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(settled).toBe(false);
+    expect(boundary.nativeSynthesize).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(await result).toMatchObject({ message: 'timeout' });
+    expect(boundary.encodedAudio.start).not.toHaveBeenCalled();
+    initialization.resolve();
   });
 
-  it('routes Test TTS through the daemon controller for the default web auto execution path', async () => {
-    platformOsMock.value = 'web';
-    const { localNeuralTtsProviderSpec } = await import('./localNeuralTtsProvider');
-
-    const cfgTts: VoiceLocalTtsSettings = {
-      provider: 'local_neural',
-      localNeural: { model: 'kokoro', assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', voiceId: 'af_heart', speed: 1, execution: 'auto' },
-      autoSpeakReplies: true,
-      bargeInEnabled: true,
-    };
-
-    await localNeuralTtsProviderSpec.test({
-      cfgTts,
-      voice: voiceSettingsDefaults,
-      networkTimeoutMs: 15_000,
-      sample: 'Hello',
+  it('routes Test TTS through the actual daemon stream for the default web auto execution path', async () => {
+    boundary.platform.value = 'web';
+    await restoreAccount();
+    const play = vi.fn();
+    // HTMLAudioElement is the browser SDK boundary; real playback and stream ACK stay live.
+    vi.stubGlobal('Audio', class {
+      onended: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      pause() {}
+      async play() { play(); queueMicrotask(() => this.onended?.()); }
     });
-
-    expect(daemonSpeakSpy).toHaveBeenCalledWith(expect.objectContaining({
-      text: 'Hello',
-      packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
-      voiceId: 'af_heart',
-    }));
-    expect(speakKokoroTextSpy).not.toHaveBeenCalled();
+    await localNeuralTtsProviderSpec.test({ cfgTts: tts('auto'), voice: voiceSettingsDefaults,
+      networkTimeoutMs: 15_000, sample: 'Hello' });
+    const start = boundary.machineRpc.mock.calls.map(([request]) => request)
+      .find(request => request.method === 'daemon.voiceInference.tts.stream.start');
+    expect(start).toBeDefined();
+    expect(DaemonVoiceInferenceTtsStreamStartRequestSchema.parse(start?.payload)).toMatchObject({
+      text: 'Hello', packId: 'kokoro-82m-v1.0-onnx-q8-wasm', voiceId: 'af_heart',
+    });
+    expect(play).toHaveBeenCalledOnce();
+    expect(boundary.machineRpc.mock.calls.some(([request]) => request.method === 'daemon.voiceInference.tts.stream.ack')).toBe(true);
+    expect(boundary.nativeSynthesize).not.toHaveBeenCalled();
   });
 
-  it('preserves explicit web device execution for Test TTS', async () => {
-    platformOsMock.value = 'web';
-    const { localNeuralTtsProviderSpec } = await import('./localNeuralTtsProvider');
-
-    const cfgTts: VoiceLocalTtsSettings = {
-      provider: 'local_neural',
-      localNeural: { model: 'kokoro', assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', voiceId: 'af_heart', speed: 1, execution: 'device' },
-      autoSpeakReplies: true,
-      bargeInEnabled: true,
-    };
-
-    await localNeuralTtsProviderSpec.test({
-      cfgTts,
-      voice: voiceSettingsDefaults,
-      networkTimeoutMs: 15_000,
-      sample: 'Hello from web device',
-    });
-
-    expect(speakKokoroTextSpy).toHaveBeenCalledWith(expect.objectContaining({
-      text: 'Hello from web device',
-    }));
-    expect(daemonSpeakSpy).not.toHaveBeenCalled();
+  it('preserves explicit web device execution and reports the unsupported device runtime', async () => {
+    boundary.platform.value = 'web';
+    await restoreAccount();
+    await expect(localNeuralTtsProviderSpec.test({ cfgTts: tts('device'), voice: voiceSettingsDefaults,
+      networkTimeoutMs: 15_000, sample: 'Hello from web device' })).rejects.toThrow('kokoro_runtime_unsupported');
+    expect(boundary.machineRpc).not.toHaveBeenCalled();
+    expect(boundary.nativeSynthesize).not.toHaveBeenCalled();
   });
 });

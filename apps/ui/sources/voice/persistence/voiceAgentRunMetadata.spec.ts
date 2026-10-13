@@ -1,365 +1,140 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { createSessionFixture, createSessionListRenderableSessionFixture, standardCleanup } from '@/dev/testkit';
+import { buildVoiceAgentRunMetadataV1, parseVoiceAgentRunMetadataV1 } from '@happier-dev/protocol/voice/voiceAgentRunMetadataV1';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
+import { ExecutionRunResumeHandleSchema } from '@happier-dev/protocol/execution/runs/index';
 
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
-const patchSessionMetadataWithRetry = vi.fn();
+let account: Awaited<ReturnType<typeof import('@/voice/settings/panels/voiceSettingsAccountTestHarness').createVoiceSettingsAccountTestHarness>>;
+let storage: typeof import('@/sync/domains/state/storage').storage;
+let sessionHttp: ReturnType<typeof import('@/dev/testkit/harness/sessionMetadataHttpBoundary').createSessionMetadataHttpBoundary>;
+const claudeTarget = { kind: 'builtInAgent', agentId: 'claude' } as const;
+const codexTarget = { kind: 'builtInAgent', agentId: 'codex' } as const;
 
-// Hydrated `sessions` entries are the active Home's entity map, so this file's single Home
-// must be the active one: a bare session id resolves through the active Home address, and a
-// mismatched fixture server id would make every owner-metadata read unreachable.
-const serverId = getActiveServerSnapshot().serverId;
+function runMetadata(runId: string, updatedAtMs: number, welcomedEpoch?: number) {
+  const metadata = buildVoiceAgentRunMetadataV1({ runId, updatedAtMs, backendTarget: claudeTarget,
+    resumeHandle: ExecutionRunResumeHandleSchema.parse({ kind: 'provider_session.v1', backendTarget: claudeTarget, providerSessionId: `provider-${runId}` }),
+    ...(welcomedEpoch === undefined ? {} : { welcomedEpoch }) });
+  if (!metadata) throw new Error('Invalid canonical Voice run fixture');
+  return metadata;
+}
 
-const stateRef = {
-    current: {
-        sessions: {
-            sys_voice: {
-                id: 'sys_voice',
-                serverId,
-                updatedAt: 10,
-                metadata: { systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
-            },
-            s1: { id: 's1', serverId, updatedAt: 1, metadata: { flavor: 'claude' } },
-        },
-        sessionListRowsByServerId: {},
-        ordinarySessionListMembershipByServerId: {},
-        sessionListIndexByServerId: {},
-        concurrentSessionListCacheByServerId: {},
-    } as any,
-};
+function seedRun(sessionId: string, payload: ReturnType<typeof runMetadata> & Readonly<{ streamId?: string }>) {
+  storage.setState(state => ({ sessions: { ...state.sessions, [sessionId]: {
+    ...state.sessions[sessionId]!, metadata: { ...state.sessions[sessionId]!.metadata!, voiceAgentRunV1: payload },
+  } } }));
+  sessionHttp.replaceSession(sessionId);
+}
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        storage: {
-            getState: () => stateRef.current,
-        } as any,
-    });
+afterEach(() => standardCleanup());
+
+beforeEach(async () => {
+  const { createVoiceSettingsAccountTestHarness } = await import('@/voice/settings/panels/voiceSettingsAccountTestHarness');
+  const { settingsParse } = await import('@/sync/domains/settings/settings');
+  account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
+  onTestFinished(account.dispose);
+  ({ storage } = await import('@/sync/domains/state/storage'));
+  storage.setState({ sessions: {
+    sys_voice: createSessionFixture({ id: 'sys_voice', serverId: account.scope.serverId,
+      metadata: { ...createSessionFixture().metadata!, ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }) } }),
+    s1: createSessionFixture({ id: 's1', serverId: account.scope.serverId }),
+  }, sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {},
+    sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} });
+  const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
+  sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+  const request = account.request.getMockImplementation();
+  if (!request) throw new Error('Account HTTP boundary missing');
+  account.request.mockImplementation(async (input, init) => sessionHttp.handle(input, init) ?? request(input, init));
 });
 
-vi.mock('@/sync/sync', () => ({
-  sync: {
-    patchSessionMetadataWithRetry: (sessionId: string, updater: (m: any) => any) =>
-      patchSessionMetadataWithRetry(sessionId, updater),
-  },
-}));
-
-describe('voiceAgentRunMetadata', () => {
-  const claudeTarget = { kind: 'builtInAgent', agentId: 'claude' } as const;
-  const codexTarget = { kind: 'builtInAgent', agentId: 'codex' } as const;
-  const claudeBackendTarget = { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' } as const;
-  const codexBackendTarget = { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } as const;
-
-  beforeEach(() => {
-    vi.resetModules();
-    patchSessionMetadataWithRetry.mockReset();
-    stateRef.current = {
-        ...stateRef.current,
-        sessions: {
-            ...stateRef.current.sessions,
-            sys_voice: {
-                ...stateRef.current.sessions.sys_voice,
-                metadataLayoutVersion: 0,
-                metadata: { systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
-                ownerMetadataView: undefined,
-            },
-        },
-        sessionListRowsByServerId: {},
-        ordinarySessionListMembershipByServerId: {},
-        sessionListIndexByServerId: {},
-        concurrentSessionListCacheByServerId: {},
-    };
-  });
-
-	  it('reads voiceAgentRunV1 from voice conversation session metadata when present', async () => {
-	    stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1 = {
-	      v: 1,
-	      runId: 'run_1',
-	      backendTarget: claudeTarget,
-	      backendId: 'claude',
-      resumeHandle: { kind: 'provider_session.v1', backendTarget: claudeTarget, providerSessionId: 'vs_1' },
-      updatedAtMs: 123,
-    };
-
+describe('voiceAgentRunMetadata through real storage and Sync', () => {
+  it('reads persisted run identity and its resume handle from a Voice conversation', async () => {
+    seedRun('sys_voice', runMetadata('run_1', 123));
     const { readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
-    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' })).toMatchObject({
-      v: 1,
-      runId: 'run_1',
-      backendTarget: claudeTarget,
-      backendId: 'claude',
-      updatedAtMs: 123,
-    });
+    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' })).toEqual(runMetadata('run_1', 123));
   });
 
   it('reads a layout-v1 run only from the owner metadata view', async () => {
-    stateRef.current.sessions.sys_voice = {
-      ...stateRef.current.sessions.sys_voice,
-      metadataLayoutVersion: 1,
-      metadata: {
-        v: 1,
-        voiceAgentRunV1: {
-          v: 1,
-          runId: 'shared_private_lookalike',
-          backendTarget: codexTarget,
-          backendId: 'codex',
-          resumeHandle: null,
-          updatedAtMs: 1,
-        },
-      },
-      ownerMetadataView: {
-        voiceAgentRunV1: {
-          v: 1,
-          runId: 'owner_run',
-          backendTarget: claudeTarget,
-          backendId: 'claude',
-          resumeHandle: null,
-          updatedAtMs: 2,
-        },
-      },
-    } as any;
-
+    storage.setState(state => ({ sessions: { ...state.sessions, sys_voice: {
+      ...state.sessions.sys_voice!, metadataLayoutVersion: 1,
+      metadata: { ...createSessionFixture().metadata!, voiceAgentRunV1: runMetadata('shared_private_lookalike', 1) },
+      ownerMetadataView: { ...createSessionFixture().metadata!, voiceAgentRunV1: runMetadata('owner_run', 2) },
+    } } }));
     const { readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
     expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' })?.runId).toBe('owner_run');
-
-    stateRef.current.sessions.sys_voice.ownerMetadataView = null;
+    storage.setState(state => ({ sessions: { ...state.sessions, sys_voice: { ...state.sessions.sys_voice!, ownerMetadataView: null } } }));
     expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' })).toBeNull();
   });
 
-  it('writes voiceAgentRunV1 into voice conversation session metadata', async () => {
-    patchSessionMetadataWithRetry.mockImplementation(async (sessionId: string, updater: (m: any) => any) => {
-      const current = stateRef.current;
-      const nextMetadata = updater(current.sessions[sessionId].metadata);
-      stateRef.current = {
-          ...current,
-          sessions: {
-              ...current.sessions,
-              [sessionId]: {
-                  ...current.sessions[sessionId],
-                  metadata: nextMetadata,
-              },
-          },
-      };
-    });
-
-    const { writeVoiceAgentRunMetadataToSession } = await import('./voiceAgentRunMetadata');
-    await writeVoiceAgentRunMetadataToSession({
-      sessionId: 'sys_voice',
-      runId: 'run_2',
-      backendTarget: codexTarget,
-      resumeHandle: { kind: 'provider_session.v1', backendTarget: codexBackendTarget, providerSessionId: 'vs_2' },
-      updatedAtMs: 999,
-      welcomedEpoch: 4,
-    });
-
-    expect(patchSessionMetadataWithRetry).toHaveBeenCalledWith('sys_voice', expect.any(Function));
-    expect(stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1).toMatchObject({
-      v: 1,
-      runId: 'run_2',
-      backendTarget: codexTarget,
-      backendId: 'codex',
-      updatedAtMs: 999,
-      welcomedEpoch: 4,
-    });
+  it('persists a canonical owner tuple and restores the published run through Sync', async () => {
+    const { writeVoiceAgentRunMetadataToSession, readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
+    await writeVoiceAgentRunMetadataToSession({ sessionId: 'sys_voice', runId: 'run_2', backendTarget: codexTarget,
+      resumeHandle: { kind: 'provider_session.v1', backendTarget: codexTarget, providerSessionId: 'vs_2' }, updatedAtMs: 999, welcomedEpoch: 4 });
+    expect(sessionHttp.writes).toContain('sys_voice');
+    const produced = readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' });
+    expect(produced).toMatchObject({ runId: 'run_2', backendTarget: codexTarget, backendId: 'codex', updatedAtMs: 999, welcomedEpoch: 4 });
+    expect(parseVoiceAgentRunMetadataV1(JSON.parse(JSON.stringify(produced)))).toEqual(produced);
+    const { sync } = await import('@/sync/sync');
+    storage.setState({ sessions: {} });
+    expect(await sync.ensureSessionVisibleForMessageRoute('sys_voice', { forceRefresh: true, serverId: account.scope.serverId }))
+      .toMatchObject({ kind: 'available', sessionId: 'sys_voice' });
+    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' })).toEqual(produced);
   });
 
-  it('keeps the original timestamp when the same voice run is published again', async () => {
-    stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1 = {
-      v: 1,
-      runId: 'run_same',
-      backendId: 'claude',
-      backendTarget: claudeTarget,
-      resumeHandle: null,
-      updatedAtMs: 123,
-      transcriptContractVersion: 2,
-    };
-    patchSessionMetadataWithRetry.mockImplementation(async (sessionId: string, updater: (m: any) => any) => {
-      const metadata = stateRef.current.sessions[sessionId].metadata;
-      stateRef.current.sessions[sessionId].metadata = updater(metadata);
-    });
-
-    const { writeVoiceAgentRunMetadataToSession } = await import('./voiceAgentRunMetadata');
-    await writeVoiceAgentRunMetadataToSession({
-      sessionId: 'sys_voice',
-      runId: 'run_same',
-      backendTarget: claudeTarget,
-      resumeHandle: null,
-      updatedAtMs: 999,
-    });
-
-    expect(stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1.updatedAtMs).toBe(123);
+  it('keeps the original timestamp when the same Voice run is published again', async () => {
+    seedRun('sys_voice', runMetadata('run_same', 123));
+    const { writeVoiceAgentRunMetadataToSession, readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
+    await writeVoiceAgentRunMetadataToSession({ sessionId: 'sys_voice', runId: 'run_same', backendTarget: claudeTarget,
+      resumeHandle: runMetadata('run_same', 123).resumeHandle, updatedAtMs: 999 });
+    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' })?.updatedAtMs).toBe(123);
   });
 
-  it('never persists a streamId field, even when legacy metadata carried one', async () => {
-    stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1 = {
-      v: 1,
-      runId: 'run_prev',
-      backendTarget: claudeTarget,
-      backendId: 'claude',
-      resumeHandle: { kind: 'provider_session.v1', backendTarget: claudeBackendTarget, providerSessionId: 'vs_prev' },
-      streamId: 'stream_prev',
-      updatedAtMs: 10,
-    };
-    patchSessionMetadataWithRetry.mockImplementation(async (sessionId: string, updater: (m: any) => any) => {
-      const current = stateRef.current;
-      const nextMetadata = updater(current.sessions[sessionId].metadata);
-      stateRef.current = {
-          ...current,
-          sessions: {
-              ...current.sessions,
-              [sessionId]: {
-                  ...current.sessions[sessionId],
-                  metadata: nextMetadata,
-              },
-          },
-      };
-    });
-
+  it('never persists a streamId carried by legacy metadata', async () => {
+    seedRun('sys_voice', { ...runMetadata('run_prev', 10), streamId: 'stream_prev' });
     const { writeVoiceAgentRunMetadataToSession } = await import('./voiceAgentRunMetadata');
-    await writeVoiceAgentRunMetadataToSession({
-      sessionId: 'sys_voice',
-      runId: 'run_fresh',
-      backendTarget: claudeTarget,
-      resumeHandle: { kind: 'provider_session.v1', backendTarget: claudeBackendTarget, providerSessionId: 'vs_fresh' },
-      updatedAtMs: 20,
-    });
-
-    expect(stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1).toMatchObject({
-      runId: 'run_fresh',
-    });
-    expect('streamId' in (stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1 as any)).toBe(false);
+    await writeVoiceAgentRunMetadataToSession({ sessionId: 'sys_voice', runId: 'run_fresh', backendTarget: claudeTarget,
+      resumeHandle: runMetadata('run_fresh', 20).resumeHandle, updatedAtMs: 20 });
+    const { readSessionOwnerMetadataView } = await import('@/sync/domains/session/readSessionOwnerMetadataView');
+    const metadata = readSessionOwnerMetadataView(storage.getState().sessions.sys_voice!);
+    expect(metadata?.voiceAgentRunV1).toMatchObject({ runId: 'run_fresh' });
+    expect(metadata?.voiceAgentRunV1).not.toHaveProperty('streamId');
   });
 
-	  it('clears voiceAgentRunV1 by removing the optional owner field', async () => {
-	    stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1 = {
-	      v: 1,
-	      runId: 'run_1',
-	      backendTarget: claudeTarget,
-	      backendId: 'claude',
-      resumeHandle: { kind: 'provider_session.v1', backendTarget: claudeBackendTarget, providerSessionId: 'vs_1' },
-      updatedAtMs: 123,
-    };
-
-    patchSessionMetadataWithRetry.mockImplementation(async (sessionId: string, updater: (m: any) => any) => {
-      const current = stateRef.current;
-      const nextMetadata = updater(current.sessions[sessionId].metadata);
-      stateRef.current = {
-          ...current,
-          sessions: {
-              ...current.sessions,
-              [sessionId]: {
-                  ...current.sessions[sessionId],
-                  metadata: nextMetadata,
-              },
-          },
-      };
-    });
-
-    const { clearVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
+  it('clears the optional run field without removing neighboring owner metadata', async () => {
+    seedRun('sys_voice', runMetadata('run_1', 123));
+    const { clearVoiceAgentRunMetadataFromSession, readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
     await clearVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' });
-
-    expect(stateRef.current.sessions.sys_voice.metadata).not.toHaveProperty('voiceAgentRunV1');
+    expect(sessionHttp.writes).toContain('sys_voice');
+    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' })).toBeNull();
+    const { readSessionOwnerMetadataView } = await import('@/sync/domains/session/readSessionOwnerMetadataView');
+    expect(readSessionOwnerMetadataView(storage.getState().sessions.sys_voice!)).toMatchObject(
+      buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }));
   });
 
-  it('reads and writes voiceAgentRunV1 for any session metadata, not only carrier sessions', async () => {
-    patchSessionMetadataWithRetry.mockImplementation(async (sessionId: string, updater: (m: any) => any) => {
-      const current = stateRef.current;
-      const nextMetadata = updater(current.sessions[sessionId].metadata);
-      stateRef.current = {
-          ...current,
-          sessions: {
-              ...current.sessions,
-              [sessionId]: {
-                  ...current.sessions[sessionId],
-                  metadata: nextMetadata,
-              },
-          },
-      };
-    });
-
-    const {
-      readVoiceAgentRunMetadataFromSession,
-      writeVoiceAgentRunMetadataToSession,
-      clearVoiceAgentRunMetadataFromSession,
-    } = await import('./voiceAgentRunMetadata');
-
-    await writeVoiceAgentRunMetadataToSession({
-      sessionId: 's1',
-      runId: 'run_session',
-      backendTarget: claudeTarget,
-      resumeHandle: { kind: 'provider_session.v1', backendTarget: claudeBackendTarget, providerSessionId: 'vs_session' },
-      updatedAtMs: 456,
-      welcomedEpoch: 3,
-    });
-
-    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 's1' })).toMatchObject({
-      v: 1,
-      runId: 'run_session',
-      backendTarget: claudeTarget,
-      backendId: 'claude',
-      updatedAtMs: 456,
-      welcomedEpoch: 3,
-    });
-
+  it('persists and clears runs on ordinary sessions as well as hidden Voice conversations', async () => {
+    const { readVoiceAgentRunMetadataFromSession, writeVoiceAgentRunMetadataToSession, clearVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
+    await writeVoiceAgentRunMetadataToSession({ sessionId: 's1', runId: 'run_session', backendTarget: claudeTarget,
+      resumeHandle: runMetadata('run_session', 456).resumeHandle, updatedAtMs: 456, welcomedEpoch: 3 });
+    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 's1' })).toEqual(runMetadata('run_session', 456, 3));
     await clearVoiceAgentRunMetadataFromSession({ sessionId: 's1' });
     expect(readVoiceAgentRunMetadataFromSession({ sessionId: 's1' })).toBeNull();
   });
 
-  it('prefers visible lookup voice-agent run metadata when the raw session metadata is stale', async () => {
-    stateRef.current.sessions.s1.metadata.voiceAgentRunV1 = {
-      v: 1,
-      runId: 'run_raw',
-      backendTarget: claudeTarget,
-      backendId: 'claude',
-      resumeHandle: { kind: 'provider_session.v1', backendTarget: claudeBackendTarget, providerSessionId: 'vs_raw' },
-      updatedAtMs: 111,
-    };
-    stateRef.current = {
-        ...stateRef.current,
-        sessionListRowsByServerId: {
-            ...stateRef.current.sessionListRowsByServerId,
-            [serverId]: {
-                ...(stateRef.current.sessionListRowsByServerId?.[serverId] ?? {}),
-                s1: {
-                    id: 's1',
-                    active: true,
-                    updatedAt: 1,
-                    metadata: {
-                        voiceAgentRunV1: {
-                            v: 1,
-                            runId: 'run_cached',
-                            backendTarget: claudeTarget,
-                            backendId: 'claude',
-                            resumeHandle: { kind: 'provider_session.v1', backendTarget: claudeBackendTarget, providerSessionId: 'vs_cached' },
-                            updatedAtMs: 222,
-                        },
-                    },
-                },
-            },
-        },
-        ordinarySessionListMembershipByServerId: { [serverId]: ['s1'] },
-    };
-
+  it('prefers fresh visible lookup metadata over stale raw session metadata', async () => {
+    seedRun('s1', runMetadata('run_raw', 111));
+    storage.setState({ sessionListRowsByServerId: { [account.scope.serverId]: { s1: createSessionListRenderableSessionFixture({
+      id: 's1', active: true, metadata: { ...createSessionFixture().metadata!, voiceAgentRunV1: runMetadata('run_cached', 222) },
+    }) } }, ordinarySessionListMembershipByServerId: { [account.scope.serverId]: ['s1'] } });
     const { readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
-    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 's1' })).toMatchObject({
-      runId: 'run_cached',
-      updatedAtMs: 222,
-    });
+    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 's1' })).toEqual(runMetadata('run_cached', 222));
   });
 
-  it('reads welcomedEpoch from persisted voiceAgentRunV1 metadata when present', async () => {
-    stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1 = {
-      v: 1,
-      runId: 'run_1',
-      backendTarget: claudeTarget,
-      backendId: 'claude',
-      resumeHandle: { kind: 'provider_session.v1', backendTarget: claudeBackendTarget, providerSessionId: 'vs_1' },
-      updatedAtMs: 123,
-      welcomedEpoch: 9,
-    };
-
+  it('reads the welcomed epoch retained with persisted run identity', async () => {
+    seedRun('sys_voice', runMetadata('run_1', 123, 9));
     const { readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
-    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' })).toMatchObject({
-      runId: 'run_1',
-      welcomedEpoch: 9,
-    });
+    expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_voice' })?.welcomedEpoch).toBe(9);
   });
 });

@@ -1,9 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { recordedAudioTranscriptionController } from '@/voice/runtime/input/recordedAudioTranscriptionController';
-
-const fileBase64Spy = vi.fn<() => Promise<string>>().mockResolvedValue('BASE64_AUDIO');
+import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createExpoFileSystemFileMock } from '@/dev/testkit/mocks/expoFileSystem';
+import { createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
+import { DaemonVoiceInferenceSttTranscribeResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
+import { DaemonVoiceSpeechTranscribeResponseSchema, DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema } from '@happier-dev/protocol/daemon/voiceSpeech';
+import { createHash } from 'node:crypto';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 
 const ORIGINAL_PLATFORM_OS = Platform.OS;
 const ORIGINAL_PLATFORM_SELECT = Platform.select;
@@ -18,13 +26,11 @@ class FakeAudioBuffer {
   }
 }
 
+let filesystem = createExpoFileSystemFileMock();
+const openedNativeUris: string[] = [];
 vi.mock('expo-file-system', () => ({
   File: class {
-    uri: string;
-    constructor(uri: string) {
-      this.uri = uri;
-    }
-    base64 = fileBase64Spy;
+    constructor(uri: string) { openedNativeUris.push(uri); return new filesystem.module.File(uri); }
   },
   readAsStringAsync: () => {
     throw new Error('deprecated_readAsStringAsync_called');
@@ -39,7 +45,9 @@ vi.mock('expo-audio', () => ({
   },
 }));
 
-afterEach(() => {
+afterEach(async () => {
+  // Roll back through the same physical store in which this case was admitted.
+  await account?.dispose();
   openAiCompatTranscribeSpy.mockClear();
   googleGeminiTranscribeSpy.mockClear();
   resetRuntimeFetch();
@@ -50,25 +58,98 @@ afterEach(() => {
 const daemonSttControllerTranscribeSpy = vi.fn();
 const openAiCompatTranscribeSpy = vi.fn(async (_params: unknown) => 'hello openai compat');
 const googleGeminiTranscribeSpy = vi.fn(async (_params: unknown) => 'hello gemini');
-vi.mock('@/voice/runtime/daemonInference/DaemonSttController', () => ({
-  DaemonSttController: vi.fn().mockImplementation(() => ({
-    transcribeRecordedAudio: (...args: any[]) => daemonSttControllerTranscribeSpy(...args),
-  })),
-}));
-vi.mock('@/voice/runtime/daemonInference/daemonVoiceInferencePolicy', () => ({
-  resolveDaemonVoiceInferenceExecution: async (params: { requestedExecution?: string | null }) =>
-    params.requestedExecution === 'daemon' ? 'daemon' : 'device',
-}));
-vi.mock('@/voice/credentials/bundledSpeechClient', () => ({
-  bundledSpeechDaemonClient: {
-    transcribe: (params: Readonly<{ entry?: Readonly<{ providerId?: string }> }>) => (
-      params.entry?.providerId === 'happier.voice.openai-compat/stt'
-        ? openAiCompatTranscribeSpy(params)
-        : googleGeminiTranscribeSpy(params)
-    ),
-    synthesize: vi.fn(),
-  },
-}));
+// Only framed daemon replies are substituted. Both STT clients, policy,
+// selected-machine authority and encrypted upload remain real.
+let selectedSpeechPlugin = '';
+let uploadedSize = 0;
+let uploadedChunks: Uint8Array[] = [];
+const rpcRequests = installSessionActionRpcBoundary(async request => {
+  const method = request.method.slice(request.method.indexOf(':') + 1);
+  const payload = request.params as Record<string, unknown>;
+  if (method.endsWith('upload.init')) {
+    uploadedSize = Number(payload.sizeBytes);
+    uploadedChunks = [];
+    selectedSpeechPlugin = typeof payload.target === 'object' && payload.target !== null && 'pluginId' in payload.target
+      ? String(payload.target.pluginId) : '';
+    return { success: true, uploadId: 'recorded-upload', chunkSizeBytes: 65536,
+      recipientPublicKeyBase64: recipient.recipientPublicKeyBase64 };
+  }
+  if (method.endsWith('upload.chunk')) {
+    uploadedChunks.push(await decryptEncryptedTransferChunkEnvelope({ transferId: 'recorded-upload', sequence: Number(payload.index),
+      payloadBase64: String(payload.payloadBase64), encryptedDataKeyEnvelopeBase64: String(payload.encryptedDataKeyEnvelopeBase64),
+      recipientSecretKeySeed: recipient.recipientSecretKeySeed }));
+    return { success: true };
+  }
+  if (method.endsWith('upload.abort')) return { success: true };
+  if (method.endsWith('upload.finalize')) {
+    const hash = createHash('sha256');
+    for (const bytes of uploadedChunks) hash.update(bytes);
+    const finalized = { success: true, uploadId: 'recorded-upload', sizeBytes: uploadedSize, sha256: hash.digest('hex') };
+    return selectedSpeechPlugin ? DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema.parse(finalized)
+      : { ...finalized, path: '/tmp/recorded-audio' };
+  }
+  if (method === 'daemon.voice.speech.transcribe') return DaemonVoiceSpeechTranscribeResponseSchema.parse({
+    ok: true, requestId: payload.requestId,
+    text: await (selectedSpeechPlugin === 'happier.voice.openai-compat' ? openAiCompatTranscribeSpy : googleGeminiTranscribeSpy)(payload),
+  });
+  if (method === 'daemon.voiceInference.stt.transcribe') return DaemonVoiceInferenceSttTranscribeResponseSchema.parse({
+    ok: true, requestId: payload.requestId, ...await daemonSttControllerTranscribeSpy(payload),
+  });
+  throw new Error(`Unexpected recorded-audio RPC: ${method}`);
+});
+const recipient = createTransferRecipientKeyPair();
+const { storage } = await import('@/sync/domains/state/storage');
+const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { recordedAudioTranscriptionController } = await import('@/voice/runtime/input/recordedAudioTranscriptionController');
+let account: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
+const machineId = 'machine-ready-at-start';
+const features = createRootLayoutFeaturesResponse({ features: {
+  voice: { enabled: true }, machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+  execution: { runs: { enabled: true } },
+} });
+// An authored external deployment vector, validated by its wire schema.
+features.capabilities.machines.liveStream.serverRouted = { disabledReason: null,
+  caps: MachineLiveStreamRelayCapsV1Schema.parse({ maxBitrateBps: 64000, maxFramesPerSecond: 50,
+    maxFrameBytes: 16000, maxDurationMs: 60000, maxTotalBytes: 1000000,
+    maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1 }) };
+async function answerHome(url: RequestInfo | URL): Promise<Response> {
+  const path = new URL(String(url)).pathname;
+  if (path === '/health') return Response.json({ status: 'ok' });
+  if (path === '/v1/account/encryption') return Response.json(AccountEncryptionModeResponseSchema.parse({ mode: 'plain', updatedAt: 0 }));
+  if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+  if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+  const row = createPlainMachineRowFixture({ id: machineId, accountId: 'artifact-account' });
+  if (path === '/v1/machines') return Response.json([row]);
+  if (path === '/v1/machines/' + machineId) return Response.json({ machine: row });
+  if (path === '/v1/machines/' + machineId + '/access') return Response.json({ machineId,
+    custodian: row.access!.custodian, access: row.access, canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [] });
+  return new Response('{}', { status: 404 });
+}
+function installRecordingFetch(fetchRecording: (input: string, init?: RequestInit) => Promise<Response>) {
+  setRuntimeFetch((url, init) => String(url).startsWith('blob:') ? fetchRecording(String(url), init) : answerHome(url));
+}
+beforeEach(async ({ task }) => {
+  // Platform is a fixture input: admit credentials in its real SDK store before
+  // a web case runs, rather than changing stores after a native admission.
+  const webCase = /\bweb\b|Chrome WebM/i.test(task.name);
+  (Platform as unknown as { OS: string }).OS = webCase ? 'web' : ORIGINAL_PLATFORM_OS;
+  (Platform as unknown as { select: (spec: Record<string, unknown>) => unknown }).select = webCase
+    ? spec => spec.web ?? spec.default
+    : ORIGINAL_PLATFORM_SELECT;
+  filesystem = createExpoFileSystemFileMock();
+  for (const uri of ['file:///rec.m4a', 'file:///rec.wav']) filesystem.files.set(uri, [1, 2, 3, 4]);
+  openedNativeUris.length = 0;
+  rpcRequests.length = 0;
+  account = await createPlainArtifactHomeFixture('https://recorded-capture.test', { serverFeatures: features,
+    handleRequest: path => answerHome(`https://recorded-capture.test${path}`) });
+  primeServerFeaturesSnapshot({ serverId: account.home.id, snapshot: { status: 'ready', features } });
+  const machine = createMachineFixture({ id: machineId, active: true, activeAt: Date.now() });
+  storage.setState({ machines: { [machineId]: machine }, machineListByServerId: { [account.home.id]: [machine] } });
+  storage.getState().applySettingsLocal({ experiments: true,
+    featureToggles: { ...storage.getState().settings.featureToggles, voice: true, 'voice.agent': true,
+      'execution.runs': true, 'voice.daemonInference': true },
+    voice: { ...storage.getState().settings.voice, executionMachine: { mode: 'fixed', machineId } } });
+});
 
 describe('recordedAudioTranscriptionController', () => {
   it('routes qualified OpenAI-compatible recorded audio through the generic selected-daemon speech client', async () => {
@@ -103,9 +184,9 @@ describe('recordedAudioTranscriptionController', () => {
 
     expect(text).toBe('hello openai compat');
     expect(openAiCompatTranscribeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      entry: expect.objectContaining({ providerId: 'happier.voice.openai-compat/stt' }),
-      source: { kind: 'native', uri: 'file:///rec.m4a' },
+      target: { pluginId: 'happier.voice.openai-compat', localId: 'stt' },
     }));
+    expect(openedNativeUris).toContain('file:///rec.m4a');
     expect(openAiCompatTranscribeSpy.mock.calls[0]?.[0]).not.toHaveProperty('baseUrl');
     expect(openAiCompatTranscribeSpy.mock.calls[0]?.[0]).not.toHaveProperty('apiKey');
     expect(openAiCompatTranscribeSpy.mock.calls[0]?.[0]).not.toHaveProperty('model');
@@ -137,10 +218,10 @@ describe('recordedAudioTranscriptionController', () => {
     });
 
     expect(googleGeminiTranscribeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      entry: expect.objectContaining({ providerId: 'happier.voice.google/gemini-stt' }),
-      source: { kind: 'native', uri: 'file:///rec.m4a' },
+      target: { pluginId: 'happier.voice.google', localId: 'gemini-stt' },
       mimeType: 'audio/mp4',
     }));
+    expect(openedNativeUris).toContain('file:///rec.m4a');
     expect(googleGeminiTranscribeSpy.mock.calls[0]?.[0]).not.toHaveProperty('apiKey');
     expect(googleGeminiTranscribeSpy.mock.calls[0]?.[0]).not.toHaveProperty('model');
     expect(googleGeminiTranscribeSpy.mock.calls[0]?.[0]).not.toHaveProperty('language');
@@ -175,9 +256,9 @@ describe('recordedAudioTranscriptionController', () => {
     expect(text).toBe('hello gemini');
     expect(googleGeminiTranscribeSpy).toHaveBeenCalledTimes(1);
     expect(googleGeminiTranscribeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      entry: expect.objectContaining({ providerId: 'happier.voice.google/gemini-stt' }),
-      source: { kind: 'native', uri: 'file:///rec.m4a' },
+      target: { pluginId: 'happier.voice.google', localId: 'gemini-stt' },
     }));
+    expect(openedNativeUris).toContain('file:///rec.m4a');
     const dispatch = googleGeminiTranscribeSpy.mock.calls[0]?.[0];
     expect(dispatch).not.toHaveProperty('apiKey');
     expect(dispatch).not.toHaveProperty('model');
@@ -283,9 +364,6 @@ describe('recordedAudioTranscriptionController', () => {
 
     expect(text).toBe('hello daemon stt');
     expect(daemonSttControllerTranscribeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'session-1',
-      source: { kind: 'native', uri: 'file:///rec.wav' },
-      inputMimeType: 'audio/wav',
       normalization: {
         inputTransport: 'upload_transfer',
         strategy: 'daemon_decode',
@@ -294,6 +372,9 @@ describe('recordedAudioTranscriptionController', () => {
       packId: 'dummy',
       language: 'en',
     }));
+    expect(openedNativeUris).toContain('file:///rec.wav');
+    expect(rpcRequests).toContainEqual(expect.objectContaining({ method: 'machine-ready-at-start:daemon.voiceInference.stt.upload.init',
+      params: expect.objectContaining({ inputMimeType: 'audio/wav', sizeBytes: 4 }) }));
   });
 
   it('routes blob recordings through a web file source for daemon local_neural STT', async () => {
@@ -307,7 +388,7 @@ describe('recordedAudioTranscriptionController', () => {
       }
       return await (globalThis.fetch as any)(input, init);
     });
-    setRuntimeFetch(runtimeFetchSpy as any);
+    installRecordingFetch(runtimeFetchSpy as unknown as Parameters<typeof installRecordingFetch>[0]);
     daemonSttControllerTranscribeSpy.mockResolvedValue({
       text: 'hello daemon web',
       language: 'en',
@@ -340,14 +421,12 @@ describe('recordedAudioTranscriptionController', () => {
     expect(runtimeFetchSpy).toHaveBeenCalledWith('blob:voice-recording', undefined);
     const call = daemonSttControllerTranscribeSpy.mock.calls.at(-1)?.[0];
     expect(call).toEqual(expect.objectContaining({
-      sessionId: 'session-1',
-      inputMimeType: 'audio/webm',
       packId: 'dummy',
       language: 'en',
-      source: expect.objectContaining({ kind: 'web' }),
     }));
-    expect(call?.source.file).toBeInstanceOf(File);
-    expect(call?.source.file.type).toBe('audio/webm');
+    expect(openedNativeUris).toEqual([]);
+    expect(rpcRequests).toContainEqual(expect.objectContaining({ method: 'machine-ready-at-start:daemon.voiceInference.stt.upload.init',
+      params: expect.objectContaining({ inputMimeType: 'audio/webm', sizeBytes: new Blob(['webm-bytes']).size }) }));
   });
 
   it('reuses the admitted web recording blob instead of reading its object URL again before daemon upload', async () => {
@@ -358,9 +437,7 @@ describe('recordedAudioTranscriptionController', () => {
     const runtimeFetchSpy = vi.fn(async () => {
       throw new Error('recording_blob_refetched');
     });
-    setRuntimeFetch(
-      runtimeFetchSpy as unknown as Parameters<typeof setRuntimeFetch>[0],
-    );
+    installRecordingFetch(runtimeFetchSpy);
     daemonSttControllerTranscribeSpy.mockResolvedValue({
       text: 'hello admitted daemon web',
       language: 'en',
@@ -405,9 +482,11 @@ describe('recordedAudioTranscriptionController', () => {
     );
     expect(runtimeFetchSpy).not.toHaveBeenCalled();
     expect(daemonSttControllerTranscribeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      source: expect.objectContaining({ kind: 'web' }),
-      inputMimeType: 'audio/webm',
+      packId: 'dummy',
     }));
+    expect(openedNativeUris).toEqual([]);
+    expect(rpcRequests).toContainEqual(expect.objectContaining({ method: 'machine-ready-at-start:daemon.voiceInference.stt.upload.init',
+      params: expect.objectContaining({ inputMimeType: 'audio/webm', sizeBytes: webBlob.size }) }));
     (globalThis as unknown as {
       AudioContext?: unknown;
     }).AudioContext = undefined;
@@ -421,9 +500,7 @@ describe('recordedAudioTranscriptionController', () => {
     const runtimeFetchSpy = vi.fn(async () => {
       throw new Error('recording_blob_refetched');
     });
-    setRuntimeFetch(
-      runtimeFetchSpy as unknown as Parameters<typeof setRuntimeFetch>[0],
-    );
+    installRecordingFetch(runtimeFetchSpy);
     daemonSttControllerTranscribeSpy.mockResolvedValue({
       text: 'open the project settings',
       language: 'en',
@@ -473,17 +550,12 @@ describe('recordedAudioTranscriptionController', () => {
     expect(runtimeFetchSpy).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
     expect(daemonSttControllerTranscribeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      machineTarget: { machineId: 'machine-ready-at-start' },
-      source: expect.objectContaining({
-        kind: 'web',
-        file: expect.objectContaining({
-          size: 1_080,
-          type: 'audio/webm;codecs=opus',
-        }),
-      }),
-      inputMimeType: 'audio/webm;codecs=opus',
       normalization: expect.objectContaining({ strategy: 'daemon_decode' }),
     }));
+    expect(rpcRequests.every(request => request.method.startsWith('machine-ready-at-start:'))).toBe(true);
+    expect(openedNativeUris).toEqual([]);
+    expect(rpcRequests).toContainEqual(expect.objectContaining({ method: 'machine-ready-at-start:daemon.voiceInference.stt.upload.init',
+      params: expect.objectContaining({ inputMimeType: 'audio/webm;codecs=opus', sizeBytes: 1_080 }) }));
     (globalThis as unknown as {
       AudioContext?: unknown;
     }).AudioContext = undefined;
@@ -500,7 +572,7 @@ describe('recordedAudioTranscriptionController', () => {
       }
       return await (globalThis.fetch as any)(input, init);
     });
-    setRuntimeFetch(runtimeFetchSpy as any);
+    installRecordingFetch(runtimeFetchSpy as unknown as Parameters<typeof installRecordingFetch>[0]);
     daemonSttControllerTranscribeSpy.mockResolvedValue({
       text: 'hello daemon web wav',
       language: 'en',
@@ -537,8 +609,6 @@ describe('recordedAudioTranscriptionController', () => {
     expect(decodeAudioData).toHaveBeenCalledTimes(1);
     const call = daemonSttControllerTranscribeSpy.mock.calls.at(-1)?.[0];
     expect(call).toEqual(expect.objectContaining({
-      sessionId: 'session-1',
-      inputMimeType: 'audio/wav',
       normalization: {
         inputTransport: 'upload_transfer',
         strategy: 'ui_pretranscoded_pcm16_fallback',
@@ -546,11 +616,10 @@ describe('recordedAudioTranscriptionController', () => {
       },
       packId: 'dummy',
       language: 'en',
-      source: expect.objectContaining({ kind: 'web' }),
     }));
-    expect(call?.source.file).toBeInstanceOf(File);
-    expect(call?.source.file.name).toMatch(/\.wav$/);
-    expect(call?.source.file.type).toBe('audio/wav');
+    expect(openedNativeUris).toEqual([]);
+    expect(rpcRequests).toContainEqual(expect.objectContaining({ method: 'machine-ready-at-start:daemon.voiceInference.stt.upload.init',
+      params: expect.objectContaining({ inputMimeType: 'audio/wav', sizeBytes: 44 + 4 * 2 }) }));
     (globalThis as any).AudioContext = undefined;
   });
 
@@ -585,14 +654,15 @@ describe('recordedAudioTranscriptionController', () => {
 
     expect(text).toBe('hello daemon m4a');
     expect(daemonSttControllerTranscribeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      inputMimeType: 'audio/mp4',
       normalization: {
         inputTransport: 'upload_transfer',
         strategy: 'daemon_decode',
         systemFfmpegAllowed: false,
       },
-      source: { kind: 'native', uri: 'file:///rec.m4a' },
     }));
+    expect(openedNativeUris).toContain('file:///rec.m4a');
+    expect(rpcRequests).toContainEqual(expect.objectContaining({ method: 'machine-ready-at-start:daemon.voiceInference.stt.upload.init',
+      params: expect.objectContaining({ inputMimeType: 'audio/mp4' }) }));
   });
 
   it('preserves daemon local_neural STT unavailability details instead of flattening them to null', async () => {

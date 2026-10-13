@@ -186,8 +186,12 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
       const lifetime = captureActiveServerAccountScopeLifetime();
       const exactHome = binding && session?.serverId === binding.conversationSessionAddress.serverId
         && lifetime?.isCurrent() && lifetime.scope.serverId === binding.conversationSessionAddress.serverId;
-      setVoiceSessionSnapshot(snapshot, binding, exactHome && lifetime ? {
-        accountScope: lifetime.scope, conversationScope: readVoiceConversationScopeMetadata(session?.metadata),
+      const targetSessionAddress = controller.getAttemptTargetSessionAddress();
+      const exactTargetHome = targetSessionAddress && lifetime?.isCurrent()
+        && lifetime.scope.serverId === targetSessionAddress.serverId;
+      setVoiceSessionSnapshot(snapshot, binding, (exactHome || exactTargetHome) && lifetime ? {
+        accountScope: lifetime.scope, targetSessionAddress,
+        conversationScope: exactHome ? readVoiceConversationScopeMetadata(session?.metadata) : null,
       } : null);
       const note = continuation.update({ snapshot, binding, deviceId: snapshot.canStop && exactHome ? getDeviceAnalyticsId() : null,
         deviceDisplayName: resolveLocalDeviceLabel({ deviceName: Constants.deviceName, platform: Platform.OS }),

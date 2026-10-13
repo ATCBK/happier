@@ -17,21 +17,22 @@ describe('voice registry provider selection', () => {
   it('projects deterministic provider-owned selection rows', () => {
     const settings = voiceSettingsParse({ providerId: null });
     const rows = projectVoiceProviderSelectionRows(settings, createDefaultVoiceProviderRegistry());
+    // Lab C1: Local voice (Happier's own, nothing leaves your computers) leads the gallery.
     expect(rows.map((row) => `${row.providerId}:${row.optionId}`)).toEqual([
+      'local_conversation:local',
       'happier.voice.elevenlabs/realtime-elevenlabs:happier',
       'happier.voice.elevenlabs/realtime-elevenlabs:byo',
       'happier.voice.openai/realtime-openai:byo',
       'happier.voice.xai/realtime-grok:byo',
       'happier.agent.codex/realtime-codex:experimental',
-      'local_conversation:local',
     ]);
     expect(rows.map((row) => row.titleKey)).toEqual([
+      'settingsVoice.mode.local',
       'settingsVoice.mode.happier',
       'settingsVoice.mode.byo',
       'settingsVoice.mode.openaiRealtime',
       'settingsVoice.mode.grokRealtime',
       'settingsVoice.mode.codexRealtime',
-      'settingsVoice.mode.local',
     ]);
   });
 

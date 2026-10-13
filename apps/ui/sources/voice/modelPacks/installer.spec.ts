@@ -154,38 +154,7 @@ describe('modelPacks installer (native)', () => {
   });
 
   it('rejects pack ids that attempt to escape the model packs root directory', async () => {
-    class Directory {
-      uri: string;
-      exists = true;
-      constructor(...uris: any[]) {
-        const packId = String(uris[uris.length - 1] ?? '');
-        this.uri = `file:///docs/happier/voice/modelPacks/${packId}`;
-      }
-      create() {}
-      delete() {}
-    }
-
-    class File {
-      uri = 'file:///docs/happier/voice/modelPacks/example/pack.json';
-      get exists() {
-        return false;
-      }
-      create() {}
-      writableStream() {
-        return new WritableStream();
-      }
-      async bytes() {
-        return new Uint8Array();
-      }
-      async text() {
-        return '';
-      }
-      write() {}
-      delete() {}
-      arrayBuffer() {
-        return Promise.resolve(new ArrayBuffer(0));
-      }
-    }
+    const { fs } = createMemFs();
 
     await expect(
       ensureModelPackInstalled(
@@ -196,8 +165,8 @@ describe('modelPacks installer (native)', () => {
           timeoutMs: 5000,
           signal: new AbortController().signal,
         },
-        { download: createMemNativeDownload({ Directory, File, Paths: { document: 'file:///docs/' } } as any, (async () => ({ ok: false })) as any),
-          fs: { Directory, File, Paths: { document: 'file:///docs/' } } as any,
+        { download: createMemNativeDownload(fs, (async () => ({ ok: false })) as any),
+          fs: fs,
           fetch: (async () => ({ ok: false })) as any,
         },
       ),
@@ -349,32 +318,7 @@ describe('modelPacks installer (native)', () => {
   });
 
   it('rejects pack manifests that contain unsafe paths', async () => {
-    class Directory {
-      uri: string;
-      exists = false;
-      constructor(..._uris: any[]) {
-        this.uri = 'file:///docs/happier/voice/modelPacks/example';
-      }
-      create() {}
-      delete() {}
-    }
-    class File {
-      exists = false;
-      uri = 'file:///docs/happier/voice/modelPacks/example/pack.json';
-      constructor(..._uris: any[]) {}
-      async text() {
-        return '';
-      }
-      write() {}
-      create() {}
-      delete() {}
-      async bytes() {
-        return new Uint8Array();
-      }
-      writableStream() {
-        return new WritableStream();
-      }
-    }
+    const { fs } = createMemFs();
 
     const fetchImpl = async (_url: string) => {
       return {
@@ -406,8 +350,8 @@ describe('modelPacks installer (native)', () => {
           timeoutMs: 5000,
           signal: new AbortController().signal,
         },
-        { download: createMemNativeDownload({ Directory, File, Paths: { document: 'file:///docs/' } } as any, fetchImpl as any),
-          fs: { Directory, File, Paths: { document: 'file:///docs/' } } as any,
+        { download: createMemNativeDownload(fs, fetchImpl as any),
+          fs: fs,
           fetch: fetchImpl as any,
         },
       ),

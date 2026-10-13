@@ -39,38 +39,6 @@ const successfulStart = {
   transport: { kind: 'webrtc', answerSdp: 'v=0\r\na=answer\r\n' },
 } as const;
 
-function createManualAbortSignal(): Readonly<{
-  signal: AbortSignal;
-  abort(): void;
-}> {
-  let aborted = false;
-  const listeners = new Set<EventListenerOrEventListenerObject>();
-  const signal = {
-    get aborted() {
-      return aborted;
-    },
-    addEventListener(type: string, listener: EventListenerOrEventListenerObject | null) {
-      if (type === 'abort' && listener) listeners.add(listener);
-    },
-    removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null) {
-      if (type === 'abort' && listener) listeners.delete(listener);
-    },
-  } as unknown as AbortSignal;
-  return Object.freeze({
-    signal,
-    abort() {
-      if (aborted) return;
-      aborted = true;
-      const event = new Event('abort');
-      for (const listener of [...listeners]) {
-        if (typeof listener === 'function') listener.call(signal, event);
-        else listener.handleEvent(event);
-      }
-      listeners.clear();
-    },
-  });
-}
-
 function expectNoDiagnosticSentinel(value: unknown): void {
   const serialized = JSON.stringify(value);
   for (const sentinel of Object.values(sentinels)) {
@@ -1027,7 +995,7 @@ describe('bound Agent-session realtime service', () => {
   it.each(['owner', 'watcher'] as const)(
     'isolates a throwing %s public-handle watcher while preserving subscriptions and abort cleanup',
     async (throwingBoundary) => {
-      const attempt = createManualAbortSignal();
+      const attempt = new AbortController();
       const stopRpc = vi.fn(async () => ({ ok: true, status: 'stopped' }));
       const ownerTerminal = vi.fn(() => {
         if (throwingBoundary === 'owner') throw new Error('owner_terminal_callback_failed');

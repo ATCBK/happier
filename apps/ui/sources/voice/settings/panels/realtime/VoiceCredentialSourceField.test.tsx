@@ -2,17 +2,31 @@
 import React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { buildQualifiedPluginContributionKey, VoiceProviderContributionSchema, type VoiceProviderContribution } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey, createRecipientContractDigestV1, PluginProjectionV2Schema, VoiceProviderContributionSchema, type PluginProjectionV2, type VoiceProviderContribution } from '@happier-dev/protocol';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ConnectedAccountCatalogRowMutationV1Schema, ConnectedPurposeCatalogV1Schema, type ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
-import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { getConnectedAccountAuthentication } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { AppShellPluginUiProjectionProvider, useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { commitExternalVoiceProviderRegistration, resetExternalVoiceProviderRegistrationsForTests } from '@/voice/registry/externalVoiceProviderRegistrations';
 import { createVoiceProviderRegistry } from '@/voice/registry/providerRegistry';
+import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
+import { createExternalVoiceProviderActivationScope } from '@/voice/registry/externalVoiceProviderActivation.testkit';
+import { createBundledConversationRuntimeHostLease } from '@/voice/registry/bundledConversationRuntimeHost';
+import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
+import { BUNDLED_FIRST_PARTY_VOICE_CONTRIBUTIONS } from '@/voice/registry/generatedBundledVoiceEntries';
+import { createBundledConversationRuntimes } from '@/voice/registry/bundledConversationRuntimes';
+import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
 import { AccountProfileSchema, type AccountProfile } from '@happier-dev/protocol/account/profile';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -31,12 +45,10 @@ vi.mock('react-native-unistyles', async () => {
   const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
   return createUnistylesMock();
 });
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({ translate: (key: string) => key });
-});
 vi.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 vi.mock('@hugeicons/react-native', () => ({ HugeiconsIcon: () => null }));
+// Credential settings never starts the unavailable vendor conversation SDK.
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: () => { throw new Error('Unexpected ElevenLabs conversation start'); } } }));
 vi.mock('@/utils/web/radixCjs', async () => {
   const { createRadixCjsRealModule } = await import('@/dev/testkit/mocks/radixCjs');
   return await createRadixCjsRealModule();
@@ -50,9 +62,12 @@ const { fetchAndApplyProfile } = await import('@/sync/engine/account/syncAccount
 const { refreshConnectedAccountCatalog } = await import('@/sync/engine/settings/connectedAccountCatalogEngine');
 const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 const gestureDispatch = await import('@/utils/system/fireAndForget');
+const { t, getPreferredLanguage, setPreferredLanguageFromSettings } = await import('@/text');
+const initialLanguage = getPreferredLanguage();
+afterAll(() => { setPreferredLanguageFromSettings(initialLanguage); });
 
 const contribution = Object.freeze({
-  pluginId: 'happier.voice.openai',
+  pluginId: 'acme.credential-source-fixture',
   localId: 'realtime-openai',
 });
 const declaration = VoiceProviderContributionSchema.parse({
@@ -144,6 +159,7 @@ const declaration = VoiceProviderContributionSchema.parse({
 const credentials = declaration.credentials!;
 
 function installCurrentDeclaration(currentDeclaration: VoiceProviderContribution) {
+  projectedDeclaration = currentDeclaration;
   const providerId = buildQualifiedPluginContributionKey({
     pluginId: contribution.pluginId,
     localId: currentDeclaration.id,
@@ -159,19 +175,20 @@ function installCurrentDeclaration(currentDeclaration: VoiceProviderContribution
     pluginId: contribution.pluginId,
     localId: currentDeclaration.id,
     providerId,
+    occurrenceId: declarationOccurrenceId,
     descriptor,
     adapter: null,
   });
 }
 
-function installCodexDescriptor(options: Readonly<{
+async function installCodexDescriptor(options: Readonly<{
   requiresAccountConfiguration?: boolean;
   includeOpenAi?: boolean;
+  available?: boolean;
 }> = {}) {
-  installConnectedAccountDescriptorProjection({
-    scopeKey: 'voice-credential-source-test',
-    status: 'ready',
-    descriptors: [{
+  // Authored daemon reply bytes, validated again by the whole Socket DTO.
+  // The CLI projector is explicitly outside this downstream UI suite.
+  descriptorReplies = options.available === false ? [] : ConnectedAccountUiProjectionEntryV1Schema.array().parse([{
       id: 'openai-codex',
       serviceId: 'openai-codex',
       pluginId: 'happier.agent.codex',
@@ -229,11 +246,61 @@ function installCodexDescriptor(options: Readonly<{
       capabilities: [],
       availability: { state: 'available' as const, reason: 'resolved' as const },
       diagnostics: [],
-    }] : [])],
-    conflicts: [],
-    errorReason: null,
+    }] : [])]);
+  if (reloadProjection) {
+    await act(async () => { reloadProjection?.(); });
+    await waitForDescriptorReply();
+  }
+}
+
+const declarationOccurrenceId = 'credential-source-declaration';
+const descriptorMachineId = 'credential-descriptor-machine';
+let projectedDeclaration = declaration;
+let descriptorReplies: Array<ReturnType<typeof ConnectedAccountUiProjectionEntryV1Schema.parse>> = [];
+let reloadProjection: (() => void) | undefined;
+let runtimeLease: ReturnType<typeof createBundledConversationRuntimeHostLease> | undefined;
+let bundledRuntimes: ReturnType<typeof createBundledConversationRuntimes> = [];
+function ProjectionReader() {
+  reloadProjection = useAppShellPluginUiProjection().reloadConnectedAccountProjection;
+  return null;
+}
+async function waitForDescriptorReply() {
+  await vi.waitFor(async () => {
+    await flush();
+    expect(getConnectedAccountAuthentication({
+      pluginId: 'happier.agent.codex', localId: 'openai-codex',
+    })).toEqual(descriptorReplies.find(entry => entry.id === 'openai-codex')?.authentication ?? null);
   });
 }
+const projectionRequests = installSessionActionRpcBoundary(request => {
+  if (!request.method.endsWith(`:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`)) {
+    return { error: 'unavailable' };
+  }
+  const entries = BUNDLED_FIRST_PARTY_VOICE_CONTRIBUTIONS.map(entry => {
+    const recipientContract = createBundledVoiceRecipientContract(entry);
+    return { id: entry.providerId, contributionKey: entry.providerId, pluginId: entry.pluginId,
+      occurrenceId: 'credential-bundled-daemon-occurrence', definition: entry.declaration,
+      ...(recipientContract ? { recipientContract,
+        recipientContractDigest: createRecipientContractDigestV1(recipientContract) } : {}),
+    } satisfies NonNullable<PluginProjectionV2['familiesById']['voiceProviders']>['entriesById'][string];
+  });
+  const providerId = buildQualifiedPluginContributionKey({ pluginId: contribution.pluginId, localId: projectedDeclaration.id });
+  return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
+    projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {},
+      agentsById: {}, actionsById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {},
+      familiesById: {
+        connectedAccounts: { family: 'connectedAccounts', entriesById: Object.fromEntries(descriptorReplies.map(entry => [
+          buildQualifiedPluginContributionKey({ pluginId: entry.pluginId!, localId: entry.id }), entry,
+        ])) },
+        voiceProviders: { family: 'voiceProviders', entriesById: Object.fromEntries([
+          ...entries.map(entry => [entry.id, entry] as const),
+          [providerId, { id: providerId, contributionKey: providerId, pluginId: contribution.pluginId,
+            occurrenceId: declarationOccurrenceId, definition: projectedDeclaration }],
+        ]) },
+      },
+    }),
+  });
+});
 
 
 const PURPOSES_PATH = '/v1/account/entity-rows/connected-accounts/purposes';
@@ -312,7 +379,7 @@ async function choose(id: string, admitted = true) {
   await flush();
   return admitted ? await selectionReceipt() : undefined;
 }
-async function renderField(currentDeclaration = declaration, isCurrent?: () => boolean) {
+async function renderField(currentDeclaration = declaration, isCurrent?: () => boolean, content?: React.ReactNode) {
   const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
   const { ModalProvider } = await import('@/modal');
   const container = document.createElement('div');
@@ -320,10 +387,19 @@ async function renderField(currentDeclaration = declaration, isCurrent?: () => b
   const root = createRoot(container);
   mounted = { root, container };
   const element = () => <InjectedAuthProvider credentials={account!.credentials}><ModalProvider>
-    <VoiceCredentialSourceField contribution={{ pluginId: contribution.pluginId, localId: currentDeclaration.id }}
-      declaration={currentDeclaration} credentials={currentDeclaration.credentials!} isCurrent={isCurrent} />
+    <AppShellPluginUiProjectionProvider><ProjectionReader />
+      {content ?? <VoiceCredentialSourceField contribution={{ pluginId: contribution.pluginId, localId: currentDeclaration.id }}
+        declaration={currentDeclaration} credentials={currentDeclaration.credentials!} isCurrent={isCurrent} />}
+    </AppShellPluginUiProjectionProvider>
   </ModalProvider></InjectedAuthProvider>;
   await act(async () => { root.render(element()); });
+  await vi.waitFor(async () => {
+    await flush();
+    expect(projectionRequests.some(request => request.method.endsWith(
+      `:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`,
+    )), 'Actual AppShell daemon description admission').toBe(true);
+  });
+  await waitForDescriptorReply();
   return async () => { await act(async () => { root.render(element()); }); };
 }
 async function publishProfile(accounts: AccountProfile['connectedAccountsV4'] = [codexAccount]) {
@@ -334,17 +410,24 @@ async function publishProfile(accounts: AccountProfile['connectedAccountsV4'] = 
   });
 }
 beforeEach(async () => {
+  setPreferredLanguageFromSettings('en');
   locks = installWebLockManagerMock();
+  reloadProjection = undefined;
+  projectionRequests.length = 0;
   resetExternalVoiceProviderRegistrationsForTests();
   installCurrentDeclaration(declaration);
-  installCodexDescriptor();
+  await installCodexDescriptor();
+  runtimeLease = createBundledConversationRuntimeHostLease();
+  bundledRuntimes = createBundledConversationRuntimes({
+    bundledEntries: BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES, host: runtimeLease.host,
+  });
   purposes = { v: 1, bindings: [] };
   revision = 9;
   writes = [];
   beforePurposeRead = undefined;
   afterAcknowledgement = undefined;
   omitSettingsReceipt = false;
-  account = await createSecretSettingsTestHarness({ settings: settingsParse({
+  account = await createSecretSettingsTestHarness({ voiceEnabled: true, settings: settingsParse({
     schemaVersion: 7, secrets: [], voiceSettingsV1: { credentialBindings: [] },
   }) });
   account.catalogRows.set(PURPOSES_PATH, {
@@ -355,6 +438,17 @@ beforeEach(async () => {
   setRuntimeFetch(async (url, init) => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/auth/ping') return Response.json({});
+    const machine = createPlainMachineRowFixture({
+      id: descriptorMachineId, accountId: account!.scope.accountId,
+    });
+    if (path === '/v1/machines') return Response.json([machine]);
+    // The real scoped RPC owner must confirm this exact Home machine envelope
+    // before it can emit a daemon request; a list row alone is not that authority.
+    if (path === `/v1/machines/${descriptorMachineId}`) return Response.json({ machine });
+    if (path === `/v1/machines/${descriptorMachineId}/access`) return Response.json({
+      machineId: machine.id, custodian: machine.access!.custodian, access: machine.access,
+      canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+    });
     if (path !== PURPOSES_PATH) return account!.request(url, init);
     if (init?.method !== 'POST') {
       const callback = beforePurposeRead;
@@ -387,6 +481,9 @@ beforeEach(async () => {
   });
   await refreshConnectedAccountCatalog(account.scope, 'purposes');
   await publishProfile();
+  storage.getState().applyMachines([createMachineFixture({ id: descriptorMachineId,
+    active: true, activeAt: Date.now(), daemonStateVersion: 1,
+  })], true, { sourceServerId: account.scope.serverId });
   gestureObservation = observeGesture();
 });
 afterEach(async () => {
@@ -395,6 +492,11 @@ afterEach(async () => {
     mounted.container.remove();
     mounted = undefined;
   }
+  reloadProjection = undefined;
+  await Promise.all(bundledRuntimes.map(runtime => runtime.dispose()));
+  bundledRuntimes = [];
+  runtimeLease?.revoke();
+  runtimeLease = undefined;
   resetExternalVoiceProviderRegistrationsForTests();
   gestureObservation?.mockRestore();
   await account?.dispose();
@@ -404,6 +506,45 @@ afterEach(async () => {
 });
 
 describe('VoiceCredentialSourceField → admitted Account purpose transaction', () => {
+  it('renders only the canonical source selector for a Connected Account-only declared conversation and persists its exact binding', async () => {
+    const connectedOnly = VoiceProviderContributionSchema.parse({ ...declaration,
+      credentials: { ...credentials, sources: credentials.sources.filter(source => source.kind === 'connectedAccount') },
+      settings: { schemaVersion: 1, fields: [{ id: 'model', title: 'Model',
+        schema: { type: 'string', minLength: 1, maxLength: 64 }, default: 'voice-fixture',
+        presentation: { control: 'text' },
+      }] },
+    });
+    if (connectedOnly.kind !== 'conversation') throw new Error('Expected conversation declaration');
+    const runtime = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(entry => entry.declaration.id === 'realtime-openai');
+    if (!runtime) throw new Error('Expected shipped OpenAI runtime');
+    projectedDeclaration = connectedOnly;
+    const scope = createExternalVoiceProviderActivationScope({ pluginId: contribution.pluginId,
+      occurrenceId: declarationOccurrenceId, declarations: [connectedOnly], hostPlatform: 'web' });
+    onTestFinished(async () => { await scope.unwind(); });
+    runtime.activate(scope.api);
+    await scope.commit();
+    const providerId = buildQualifiedPluginContributionKey({ pluginId: contribution.pluginId, localId: connectedOnly.id });
+    const activated = createDefaultVoiceProviderRegistry().get(providerId);
+    if (!activated?.providerSettings) throw new Error('Expected activated provider settings defaults');
+    const currentSettings = storage.getState().settings;
+    account!.replaceSettings(settingsParse({ ...currentSettings, ...normalizeVoiceSettingsLocalDelta({
+      voice: { ...currentSettings.voice, providerId, providers: { ...currentSettings.voice.providers,
+        [providerId]: { schemaVersion: activated.providerSettings.schemaVersion,
+          config: activated.providerSettings.defaultConfig } } },
+    }, currentSettings) }));
+    const { VoiceProviderSection } = await import('../VoiceProviderSection');
+    await renderField(connectedOnly, undefined, <VoiceProviderSection voice={storage.getState().settings.voice}
+      setVoice={vi.fn()} happierVoiceSupported={true} platformOs="web" />);
+    expect(document.querySelectorAll('[data-testid="voice-credential-source-api_key"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-testid^="settings.voice.externalCredential."]')).toHaveLength(0);
+    await open();
+    expect(document.querySelector('[data-testid="dropdown-option-savedSecret"]')).toBeNull();
+    gestureObservation.mockClear();
+    await act(async () => { pointerPress(requireNode(`dropdown-option-${optionId(codexTarget)}`)); });
+    expect(await selectionReceipt()).toMatchObject({ status: 'applied' });
+    await vi.waitFor(() => assertAccountSelection());
+    expect(writes.map(write => write.expectedRevision)).toEqual([9]);
+  });
   it('selects the exact declared account and presents its service without exposing its id', async () => {
     await renderField();
     await open();
@@ -421,7 +562,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     await renderField();
     expect(await choose(optionId(codexTarget))).toMatchObject({ status: 'outcomeUnknown' });
     await vi.waitFor(() => expect(requireNode('voice-credential-source-api_key').textContent)
-      .toContain('settingsProviders.errors.mutationOutcomeUnknownDescription'));
+      .toContain(t('settingsProviders.errors.mutationOutcomeUnknownDescription')));
     expect(requireNode('voice-credential-source-api_key').textContent).toContain('Work Codex');
     assertAccountSelection();
     expect(revision).toBe(10);
@@ -448,7 +589,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
       { pluginId: contribution.pluginId, localId: speech.id }, 'voice.speech.transcribe'));
   });
   it('refuses an account whose mode still needs Account configuration', async () => {
-    installCodexDescriptor({ requiresAccountConfiguration: true });
+    await installCodexDescriptor({ requiresAccountConfiguration: true });
     await renderField();
     await open();
     const row = requireNode(`dropdown-option-${optionId(codexTarget)}`);
@@ -460,12 +601,11 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     expect(revision).toBe(9);
   });
   it('updates eligibility when the real descriptor projection arrives', async () => {
-    installConnectedAccountDescriptorProjection({ scopeKey: 'voice-credential-source-test',
-      status: 'loading', descriptors: [], conflicts: [], errorReason: null });
+    await installCodexDescriptor({ available: false });
     const rerender = await renderField();
     await open();
     expect(requireNode(`dropdown-option-${optionId(codexTarget)}`).getAttribute('aria-disabled')).toBe('true');
-    installCodexDescriptor();
+    await installCodexDescriptor();
     await rerender();
     expect(requireNode(`dropdown-option-${optionId(codexTarget)}`).getAttribute('aria-disabled')).not.toBe('true');
     await act(async () => { pointerPress(requireNode(`dropdown-option-${optionId(codexTarget)}`)); });
@@ -473,7 +613,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     await vi.waitFor(() => assertAccountSelection());
   });
   it('offers none, SavedSecret and only manifest-declared service accounts', async () => {
-    installCodexDescriptor({ includeOpenAi: true });
+    await installCodexDescriptor({ includeOpenAi: true });
     await publishProfile([codexAccount, { ...codexAccount, ref: apiTarget.account,
       authenticationModeId: 'api-key', configurationReady: true, displayName: 'Work API key' },
       { ...codexAccount, ref: { service: { pluginId: 'unrelated.plugin', localId: 'other' }, accountId: 'other-account' },
@@ -492,13 +632,13 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     purposes = { v: 1, bindings: [{ purpose: { consumer: contribution, purpose: credentials.slot.purpose }, target: codexTarget }] };
     await refreshConnectedAccountCatalog(account!.scope, 'purposes');
     await renderField();
-    expect(requireNode('voice-credential-source-api_key').textContent).toContain('common.unavailable');
+    expect(requireNode('voice-credential-source-api_key').textContent).toContain(t('common.unavailable'));
     await choose('none');
     await vi.waitFor(() => expect(binding()).toMatchObject({ credentialSource: { kind: 'none' } }));
     expect(purposes.bindings).toEqual([]);
   });
   it('replaces the single purpose between accounts and clears it for none', async () => {
-    installCodexDescriptor({ includeOpenAi: true });
+    await installCodexDescriptor({ includeOpenAi: true });
     await publishProfile([codexAccount, { ...codexAccount, ref: apiTarget.account,
       authenticationModeId: 'api-key', configurationReady: true, displayName: 'Work API key' }]);
     await renderField();
@@ -599,7 +739,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     expect(await choose(optionId(codexTarget))).toMatchObject({ status: 'applied' });
     await vi.waitFor(() => assertAccountSelection());
     await vi.waitFor(() => expect(requireNode('voice-credential-source-api_key').textContent).toContain('Work Codex'));
-    expect(requireNode('voice-credential-source-api_key').textContent).not.toContain('mutationOutcomeUnknownDescription');
+    expect(requireNode('voice-credential-source-api_key').textContent).not.toContain(t('settingsProviders.errors.mutationOutcomeUnknownDescription'));
     expect(revision).toBe(10);
   });
 });

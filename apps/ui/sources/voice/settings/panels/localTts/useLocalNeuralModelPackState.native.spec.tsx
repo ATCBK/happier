@@ -1,113 +1,63 @@
-import React from 'react';
-import { act, ReactTestRenderer } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
-import { installLocalTtsCommonModuleMocks } from './localTtsTestHelpers';
+import { act } from 'react-test-renderer';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { KOKORO_DEFAULT_TTS_PACK_ID } from '@happier-dev/protocol/voice/modelPacks/catalog';
+const boundary = createVoiceSpeechOutputBoundary({ getAccount: () => {
+  throw new Error('Device model preparation must not dispatch a daemon RPC');
+} });
+let { filesystem } = boundary.reset();
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('react-native-unistyles', async () =>
+  (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 
-const modalAlertSpy = vi.fn();
-const prepareKokoroTtsSpy = vi.fn();
-const getModelPackInstallSummarySpy = vi.fn();
+const { Alert } = await import('react-native');
+const { t } = await import('@/text');
+// The native dialog API is the OS boundary; ModalManager and text remain real.
+const alert = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
 
-installLocalTtsCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: {
-                alert: modalAlertSpy,
-            },
-        }).module;
-    },
-});
-
-vi.mock('@/voice/kokoro/runtime/synthesizeKokoroWav', () => ({
-  prepareKokoroTts: (...args: any[]) => prepareKokoroTtsSpy(...args),
-}));
-
-vi.mock('@/voice/modelPacks/installer.native', () => ({
-  checkModelPackUpdateAvailable: vi.fn(),
-  ensureModelPackInstalled: vi.fn(),
-  getModelPackInstallSummary: (...args: any[]) => getModelPackInstallSummarySpy(...args),
-  removeModelPack: vi.fn(),
-}));
-
-vi.mock('@/voice/modelPacks/formatBuildLabel', () => ({
-  formatModelPackBuildLabel: () => null,
-}));
-
-function createHarness(
-  useHook: (props: { packId: string; manifestUrl: string | null; networkTimeoutMs: number }) => {
-    prepareModel: () => Promise<void>;
-    cancelPrepare: () => void;
-    modelStatus: string;
-  },
-) {
-  return function Harness(props: { packId: string; manifestUrl: string | null; networkTimeoutMs: number }) {
-    const state = useHook(props);
-    return React.createElement('Harness', {
-      onPrepare: state.prepareModel,
-      onCancel: state.cancelPrepare,
-      modelStatus: state.modelStatus,
-    });
-  };
-}
+const { useLocalNeuralModelPackState } = await import('./useLocalNeuralModelPackState.native');
+const input = { packId: KOKORO_DEFAULT_TTS_PACK_ID, manifestUrl: null };
 
 describe('useLocalNeuralModelPackState (native)', () => {
   beforeEach(() => {
-    modalAlertSpy.mockClear();
-    prepareKokoroTtsSpy.mockClear();
-    getModelPackInstallSummarySpy.mockClear();
-    getModelPackInstallSummarySpy.mockResolvedValue({ installed: false, packDirUri: 'file:///packs', manifest: null });
+    ({ filesystem } = boundary.reset());
+    boundary.platform.value = 'ios';
+    boundary.setNativeAvailable(false);
+    alert.mockClear();
   });
+  afterEach(() => { standardCleanup(); boundary.disposeNativeSdkBridge(); vi.unstubAllGlobals(); });
+  afterAll(async () => { alert.mockRestore(); await boundary.disposeAudioSession(); });
 
   it('surfaces prepare errors via Modal.alert', async () => {
-    prepareKokoroTtsSpy.mockRejectedValueOnce(new Error('kokoro_native_module_unavailable'));
-
-    const { useLocalNeuralModelPackState } = await import('./useLocalNeuralModelPackState.native');
-    const Harness = createHarness(useLocalNeuralModelPackState);
-
-    let tree!: ReactTestRenderer;
-    tree = (await renderScreen(React.createElement(Harness, { packId: 'dummy-pack', manifestUrl: null, networkTimeoutMs: 1000 }))).tree;
-    await act(async () => {});
-
-    const node = tree.findByType('Harness');
-    await act(async () => {
-      invokeTestInstanceHandler(await node, 'onPrepare', );
-    });
-
-    expect(modalAlertSpy).toHaveBeenCalled();
-    expect(String(modalAlertSpy.mock.calls[0]?.[1] ?? '')).toContain('kokoro_native_module_unavailable');
+    const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: input });
+    await act(async () => { await hook.getCurrent().prepareModel(); });
+    expect(hook.getCurrent().modelStatus).toBe('error');
+    expect(alert).toHaveBeenCalledWith(t('common.error'), 'kokoro_native_module_unavailable', undefined);
+    expect(filesystem.files.size).toBe(0);
   });
 
   it('settles a cancelled download back to idle instead of pinning downloading', async () => {
-    prepareKokoroTtsSpy.mockImplementationOnce(({ signal }: { signal: AbortSignal }) => (
-      new Promise((_resolve, reject) => {
+    boundary.setNativeAvailable(true);
+    const requested = createDeferred<AbortSignal>();
+    vi.stubGlobal('fetch', vi.fn((_url: string, options: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = options.signal;
+        if (!signal) throw new Error('Expected an admitted installer cancellation signal');
+        requested.resolve(signal);
         signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-      })
-    ));
-
-    const { useLocalNeuralModelPackState } = await import('./useLocalNeuralModelPackState.native');
-    const Harness = createHarness(useLocalNeuralModelPackState);
-    const rendered = await renderScreen(React.createElement(Harness, {
-      packId: 'dummy-pack',
-      manifestUrl: null,
-      networkTimeoutMs: 1000,
-    }));
-    await act(async () => {});
-
-    await act(async () => {
-      void invokeTestInstanceHandler(rendered.tree.findByType('Harness'), 'onPrepare');
-    });
-    expect(rendered.tree.findByType('Harness').props.modelStatus).toBe('downloading');
-
-    await act(async () => {
-      invokeTestInstanceHandler(rendered.tree.findByType('Harness'), 'onCancel');
-      await Promise.resolve();
-    });
-
-    expect(rendered.tree.findByType('Harness').props.modelStatus).toBe('idle');
-    expect(modalAlertSpy).not.toHaveBeenCalled();
+      })));
+    const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: input });
+    let operation!: Promise<void>;
+    await act(async () => { operation = hook.getCurrent().prepareModel(); });
+    const signal = await requested.promise;
+    expect(hook.getCurrent().modelStatus).toBe('downloading');
+    await act(async () => { hook.getCurrent().cancelPrepare(); await operation; });
+    expect(signal.aborted).toBe(true);
+    expect(hook.getCurrent().modelStatus).toBe('idle');
+    expect(hook.getCurrent().downloadProgress).toBeNull();
+    expect(filesystem.files.size).toBe(0);
+    expect(alert).not.toHaveBeenCalled();
   });
 });

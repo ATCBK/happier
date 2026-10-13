@@ -9,19 +9,21 @@ import {
   FeaturesResponseSchema,
 } from '@happier-dev/protocol';
 import type { BundledVoiceRuntimeContribution } from '@/voice/session/types';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { refreshAcpCatalog } from '@/sync/engine/settings/acpCatalogEngine';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { parseToken } from '@/utils/auth/parseToken';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
@@ -32,25 +34,49 @@ const machineRpcBoundary = vi.hoisted(() => ({
   machineRpc: vi.fn(),
 }));
 let daemonProjection: ReturnType<typeof PluginProjectionV2Schema.parse> | null = null;
+const transportHomes = new Map<string, { serverId: string; token: string }>();
+// Keep Home/Account admission, Session and Machine crypto, request scope and RPC
+// framing real. Only the Socket.IO network's authenticated daemon reply changes.
+installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+  let timeoutMs: number | null = null;
+  vi.mocked(socket.connect).mockImplementation(() => {
+    socket.connected = true;
+    for (const listener of socket.listeners('connect')) listener();
+    return socket;
+  });
+  // This cold external transport exists for its entire Socket lifetime. Keep
+  // its native network methods installed after per-test spy restoration.
+  socket.timeout = vi.fn<typeof socket.timeout>(value => { timeoutMs = value; return socket; });
+  socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload: unknown) => {
+    if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+    if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) {
+      throw new Error('Expected a framed Socket RPC');
+    }
+    const home = transportHomes.get(String(serverUrl));
+    const token = typeof socket.auth === 'object' && 'token' in socket.auth ? socket.auth.token : undefined;
+    if (!home || token !== home.token) throw new Error('Expected the captured Home Account credential');
+    const separator = payload.method.indexOf(':');
+    const targetId = payload.method.slice(0, separator);
+    const method = payload.method.slice(separator + 1);
+    const requestTimeoutMs = timeoutMs;
+    timeoutMs = null;
+    const authority = { serverId: home.serverId, accountId: parseToken(home.token), timeoutMs: requestTimeoutMs };
+    const result = method.startsWith('session.agentRealtime.')
+      ? await rpcBoundary.sessionRpc({ ...authority, sessionId: targetId, method, payload: payload.params })
+      : await machineRpcBoundary.machineRpc({ ...authority, machineId: targetId, method, payload: payload.params });
+    return { ok: true, result };
+  });
+});
 
-// Genuine daemon RPC boundary. Internal binding/service/controller logic remains real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
-  sessionRpcWithServerScope: rpcBoundary.sessionRpc,
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-  machineRpcWithServerScope: machineRpcBoundary.machineRpc,
-}));
-
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { readStoredSessionMessages } from "@happier-dev/session-core/messages";
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
-import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
+import { disconnectActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
 import '@/sync/syncEngine';
 import { sync } from '@/sync/sync';
-import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
@@ -103,10 +129,10 @@ function codexEntry() {
   return entry;
 }
 
-function activateCodexEntry(input: Readonly<{
+async function activateCodexEntry(input: Readonly<{
   host: BundledRealtimeProviderRuntimeHost;
   authorityHost: BundledRealtimeProviderRuntimeHost;
-}>): BundledVoiceRuntimeContribution {
+}>): Promise<BundledVoiceRuntimeContribution> {
   const entry = codexEntry();
   const providerId = readEntryProviderId(entry);
   const scope = createExternalVoiceProviderActivationScope({
@@ -128,10 +154,7 @@ function activateCodexEntry(input: Readonly<{
     }),
   });
   entry.activate(scope.api as Parameters<typeof entry.activate>[0]);
-  const commit = scope.commit();
-  if (commit) {
-    void commit.catch(() => undefined);
-  }
+  await scope.commit();
   const registration = getExternalVoiceProviderRegistration(providerId);
   if (!registration?.adapter) {
     throw new Error('realtime_codex bundled activation failed');
@@ -144,7 +167,7 @@ function activateCodexEntry(input: Readonly<{
   });
 }
 
-function installDirectSessionState(): void {
+function installDirectSessionState() {
   const voice = voiceSettingsParse({
     providerId: 'happier.agent.codex/realtime-codex',
     providers: {
@@ -154,12 +177,12 @@ function installDirectSessionState(): void {
       },
     },
   });
+  const settings = settingsParse({
+    ...settingsDefaults,
+    ...normalizeVoiceSettingsLocalDelta({ voice }, settingsDefaults),
+  });
   storage.setState((current) => ({
     ...current,
-    settings: {
-      ...settingsDefaults,
-      voice,
-    },
     sessions: {
       ...current.sessions,
       'codex-direct-session': createSessionFixture({
@@ -177,11 +200,10 @@ function installDirectSessionState(): void {
       }),
     },
   }) as never);
+  return settings;
 }
 
 describe('realtime_codex normal web composed gate', () => {
-  const originalSyncEncryption = sync.encryption;
-  const originalSyncCredentials = Reflect.get(sync, 'credentials');
   let activeServerId: string;
   let nextTranscriptSeq: number;
   let persistenceCleanup: (() => void) | null;
@@ -189,8 +211,14 @@ describe('realtime_codex normal web composed gate', () => {
   let transcriptRequest: ReturnType<typeof vi.fn>;
   let globalCreationAccount: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null;
   let sessionHttp: ReturnType<typeof createSessionMetadataHttpBoundary>;
+  // These records belong to the simulated Home database, not the client store.
+  // The real spawned-session owner must fetch and publish them through Sync.
+  let daemonSessions: Record<string, ReturnType<typeof createSessionFixture>>;
 
-  const restoreGlobalCreationAccount = async () => {
+  const restoreGlobalCreationAccount = async (settings = storage.getState().settings) => {
+    // This is a new server document fixture, not an older echo of the scoped
+    // document already persisted by the actual settings owner.
+    const settingsRevision = (storage.getState().settingsVersion ?? 0) + 1;
     await globalCreationAccount?.dispose();
     globalCreationAccount = await restoreServerAccountForTest({
       serverUrl: getActiveServerSnapshot().serverUrl,
@@ -199,24 +227,44 @@ describe('realtime_codex normal web composed gate', () => {
       request: async (input, init) => {
         const path = new URL(String(input)).pathname;
         if (path === '/health') return Response.json({});
+        if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({
+          id: 'codex-composed-account',
+          connectedServicesV2: [{
+            serviceId: 'openai-codex',
+            profiles: ['voice-profile', 'codex-global-profile'].map(profileId => ({
+              profileId, status: 'connected', kind: 'oauth',
+            })),
+          }],
+          connectedServiceCredentialRevisionsV1: ['voice-profile', 'codex-global-profile'].map(profileId => ({
+            serviceId: 'openai-codex', profileId,
+            credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+          })),
+        }));
         const sessionResponse = sessionHttp.handle(input, init);
         if (sessionResponse) return sessionResponse;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {}, capabilities: {} }));
-        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: storage.getState().settings }, version: 1 });
+        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: settings }, version: settingsRevision });
         if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } });
         if (path === '/v1/machines') return Response.json(Object.keys(storage.getState().machines).map(id => createPlainMachineRowFixture({ id, accountId: 'codex-composed-account' })));
+        const machine = /^\/v1\/machines\/([^/]+)$/.exec(path);
+        if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(machine[1]!), accountId: 'codex-composed-account' }) });
         const access = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
         if (access) {
           const machineId = decodeURIComponent(access[1]!);
           const row = createPlainMachineRowFixture({ id: machineId, accountId: 'codex-composed-account' });
           return Response.json({ machineId, custodian: row.access!.custodian, access: row.access, canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [] });
         }
-        return Response.json({}, { status: 404 });
+        return await transcriptRequest(input, init);
       },
     });
     activeServerId = globalCreationAccount.home.id;
+    transportHomes.set(globalCreationAccount.home.serverUrl, { serverId: activeServerId, token: globalCreationAccount.credentials.token });
+    await sync.refreshProfile();
+    expect(storage.getState().profileScope).toMatchObject({
+      serverId: activeServerId, accountId: 'codex-composed-account',
+    });
     await refreshAcpCatalog({ serverId: activeServerId, accountId: 'codex-composed-account' });
   };
 
@@ -227,14 +275,7 @@ describe('realtime_codex normal web composed gate', () => {
   ).length;
 
   const installTranscriptPersistenceBoundary = async (): Promise<void> => {
-    const activeRequest = apiSocket.request.bind(apiSocket);
-    const activeRequestSpy = vi.spyOn(apiSocket, 'request').mockImplementation((path, init, options) =>
-      String(path).endsWith('/messages') && init?.method === 'POST' ? Promise.reject(new Error('dynamic active request must not own transcript persistence')) : activeRequest(path, init, options));
-    setRuntimeFetch(transcriptRequest);
-    storage.getState().activateProfileScope({
-      serverId: activeServerId,
-      accountId: 'codex-composed-account',
-    });
+    const activeRequestSpy = vi.spyOn(apiSocket, 'request');
     persistenceCleanup = () => {
       activeRequestSpy.mockRestore();
       persistenceCleanup = null;
@@ -245,18 +286,16 @@ describe('realtime_codex normal web composed gate', () => {
     const activeServer = getActiveServerSnapshot();
     if (!activeServer.serverId) throw new Error('Codex composed test requires an active server');
     activeServerId = activeServer.serverId;
-    const credentialsForServer = vi.spyOn(
-      TokenStorage,
-      'getCredentialsForServerUrl',
-    ).mockResolvedValue(null);
-    await switchConnectionToActiveServer();
-    credentialsForServer.mockRestore();
-    storage.setState((current) => ({ ...current, profileScope: null }));
-    installDirectSessionState();
+    await disconnectActiveServerConnection();
+    storage.getState().clearProfileScope();
+    const directSettings = installDirectSessionState();
     nextTranscriptSeq = 0;
     persistenceCleanup = null;
     globalCreationAccount = null;
-    sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    daemonSessions = {};
+    sessionHttp = createSessionMetadataHttpBoundary(() => ({
+      ...storage.getState().sessions, ...daemonSessions,
+    }));
     restoreExecutorModuleLoader = null;
     transcriptRequest = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
       const url = String(input);
@@ -305,8 +344,15 @@ describe('realtime_codex normal web composed gate', () => {
       getByControlSessionId: voiceSessionBindingStore.getState().getByControlSessionId,
       list: voiceSessionBindingStore.getState().list,
     }, true);
-    await restoreGlobalCreationAccount();
+    await restoreGlobalCreationAccount(directSettings);
+    const restored = storage.getState();
+    if (!restored.settingsScope) throw new Error('Direct Codex fixture requires the restored Account settings scope');
+    restored.applySettingsForScope(restored.settingsScope, directSettings, (restored.settingsVersion ?? 0) + 1);
     installDirectSessionState();
+    // Browser environment leaves select the real host's browser audio branch;
+    // its generation guard and lease lifetime are not replaced by the fixture.
+    vi.stubGlobal('window', Object.freeze({}));
+    vi.stubGlobal('document', Object.freeze({}));
   });
 
   afterEach(async () => {
@@ -314,8 +360,6 @@ describe('realtime_codex normal web composed gate', () => {
     restoreExecutorModuleLoader?.();
     persistenceCleanup?.();
     resetRuntimeFetch();
-    sync.encryption = originalSyncEncryption;
-    Reflect.set(sync, 'credentials', originalSyncCredentials);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     clearDaemonMergedProjectionCacheForTests();
@@ -365,11 +409,8 @@ describe('realtime_codex normal web composed gate', () => {
     const webHost = Object.freeze({
       ...hostLease.host,
       getPlatform: () => 'web' as const,
-      createMicSession: () => browser.micSession,
+      createMicSession: browser.createMicSession,
       presentAttemptDiagnostic,
-      acquireAudioMode: async () => Object.freeze({
-        release: async () => undefined,
-      }),
       async createAgentSessionRealtimeService(input: Parameters<
         CreateAgentSessionRealtimeService
       >[0]) {
@@ -384,7 +425,7 @@ describe('realtime_codex normal web composed gate', () => {
         return createService ? await createService(input) : null;
       },
     });
-    const runtime = activateCodexEntry({
+    const runtime = await activateCodexEntry({
       host: webHost,
       authorityHost: hostLease.host,
     });
@@ -527,7 +568,7 @@ describe('realtime_codex normal web composed gate', () => {
     )).toHaveLength(1));
     await vi.waitFor(() => expect(browser.peer.close).toHaveBeenCalledTimes(1));
     await Promise.resolve();
-    expect(secondBrowser.peer.createDataChannel).not.toHaveBeenCalled();
+    expect(secondBrowser.peers).toHaveLength(0);
     resolveFirstStop({ ok: true, status: 'stopped' });
     await vi.waitFor(() => expect(secondBrowser.peer.createDataChannel).toHaveBeenCalledTimes(1));
     secondBrowser.peer.channel.open();
@@ -708,11 +749,10 @@ describe('realtime_codex normal web composed gate', () => {
     const webHost = Object.freeze({
       ...hostLease.host,
       getPlatform: () => 'web' as const,
-      createMicSession: () => browser.micSession,
+      createMicSession: browser.createMicSession,
       presentAttemptDiagnostic,
-      acquireAudioMode: async () => Object.freeze({ release: async () => undefined }),
     });
-    const runtime = activateCodexEntry({ host: webHost, authorityHost: hostLease.host });
+    const runtime = await activateCodexEntry({ host: webHost, authorityHost: hostLease.host });
     registerVoiceAdapters([runtime.adapter]);
 
     try {
@@ -771,9 +811,9 @@ describe('realtime_codex normal web composed gate', () => {
     const webHost = Object.freeze({
       ...hostLease.host,
       getPlatform: () => 'web' as const,
-      createMicSession: () => browser.micSession,
+      createMicSession: browser.createMicSession,
     });
-    const runtime = activateCodexEntry({
+    const runtime = await activateCodexEntry({
       host: webHost,
       authorityHost: hostLease.host,
     });
@@ -791,7 +831,7 @@ describe('realtime_codex normal web composed gate', () => {
       expect(methods).toEqual(['session.agentRealtime.inspect']);
       expect(methods).not.toContain('session.agentRealtime.start');
       expect(methods.some((method) => method.includes('voice_media'))).toBe(false);
-      expect(browser.peer.createDataChannel).not.toHaveBeenCalled();
+      expect(browser.peers).toHaveLength(0);
       expect(storage.getState().settings.voice.providerId).toBe('happier.agent.codex/realtime-codex');
     } finally {
       await runtime.dispose();
@@ -822,12 +862,9 @@ describe('realtime_codex normal web composed gate', () => {
     const webHost = Object.freeze({
       ...hostLease.host,
       getPlatform: () => 'web' as const,
-      createMicSession: () => browser.micSession,
-      acquireAudioMode: async () => Object.freeze({
-        release: async () => undefined,
-      }),
+      createMicSession: browser.createMicSession,
     });
-    const runtime = activateCodexEntry({
+    const runtime = await activateCodexEntry({
       host: webHost,
       authorityHost: hostLease.host,
     });
@@ -852,7 +889,7 @@ describe('realtime_codex normal web composed gate', () => {
       });
       expect(rpcBoundary.sessionRpc).not.toHaveBeenCalled();
       expect(browser.micSession.ensureActive).not.toHaveBeenCalled();
-      expect(browser.peer.createDataChannel).not.toHaveBeenCalled();
+      expect(browser.peers).toHaveLength(0);
     } finally {
       await runtime.dispose();
       hostLease.revoke();
@@ -944,14 +981,16 @@ describe('realtime_codex normal web composed gate', () => {
     });
     const browser = installVoiceWebRtcBrowserBoundary();
     const hostLease = createBundledConversationRuntimeHostLease();
-    const createAgentSessionRealtimeService = vi.fn();
+    const createService = hostLease.host.createAgentSessionRealtimeService;
+    if (!createService) throw new Error('Codex requires the actual Agent realtime service');
+    const createAgentSessionRealtimeService = vi.fn(createService);
     const host = Object.freeze({
       ...hostLease.host,
       getPlatform: () => 'web' as const,
-      createMicSession: () => browser.micSession,
+      createMicSession: browser.createMicSession,
       createAgentSessionRealtimeService,
     });
-    const runtime = activateCodexEntry({ host, authorityHost: hostLease.host });
+    const runtime = await activateCodexEntry({ host, authorityHost: hostLease.host });
     registerVoiceAdapters([runtime.adapter]);
 
     try {
@@ -973,7 +1012,7 @@ describe('realtime_codex normal web composed gate', () => {
         errorPresentation: 'error',
       });
       expect(browser.micSession.ensureActive).not.toHaveBeenCalled();
-      expect(browser.peer.createDataChannel).not.toHaveBeenCalled();
+      expect(browser.peers).toHaveLength(0);
       expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toHaveLength(1);
       expect(createAgentSessionRealtimeService).not.toHaveBeenCalled();
       expect(rpcBoundary.sessionRpc).not.toHaveBeenCalled();
@@ -1007,12 +1046,9 @@ describe('realtime_codex normal web composed gate', () => {
     const webHost = Object.freeze({
       ...hostLease.host,
       getPlatform: () => 'web' as const,
-      createMicSession: () => browser.micSession,
-      acquireAudioMode: async () => Object.freeze({
-        release: async () => undefined,
-      }),
+      createMicSession: browser.createMicSession,
     });
-    const runtime = activateCodexEntry({
+    const runtime = await activateCodexEntry({
       host: webHost,
       authorityHost: hostLease.host,
     });
@@ -1077,10 +1113,9 @@ describe('realtime_codex normal web composed gate', () => {
       const host = Object.freeze({
         ...hostLease.host,
         getPlatform: () => 'web' as const,
-        createMicSession: () => browser.micSession,
-        acquireAudioMode: async () => Object.freeze({ release: async () => undefined }),
+        createMicSession: browser.createMicSession,
       });
-      const runtime = activateCodexEntry({ host, authorityHost: hostLease.host });
+      const runtime = await activateCodexEntry({ host, authorityHost: hostLease.host });
       registerVoiceAdapters([runtime.adapter]);
 
       try {
@@ -1142,10 +1177,9 @@ describe('realtime_codex normal web composed gate', () => {
       const host = Object.freeze({
         ...hostLease.host,
         getPlatform: () => 'web' as const,
-        createMicSession: () => browser.micSession,
-        acquireAudioMode: async () => Object.freeze({ release: async () => undefined }),
+        createMicSession: browser.createMicSession,
       });
-      const runtime = activateCodexEntry({ host, authorityHost: hostLease.host });
+      const runtime = await activateCodexEntry({ host, authorityHost: hostLease.host });
       registerVoiceAdapters([runtime.adapter]);
 
       try {
@@ -1291,27 +1325,22 @@ describe('realtime_codex normal web composed gate', () => {
       const sessionId = spawnedSessionIds[events.filter(event => event.startsWith('spawn:')).length];
       if (!sessionId) throw new Error('unexpected trusted Global spawn');
       events.push(`spawn:${sessionId}`);
-      storage.setState((current) => ({
-        ...current,
-        sessions: {
-          ...current.sessions,
-          [sessionId]: createSessionFixture({
-            id: sessionId,
-            serverId: activeServerId,
-            active: true,
-            encryptionMode: 'plain',
-            metadata: {
-              machineId: input.machineId,
-              path: input.payload.directory.path,
-              host: 'global.test.local',
-              flavor: 'codex',
-              connectedServices,
-            },
-            permissionMode: input.payload.permissionMode,
-          }),
+      daemonSessions[sessionId] = createSessionFixture({
+        id: sessionId,
+        serverId: activeServerId,
+        active: true,
+        encryptionMode: 'plain',
+        metadata: {
+          machineId: input.machineId,
+          path: input.payload.directory.path,
+          host: 'global.test.local',
+          flavor: 'codex',
+          connectedServices,
         },
-      }) as never);
+        permissionMode: input.payload.permissionMode,
+      });
       sessionHttp.replaceSession(sessionId);
+      expect(storage.getState().sessions[sessionId]).toBeUndefined();
       return {
         type: 'success' as const,
         disposition: 'created' as const,
@@ -1365,8 +1394,7 @@ describe('realtime_codex normal web composed gate', () => {
     const host = Object.freeze({
       ...hostLease.host,
       getPlatform: () => 'web' as const,
-      createMicSession: () => browser.micSession,
-      acquireAudioMode: async () => Object.freeze({ release: async () => undefined }),
+      createMicSession: browser.createMicSession,
       async createAgentSessionRealtimeService(input: Parameters<CreateAgentSessionRealtimeService>[0]) {
         const storedBinding = voiceSessionBindingStore.getState().getByControlSessionId(
           input.controlSessionId,
@@ -1377,7 +1405,7 @@ describe('realtime_codex normal web composed gate', () => {
         return createService ? await createService(input) : null;
       },
     });
-    const runtime = activateCodexEntry({ host, authorityHost: hostLease.host });
+    const runtime = await activateCodexEntry({ host, authorityHost: hostLease.host });
 
     try {
       await expect(runtime.adapter.resolveConversationBinding?.({

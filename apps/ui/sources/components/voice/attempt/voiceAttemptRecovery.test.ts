@@ -1,33 +1,60 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleController';
+import { setVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
+import { createVoiceCaptureAdmissionController } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
+import { registerVoiceAdapters } from '@/voice/session/voiceAdapterRegistry';
+import { resetVoiceSessionStoreForTests, setVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
+import type { VoiceMachineRecoveryAction } from '@/voice/runtime/machine/voiceConversationRuntimeTypes';
+import { createBuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
+import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
+import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
+import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
+import { storage } from '@/sync/domains/state/storage';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
+import { createSessionFixture } from '@/dev/testkit';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 
 import type { VoiceConnectRecoveryTarget } from '@/components/voice/surface/resolveVoiceConnectRecoveryTarget';
 import type { VoiceSurfaceRecovery } from '@/components/voice/surface/resolveVoiceSurfaceRecovery';
 
 const state = vi.hoisted(() => ({
   openSettings: vi.fn(async () => undefined),
-  retry: vi.fn(async () => undefined),
-  toggle: vi.fn(async () => undefined),
+  platform: 'web' as 'web' | 'ios',
+  startSession: vi.fn(),
+  endSession: vi.fn(async () => undefined),
 }));
 
-vi.mock('react-native', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-native')>();
-  return {
-    ...actual,
-    Linking: { ...actual.Linking, openSettings: state.openSettings },
-    Platform: { ...actual.Platform, OS: 'ios' },
-  };
-});
-vi.mock('@/voice/session/voiceSession', () => ({
-  voiceSessionManager: {
-    retry: state.retry,
-    toggle: state.toggle,
-    bargeIn: vi.fn(),
-    stop: vi.fn(),
-    interrupt: vi.fn(),
-    setMuted: vi.fn(),
-  },
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: state.startSession } }));
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: state.startSession } }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+  Linking: { openSettings: state.openSettings },
+  Platform: { get OS() { return state.platform; } },
 }));
-vi.mock('@/utils/system/fireAndForget', () => ({ fireAndForget: (task: Promise<unknown>) => void task }));
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
+
+await loadSyncSingletonForTests();
+
+let lifecycle: ReturnType<typeof createVoiceSessionLifecycleController>;
+let assembly: ReturnType<typeof createBuiltinVoiceAdapterAssembly>;
+let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+const initialStorage = storage.getState();
+const initialBindings = voiceSessionBindingStore.getState();
+const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find((candidate) => candidate.pluginId === 'happier.voice.elevenlabs');
+if (!entry) throw new Error('recovery_elevenlabs_entry_unavailable');
+
+async function admitFailedConversation(sessionId: string): Promise<void> {
+  state.startSession.mockRejectedValueOnce(new Error('SDK connection failed'));
+  await lifecycle.toggle({ serverId: account.home.id, sessionId }).catch(() => undefined);
+  expect(state.startSession).toHaveBeenCalledOnce();
+  expect(lifecycle.getSnapshot().status).toBe('error');
+}
 
 const RUNTIME_TARGET = {
   agentId: 'codex',
@@ -54,7 +81,7 @@ function context(overrides: Partial<{
 }
 
 async function dispatch(
-  recoveryAction: any,
+  recoveryAction: VoiceMachineRecoveryAction | null,
   navigate: (href: unknown) => void = vi.fn(),
   overrides: Parameters<typeof context>[0] = {},
   setupIncomplete = false,
@@ -69,7 +96,54 @@ async function dispatch(
 }
 
 describe('the one Voice recovery dispatch every placement fires', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    resetVoiceSessionStoreForTests();
+    state.platform = 'web';
+    state.startSession.mockReset().mockResolvedValue({
+        endSession: state.endSession, setMicMuted() {}, setVolume() {},
+        sendUserMessage() {}, sendContextualUpdate() {}, getId: () => 'recovery-provider-conversation',
+    });
+    const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    account = await restoreServerAccountForTest({
+      serverUrl: 'https://voice-recovery.example.test', accountId: 'recovery-account', credentialScope: 'restored-home',
+      request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        const preparation = answerVoiceRealtimePreparationHttpRequest(url, storage.getState().settings);
+        if (preparation) return preparation;
+        if (path === '/health') return Response.json({});
+        if (path === '/v1/voice/token') return Response.json({ allowed: true, token: 'recovery-hosted-token', leaseId: 'recovery-hosted-lease', bindingNonce: 'recovery-hosted-nonce', expiresAtMs: Date.now() + 60_000 });
+        if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
+        const response = sessionHttp.handle(url, init);
+        if (response) return response;
+        return null;
+      },
+    });
+    expect(await TokenStorage.getCredentials()).toEqual(account.credentials);
+    const voice = writeVoiceProviderSettingsConfig(initialStorage.settings.voice, entry.providerId, ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS);
+    storage.setState((current) => ({ ...current,
+      settings: { ...current.settings, voice: { ...voice, providerId: entry.providerId } },
+      sessions: Object.fromEntries(['s1', 'named-session'].map((id) => [id, createSessionFixture({ id, serverId: account.home.id, encryptionMode: 'plain' })])),
+    }));
+    voiceConversationRuntimeMachine.reset();
+    assembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [entry] });
+    registerVoiceAdapters(assembly.adapters);
+    lifecycle = createVoiceSessionLifecycleController({ captureAdmission: createVoiceCaptureAdmissionController() });
+    setVoiceSessionLifecycleController(lifecycle);
+    lifecycle.subscribe(() => setVoiceSessionSnapshot(lifecycle.getSnapshot()));
+    lifecycle.setConfiguredProviderId(entry.providerId);
+  });
+  afterEach(async () => {
+    await lifecycle.dispose();
+    await assembly.dispose();
+    await account.dispose();
+    setVoiceSessionLifecycleController(null);
+    registerVoiceAdapters([]);
+    voiceSessionBindingStore.setState(initialBindings, true);
+    storage.setState(initialStorage, true);
+    vi.restoreAllMocks();
+    resetVoiceSessionStoreForTests();
+  });
 
   it('opens app voice settings for credential review', async () => {
     const navigate = vi.fn();
@@ -97,7 +171,7 @@ describe('the one Voice recovery dispatch every placement fires', () => {
     })).toBe(true);
     expect(navigate).toHaveBeenCalledWith('/settings/voice/conversations?setting=voiceConversations.sttProvider');
     expect(state.openSettings).not.toHaveBeenCalled();
-    expect(state.retry).not.toHaveBeenCalled();
+    expect(lifecycle.getSnapshot().status).toBe('disconnected');
   });
 
   it('forwards the canonical selected service and account route for Connect recovery', async () => {
@@ -174,22 +248,27 @@ describe('the one Voice recovery dispatch every placement fires', () => {
   });
 
   it('opens platform settings for microphone permission recovery', async () => {
+    state.platform = 'ios';
     (await dispatch('open_settings'))();
     expect(state.openSettings).toHaveBeenCalledTimes(1);
   });
 
   it('retries through the canonical voice session manager', async () => {
+    await admitFailedConversation('s1');
     (await dispatch('retry'))();
-    expect(state.retry).toHaveBeenCalledWith('s1');
+    await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 's1', status: 'connected', mode: 'idle', canStop: true }));
+    expect(lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: account.home.id, sessionId: 's1' });
   });
 
   it('retries the conversation the surface named rather than falling back to a global start', async () => {
+    await admitFailedConversation('named-session');
     (await dispatch('retry', vi.fn(), {
       attemptSessionId: null,
       startSessionId: 'named-session',
       globalStartAuthorized: false,
     }))();
-    expect(state.retry).toHaveBeenCalledWith('named-session');
+    await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 'named-session', status: 'connected' }));
+    expect(lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: account.home.id, sessionId: 'named-session' });
   });
 
   it('refuses a retry that has no conversation to retry', async () => {
@@ -198,7 +277,7 @@ describe('the one Voice recovery dispatch every placement fires', () => {
       startSessionId: null,
       globalStartAuthorized: false,
     }))();
-    expect(state.retry).not.toHaveBeenCalled();
+    expect(lifecycle.getSnapshot().status).toBe('disconnected');
   });
 
   it('finishes an unfinished provider setup in Voice settings when nothing has failed yet', async () => {
@@ -214,7 +293,7 @@ describe('the one Voice recovery dispatch every placement fires', () => {
     const navigate = vi.fn();
     (await dispatch(null, navigate))();
     expect(navigate).not.toHaveBeenCalled();
-    expect(state.toggle).not.toHaveBeenCalled();
+    expect(lifecycle.getSnapshot().status).toBe('disconnected');
   });
 });
 

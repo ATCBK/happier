@@ -1,41 +1,57 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  installDisconnectedServerSocketBoundary,
+  restoreServerAccountForTest,
+} from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
-const mocks = vi.hoisted(() => ({
-  getCredentials: vi.fn(),
-  fetchToken: vi.fn(),
-  completeSession: vi.fn(),
-  releaseSession: vi.fn(),
-}));
-
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-  return {
-    ...actual,
-    TokenStorage: { ...actual.TokenStorage, getCredentials: mocks.getCredentials },
-  };
-});
-
-vi.mock('@/sync/api/voice/apiVoice', () => ({
-  fetchHappierVoiceToken: mocks.fetchToken,
-  completeHappierVoiceSession: mocks.completeSession,
-  releaseHappierVoiceSession: mocks.releaseSession,
-}));
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
 
 import { createBundledHostedConversationService } from './bundledConversationRuntimeHost';
 
 describe('createBundledHostedConversationService', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.getCredentials.mockResolvedValue({ token: 'account-token' });
-    mocks.fetchToken.mockResolvedValue({
-      allowed: true,
-      token: 'provider-token',
-      leaseId: 'lease-1',
-      bindingNonce: 'nonce-1',
-      expiresAtMs: 12_000,
+  const requests: Array<{ path: string; body: unknown; authorization: string | null }> = [];
+  let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+  let admissionStarted: boolean;
+  let holdAdmission: boolean;
+  let observedAbort: boolean;
+
+  beforeEach(async () => {
+    requests.length = 0;
+    admissionStarted = false;
+    holdAdmission = false;
+    observedAbort = false;
+    account = await restoreServerAccountForTest({
+      serverUrl: 'https://hosted-service.example.test',
+      accountId: 'hosted-account',
+      credentialScope: 'restored-home',
+      request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/health') return new Response('{}');
+        if (!path.startsWith('/v1/voice/')) return null;
+        requests.push({ path, body: JSON.parse(String(init?.body)), authorization: new Headers(init?.headers).get('Authorization') });
+        if (path === '/v1/voice/token') {
+          admissionStarted = true;
+          if (holdAdmission) {
+            await new Promise<void>((resolve) => init?.signal?.addEventListener('abort', () => {
+              observedAbort = init.signal?.aborted === true;
+              resolve();
+            }, { once: true }));
+            throw Object.assign(new Error('aborted'), { code: 'aborted' });
+          }
+          return Response.json({ allowed: true, token: 'provider-token', leaseId: 'lease-1', bindingNonce: 'nonce-1', expiresAtMs: 12_000 });
+        }
+        if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
+        throw new Error(`Unexpected hosted request: ${path}`);
+      },
     });
-    mocks.completeSession.mockResolvedValue(undefined);
-    mocks.releaseSession.mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    await account?.dispose();
+    vi.restoreAllMocks();
   });
 
   it('binds the minted lease to one attempt and completes through the canonical API', async () => {
@@ -54,32 +70,14 @@ describe('createBundledHostedConversationService', () => {
     await service.complete({ providerConversationId: 'provider-conversation-1' });
     await service.complete({ providerConversationId: 'ignored-second-completion' });
 
-    expect(mocks.fetchToken).toHaveBeenCalledWith(
-      { token: 'account-token' },
-      expect.objectContaining({ sessionId: 'session-1' }),
-    );
-    expect(mocks.completeSession).toHaveBeenCalledTimes(1);
-    expect(mocks.completeSession).toHaveBeenCalledWith(
-      { token: 'account-token' },
-      {
-        leaseId: 'lease-1',
-        providerConversationId: 'provider-conversation-1',
-      },
-      { request: expect.any(Function) },
-    );
+    expect(requests).toEqual([
+      { path: '/v1/voice/token', body: { sessionId: 'session-1' }, authorization: `Bearer ${account.credentials.token}` },
+      { path: '/v1/voice/session/complete', body: { leaseId: 'lease-1', providerConversationId: 'provider-conversation-1' }, authorization: `Bearer ${account.credentials.token}` },
+    ]);
   });
 
   it('aborts in-flight admission without creating a second server settlement writer', async () => {
-    let admissionStarted = false;
-    let observedAbort = false;
-    mocks.fetchToken.mockImplementationOnce(async (_credentials, input) => {
-      admissionStarted = true;
-      await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => {
-        observedAbort = input.signal.aborted;
-        resolve();
-      }, { once: true }));
-      throw Object.assign(new Error('aborted'), { code: 'aborted' });
-    });
+    holdAdmission = true;
     const service = createBundledHostedConversationService({
       signal: new AbortController().signal,
       isCurrent: () => true,
@@ -91,8 +89,7 @@ describe('createBundledHostedConversationService', () => {
     await expect(start).rejects.toMatchObject({ code: 'aborted' });
 
     expect(observedAbort).toBe(true);
-    expect(mocks.completeSession).not.toHaveBeenCalled();
-    expect(mocks.releaseSession).not.toHaveBeenCalled();
+    expect(requests).toEqual([{ path: '/v1/voice/token', body: {}, authorization: `Bearer ${account.credentials.token}` }]);
   });
 
   it('releases a minted lease when the attempt aborts before completion', async () => {
@@ -105,13 +102,10 @@ describe('createBundledHostedConversationService', () => {
     await service.abort();
     await service.abort();
 
-    expect(mocks.releaseSession).toHaveBeenCalledTimes(1);
-    expect(mocks.releaseSession).toHaveBeenCalledWith(
-      { token: 'account-token' },
-      { leaseId: 'lease-1' },
-      { request: expect.any(Function) },
-    );
-    expect(mocks.completeSession).not.toHaveBeenCalled();
+    expect(requests).toEqual([
+      { path: '/v1/voice/token', body: { sessionId: 'session-1' }, authorization: `Bearer ${account.credentials.token}` },
+      { path: '/v1/voice/session/release', body: { leaseId: 'lease-1' }, authorization: `Bearer ${account.credentials.token}` },
+    ]);
   });
 
   it('rejects admission after the owning Voice generation is revoked', async () => {
@@ -123,6 +117,6 @@ describe('createBundledHostedConversationService', () => {
     await expect(service.start({ sessionId: null })).rejects.toMatchObject({
       code: 'hosted_conversation_generation_revoked',
     });
-    expect(mocks.fetchToken).not.toHaveBeenCalled();
+    expect(requests).toEqual([]);
   });
 });

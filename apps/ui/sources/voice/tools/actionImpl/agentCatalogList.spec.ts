@@ -225,7 +225,7 @@ describe('agent catalog voice tools', () => {
   afterEach(async () => {
     const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
     await serverScopedRpcSocketPool.stopAll();
-    accountHomes?.dispose();
+    await accountHomes?.dispose();
     vi.unstubAllGlobals();
   });
 

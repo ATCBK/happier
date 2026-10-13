@@ -1,8 +1,12 @@
 import { act } from 'react-test-renderer';
 import type { PropsWithChildren } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 
-import { AuthProvider } from '@/auth/context/AuthContext';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import {
     createMachineFixture,
     createRootLayoutFeaturesResponse,
@@ -14,6 +18,7 @@ import {
     resetServerFeaturesClientForTests,
 } from '@/sync/api/capabilities/serverFeaturesClient';
 import { storage } from '@/sync/domains/state/storage';
+import * as runtimeFetchAdapter from '@/utils/system/runtimeFetch';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { voiceSettingsDefaults } from '@/sync/domains/settings/voiceSettings';
@@ -23,37 +28,31 @@ import { resolveVoiceDictationReadiness } from './voiceDictationReadiness';
 
 const machineRpcWithServerScopeSpy = vi.hoisted(() => vi.fn());
 const stopRecording = vi.hoisted(() => vi.fn(async () => 'blob:dictation-composed-recording'));
+let account: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
+let credentials: Awaited<ReturnType<typeof TokenStorage.getCredentialsForServerUrl>>;
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('socket.io-client', async importOriginal => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 
-// Install the browser recorder boundary before transitive consumers construct
-// the singleton capture owner; its deterministic internal logic remains real.
-vi.mock('@/voice/runtime/input/LocalVoiceCaptureOwner', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/voice/runtime/input/LocalVoiceCaptureOwner')>();
-    return {
-        ...actual,
-        createLocalVoiceCaptureOwner: (
-            deps: Parameters<typeof actual.createLocalVoiceCaptureOwner>[0],
-        ) => actual.createLocalVoiceCaptureOwner(deps, {
-            createRecordingMicSession: () => {
-                let muted = false;
-                return {
-                    ensureActive: async () => {},
-                    setMuted: (nextMuted: boolean) => { muted = nextMuted; },
-                    isMuted: () => muted,
-                    teardown: async () => {},
-                    getStream: () => null,
-                    beginRecording: async () => {},
-                    stopRecording,
-                };
-            },
-        }),
-    };
+// Expo is the SDK leaf. NativeMicSession, audio-mode custody and capture stay real.
+vi.mock('expo-audio', () => {
+    class AudioRecorderWeb {
+        uri: string | null = null;
+        async prepareToRecordAsync() {}
+        pause() {}
+        record() {}
+        async stop() { this.uri = await stopRecording(); }
+    }
+    return { AudioModule: { AudioRecorderWeb, setAudioModeAsync: async () => {} },
+        RecordingPresets: { HIGH_QUALITY: { web: { mimeType: 'audio/webm' } } } };
 });
 
 function AuthenticatedHookBoundary({ children }: PropsWithChildren) {
     return (
-        <AuthProvider initialCredentials={{ token: 'token-1', secret: 'secret-1' }}>
+        <InjectedAuthProvider credentials={credentials!}>
             {children}
-        </AuthProvider>
+        </InjectedAuthProvider>
     );
 }
 
@@ -67,9 +66,12 @@ vi.mock('react-native', async () => {
     });
 });
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (...args: unknown[]) => machineRpcWithServerScopeSpy(...args),
-}));
+installSessionActionRpcBoundary(request => machineRpcWithServerScopeSpy(request));
+const recordingModule = await loadVitestModuleForNodeRequire(
+    new URL('../runtime/mic/NativeMicSession.ts', import.meta.url),
+    () => import('@/voice/runtime/mic/NativeMicSession'),
+);
+afterAll(() => recordingModule.dispose());
 
 const initialStorageState = storage.getState();
 
@@ -83,22 +85,34 @@ describe('useVoiceDictation composed daemon readiness', () => {
         storage.setState(initialStorageState, true);
         vi.restoreAllMocks();
         machineRpcWithServerScopeSpy.mockReset();
+        await account?.dispose();
+        vi.unstubAllGlobals();
     });
 
     it('does not report Ready when the real controller will fail the daemon feature gate before RPC', async () => {
         const executionMachineId = 'machine-ready-at-start';
+        const installedFetch = vi.spyOn(runtimeFetchAdapter, 'setRuntimeFetch');
+        let respondHome: Parameters<typeof setRuntimeFetch>[0] | null = null;
+        try {
+            account = await createPlainArtifactHomeFixture('https://dictation-readiness.test');
+            respondHome = installedFetch.mock.calls.at(-1)?.[0] ?? null;
+        } finally {
+            installedFetch.mockRestore();
+        }
+        if (!respondHome) throw new Error('Expected the canonical Home HTTP boundary');
+        const homeHttpBoundary = respondHome;
         const recording = new Blob(['recorded-audio'], { type: 'audio/webm;codecs=opus' });
+        setRuntimeFetch(async (input, init) => String(input) === 'blob:dictation-composed-recording'
+            ? new Response(recording)
+            : await homeHttpBoundary(input, init));
+        credentials = await TokenStorage.getCredentialsForServerUrl('https://dictation-readiness.test');
         stopRecording.mockClear();
-        setRuntimeFetch(async (input) => {
-            if (String(input) !== 'blob:dictation-composed-recording') {
-                throw new Error(`unexpected fetch: ${String(input)}`);
-            }
-            return {
-                blob: async () => recording,
-            } as Response;
+        vi.stubGlobal('navigator', {
+            mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) },
         });
         storage.setState({
             ...storage.getState(),
+            machineListByServerId: { [account.home.id]: [createMachineFixture({ id: executionMachineId, active: true, activeAt: Date.now() })] },
             machines: {
                 [executionMachineId]: createMachineFixture({
                     id: executionMachineId,
@@ -142,6 +156,7 @@ describe('useVoiceDictation composed daemon readiness', () => {
             },
         });
         primeServerFeaturesSnapshot({
+            serverId: account.home.id,
             snapshot: {
                 status: 'ready',
                 features: createRootLayoutFeaturesResponse({

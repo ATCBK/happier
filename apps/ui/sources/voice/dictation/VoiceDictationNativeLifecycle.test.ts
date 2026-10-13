@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
     VoiceAudioSessionCoordinator,
-    VoiceAudioSessionPlatform,
     VoiceAudioSessionPlatformEvent,
 } from '@happier-dev/audio-stream-native';
 
-import { createVoiceAudioSessionCoordinator } from '../../../../../packages/audio-stream-native/src/voiceAudioSessionCoordinator';
 import { createDeviceSttController } from '@/voice/input/DeviceSttController';
 import { createLocalVoiceCaptureOwner } from '@/voice/runtime/input/LocalVoiceCaptureOwner';
 import { createExpoAudioRecordingMicSession } from '@/voice/runtime/mic/NativeMicSession';
+import { createNativeMicSession } from '@/voice/runtime/mic/NativeMicSession';
+import { createVoiceFileRecording } from '@happier-dev/audio-stream-native';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 
 import { createVoiceDictationController } from './VoiceDictationController';
 
@@ -39,15 +40,9 @@ vi.mock('react-native', async () => {
     });
 });
 
-// The platform prompt and alert are the boundary; the refusal decision stays real.
-vi.mock('@/utils/platform/microphonePermissions', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/utils/platform/microphonePermissions')>(),
-    requestMicrophonePermission: vi.fn(async () => ({
-        granted: true,
-        canAskAgain: true,
-    })),
-    showMicrophonePermissionDeniedAlert: vi.fn(),
-}));
+vi.mock('expo-audio', () => ({ AudioModule: {
+    requestRecordingPermissionsAsync: async () => ({ granted: true, canAskAgain: true }),
+} }));
 
 vi.mock('expo-speech-recognition', () => ({
     ExpoSpeechRecognitionModule: {
@@ -116,30 +111,11 @@ function createNativeCoordinatorHarness(): Readonly<{
     emit: (event: VoiceAudioSessionPlatformEvent) => void;
     restore: ReturnType<typeof vi.fn>;
 }> {
-    let listener: ((event: VoiceAudioSessionPlatformEvent) => void) | null = null;
-    const restore = vi.fn(async () => {});
-    const platform: VoiceAudioSessionPlatform = {
-        apply: vi.fn(async ({ generation, configuration }) => ({
-            generation,
-            aecAvailable: true,
-            aecActive: configuration.aec !== 'off',
-            route: 'built-in',
-        })),
-        restore,
-        subscribe: (next) => {
-            listener = next;
-            return {
-                remove: () => {
-                    listener = null;
-                },
-            };
-        },
-    };
-    const coordinator = createVoiceAudioSessionCoordinator({ platform });
+    const native = createNativeVoicePcmCaptureHarness();
     return {
-        coordinator,
-        emit: (event) => listener?.(event),
-        restore,
+        coordinator: native.coordinator,
+        emit: native.emitSession,
+        restore: native.restore,
     };
 }
 
@@ -147,14 +123,17 @@ function createRecordedDictationHarness(
     coordinator: VoiceAudioSessionCoordinator,
 ) {
     const recorderStop = vi.fn(async () => {});
-    const createRecorder = vi.fn(() => ({
-        start: vi.fn(async () => {}),
-        setMuted: vi.fn(async () => {}),
-        stop: async () => {
+    const fileRecordingSdk = {
+        startFileRecording: vi.fn(async () => ({ recordingId: 'native-dictation' })),
+        setFileRecordingMuted: vi.fn(async () => {}),
+        stopFileRecording: vi.fn(async () => {
             await recorderStop();
-            return 'file:///native-dictation.m4a';
-        },
-    }));
+            return { uri: 'file:///native-dictation.m4a' };
+        }),
+    };
+    // The real first-party recorder owns recording identity and terminal state.
+    const native = createNativeVoicePcmCaptureHarness();
+    const createRecorder = () => createVoiceFileRecording({ ...native.nativeModule, ...fileRecordingSdk });
     const captureOwner = createLocalVoiceCaptureOwner({
         getSettings: () => ({}),
         onCaptureError: vi.fn(),
@@ -210,13 +189,8 @@ function createDeviceDictationHarness(
             stopTimeoutMs: 0,
         }),
         createLiveMicSession: () => {
-            const session = {
-                ensureActive: vi.fn(async () => {}),
-                setMuted: vi.fn(),
-                isMuted: vi.fn(() => false),
-                teardown: vi.fn(async () => {}),
-                getStream: vi.fn(() => null),
-            };
+            const microphone = createNativeMicSession();
+            const session = { ...microphone, teardown: vi.fn(microphone.teardown) };
             liveMicSessions.push(session);
             return session;
         },

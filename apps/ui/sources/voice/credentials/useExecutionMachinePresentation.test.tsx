@@ -1,131 +1,135 @@
+/** @vitest-environment jsdom */
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
-import { renderHook, standardCleanup } from '@/dev/testkit';
-import { storage } from '@/sync/domains/state/storage';
-import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
-import { persistVoiceAutoTargetMachineId } from '@/voice/persistence/voiceAutoTargetMachineSettings';
-import { voiceSettingsDefaults } from '@/sync/domains/settings/voiceSettings';
-import { t } from '@/text';
+import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-import { useVoiceExecutionMachinePresentation } from './useExecutionMachinePresentation';
+installDisconnectedServerSocketBoundary();
+// Node supplies the unavailable native crypto adapters; Account/settings owners stay real.
+vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
+vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
+vi.mock('@/platform/digest', () => import('@/platform/digest.node'));
+vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
+vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
 
-const initialState = storage.getState();
+await loadSyncSingletonForTests();
+const { createSecretSettingsTestHarness } = await import('@/components/settings/secrets/secretSettingsTestHarness');
+const { storage } = await import('@/sync/domains/state/storage');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const { requireOneShotAccountSettingsMutationApplied } = await import('@/sync/engine/settings/syncSettings');
+const { sync } = await import('@/sync/sync');
+const { useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore');
+const { persistVoiceAutoTargetMachineId } = await import('@/voice/persistence/voiceAutoTargetMachineSettings');
+const { t } = await import('@/text');
+const { resolveMachineDisplayNames } = await import('@/utils/sessions/machineDisplayNames');
+const { useVoiceExecutionMachinePresentation } = await import('./useExecutionMachinePresentation');
 
-function machine(id: string, displayName: string) {
-  return {
-    id,
-    active: true,
-    createdAt: 1,
-    updatedAt: 1,
-    metadata: { displayName },
-  } as any;
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>>;
+let webLocks: ReturnType<typeof installWebLockManagerMock>;
+
+function publishMachines(...machines: ReturnType<typeof createMachineFixture>[]) {
+  storage.getState().applyMachines(machines.map(machine => createMachineFixture({ ...machine, activeAt: Date.now() })), true,
+    { sourceServerId: account.scope.serverId });
+}
+
+async function selectMachine(machineId: string) {
+  const current = storage.getState();
+  if (current.settingsVersion === null) throw new Error('Expected hydrated Account settings version');
+  requireOneShotAccountSettingsMutationApplied(await sync.mutateAccountSettingsOnce({
+    expectedSettingsScope: account.scope,
+    expectedSettingsVersion: current.settingsVersion,
+    mutate: (raw) => ({
+      settings: { ...raw, ...normalizeVoiceSettingsLocalDelta({ voice: {
+        ...settingsParse(raw).voice,
+        executionMachine: { mode: 'fixed', machineId },
+      } }, settingsParse(raw)) },
+      value: undefined,
+    }),
+  }));
 }
 
 describe('useVoiceExecutionMachinePresentation', () => {
-  it('reacts to local auto-target memory without an Account settings write', async () => {
-    const scope = { serverId: 'voice-memory-home', accountId: 'voice-memory-account' };
-    storage.setState((state) => ({
-      settingsScope: scope,
-      machines: { 'machine-a': machine('machine-a', 'Machine A'), 'machine-b': machine('machine-b', 'Machine B') },
-      settings: { ...state.settings, voice: voiceSettingsDefaults },
-    }));
+  beforeEach(async () => {
+    webLocks = installWebLockManagerMock();
+    account = await createSecretSettingsTestHarness({ settings: settingsParse({}) });
     useVoiceTargetStore.setState({ autoTargetMachineByScope: {} });
+  });
+
+  afterEach(async () => {
+    standardCleanup();
+    await account?.dispose();
+    useVoiceTargetStore.setState({ autoTargetMachineByScope: {} });
+    webLocks?.restore();
+  });
+
+  it('reacts to local auto-target memory without an Account settings write', async () => {
+    publishMachines(
+      createMachineFixture({ id: 'machine-a', metadata: { ...createMachineFixture().metadata!, displayName: 'Machine A' } }),
+      createMachineFixture({ id: 'machine-b', metadata: { ...createMachineFixture().metadata!, displayName: 'Machine B' } }),
+    );
     const hook = await renderHook(() => useVoiceExecutionMachinePresentation());
     const settings = storage.getState().settings;
-    await act(async () => { persistVoiceAutoTargetMachineId('machine-b', scope); });
+    await act(async () => { persistVoiceAutoTargetMachineId('machine-b', account.scope); });
     expect(hook.getCurrent()).toEqual({ selectedMachineId: 'machine-b', machineId: 'machine-b', machineLabel: 'Machine B', selectionKind: 'resolved' });
     expect(storage.getState().settings).toBe(settings);
-    await hook.unmount();
-  });
-  afterEach(() => {
-    standardCleanup();
-    storage.setState(initialState, true);
+    expect(account.settingsWrites).toEqual([]);
   });
 
   it('reacts when hydration supplies the canonical execution-machine selection', async () => {
-    storage.setState({
-      ...storage.getState(),
-      machines: {},
-      settings: {
-        ...storage.getState().settings,
-        voice: undefined as any,
-      },
-    });
-
+    publishMachines();
     const hook = await renderHook(() => useVoiceExecutionMachinePresentation());
     expect(hook.getCurrent()).toEqual({ selectedMachineId: null, machineId: null, machineLabel: null, selectionKind: 'none' });
 
     await act(async () => {
-      storage.setState((state) => ({
-        machines: {
-          'machine-a': machine('machine-a', 'Machine A'),
-        },
-        settings: {
-          ...state.settings,
-          voice: {
-            executionMachine: {
-              mode: 'fixed',
-              machineId: 'machine-a',
-            },
-          } as any,
-        },
-      }));
-      await Promise.resolve();
+      publishMachines(createMachineFixture({ id: 'machine-a', metadata: { ...createMachineFixture().metadata!, displayName: 'Machine A' } }));
+      const current = storage.getState().settings;
+      account.replaceSettings(settingsParse({ ...current, ...normalizeVoiceSettingsLocalDelta({ voice: {
+        ...current.voice, executionMachine: { mode: 'fixed', machineId: 'machine-a' },
+      } }, current) }), { version: 2, publish: false });
+      await sync.refreshAccountSettingsFromServer(2, account.scope);
     });
 
     expect(hook.getCurrent()).toEqual({ selectedMachineId: 'machine-a', machineId: 'machine-a', machineLabel: 'Machine A', selectionKind: 'resolved' });
+    expect(account.persistedSettings.voice.executionMachine).toEqual({ mode: 'fixed', machineId: 'machine-a' });
   });
 
   it('labels an unnamed execution machine as unnamed, never by its id', async () => {
-    storage.setState((state) => ({
-      machines: { 'f98b860d-63e0': { ...machine('f98b860d-63e0', ''), metadata: {} } },
-      settings: {
-        ...state.settings,
-        voice: { executionMachine: { mode: 'fixed', machineId: 'f98b860d-63e0' } } as any,
-      },
-    }));
+    publishMachines(createMachineFixture({ id: 'f98b860d-63e0', metadata: { ...createMachineFixture().metadata!, host: '', displayName: '' } }));
+    await selectMachine('f98b860d-63e0');
     const hook = await renderHook(() => useVoiceExecutionMachinePresentation());
     expect(hook.getCurrent().machineLabel).toBe(t('machine.unnamedMachine'));
   });
 
+  it('uses the picker-qualified name and names a missing selection without exposing its id', async () => {
+    const first = createMachineFixture({ id: 'aaaa-1111', metadata: { ...createMachineFixture().metadata!, displayName: 'Studio', host: 'studio-a' } });
+    const second = createMachineFixture({ id: 'bbbb-2222', metadata: { ...createMachineFixture().metadata!, displayName: 'Studio', host: 'studio-b' } });
+    publishMachines(first, second);
+    await selectMachine(first.id);
+    const hook = await renderHook(() => useVoiceExecutionMachinePresentation());
+    expect(hook.getCurrent().machineLabel).toBe(resolveMachineDisplayNames([first, second]).get(first.id));
+    await act(async () => { publishMachines(); });
+    expect(hook.getCurrent().machineLabel).toBe(t('machine.unlistedMachine'));
+    expect(hook.getCurrent().selectedMachineId).toBe(first.id);
+  });
+
   it('reacts to a committed machine replacement and its label', async () => {
-    storage.setState({
-      ...storage.getState(),
-      machines: {
-        'machine-a': machine('machine-a', 'Machine A'),
-        'machine-b': machine('machine-b', 'Machine B'),
-      },
-      settings: {
-        ...storage.getState().settings,
-        voice: {
-          executionMachine: {
-            mode: 'fixed',
-            machineId: 'machine-a',
-          },
-        } as any,
-      },
-    });
+    publishMachines(
+      createMachineFixture({ id: 'machine-a', metadata: { ...createMachineFixture().metadata!, displayName: 'Machine A' } }),
+      createMachineFixture({ id: 'machine-b', metadata: { ...createMachineFixture().metadata!, displayName: 'Machine B' } }),
+    );
+    await selectMachine('machine-a');
 
     const hook = await renderHook(() => useVoiceExecutionMachinePresentation());
     expect(hook.getCurrent()).toEqual({ selectedMachineId: 'machine-a', machineId: 'machine-a', machineLabel: 'Machine A', selectionKind: 'resolved' });
 
-    await act(async () => {
-      storage.setState((state) => ({
-        settings: {
-          ...state.settings,
-          voice: {
-            ...(state.settings.voice as any),
-            executionMachine: {
-              mode: 'fixed',
-              machineId: 'machine-b',
-            },
-          },
-        },
-      }));
-      await Promise.resolve();
-    });
+    await act(async () => { await selectMachine('machine-b'); });
 
     expect(hook.getCurrent()).toEqual({ selectedMachineId: 'machine-b', machineId: 'machine-b', machineLabel: 'Machine B', selectionKind: 'resolved' });
+    expect(account.persistedSettings.voice.executionMachine).toEqual({ mode: 'fixed', machineId: 'machine-b' });
   });
 });

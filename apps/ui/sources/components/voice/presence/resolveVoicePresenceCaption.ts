@@ -30,7 +30,8 @@ export function resolveVoicePresenceCaption(voice: CaptionFacts, targetName: str
  * The compact containers' quiet second line: while the call itself needs attention (muted, opening,
  * reconnecting, blocked, failed) that caption — never the stale last line, which would read as if
  * the call were fine; otherwise the last line said, or — bound to a Session — who you are talking to
- * ("Talking to Release captain", lab `b-voice I`), or the caption until there is one.
+ * ("Talking to Release captain", lab `b-voice I`; just its name once the call has ended), or the caption until
+ * there is one.
  */
 export function resolveVoiceCompactLine(
     voice: CaptionFacts,
@@ -42,7 +43,8 @@ export function resolveVoiceCompactLine(
     if (callFirst) return caption ? { kind: 'caption', text: caption } : null;
     const line = latestTranscriptText?.trim();
     if (line) return { kind: 'transcript', text: line };
-    if (targetName) return { kind: 'caption', text: t('sessionVoice.talkingTo', { name: targetName }) };
+    // Once the call has ended the target is only named: "Talking to …" would claim Voice is still on it.
+    if (targetName) return { kind: 'caption', text: voice.live ? t('sessionVoice.talkingTo', { name: targetName }) : targetName };
     return caption ? { kind: 'caption', text: caption } : null;
 }
 

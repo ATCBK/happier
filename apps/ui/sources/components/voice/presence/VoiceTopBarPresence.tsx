@@ -109,8 +109,8 @@ const VoiceTopBarPill = React.memo(function VoiceTopBarPill(props: Readonly<{
             >
                 <View style={styles.labelRow}>
                     <VoiceStatusLine voice={voice} size="pill" />
-                    {/* Talking to a Session: its avatar and name ride the status line (lab `b-voice A`); global has none. */}
-                    {voice.live && voice.targetSessionAddress ? (
+                    {/* The admitted target stays named through its clean ended moment; global has none. */}
+                    {voice.targetSessionAddress ? (
                         <VoiceTargetIdentity address={voice.targetSessionAddress} size="pill" testID={`${props.testID}-target`} />
                     ) : null}
                 </View>

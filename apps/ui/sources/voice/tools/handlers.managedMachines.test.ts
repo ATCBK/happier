@@ -53,8 +53,8 @@ describe('Machines advertised UI and eligible Voice execution', () => {
         home: request.home, accountId: request.accountId, method: request.method,
       }))).toEqual([{ home: 'compute', accountId: 'owner', method: 'GET' }]);
     } finally {
+      await home.dispose();
       storage.setState({ settings: previousSettings });
-      home.dispose();
     }
   });
 
@@ -109,10 +109,10 @@ describe('Machines advertised UI and eligible Voice execution', () => {
         .toEqual([{ home: 'compute', accountId: 'owner' }]);
     } finally {
       await serverScopedRpcSocketPool.stopAll();
+      await home.dispose();
       resetScopedMachineTransportCacheForTests();
       installDisconnectedServerSocketBoundary();
       storage.setState({ settings: previousSettings });
-      home.dispose();
     }
   });
 
@@ -173,7 +173,7 @@ describe('Machines advertised UI and eligible Voice execution', () => {
         { home: 'compute', accountId: 'owner', path: '/v1/machines/managed/actions/get', body: managedInput },
       ]);
     } finally {
-      home.dispose();
+      await home.dispose();
     }
   });
 
@@ -247,6 +247,9 @@ describe('Machines advertised UI and eligible Voice execution', () => {
             .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
         }
         expect(home.requests.filter(request => request.path.startsWith('/v1/actions/'))).toHaveLength(1);
-      } finally { storage.setState({ settings: enabledSettings }); home.dispose(); }
+      } finally {
+        await home.dispose();
+        storage.setState({ settings: enabledSettings });
+      }
     });
 });

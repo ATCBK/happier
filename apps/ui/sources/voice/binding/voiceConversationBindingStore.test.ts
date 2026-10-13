@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
+import { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } from '@happier-dev/protocol/voice/sessionBinding';
 
 import {
   bindVoiceRuntimeAttemptBinding,
@@ -54,9 +57,11 @@ describe('createVoiceSessionBindingStore', () => {
       store,
       state: {
         sessions: {
-          'carrier-old': {
+          'carrier-old': createSessionFixture({
+            id: 'carrier-old',
+            serverId: 'server-old',
             metadata: writeVoiceConversationBindingMetadata(
-              { systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
+              { ...createSessionFixture().metadata!, ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }) },
               {
                 adapterId: 'local_conversation',
                 controlSessionId: '__voice_agent__',
@@ -67,10 +72,12 @@ describe('createVoiceSessionBindingStore', () => {
                 updatedAt: 100,
               },
             ),
-          },
-          'carrier-new': {
+          }),
+          'carrier-new': createSessionFixture({
+            id: 'carrier-new',
+            serverId: 'server-new',
             metadata: writeVoiceConversationBindingMetadata(
-              { systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
+              { ...createSessionFixture().metadata!, ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }) },
               {
                 adapterId: 'local_conversation',
                 controlSessionId: '__voice_agent__',
@@ -81,9 +88,9 @@ describe('createVoiceSessionBindingStore', () => {
                 updatedAt: 200,
               },
             ),
-          },
+          }),
         },
-      } as any,
+      },
     });
 
     expect(store.getState().getByControlSessionId('__voice_agent__')).toEqual(
@@ -135,10 +142,11 @@ describe('createVoiceSessionBindingStore', () => {
       store,
       state: {
         sessions: {
-          'carrier-s1': {
+          'carrier-s1': createSessionFixture({
+            id: 'carrier-s1',
             serverId: 'srv-1',
             metadata: writeVoiceConversationBindingMetadata(
-              { systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
+              { ...createSessionFixture().metadata!, ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }) },
               {
                 adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
                 controlSessionId: '__voice_agent__',
@@ -149,27 +157,17 @@ describe('createVoiceSessionBindingStore', () => {
                 updatedAt: 10,
               },
             ),
-          },
+          }),
         },
         sessionListIndexByServerId: {
           'srv-1': [{ type: 'session', sessionId: 'carrier-s1', serverId: 'srv-1', serverName: 'Primary' }],
         },
         sessionListRowsByServerId: {
           'srv-1': {
-            'carrier-s1': {
+            'carrier-s1': createSessionListRenderableSessionFixture({
               id: 'carrier-s1',
-              seq: 1,
-              createdAt: 10,
-              updatedAt: 10,
-              active: true,
-              activeAt: 10,
-              metadataVersion: 1,
-              agentStateVersion: 0,
-              metadata: { summaryText: 'Cached shell metadata only', path: '/tmp/carrier-s1' },
-              thinking: false,
-              thinkingAt: 0,
-              presence: 'online',
-            },
+              metadata: { ...createSessionFixture().metadata!, summaryText: 'Cached shell metadata only', path: '/tmp/carrier-s1' },
+            }),
           },
         },
         ordinarySessionListMembershipByServerId: { 'srv-1': ['carrier-s1'] },
@@ -201,24 +199,27 @@ describe('createVoiceSessionBindingStore', () => {
       updatedAt: 20,
     };
 
+    const session = createSessionFixture({
+      id: 'carrier-owner',
+      serverId: 'srv-owner',
+      metadataLayoutVersion: 1,
+      metadata: writeVoiceConversationBindingMetadata(
+        { ...createSessionFixture().metadata!, v: 1, ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }) },
+        { ...binding, targetSessionAddress: { serverId: 'srv-owner', sessionId: 'shared-private-lookalike' } },
+      ),
+      ownerMetadataView: writeVoiceConversationBindingMetadata(
+        { ...createSessionFixture().metadata!, ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }) },
+        binding,
+      ),
+    });
     const state = {
       sessions: {
-        'carrier-owner': {
-          metadataLayoutVersion: 1,
-          metadata: writeVoiceConversationBindingMetadata(
-            { v: 1, systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
-            { ...binding, targetSessionAddress: { serverId: 'srv-owner', sessionId: 'shared-private-lookalike' } },
-          ),
-          ownerMetadataView: writeVoiceConversationBindingMetadata(
-            { systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
-            binding,
-          ),
-        },
+        'carrier-owner': session,
       },
     };
     syncPersistedVoiceConversationBindings({
       store,
-      state: state as any,
+      state,
     });
 
     expect(store.getState().getByControlSessionId('__voice_agent__')?.targetSessionAddress).toEqual({
@@ -226,8 +227,8 @@ describe('createVoiceSessionBindingStore', () => {
       sessionId: 'owner-target',
     });
 
-    state.sessions['carrier-owner'].ownerMetadataView = null as any;
-    syncPersistedVoiceConversationBindings({ store, state: state as any });
+    state.sessions['carrier-owner'].ownerMetadataView = null;
+    syncPersistedVoiceConversationBindings({ store, state });
     expect(store.getState().getByControlSessionId('__voice_agent__')).toBeNull();
   });
 
@@ -300,9 +301,11 @@ describe('createVoiceSessionBindingStore', () => {
       store,
       state: {
         sessions: {
-          'persisted-carrier-b': {
+          'persisted-carrier-b': createSessionFixture({
+            id: 'persisted-carrier-b',
+            serverId: 'server-a',
             metadata: writeVoiceConversationBindingMetadata(
-              { systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
+              { ...createSessionFixture().metadata!, ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }) },
               {
                 ...runtimeBinding,
                 conversationSessionId: 'persisted-carrier-b',
@@ -311,9 +314,9 @@ describe('createVoiceSessionBindingStore', () => {
                 updatedAt: 20,
               },
             ),
-          },
+          }),
         },
-      } as any,
+      },
     });
 
     expect(store.getState().getByControlSessionId(runtimeBinding.controlSessionId))
@@ -324,7 +327,7 @@ describe('createVoiceSessionBindingStore', () => {
       conversationSessionId: runtimeBinding.conversationSessionId,
     })).toBe(true);
 
-    syncPersistedVoiceConversationBindings({ store, state: { sessions: {} } as any });
+    syncPersistedVoiceConversationBindings({ store, state: { sessions: {} } });
 
     expect(store.getState().getByConversationSessionId(
       runtimeBinding.conversationSessionId,

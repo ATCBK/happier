@@ -1,93 +1,74 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { UserTextMessage } from '@happier-dev/session-core/messages';
 
-import { renderHook } from '@/dev/testkit';
+import { createSessionFixture, createSessionMessagesFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { getStorage } from '@/sync/domains/state/storage';
+import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
+import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
+import type { VoiceSessionBinding } from '@/voice/binding/voiceConversationBindingTypes';
 import { useVoiceSurfaceConversationState } from './useVoiceSurfaceConversationState';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const BOUND_CONVERSATION_SESSION_ID = 'carrier-s1';
 
-type StorageState = Readonly<{
-    sessions: Record<string, unknown>;
-    sessionMessages: Record<string, unknown>;
-}>;
-
-const storageState: { current: StorageState } = {
-    current: { sessions: {}, sessionMessages: {} },
-};
-const storageListeners = new Set<() => void>();
-
-vi.mock('@/sync/domains/state/storage', () => ({
-    storage: {
-        getState: () => storageState.current,
-        subscribe: (listener: () => void) => {
-            storageListeners.add(listener);
-            return () => storageListeners.delete(listener);
-        },
-    },
-}));
-
-const STABLE_BINDING_STATE = {};
-vi.mock('@/voice/binding/voiceConversationBindingStore', () => ({
-    voiceSessionBindingStore: {
-        getState: () => STABLE_BINDING_STATE,
-        subscribe: () => () => {},
-    },
-}));
-
+const initialStorageState = getStorage().getState();
+const initialBindingState = voiceSessionBindingStore.getState();
 const BINDING = Object.freeze({
     adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-    controlSessionId: 'voice-global',
+    controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
     conversationSessionId: BOUND_CONVERSATION_SESSION_ID,
+    conversationSessionAddress: { serverId: 'server-active', sessionId: BOUND_CONVERSATION_SESSION_ID },
     transcriptMode: 'synthetic' as const,
-    targetSessionId: 's1',
+    targetSessionAddress: { serverId: 'server-active', sessionId: 's1' },
     updatedAt: 1,
-});
-vi.mock('@/voice/binding/resolveVoiceBindingBySessionId', () => ({
-    resolveVoiceBindingBySessionId: () => BINDING,
-}));
-vi.mock('@/voice/agent/voiceAgentGlobalSessionId', () => ({
-    VOICE_AGENT_GLOBAL_SESSION_ID: 'voice-global',
-}));
+} satisfies VoiceSessionBinding);
 
-function userMessage(seq: number) {
+function userMessage(seq: number): UserTextMessage {
     return {
         id: `m-${seq}`,
         localId: `m-${seq}`,
         createdAt: seq,
-        role: 'user' as const,
-        content: { type: 'text', text: `msg-${seq}` },
+        kind: 'user-text',
+        text: `msg-${seq}`,
     };
 }
 
-function commitStorage(next: StorageState): void {
-    storageState.current = next;
-    for (const listener of [...storageListeners]) listener();
+function conversationMessages(...sequence: number[]) {
+    const messages = sequence.map(userMessage);
+    return createSessionMessagesFixture({
+        messageIdsOldestFirst: messages.map((message) => message.id),
+        messagesById: Object.fromEntries(messages.map((message) => [message.id, message])),
+    });
 }
 
 /** A message write to a session this Voice surface is not bound to. */
 function writeUnrelatedSessionMessages(index: number): void {
-    commitStorage({
-        ...storageState.current,
+    getStorage().setState((state) => ({
         sessionMessages: {
-            ...storageState.current.sessionMessages,
-            [`unrelated-${index}`]: { messages: [userMessage(index + 1)] },
+            ...state.sessionMessages,
+            [`unrelated-${index}`]: conversationMessages(index + 1),
         },
-    });
+    }));
 }
 
 beforeEach(() => {
-    storageState.current = {
-        sessions: {},
+    getStorage().setState(initialStorageState, true);
+    voiceSessionBindingStore.setState(initialBindingState, true);
+    getStorage().setState({
+        sessions: { [BOUND_CONVERSATION_SESSION_ID]: createSessionFixture({ id: BOUND_CONVERSATION_SESSION_ID, serverId: 'server-active' }) },
         sessionMessages: {
-            [BOUND_CONVERSATION_SESSION_ID]: { messages: [userMessage(1)] },
+            [BOUND_CONVERSATION_SESSION_ID]: conversationMessages(1),
         },
-    };
+    });
+    voiceSessionBindingStore.getState().bind(BINDING);
 });
 
 afterEach(() => {
-    storageListeners.clear();
+    standardCleanup();
+    getStorage().setState(initialStorageState, true);
+    voiceSessionBindingStore.setState(initialBindingState, true);
 });
 
 /**
@@ -104,7 +85,7 @@ describe('useVoiceSurfaceConversationState message-store subscription', () => {
             renders += 1;
             return useVoiceSurfaceConversationState({
                 providerId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-                activeControlSessionId: 'voice-global',
+                activeControlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
                 surfaceSessionId: null,
                 transcriptEnabled: true,
                 voiceSettings: {},
@@ -132,7 +113,7 @@ describe('useVoiceSurfaceConversationState message-store subscription', () => {
         const hook = await renderHook(() =>
             useVoiceSurfaceConversationState({
                 providerId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-                activeControlSessionId: 'voice-global',
+                activeControlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
                 surfaceSessionId: null,
                 transcriptEnabled: true,
                 voiceSettings: {},
@@ -142,13 +123,12 @@ describe('useVoiceSurfaceConversationState message-store subscription', () => {
         expect(hook.getCurrent().transcriptEntries).toHaveLength(1);
 
         await act(async () => {
-            commitStorage({
-                ...storageState.current,
+            getStorage().setState((state) => ({
                 sessionMessages: {
-                    ...storageState.current.sessionMessages,
-                    [BOUND_CONVERSATION_SESSION_ID]: { messages: [userMessage(1), userMessage(2)] },
+                    ...state.sessionMessages,
+                    [BOUND_CONVERSATION_SESSION_ID]: conversationMessages(1, 2),
                 },
-            });
+            }));
         });
 
         expect(hook.getCurrent().transcriptEntries.map((entry) => entry.id)).toEqual(['m-1', 'm-2']);

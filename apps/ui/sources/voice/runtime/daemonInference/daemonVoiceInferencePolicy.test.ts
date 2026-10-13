@@ -1,110 +1,64 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Platform } from 'react-native';
+import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { storage } from '@/sync/domains/state/storage';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { resolveDaemonVoiceInferenceExecution, resolveLocalNeuralExecutionPolicy } from './daemonVoiceInferencePolicy';
 
-const isRuntimeFeatureEnabledMock = vi.hoisted(() => vi.fn());
+// Only the platform SDK boundary changes; stored settings and feature decisions stay real.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+const initialState = storage.getState();
+beforeEach(() => {
+    Platform.OS = 'web';
+    storage.getState().applySettingsLocal({ experiments: true, featureToggles: {
+        voice: true, 'execution.runs': true, 'voice.agent': true, 'voice.daemonInference': true,
+    } });
+    primeServerFeaturesSnapshot({ serverId: getActiveServerSnapshot().serverId, snapshot: {
+        status: 'ready', features: FeaturesResponseSchema.parse({
+            features: { voice: { enabled: true }, execution: { runs: { enabled: true } } }, capabilities: {},
+        }),
+    } });
+});
+afterEach(() => { storage.setState(initialState, true); resetServerFeaturesClientForTests(); });
 
-vi.mock('@/sync/domains/features/featureDecisionInputs', () => ({
-    isRuntimeFeatureEnabled: (...args: any[]) => isRuntimeFeatureEnabledMock(...args),
-}));
-
-describe('resolveDaemonVoiceInferenceExecution', () => {
-    beforeEach(() => {
-        vi.resetModules();
-        isRuntimeFeatureEnabledMock.mockReset();
-    });
-
-    it('derives one shared local_neural execution policy for web selection and default routing', async () => {
-        vi.doMock('react-native', () => ({
-            Platform: { OS: 'web' },
-        }));
-
-        const { resolveLocalNeuralExecutionPolicy } = await import('./daemonVoiceInferencePolicy');
-
+describe('daemon inference policy with real feature decisions', () => {
+    it('derives one shared local-neural selection policy on web', () => {
         expect(resolveLocalNeuralExecutionPolicy({ requestedExecution: 'device' })).toEqual({
-            allowDeviceSelection: false,
-            preferredExecution: 'device',
-            requestedExecution: 'device',
-            selectableExecution: 'device',
+            allowDeviceSelection: false, preferredExecution: 'device', requestedExecution: 'device', selectableExecution: 'device',
         });
-
         expect(resolveLocalNeuralExecutionPolicy({ requestedExecution: 'auto' })).toEqual({
-            allowDeviceSelection: false,
-            preferredExecution: 'daemon',
-            requestedExecution: 'auto',
-            selectableExecution: 'auto',
+            allowDeviceSelection: false, preferredExecution: 'daemon', requestedExecution: 'auto', selectableExecution: 'auto',
         });
     });
-
-    it('prefers daemon execution for auto on web when daemon inference is enabled', async () => {
-        vi.doMock('react-native', () => ({
-            Platform: { OS: 'web' },
-        }));
-        isRuntimeFeatureEnabledMock.mockResolvedValue(true);
-
-        const { resolveDaemonVoiceInferenceExecution } = await import('./daemonVoiceInferencePolicy');
-
+    it('prefers the daemon for auto on web when the real feature graph admits it', async () => {
         await expect(resolveDaemonVoiceInferenceExecution({ requestedExecution: 'auto' })).resolves.toBe('daemon');
     });
-
-    it('keeps explicit device execution on web instead of changing execution authority', async () => {
-        vi.doMock('react-native', () => ({
-            Platform: { OS: 'web' },
-        }));
-        isRuntimeFeatureEnabledMock.mockResolvedValue(true);
-
-        const { resolveDaemonVoiceInferenceExecution } = await import('./daemonVoiceInferencePolicy');
-
+    it('keeps explicit web device authority despite unavailable daemon readiness', async () => {
+        storage.getState().applySettingsLocal({ featureToggles: { 'voice.daemonInference': false } });
         await expect(resolveDaemonVoiceInferenceExecution({ requestedExecution: 'device' })).resolves.toBe('device');
-        expect(isRuntimeFeatureEnabledMock).not.toHaveBeenCalled();
     });
-
-    it('returns a typed unavailable error for explicit daemon execution when daemon inference is disabled', async () => {
-        vi.doMock('react-native', () => ({
-            Platform: { OS: 'web' },
-        }));
-        isRuntimeFeatureEnabledMock.mockResolvedValue(false);
-
-        const { resolveDaemonVoiceInferenceExecution } = await import('./daemonVoiceInferencePolicy');
-
+    it('refuses explicit daemon execution when local policy disables it', async () => {
+        storage.getState().applySettingsLocal({ featureToggles: { 'voice.daemonInference': false } });
         await expect(resolveDaemonVoiceInferenceExecution({ requestedExecution: 'daemon' })).rejects.toMatchObject({
-            code: 'feature_disabled',
-            message: 'daemon_voice_inference_feature_disabled',
+            code: 'feature_disabled', message: 'daemon_voice_inference_feature_disabled',
         });
     });
-
-    it('returns a typed error for explicit daemon execution when the feature probe errors', async () => {
-        vi.doMock('react-native', () => ({
-            Platform: { OS: 'web' },
-        }));
-        isRuntimeFeatureEnabledMock.mockRejectedValue(new Error('feature probe failed'));
-
-        const { resolveDaemonVoiceInferenceExecution } = await import('./daemonVoiceInferencePolicy');
-
-        await expect(resolveDaemonVoiceInferenceExecution({ requestedExecution: 'daemon' })).rejects.toMatchObject({
-            code: 'internal_error',
-            message: 'daemon_voice_inference_feature_probe_failed',
-        });
+    it('fails closed on the real network-error feature snapshot', async () => {
+        primeServerFeaturesSnapshot({ serverId: getActiveServerSnapshot().serverId,
+            snapshot: { status: 'error', reason: 'network' } });
+        await expect(resolveDaemonVoiceInferenceExecution({ requestedExecution: 'daemon' })).rejects.toMatchObject({ code: 'feature_disabled' });
     });
-
     it('keeps explicit device execution on native', async () => {
-        vi.doMock('react-native', () => ({
-            Platform: { OS: 'ios' },
-        }));
-        isRuntimeFeatureEnabledMock.mockResolvedValue(true);
-
-        const { resolveDaemonVoiceInferenceExecution } = await import('./daemonVoiceInferencePolicy');
-
+        Platform.OS = 'ios';
         await expect(resolveDaemonVoiceInferenceExecution({ requestedExecution: 'device' })).resolves.toBe('device');
     });
-
-    it('keeps auto execution on the native device branch when daemon inference is enabled', async () => {
-        vi.doMock('react-native', () => ({
-            Platform: { OS: 'ios' },
-        }));
-        isRuntimeFeatureEnabledMock.mockResolvedValue(true);
-
-        const { resolveDaemonVoiceInferenceExecution } = await import('./daemonVoiceInferencePolicy');
-
+    it('keeps native auto on-device despite unavailable daemon readiness', async () => {
+        Platform.OS = 'ios';
+        storage.getState().applySettingsLocal({ featureToggles: { 'voice.daemonInference': false } });
         await expect(resolveDaemonVoiceInferenceExecution({ requestedExecution: 'auto' })).resolves.toBe('device');
     });
-
 });

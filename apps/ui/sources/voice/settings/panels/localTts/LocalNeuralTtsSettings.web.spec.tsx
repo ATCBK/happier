@@ -1,62 +1,69 @@
 import React from 'react';
 
-import { act, ReactTestRenderer } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
-import { installLocalTtsCommonModuleMocks } from './localTtsTestHelpers';
+import { createMachineFixture, createPlainMachineRowFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { t } from '@/text';
+import { DaemonVoiceInferenceModelStatusSchema, DaemonVoiceInferenceModelsListResponseSchema,
+    DaemonVoiceInferenceModelsStatusResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
 
-installLocalTtsCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: {
-                prompt: vi.fn(),
-                confirm: vi.fn(),
-                alert: vi.fn(),
-            },
-        }).module;
-    },
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const account = createProviderSettingsAccountHarness();
+const remoteStatus = DaemonVoiceInferenceModelStatusSchema.parse({
+    packId: 'acme.voice/tts-pack', pluginIdentity: { pluginId: 'acme.voice', packId: 'tts-pack' },
+    kind: 'tts_sherpa', model: 'kokoro', version: '1', executionSupport: ['daemon'],
+    installState: 'installed', progress: null, lastError: null, updatedAtMs: 1,
+    voices: [{ id: 'calm', title: 'Calm' }, { id: 'bright', title: 'Bright' }], defaultVoiceId: 'bright',
+});
+installSessionActionRpcBoundary(async request => {
+    if (request.method.endsWith(':daemon.voiceInference.models.list')) {
+        return DaemonVoiceInferenceModelsListResponseSchema.parse({ ok: true, models: [remoteStatus] });
+    }
+    if (request.method.endsWith(':daemon.voiceInference.models.status')) {
+        return DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [] });
+    }
+    throw new Error(`Unexpected model catalog RPC: ${request.method}`);
 });
 
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
-}));
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) =>
-        React.createElement(
-            'DropdownMenu',
-            props,
-            typeof props.trigger === 'function' ? props.trigger({ open: false, toggle: () => {} }) : props.trigger,
-        ),
-}));
-
-vi.mock('@/voice/settings/panels/daemonInference/DaemonVoiceInferenceExecutionDropdown', () => ({
-    DaemonVoiceInferenceExecutionDropdown: (props: any) => React.createElement('ExecutionDropdown', props),
-}));
-
-vi.mock('@/voice/settings/panels/modelCatalog/DaemonModelPackRow', () => ({
-    SelectedDaemonModelPackRow: (props: any) => React.createElement('DaemonModelSection', props),
-}));
+vi.mock('@expo/vector-icons', async () =>
+    (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { DaemonVoiceInferenceExecutionDropdown } = await import('@/voice/settings/panels/daemonInference/DaemonVoiceInferenceExecutionDropdown');
+const { SelectedDaemonModelPackRow } = await import('@/voice/settings/panels/modelCatalog/DaemonModelPackRow');
+const { DaemonVoiceModelCatalogProvider } = await import('@/voice/settings/panels/modelCatalog/DaemonVoiceModelCatalogContext');
+const { useDaemonVoiceModelCatalogState } = await import('@/voice/settings/panels/modelCatalog/useDaemonVoiceModelCatalogState');
+const { LocalNeuralTtsSettings } = await import('./LocalNeuralTtsSettings.web');
+beforeEach(async () => {
+    const scope = await account.restore({ settings: { experiments: true,
+        featureToggles: { 'voice.agent': true, 'execution.runs': true, 'voice.daemonInference': true },
+        voice: { providerId: 'local_conversation', executionMachine: { mode: 'fixed', machineId: 'tts-machine' } },
+    }, machines: [createMachineFixture({ id: 'tts-machine', activeAt: Date.now() })],
+    features: createRootLayoutFeaturesResponse({ features: {
+        voice: { enabled: true }, execution: { runs: { enabled: true } },
+        machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+    }, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+        maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000, maxDurationMs: 60_000,
+        maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2,
+        maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1,
+    } } } } } }), });
+    const machine = createPlainMachineRowFixture({ id: 'tts-machine', accountId: scope.accountId });
+    account.home.answer(scope.serverId, '/v1/machines/tts-machine', { body: { machine } });
+    account.home.answer(scope.serverId, '/v1/machines/tts-machine/access', { body: {
+        machineId: machine.id, custodian: machine.access!.custodian, access: machine.access,
+        canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+    } });
+});
+afterEach(async () => { standardCleanup(); await account.reset(); });
 
 describe('LocalNeuralTtsSettings (web)', () => {
-    const daemonCatalog = {
-        state: {
-            statuses: [{
-                packId: 'acme.voice/tts-pack', pluginIdentity: { pluginId: 'acme.voice', packId: 'tts-pack' },
-                kind: 'tts_sherpa', model: 'kokoro', version: '1', executionSupport: ['daemon'],
-                installState: 'installed', progress: null, lastError: null, updatedAtMs: 1,
-                voices: [{ id: 'calm', title: 'Calm' }, { id: 'bright', title: 'Bright' }],
-                defaultVoiceId: 'bright',
-            }],
-        },
-    } as any;
-
     it.each([null, 1, Number.NaN])('shows effective default speed for %s and preserves the pack and voice when changed', async (storedSpeed) => {
         const { LocalNeuralTtsSettings } = await import('./LocalNeuralTtsSettings.web');
         const cfgKokoro = { model: 'kokoro' as const, assetId: 'acme.voice/tts-pack', voiceId: 'bright',
@@ -67,8 +74,8 @@ describe('LocalNeuralTtsSettings (web)', () => {
             setKokoro={setKokoro}
             networkTimeoutMs={15_000}
         />);
-        const speed = tree.root.findAllByType('DropdownMenu').find((node) =>
-            node.props.itemTrigger?.title === 'settingsVoice.local.kokoro.speed.title');
+        const speed = tree.root.findAllByType(DropdownMenu).find((node) =>
+            node.props.itemTrigger?.title === t('settingsVoice.local.kokoro.speed.title'));
         expect(speed).toBeDefined();
         expect(speed!.props.selectedId).toBe('1');
         expect(setKokoro).not.toHaveBeenCalled();
@@ -79,67 +86,73 @@ describe('LocalNeuralTtsSettings (web)', () => {
     it('preserves stored web device authority while hiding device selection and stale browser Kokoro management', async () => {
         const { LocalNeuralTtsSettings } = await import('./LocalNeuralTtsSettings.web');
 
-        let tree!: ReactTestRenderer;
-        tree = (await renderScreen(React.createElement(LocalNeuralTtsSettings, {
+        const { tree } = await renderScreen(React.createElement(LocalNeuralTtsSettings, {
             cfgKokoro: { model: 'kokoro', assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', voiceId: 'af_heart', speed: 1, execution: 'device' },
             setKokoro: vi.fn(),
             networkTimeoutMs: 15_000,
             popoverBoundaryRef: null,
-        }))).tree;
+        }));
 
-        const executionDropdown = tree.root.findByType('ExecutionDropdown');
+        const executionDropdown = tree.root.findByType(DaemonVoiceInferenceExecutionDropdown);
         expect(executionDropdown.props.execution).toBe('device');
         expect(executionDropdown.props.allowDeviceSelection).toBe(false);
+        expect(executionDropdown.findByType(DropdownMenu).props.selectedId).toBe('daemon');
 
-        const daemonModelSections = tree.root.findAllByType('DaemonModelSection');
+        const daemonModelSections = tree.root.findAllByType(SelectedDaemonModelPackRow);
         expect(daemonModelSections).toHaveLength(1);
         expect(daemonModelSections[0]?.props.packId).toBe('kokoro-82m-v1.0-onnx-q8-wasm');
         expect(daemonModelSections[0]?.props.kind).toBe('tts_sherpa');
-        expect(tree.root.findAll((node) => node.props?.title === 'settingsVoice.local.kokoro.model.title')).toHaveLength(0);
-        expect(tree.root.findAll((node) => node.props?.title === 'settingsVoice.local.kokoro.web.cache.title')).toHaveLength(0);
-        expect(tree.root.findAll((node) => node.props?.title === 'settingsVoice.local.kokoro.runtime.title')).toHaveLength(0);
-        expect(tree.root.findAll((node) => node.props?.title === 'settingsVoice.local.kokoro.assetPack.title')).toHaveLength(0);
+        expect(tree.root.findAll((node) => node.props?.title === t('settingsVoice.local.kokoro.model.title'))).toHaveLength(0);
+        expect(tree.root.findAll((node) => node.props?.title === t('settingsVoice.local.kokoro.web.cache.title'))).toHaveLength(0);
+        expect(tree.root.findAll((node) => node.props?.title === t('settingsVoice.local.kokoro.runtime.title'))).toHaveLength(0);
+        expect(tree.root.findAll((node) => node.props?.title === t('settingsVoice.local.kokoro.assetPack.title'))).toHaveLength(0);
     });
 
     it('keeps only daemon-relevant voice controls on web after browser Kokoro deletion', async () => {
         const { LocalNeuralTtsSettings } = await import('./LocalNeuralTtsSettings.web');
 
-        let tree!: ReactTestRenderer;
-        tree = (await renderScreen(React.createElement(LocalNeuralTtsSettings, {
+        const { tree } = await renderScreen(React.createElement(LocalNeuralTtsSettings, {
             cfgKokoro: { model: 'kokoro', assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', voiceId: 'af_heart', speed: 1, execution: 'auto' },
             setKokoro: vi.fn(),
             networkTimeoutMs: 15_000,
             popoverBoundaryRef: null,
-        }))).tree;
+        }));
 
-        const dropdowns = tree.root.findAllByType('DropdownMenu');
+        const dropdowns = tree.root.findAllByType(DropdownMenu).filter((node) =>
+            node.props.itemTrigger?.title !== t('settingsVoice.local.daemonInference.execution.title'));
         expect(dropdowns).toHaveLength(2);
-        expect(dropdowns[0]?.props.itemTrigger?.title).toBe('settingsVoice.local.kokoro.voice.titleWeb');
-        expect(dropdowns[0]?.props.itemTrigger?.subtitle).toBe('settingsVoice.local.kokoro.voice.subtitleWeb');
-        expect(dropdowns[1]?.props.itemTrigger?.title).toBe('settingsVoice.local.kokoro.speed.title');
+        expect(dropdowns[0]?.props.itemTrigger?.title).toBe(t('settingsVoice.local.kokoro.voice.titleWeb'));
+        expect(dropdowns[0]?.props.itemTrigger?.subtitle).toBe(t('settingsVoice.local.kokoro.voice.subtitleWeb'));
+        expect(dropdowns[1]?.props.itemTrigger?.title).toBe(t('settingsVoice.local.kokoro.speed.title'));
     });
 
     it('renders the exact selected daemon pack catalog and fails closed for a retired stored voice', async () => {
-        const { DaemonVoiceModelCatalogProvider } = await import('@/voice/settings/panels/modelCatalog/DaemonVoiceModelCatalogContext');
-        const { LocalNeuralTtsSettings } = await import('./LocalNeuralTtsSettings.web');
-        const render = async (voiceId: string | null) => (await renderScreen(
-            <DaemonVoiceModelCatalogProvider value={daemonCatalog}>
+        function DaemonSettings({ voiceId }: { voiceId: string | null }) {
+            const controller = useDaemonVoiceModelCatalogState({ refreshKey: 'tts-machine' });
+            return <DaemonVoiceModelCatalogProvider value={controller}>
                 <LocalNeuralTtsSettings
                     cfgKokoro={{ model: 'kokoro', assetId: 'acme.voice/tts-pack', voiceId, speed: 1, execution: 'daemon' }}
                     setKokoro={vi.fn()}
                     networkTimeoutMs={15_000}
                     popoverBoundaryRef={null}
                 />
-            </DaemonVoiceModelCatalogProvider>,
-        )).tree.root.findAllByType('DropdownMenu')[0];
+            </DaemonVoiceModelCatalogProvider>;
+        }
+        const render = async (voiceId: string | null) => {
+            const screen = await renderScreen(<DaemonSettings voiceId={voiceId} />);
+            const menu = () => screen.tree.root.findAllByType(DropdownMenu).find(node =>
+                node.props.itemTrigger?.title === t('settingsVoice.local.kokoro.voice.titleWeb'))!;
+            await vi.waitFor(() => expect(menu().props.items.map((item: { id: string }) => item.id)).toEqual(['calm', 'bright']));
+            return menu();
+        };
 
         const defaulted = await render(null);
-        expect(defaulted.props.items.map((item: any) => item.id)).toEqual(['calm', 'bright']);
+        expect(defaulted.props.items.map((item: { id: string }) => item.id)).toEqual(['calm', 'bright']);
         expect(defaulted.props.selectedId).toBe('bright');
 
         const retired = await render('retired');
-        expect(retired.props.items.map((item: any) => item.id)).toEqual(['calm', 'bright']);
+        expect(retired.props.items.map((item: { id: string }) => item.id)).toEqual(['calm', 'bright']);
         expect(retired.props.selectedId).toBe('');
-        expect(retired.props.itemTrigger.detailFormatter()).toBe('common.unavailable');
+        expect(retired.props.itemTrigger.detailFormatter()).toBe(t('common.unavailable'));
     });
 });

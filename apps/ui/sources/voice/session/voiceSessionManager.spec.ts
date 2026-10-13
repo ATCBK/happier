@@ -1,114 +1,127 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createVoiceSessionManager } from './voiceSessionManager';
-import { setVoiceSessionSnapshot } from './voiceSessionStore';
-import type { VoiceSessionLifecycleController } from './voiceSessionLifecycleController';
-import type { VoiceSessionSnapshot } from './types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
+import { installVoiceWebRtcBrowserBoundary, TestVoiceWebRtcPeer } from '@/dev/testkit/harness/voiceWebRtcHarness';
 
-const sessionAddress = (sessionId: string) => ({ serverId: 'server-1', sessionId });
-
-function createLifecycleControllerStub(
-  snapshot: VoiceSessionSnapshot = {
-    adapterId: 'local_direct',
-    sessionId: 's1',
-    status: 'connected' as const,
-    mode: 'listening' as const,
-    canStop: true,
-  },
-): VoiceSessionLifecycleController {
-  return {
-    observeSyncedConversationMessages: vi.fn(() => {}),
-    dispose: vi.fn(async () => {}),
-    getConfiguredProviderId: vi.fn(() => 'local_direct'),
-    rearmAfterCredentialAuthorityChange: vi.fn(() => {}),
-    getSnapshot: vi.fn(() => snapshot),
-    getAttemptTargetSessionAddress: () => null,
-    bargeIn: vi.fn(async () => {}),
-    interrupt: vi.fn(async () => {}),
-    commitInput: vi.fn(async () => {}),
-    beginHoldToTalk: createVoiceSessionManager({}).beginHoldToTalk,
-    finishHoldToTalk: async () => false,
-    sendContextUpdate: vi.fn(() => {}),
-    setConfiguredProviderId: vi.fn(() => {}),
-    setCurrentUiContextToolSetEnabled: vi.fn(() => {}),
-    setMuted: vi.fn(async () => {}),
-    suspendInput: vi.fn(async () => null),
-    retry: vi.fn(async () => {}),
-    dismissFailedAttempt: vi.fn(async () => {}),
-    stop: vi.fn(async () => {}),
-    subscribe: vi.fn(() => () => {}),
-    toggle: vi.fn(async () => {}),
-  };
-}
+vi.mock('socket.io-client', async importOriginal =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native', async () =>
+  (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'web' } }));
+vi.mock('expo-router', async () =>
+  (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/', params: {}, segments: [] }).module);
 
 describe('voiceSessionManager', () => {
-  beforeEach(() => {
-    setVoiceSessionSnapshot({
-      adapterId: null,
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
-    });
+  let environment: Awaited<ReturnType<typeof createOpenAiVoiceRuntimeEnvironment>>;
+  let browser: ReturnType<typeof installVoiceWebRtcBrowserBoundary>;
+  let runtime: Awaited<ReturnType<typeof environment.createRuntime>>;
+  let lifecycle: ReturnType<typeof import('./voiceSessionLifecycleController').createVoiceSessionLifecycleController>;
+  let manager: ReturnType<typeof import('./voiceSessionManager').createVoiceSessionManager>;
+
+  beforeEach(async () => {
+    environment = await createOpenAiVoiceRuntimeEnvironment();
+    browser = installVoiceWebRtcBrowserBoundary();
+    runtime = await environment.createRuntime(browser);
+    const [{ createVoiceSessionLifecycleController }, { createVoiceSessionManager },
+      { getVoiceSessionLifecycleController, setVoiceSessionLifecycleController }] = await Promise.all([
+      import('./voiceSessionLifecycleController'), import('./voiceSessionManager'), import('./voiceSessionLifecycleControllerStore'),
+    ]);
+    lifecycle = createVoiceSessionLifecycleController();
+    lifecycle.setConfiguredProviderId(runtime.adapter.id);
+    setVoiceSessionLifecycleController(lifecycle);
+    manager = createVoiceSessionManager({ getLifecycleController: getVoiceSessionLifecycleController });
   });
+  afterEach(async () => {
+    const { setVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    setVoiceSessionLifecycleController(null);
+    await lifecycle?.dispose();
+    await runtime?.runtime.dispose();
+    runtime?.hostLease.revoke();
+    browser?.restore();
+    await environment?.dispose();
+  });
+
+  async function connect(starting: Promise<void>, peer = browser.peer) {
+    await vi.waitFor(() => expect(peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+    peer.channel.open();
+    await starting;
+    expect(runtime.adapter.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+    expect(browser.micSession.getStream()).not.toBeNull();
+  }
 
   it('routes commands through the lifecycle controller', async () => {
-    const lifecycleController = createLifecycleControllerStub();
-    const mgr = createVoiceSessionManager({
-      getLifecycleController: () => lifecycleController,
-    });
+    await connect(manager.toggle(null));
+    const sessionId = runtime.controlSessionId;
+    await manager.interrupt(sessionId);
+    await manager.bargeIn(sessionId);
+    await manager.setMuted(sessionId, true);
+    expect(browser.micTrack.enabled).toBe(false);
+    expect(manager.getSnapshot().micMuted).toBe(true);
+    manager.sendContextUpdate(sessionId, 'hello from the current session');
+    await vi.waitFor(() => expect(browser.peer.channel.sent.some(value =>
+      value.includes('hello from the current session'))).toBe(true));
+    expect(browser.peer.channel.sent.map(value => JSON.parse(value))
+      .some(event => event.type === 'response.cancel')).toBe(true);
 
-    await mgr.toggle(sessionAddress('toggle-session'));
-    await mgr.retry('retry-session');
-    await mgr.stop('stop-session');
-    await mgr.interrupt('interrupt-session');
-    await mgr.bargeIn('barge-session');
-    await mgr.setMuted('mute-session', true);
-    mgr.sendContextUpdate('context-session', 'hello');
+    browser.peer.channel.message(JSON.stringify({
+      type: 'error', event_id: 'manager-terminal-session',
+      error: { code: 'session_expired', message: 'Session expired' },
+    }));
+    await vi.waitFor(() => expect(manager.getSnapshot()).toMatchObject({
+      status: 'error', canStop: false, errorRecoveryAction: 'retry',
+    }));
+    const nextPeer = new TestVoiceWebRtcPeer();
+    vi.mocked(globalThis.RTCPeerConnection).mockImplementationOnce(() => nextPeer as unknown as RTCPeerConnection);
+    await connect(manager.retry(sessionId), nextPeer);
+    expect(manager.getSnapshot()).toMatchObject({ sessionId, status: 'connected', canStop: true });
 
-    expect(lifecycleController.toggle).toHaveBeenCalledWith(sessionAddress('toggle-session'));
-    expect(lifecycleController.retry).toHaveBeenCalledWith('retry-session');
-    expect(lifecycleController.stop).toHaveBeenCalledWith('stop-session');
-    expect(lifecycleController.interrupt).toHaveBeenCalledWith('interrupt-session');
-    expect(lifecycleController.bargeIn).toHaveBeenCalledWith('barge-session');
-    expect(lifecycleController.setMuted).toHaveBeenCalledWith('mute-session', true);
-    expect(lifecycleController.sendContextUpdate).toHaveBeenCalledWith('context-session', 'hello');
+    await manager.stop(sessionId);
+    expect(manager.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+    expect(browser.micSession.getStream()).toBeNull();
+    expect(nextPeer.channel.readyState).toBe('closed');
   });
 
-  it('returns the lifecycle-controller snapshot when available', () => {
-    const lifecycleSnapshot = {
-      adapterId: 'local_conversation',
-      sessionId: 'runtime-session',
-      status: 'connected' as const,
-      mode: 'speaking' as const,
-      canStop: true,
-      micMuted: true,
-    };
-    const mgr = createVoiceSessionManager({
-      getLifecycleController: () => createLifecycleControllerStub(lifecycleSnapshot),
+  it('returns the lifecycle-controller snapshot when available', async () => {
+    await connect(manager.toggle(null));
+    const priorProjection = lifecycle.getSnapshot();
+    await manager.setMuted(runtime.controlSessionId, true);
+    const [{ getVoiceSessionSnapshot, setVoiceSessionSnapshot }, { createVoiceSessionManager },
+      { setVoiceSessionLifecycleController }] = await Promise.all([
+      import('./voiceSessionStore'), import('./voiceSessionManager'), import('./voiceSessionLifecycleControllerStore'),
+    ]);
+    setVoiceSessionLifecycleController(null);
+    const standaloneManager = createVoiceSessionManager({ getLifecycleController: () => lifecycle });
+    // Seed the real presentation store with its prior projection; the current
+    // lifecycle owner must remain authoritative while that projection lags.
+    setVoiceSessionSnapshot(priorProjection);
+    expect(getVoiceSessionSnapshot().micMuted ?? false).toBe(false);
+    expect(standaloneManager.getSnapshot()).toEqual(lifecycle.getSnapshot());
+    expect(standaloneManager.getSnapshot()).toMatchObject({
+      adapterId: runtime.adapter.id, sessionId: runtime.controlSessionId,
+      status: 'connected', canStop: true, micMuted: true,
     });
-
-    expect(mgr.getSnapshot()).toEqual(lifecycleSnapshot);
   });
 
   it('does not fall back to direct adapter ownership when no lifecycle controller is installed', async () => {
-    const mgr = createVoiceSessionManager({
-      getLifecycleController: () => null,
-    });
+    const { setVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    setVoiceSessionLifecycleController(null);
+    await connect(runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null }));
+    const before = [...browser.peer.channel.sent];
+    const sessionId = runtime.controlSessionId;
+    await manager.toggle(null);
+    await manager.retry(sessionId);
+    await manager.stop(sessionId);
+    await manager.interrupt(sessionId);
+    await manager.bargeIn(sessionId);
+    await manager.setMuted(sessionId, true);
+    manager.sendContextUpdate(sessionId, 'must not reach the registered live adapter');
 
-    await mgr.toggle(sessionAddress('s1'));
-    await mgr.retry('s1');
-    await mgr.stop('s1');
-    await mgr.interrupt('s1');
-    await mgr.bargeIn('s1');
-    await mgr.setMuted('s1', true);
-    mgr.sendContextUpdate('s1', 'hello');
-
-    expect(mgr.getSnapshot()).toEqual({
-      adapterId: null,
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
+    expect(manager.getSnapshot()).toEqual({
+      adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false,
     });
+    // A registered live microphone makes an accidental direct-adapter fallback observable.
+    expect(runtime.adapter.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+    expect(browser.micSession.getStream()).not.toBeNull();
+    expect(browser.micTrack.enabled).toBe(true);
+    expect(browser.micTrack.stop).not.toHaveBeenCalled();
+    expect(browser.peer.channel.sent).toEqual(before);
   });
 });

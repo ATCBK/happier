@@ -1,26 +1,23 @@
+import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol/actions';
-
-import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
-
-/**
- * The live Voice runtime is the only genuine boundary this projection sits above.
- * `resolveEffectiveVoiceTargetState` runs for real underneath it.
- */
-const localVoiceAgentBinding = vi.hoisted(() => ({
-    current: null as null | Readonly<{ binding: Readonly<{ targetSessionAddress: SessionAddress | null }> }>,
-}));
-vi.mock('@/voice/context/resolveActiveLocalVoiceAgentBinding', () => ({
-    resolveActiveLocalVoiceAgentBinding: () => localVoiceAgentBinding.current,
-}));
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
+import { createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
 
 import type { Message } from "@happier-dev/session-core/messages";
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
-import { createReducer } from "@happier-dev/session-core/reducer";
 import { storage } from '@/sync/domains/state/storage';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import type { SessionMessages } from '@/sync/store/domains/messages';
+
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+installDisconnectedServerSocketBoundary();
+const { createStandaloneVoicePolicyHarness, prepareStandaloneVoicePolicyHarness } = await import('@/dev/testkit/harness/standaloneVoicePolicyHarness');
+await prepareStandaloneVoicePolicyHarness();
 
 function isCanonicalSessionTranscriptActionOutput(value: unknown): boolean {
     const spec = getActionSpec('session.transcript.get');
@@ -30,16 +27,12 @@ function isCanonicalSessionTranscriptActionOutput(value: unknown): boolean {
 
 function createTestSessionMessages(messages: ReadonlyArray<Message>): SessionMessages {
     const messagesById = Object.fromEntries(messages.map((message) => [message.id, message]));
-    return {
+    return createSessionMessagesFixture({
         messageIdsOldestFirst: messages.map((message) => message.id),
         messagesById,
         messagesMap: messagesById,
-        reducerState: createReducer(),
-        latestThinkingMessageId: null,
-        latestThinkingMessageActivityAtMs: null,
-        messagesVersion: 0,
         isLoaded: true,
-    };
+    });
 }
 
 describe('getSessionRecentMessagesForVoiceTool', () => {
@@ -58,18 +51,18 @@ describe('getSessionRecentMessagesForVoiceTool', () => {
             },
             // A retained transcript is only readable through a stored Session row, which
             // supplies its Home provenance; here that Home is the loaded one.
-            sessions: { s1: {
+            sessions: { s1: createSessionFixture({
                 id: 's1',
                 serverId: getActiveServerSnapshot().serverId,
                 viewer: { follow: { follows: true, notificationLevel: 'important', includeInVoice: true } },
-            } },
+            }) },
             sessionMessages: {
                 s1: createTestSessionMessages([
                     { id: 'm1', kind: 'user-text', localId: null, text: 'hello', createdAt: 1 },
                     { id: 'm2', kind: 'agent-text', localId: null, text: 'assistant reply', createdAt: 2 },
                 ]),
             },
-        }) as never);
+        }));
         useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([
             { serverId: 'server-a', sessionId: 's1' },
         ]);
@@ -81,7 +74,7 @@ describe('getSessionRecentMessagesForVoiceTool', () => {
             settings: settingsDefaults,
             sessions: {},
             sessionMessages: {},
-        }) as never);
+        }));
         useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([]);
     });
 
@@ -297,9 +290,9 @@ describe('voice recent-message and transcript projection Home identity', () => {
                 },
             },
             // The focused Home owns both the retained transcript and the live Voice context.
-            sessions: { s1: { id: 's1', serverId: activeServerId } },
+            sessions: { s1: createSessionFixture({ id: 's1', serverId: activeServerId }) },
             sessionMessages: { s1: createTestSessionMessages(FOCUSED_HOME_ROWS) },
-        }) as never);
+        }));
         useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([
             { serverId: activeServerId, sessionId: 's1' },
         ]);
@@ -314,10 +307,9 @@ describe('voice recent-message and transcript projection Home identity', () => {
             sessionMessages: {},
             sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {},
-        }) as never);
+        }));
         useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([]);
         useVoiceTargetStore.getState().setPrimaryActionSessionAddress(null);
-        localVoiceAgentBinding.current = null;
     });
 
     it('classifies an Action bound to another Home as a non-active target instead of matching the focused Home', async () => {
@@ -378,12 +370,12 @@ describe('voice recent-message and transcript projection Home identity', () => {
         storage.setState((current) => ({
             ...current,
             sessionListRowsByServerId: {
-                'home-b': { s1: { id: 's1', updatedAt: 7 } },
+                'home-b': { s1: createSessionListRenderableSessionFixture({ id: 's1', updatedAt: 7 }) },
             },
             ordinarySessionListMembershipByServerId: {
                 'home-b': ['s1'],
             },
-        }) as never);
+        }));
         const { getSessionRecentMessagesForVoiceTool } = await import('./sessionRecentMessages');
 
         await expect(
@@ -399,7 +391,7 @@ describe('voice recent-message and transcript projection Home identity', () => {
         // The retained transcript survives, but nothing proves which Home owns it, so the
         // focused Home must not be substituted for the Home the Action host failed to bind.
         seedFocusedHomeTranscript('always');
-        storage.setState((current) => ({ ...current, sessions: {} }) as never);
+        storage.setState((current) => ({ ...current, sessions: {} }));
         const { getSessionRecentMessagesForVoiceTool } = await import('./sessionRecentMessages');
 
         await expect(
@@ -432,10 +424,10 @@ describe('voice recent-message live-context qualification', () => {
                     },
                 },
             },
-            sessions: { s1: { id: 's1', serverId: activeServerId } },
+            sessions: { s1: createSessionFixture({ id: 's1', serverId: activeServerId }) },
             sessionMessages: { s1: createTestSessionMessages(ROWS) },
             sessionListRowsByServerId: {},
-        }) as never);
+        }));
         // Attempt-local context starts empty and cannot substitute for Account Follow consent.
         useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([]);
         return activeServerId;
@@ -447,10 +439,9 @@ describe('voice recent-message live-context qualification', () => {
             settings: settingsDefaults,
             sessions: {},
             sessionMessages: {},
-        }) as never);
+        }));
         useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([]);
         useVoiceTargetStore.getState().setPrimaryActionSessionAddress(null);
-        localVoiceAgentBinding.current = null;
     });
 
     it('uses the synchronized exact-Home Include in Voice projection as disclosure authority', async () => {
@@ -460,15 +451,15 @@ describe('voice recent-message live-context qualification', () => {
             sessionListRowsByServerId: {
                 ...current.sessionListRowsByServerId,
                 [activeServerId]: {
-                    s1: {
+                    s1: createSessionListRenderableSessionFixture({
                         id: 's1',
                         viewer: {
                             follow: { follows: true, notificationLevel: 'important', includeInVoice: true },
                         },
-                    },
+                    }),
                 },
             },
-        }) as never);
+        }));
         const { getSessionRecentMessagesForVoiceTool } = await import('./sessionRecentMessages');
 
         await expect(
@@ -505,15 +496,15 @@ describe('voice recent-message live-context qualification', () => {
             sessionListRowsByServerId: {
                 ...current.sessionListRowsByServerId,
                 [activeServerId]: {
-                    s1: {
+                    s1: createSessionListRenderableSessionFixture({
                         id: 's1',
                         viewer: {
                             follow: { follows: true, notificationLevel: 'important', includeInVoice: false },
                         },
-                    },
+                    }),
                 },
             },
-        }) as never);
+        }));
         const { getSessionRecentMessagesForVoiceTool } = await import('./sessionRecentMessages');
 
         await expect(
@@ -526,19 +517,45 @@ describe('voice recent-message live-context qualification', () => {
     });
 
     it('still refuses a Session that is neither bound nor in the live context', async () => {
-        const activeServerId = seedBoundHomeTranscript();
-        localVoiceAgentBinding.current = {
-            binding: { targetSessionAddress: { serverId: activeServerId, sessionId: 'other-session' } },
-        };
-        const { getSessionRecentMessagesForVoiceTool } = await import('./sessionRecentMessages');
-
-        await expect(
-            getSessionRecentMessagesForVoiceTool({ sessionId: 's1', serverId: activeServerId, limit: 10 }),
-        ).resolves.toEqual({
-            ok: false,
-            errorCode: 'other_sessions_snippets_disabled',
-            errorMessage: 'other_sessions_snippets_disabled',
+        const daemon = await createRetainedVoiceAgentRpcBoundary();
+        const fixture = await createStandaloneVoicePolicyHarness({ mode: 'off',
+            existingSession: { id: 'voice-transcript-hidden', active: true, metadata: {
+                path: '/voice', host: 'voice.test', flavor: 'claude',
+                ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+                agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+            } },
+            sessions: ['s1', 'other-session'].map(id => createSessionFixture({ id, active: true, activeAt: Date.now(),
+                metadata: { path: '/project', host: 'voice.test', flavor: 'claude',
+                    agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+                },
+            })),
+            dispatch: daemon.dispatch,
         });
+        const activeServerId = getActiveServerSnapshot().serverId;
+        let activation: Awaited<ReturnType<typeof fixture.activateLocalAgent>> | undefined;
+        const { getSessionRecentMessagesForVoiceTool } = await import('./sessionRecentMessages');
+        try {
+            activation = await fixture.activateLocalAgent({ serverId: activeServerId, sessionId: 'other-session' });
+            const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
+            const { resolveActiveLocalVoiceAgentBinding } = await import('@/voice/context/resolveActiveLocalVoiceAgentBinding');
+            expect(activation.controller.isAgentActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true);
+            expect(resolveActiveLocalVoiceAgentBinding()?.binding?.targetSessionAddress)
+                .toEqual({ serverId: activeServerId, sessionId: 'other-session' });
+            storage.setState(current => ({
+                settings: { ...current.settings, voice: { ...current.settings.voice,
+                    privacy: { ...current.settings.voice.privacy, shareRecentMessages: true },
+                    ui: { ...current.settings.voice.ui, updates: { ...current.settings.voice.ui.updates, otherSessionsSnippetsMode: 'never' } },
+                } },
+                sessionMessages: { s1: createTestSessionMessages(ROWS) },
+            }));
+            useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([]);
+            await expect(getSessionRecentMessagesForVoiceTool({ sessionId: 's1', serverId: activeServerId, limit: 10 })).resolves.toEqual({
+                ok: false, errorCode: 'other_sessions_snippets_disabled', errorMessage: 'other_sessions_snippets_disabled',
+            });
+        } finally {
+            await activation?.dispose();
+            await fixture.dispose();
+        }
     });
 
     it('does not treat the primary Action target as live-context disclosure consent', async () => {

@@ -3,18 +3,27 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { renderHook, type RenderHookResult } from '@/dev/testkit/hooks/renderHook';
-import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import { standardCleanup, renderHook, createSessionMessagesFixture, createSessionFixture, createMachineFixture, createRootLayoutFeaturesResponse, flushHookEffects, type RenderHookResult } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storage';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { VOICE_SETTINGS_PROVIDER_FOCUS_TARGET } from '@/voice/settings/voiceSettingsRouteFocus';
 import type { VoiceAdapterController, VoiceSessionSnapshot } from '@/voice/session/types';
-import type { ConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { t } from '@/text';
 import { voiceRuntimeLevelStore } from '@/voice/runtime/levels/voiceRuntimeLevelStore';
 import 'fake-indexeddb/auto';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { tryWriteServerEnabledBitInPlace, createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
+import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
+import type { PartialOptions } from '@elevenlabs/client';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
+import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
+import { SessionMessagesPageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import type { VoiceAttemptIdleTarget } from './useVoiceAttemptControl';
 import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
@@ -24,64 +33,26 @@ vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
-// Only native crypto adapters are replaced; the isolated dismissal case below
-// uses the real Account, Home Artifact, Action, store and admission owners.
+// Platform crypto, vendor SDK and transport boundaries surround real Account,
+// Home Artifact, Action, store, feature and admission owners.
 vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
 vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
 vi.mock('@/platform/digest', () => import('@/platform/digest.node'));
 vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
 vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
 
-const featureState = vi.hoisted(() => ({ current: {} as Record<string, boolean> }));
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string) => featureState.current[featureId] ?? true,
+const sdk = vi.hoisted(() => ({
+    startSession: vi.fn<(options: PartialOptions) => Promise<{ endSession: () => Promise<void>; setMicMuted: () => void; setVolume: () => void; sendUserMessage: () => void; sendContextualUpdate: () => void; getId: () => string }>>(),
+    endSession: vi.fn(async () => undefined),
 }));
+vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: sdk.startSession } }));
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: sdk.startSession } }));
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
 
-vi.mock('@/voice/agent/getVoiceAgentSessionTeleportAvailability', () => ({
-    getVoiceAgentSessionTeleportAvailability: () => ({ ok: false }),
-}));
-
-const connectedServices = vi.hoisted(() => ({
-    snapshot: { entries: [] as readonly ConnectedServiceRegistryEntry[] },
-}));
-
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/components/appShell/plugins/AppShellPluginUiProjection')>(),
-    useProjectedConnectedServicesRegistry: () => connectedServices.snapshot,
-}));
-
-const recoveryRuntime = vi.hoisted(() => ({
+const recoveryRuntime = {
     serverId: 'server-work',
-    serverIdentityId: 'server-identity-work' as string | null,
     machineId: 'machine-work',
-    useRealServerSnapshot: false,
-}));
-
-vi.mock('@/hooks/server/useActiveServerSnapshot', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/hooks/server/useActiveServerSnapshot')>();
-    return {
-        ...actual,
-        useActiveServerSnapshot: () => recoveryRuntime.useRealServerSnapshot ? actual.useActiveServerSnapshot() : ({
-            serverId: recoveryRuntime.serverId,
-            serverUrl: '',
-            generation: 1,
-        }),
-    };
-});
-
-vi.mock('@/sync/domains/server/resolvePortableServerIdentityForRoutingId', () => ({
-    resolvePortableServerIdentityForRoutingId: (id: string) => (
-        id === recoveryRuntime.serverId ? recoveryRuntime.serverIdentityId : null
-    ),
-}));
-
-vi.mock('@/voice/credentials/useExecutionMachinePresentation', () => ({
-    useVoiceExecutionMachinePresentation: () => ({
-        machineId: recoveryRuntime.machineId,
-        machineLabel: 'Work machine',
-    }),
-}));
+};
 
 const platformState = vi.hoisted(() => ({
     os: 'web',
@@ -102,60 +73,158 @@ vi.mock('react-native', async (importOriginal) => {
     };
 });
 
-const routerMock = vi.hoisted(() => ({ instance: null as { spies: { push: { mock: { calls: unknown[][] } } } } | null }));
+const routerMock = vi.hoisted(() => ({ instance: null as ReturnType<typeof import('@/dev/testkit/mocks/router')['createExpoRouterMock']> | null }));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     const mock = createExpoRouterMock({ pathname: () => '/' });
-    routerMock.instance = mock as never;
+    routerMock.instance = mock;
     return mock.module;
 });
 
-const initialStorageState = getStorage().getState();
+const originalStorageState = getStorage().getState();
+let initialStorageState = originalStorageState;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let webLocks: ReturnType<typeof installWebLockManagerMock>;
+let lifecycle: ReturnType<typeof import('@/voice/session/voiceSessionLifecycleController')['createVoiceSessionLifecycleController']> | undefined;
+let projectionAdapters: readonly VoiceAdapterController[] = [];
+let providerAssembly: ReturnType<typeof import('@/voice/adapters/registerBuiltinVoiceAdapters')['createBuiltinVoiceAdapterAssembly']> | undefined;
+let sessionHttp: ReturnType<typeof import('@/dev/testkit/harness/sessionMetadataHttpBoundary')['createSessionMetadataHttpBoundary']>;
 
-/** A registered adapter is what publishes `allowsGlobalStart` to both owners. */
-function createGlobalStartAdapter(
-    id: string,
-    overrides: Partial<Readonly<{
-        requiresVoiceAgentFeature: boolean;
-        allowsGlobalStart: boolean;
-        cancelResponse: 'unsupported' | 'immediate';
-        agentRuntime: Readonly<{ pluginId: string; localId: string }>;
-    }>> = {},
-): VoiceAdapterController {
-    return {
-        id,
-        engineKind: 'realtime',
-        start: async () => undefined,
-        stop: async () => undefined,
-        toggle: async () => undefined,
-        interrupt: async () => undefined,
-        bargeIn: async () => undefined,
-        setMuted: async () => undefined,
-        sendContextUpdate: () => undefined,
-        getSnapshot: () => ({
-            adapterId: id,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        }),
-        resolveSurfaceCapabilities: () => ({
-            allowsGlobalStart: overrides.allowsGlobalStart ?? true,
-            controlSessionScope: 'global',
-            requiresVoiceAgentFeature: overrides.requiresVoiceAgentFeature ?? false,
-            bargeInEnabled: false,
-            cancelResponse: overrides.cancelResponse ?? 'unsupported',
-            ...(overrides.agentRuntime ? { agentRuntime: overrides.agentRuntime } : {}),
-        }),
-    } as VoiceAdapterController;
+async function installLifecycle(adapter: VoiceAdapterController) {
+    const [{ registerVoiceAdapters, getVoiceAdapterRegistry }, { createVoiceSessionLifecycleController },
+        { setVoiceSessionLifecycleController }, { setVoiceSessionSnapshot }, { createVoiceCaptureAdmissionController }] = await Promise.all([
+        import('@/voice/session/voiceAdapterRegistry'), import('@/voice/session/voiceSessionLifecycleController'),
+        import('@/voice/session/voiceSessionLifecycleControllerStore'), import('@/voice/session/voiceSessionStore'),
+        import('@/voice/runtime/input/VoiceCaptureAdmissionController'),
+    ]);
+    registerVoiceAdapters([adapter]);
+    lifecycle = createVoiceSessionLifecycleController({ getRegistry: getVoiceAdapterRegistry, captureAdmission: createVoiceCaptureAdmissionController() });
+    lifecycle.subscribe(() => setVoiceSessionSnapshot(lifecycle!.getSnapshot()));
+    setVoiceSessionLifecycleController(lifecycle);
+    lifecycle.setConfiguredProviderId(adapter.id);
+    setVoiceSessionSnapshot(lifecycle.getSnapshot());
+    return lifecycle;
+}
+
+async function installElevenLabsLifecycle(target: SessionAddress | null = null) {
+    const [{ createBuiltinVoiceAdapterAssembly }, { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES },
+        { voiceConversationRuntimeMachine }, { voiceSessionBindingStore }, { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG }, { TokenStorage }] = await Promise.all([
+        import('@/voice/adapters/registerBuiltinVoiceAdapters'), import('@/voice/registry/generatedBundledVoiceRuntimeEntries'),
+        import('@/voice/runtime/machine/VoiceConversationRuntimeMachine'), import('@/voice/binding/voiceConversationBindingStore'),
+        import('@/voice/persistence/voiceTranscriptHistorySession'), import('@/auth/storage/tokenStorage'),
+    ]);
+    const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.elevenlabs');
+    if (!entry || !connection) throw new Error('ElevenLabs fixture requires its declared adapter and Account');
+    // Retire the old global producer before installing this attempt's binding.
+    await providerAssembly?.dispose();
+    expect(await TokenStorage.getCredentials()).toEqual(connection.credentials);
+    const { writeVoiceProviderSettingsConfig } = await import('@/sync/domains/settings/voiceSettings');
+    seedVoiceSettings({ ...writeVoiceProviderSettingsConfig(getStorage().getState().settings.voice, entry.providerId, ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS),
+        providerId: entry.providerId, ui: { activityFeedEnabled: false, scopeDefault: 'global' } });
+    const metadata = { path: '/voice-history', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() };
+    const owner = createSessionOwnerMetadataV1({ metadata });
+    if (!owner.ok) throw new Error('Voice History owner metadata was not admitted');
+    const sharedMetadata = projectSessionSharedMetadataV1({ metadata, agentState: null });
+    const conversation = createSessionFixture({ id: 'attempt-history', serverId: recoveryRuntime.serverId, encryptionMode: 'plain', active: false,
+        metadataLayoutVersion: 1, metadata: sharedMetadata,
+        ownerMetadataView: projectSessionOwnerCompatibilityViewV1({ sharedMetadata, ownerMetadata: owner.ownerMetadata }) });
+    // The hosted History producer writes the current shared/owner tuple. Keep
+    // both its HTTP record and hydrated fixture at that same real codec shape.
+    sessionHttp.createSessionFromPost(conversation.id, { method: 'POST', body: JSON.stringify({ tag: VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
+        metadataLayoutVersion: 1, sharedMetadata: { ciphertext: JSON.stringify(sharedMetadata) },
+        ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata), agentState: null, dataEncryptionKey: null, encryptionMode: 'plain' }) });
+    const targetSession = target ? createSessionFixture({ id: target.sessionId, serverId: target.serverId, metadata: { path: '/repo', host: 'test', flavor: 'claude' } }) : null;
+    getStorage().setState(state => ({ sessions: { ...state.sessions, [conversation.id]: conversation,
+        ...(targetSession ? { [targetSession.id]: targetSession } : {}) } }));
+    voiceConversationRuntimeMachine.reset();
+    providerAssembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [entry] });
+    voiceSessionBindingStore.getState().bind({ adapterId: entry.providerId, controlSessionId: target?.sessionId ?? VOICE_AGENT_GLOBAL_SESSION_ID,
+        conversationSessionId: conversation.id, conversationSessionAddress: { serverId: recoveryRuntime.serverId, sessionId: conversation.id },
+        targetSessionAddress: target, lifetime: 'runtime_attempt', transcriptMode: 'synthetic', updatedAt: 1 });
+    const adapter = providerAssembly.adapters.find(value => value.id === entry.providerId);
+    if (!adapter) throw new Error('ElevenLabs public runtime activation failed');
+    const controller = await installLifecycle(adapter);
+    return { adapter, controller };
+}
+
+function setVoiceAgentFeature(enabled: boolean): void {
+    getStorage().setState((state) => ({ settings: { ...state.settings, experiments: true,
+        featureToggles: { ...state.settings.featureToggles, voice: true, 'execution.runs': true, 'voice.agent': enabled } } }));
+}
+
+beforeEach(async () => {
+    getStorage().setState(originalStorageState, true);
+    platformState.os = 'web';
+    platformState.openSettings.mockClear();
+    sdk.endSession.mockReset().mockResolvedValue(undefined);
+    sdk.startSession.mockReset().mockResolvedValue({ endSession: sdk.endSession, setMicMuted() {}, setVolume() {},
+        sendUserMessage() {}, sendContextualUpdate() {}, getId: () => 'provider-conversation' });
+    webLocks = installWebLockManagerMock();
+    const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+    await loadSyncSingletonForTests();
+    const features = createRootLayoutFeaturesResponse();
+    if (!tryWriteServerEnabledBitInPlace(features, 'voice', true)) throw new Error('Voice feature fixture unavailable');
+    const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
+    sessionHttp = createSessionMetadataHttpBoundary(() => getStorage().getState().sessions);
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://voice-attempt.test', serverIdentityId: 'srv_voice_attempt_work',
+        accountId: 'attempt-account', credentialScope: 'restored-home', activation: 'switch', request: async (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/features') return Response.json(features);
+            if (path.endsWith('/messages')) return Response.json(SessionMessagesPageV1Schema.parse({ messages: [], hasMore: false }));
+            if (path === '/v1/sessions' && init?.method === 'POST') return sessionHttp.createSessionFromPost('attempt-history', init);
+            const sessionResponse = sessionHttp.handle(url, init);
+            if (sessionResponse) return sessionResponse;
+            const preparation = answerVoiceRealtimePreparationHttpRequest(url, getStorage().getState().settings);
+            if (preparation) return preparation;
+            if (path === '/v1/voice/token') return Response.json({ allowed: true, token: 'hosted-token', leaseId: 'hosted-lease',
+                bindingNonce: 'hosted-nonce', expiresAtMs: Date.now() + 60_000 });
+            if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
+            return null;
+        } });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    expect(await TokenStorage.getCredentials()).toEqual(connection.credentials);
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    // A profile can retain its URL alias after the active routing owner adopts
+    // the advertised identity. Fresh Session fixtures use that routing owner.
+    recoveryRuntime.serverId = getActiveServerSnapshot().serverId;
+    primeServerFeaturesSnapshot({ serverId: recoveryRuntime.serverId, snapshot: { status: 'ready', features } });
+    const scope = { serverId: recoveryRuntime.serverId, accountId: 'attempt-account' };
+    const machine = createMachineFixture({ id: recoveryRuntime.machineId, activeAt: Date.now() });
+    getStorage().setState({ isDataReady: true, profileScope: scope, settingsScope: scope,
+        settings: settingsParse({ experiments: true, featureToggles: { voice: true, 'execution.runs': true, 'voice.agent': true } }),
+        machines: { [machine.id]: machine }, machineListByServerId: { [scope.serverId]: [machine] } });
+    initialStorageState = getStorage().getState();
+    const { createBuiltinVoiceAdapterAssembly } = await import('@/voice/adapters/registerBuiltinVoiceAdapters');
+    providerAssembly = createBuiltinVoiceAdapterAssembly();
+    projectionAdapters = providerAssembly.adapters;
+    installConnectedAccountDescriptorProjection({ scopeKey: scope.serverId, status: 'ready', descriptors: [], conflicts: [], errorReason: null });
+});
+
+afterEach(async () => {
+    standardCleanup();
+    await lifecycle?.dispose();
+    lifecycle = undefined;
+    await providerAssembly?.dispose();
+    providerAssembly = undefined;
+    const { setVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleControllerStore');
+    setVoiceSessionLifecycleController(null);
+    await connection?.dispose();
+    connection = undefined;
+    webLocks.restore();
+});
+
+/** Capability decisions come from the publicly activated provider, not a test copy. */
+function getActivatedAdapter(id: string): VoiceAdapterController {
+    const adapter = projectionAdapters.find(candidate => candidate.id === id);
+    if (!adapter) throw new Error(`No activated provider for ${id}`);
+    return adapter;
 }
 
 function seedVoiceSettings(voice: unknown): void {
-    getStorage().setState((state: any) => ({
-        ...state,
+    getStorage().setState((state) => ({
         isDataReady: true,
-        settings: { ...state.settings, voice },
+        settings: { ...state.settings, voice: voiceSettingsParse({ ...voiceSettingsParse(voice), executionMachine: { mode: 'fixed', machineId: recoveryRuntime.machineId } }) },
     }));
 }
 
@@ -166,7 +235,7 @@ async function renderBothOwners() {
     const { useVoiceSurfaceModel } = await import('@/components/voice/surface/useVoiceSurfaceModel');
     const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
     return await renderHook(() => ({
-        model: useVoiceSurfaceModel({ variant: 'sidebar' } as any),
+        model: useVoiceSurfaceModel({ variant: 'sidebar' }),
         control: useVoiceAttemptControl(GLOBAL_TARGET),
     }));
 }
@@ -182,7 +251,7 @@ async function renderBothOwners() {
 describe('useVoiceAttemptControl start admission', () => {
     beforeEach(async () => {
         getStorage().setState(initialStorageState, true);
-        featureState.current = { 'voice.agent': true };
+        setVoiceAgentFeature(true);
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
         setVoiceSessionSnapshot({
             adapterId: null,
@@ -190,7 +259,7 @@ describe('useVoiceAttemptControl start admission', () => {
             status: 'disconnected',
             mode: 'idle',
             canStop: false,
-        } as any);
+        });
     });
 
     afterEach(async () => {
@@ -221,7 +290,7 @@ describe('useVoiceAttemptControl start admission', () => {
 
     it('refuses a start the surface model refuses when the connected-services reference is missing', async () => {
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
-        registerVoiceAdapters([createGlobalStartAdapter('happier.agent.codex/realtime-codex')]);
+        registerVoiceAdapters([getActivatedAdapter('happier.agent.codex/realtime-codex')]);
         // Provider selected, but its connected-services reference was never chosen: the surface
         // keeps it visible for remediation and refuses the start.
         seedVoiceSettings({
@@ -242,9 +311,9 @@ describe('useVoiceAttemptControl start admission', () => {
     it('refuses a start the surface model refuses when the daemon voice agent is unavailable', async () => {
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
         registerVoiceAdapters([
-            createGlobalStartAdapter('local_conversation', { requiresVoiceAgentFeature: true }),
+            getActivatedAdapter('local_conversation'),
         ]);
-        featureState.current = { 'voice.agent': false };
+        setVoiceAgentFeature(false);
         seedVoiceSettings({
             providerId: 'local_conversation',
             ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
@@ -265,7 +334,7 @@ describe('useVoiceAttemptControl start admission', () => {
 
     it('admits the start both owners agree on', async () => {
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
-        registerVoiceAdapters([createGlobalStartAdapter('local_conversation')]);
+        registerVoiceAdapters([getActivatedAdapter('local_conversation')]);
         seedVoiceSettings({
             providerId: 'local_conversation',
             ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
@@ -301,8 +370,8 @@ describe('presentation follows the running attempt, not the next selection', () 
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
         registerVoiceAdapters([
-            createGlobalStartAdapter(RUNNING_PROVIDER_ID, { cancelResponse: 'immediate' }),
-            createGlobalStartAdapter(NEXT_PROVIDER_ID, { cancelResponse: 'unsupported' }),
+            getActivatedAdapter(RUNNING_PROVIDER_ID),
+            getActivatedAdapter(NEXT_PROVIDER_ID),
         ]);
         seedVoiceSettings({
             providerId: RUNNING_PROVIDER_ID,
@@ -318,12 +387,12 @@ describe('presentation follows the running attempt, not the next selection', () 
             status: 'connected',
             mode: 'thinking',
             canStop: true,
-        } as any);
+        });
     }
 
     beforeEach(async () => {
         getStorage().setState(initialStorageState, true);
-        featureState.current = { 'voice.agent': true };
+        setVoiceAgentFeature(true);
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
         setVoiceSessionSnapshot({
             adapterId: null,
@@ -331,7 +400,7 @@ describe('presentation follows the running attempt, not the next selection', () 
             status: 'disconnected',
             mode: 'idle',
             canStop: false,
-        } as any);
+        });
     });
 
     afterEach(async () => {
@@ -345,7 +414,7 @@ describe('presentation follows the running attempt, not the next selection', () 
             status: 'disconnected',
             mode: 'idle',
             canStop: false,
-        } as any);
+        });
         getStorage().setState(initialStorageState, true);
     });
 
@@ -356,8 +425,8 @@ describe('presentation follows the running attempt, not the next selection', () 
 
         await act(async () => {
             seedVoiceSettings({
+                ...getStorage().getState().settings.voice,
                 providerId: 'off',
-                ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
             });
         });
 
@@ -377,8 +446,8 @@ describe('presentation follows the running attempt, not the next selection', () 
 
         await act(async () => {
             seedVoiceSettings({
+                ...getStorage().getState().settings.voice,
                 providerId: NEXT_PROVIDER_ID,
-                ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
             });
         });
 
@@ -402,25 +471,11 @@ describe('presentation follows the running attempt, not the next selection', () 
  */
 describe('external provider registration reaches the surface', () => {
     const externalToken = Object.freeze({});
-    const EXTERNAL_PROVIDER_ID = 'acme.voice.demo/realtime-demo';
-
-    function externalDescriptor() {
-        return {
-            kind: 'voice.conversation-provider.v1' as const,
-            pluginId: 'acme.voice.demo',
-            providerId: EXTERNAL_PROVIDER_ID,
-            settingsSectionId: 'voice.acme-demo',
-            roles: [] as never[],
-            requirements: [] as never[],
-            supportedPlatforms: ['web', 'ios', 'android'] as const,
-            source: { kind: 'external' as const, pluginId: 'acme.voice.demo', localId: 'realtime-demo' },
-            projectSettings: () => ({ status: 'ready' as const, modeId: 'byo' }),
-        };
-    }
+    const EXTERNAL_PROVIDER_ID = 'acme.voice.demo/realtime-elevenlabs';
 
     beforeEach(async () => {
         getStorage().setState(initialStorageState, true);
-        featureState.current = { 'voice.agent': true };
+        setVoiceAgentFeature(true);
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
         setVoiceSessionSnapshot({
             adapterId: null,
@@ -428,7 +483,7 @@ describe('external provider registration reaches the surface', () => {
             status: 'disconnected',
             mode: 'idle',
             canStop: false,
-        } as any);
+        });
     });
 
     afterEach(async () => {
@@ -448,10 +503,35 @@ describe('external provider registration reaches the surface', () => {
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
         const { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } =
             await import('@/voice/registry/externalVoiceProviderRegistrations');
-        registerVoiceAdapters([createGlobalStartAdapter(EXTERNAL_PROVIDER_ID)]);
+        const { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } = await import('@/voice/registry/generatedBundledVoiceRuntimeEntries');
+        const { createBuiltinVoiceAdapterAssembly } = await import('@/voice/adapters/registerBuiltinVoiceAdapters');
+        const declared = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(entry => entry.pluginId === 'happier.voice.elevenlabs');
+        if (!declared?.declaration.settings) throw new Error('External discovery fixture requires its public provider leaf and settings');
+        await providerAssembly?.dispose();
+        // The public provider leaf activates against a different plugin identity.
+        // Discovery exercises the actual registration/capability projection;
+        // it does not claim that this external service starts a hosted call.
+        providerAssembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [{ ...declared, pluginId: 'acme.voice.demo', providerId: EXTERNAL_PROVIDER_ID }] });
+        const adapter = providerAssembly.adapters.find(candidate => candidate.id === EXTERNAL_PROVIDER_ID);
+        if (!adapter) throw new Error('External provider leaf did not activate');
+        removeExternalVoiceProviderRegistration(externalToken);
+        registerVoiceAdapters([adapter]);
+        const { projectVoiceProviderDeclarationRegistryBase } = await import('@/voice/registry/providerRegistry');
+        const { createExternalVoiceProviderSettingsDescriptor } = await import('@/voice/settings/externalProviderSettings');
+        const descriptor = {
+            kind: 'voice.conversation-provider.v1' as const, pluginId: 'acme.voice.demo', providerId: EXTERNAL_PROVIDER_ID,
+            settingsSectionId: EXTERNAL_PROVIDER_ID, declaration: declared.declaration,
+            ...projectVoiceProviderDeclarationRegistryBase({ declaration: declared.declaration,
+                providerSettings: createExternalVoiceProviderSettingsDescriptor(declared.declaration.settings), selectionOptions: [] }),
+            source: { kind: 'external' as const, pluginId: 'acme.voice.demo', localId: declared.declaration.id },
+        };
         seedVoiceSettings({
             providerId: EXTERNAL_PROVIDER_ID,
             ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
+            providers: { [EXTERNAL_PROVIDER_ID]: {
+                schemaVersion: declared.declaration.settings.schemaVersion,
+                config: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
+            } },
         });
 
         const hook = await renderBothOwners();
@@ -462,9 +542,9 @@ describe('external provider registration reaches the surface', () => {
             commitExternalVoiceProviderRegistration(Object.freeze({
                 token: externalToken,
                 pluginId: 'acme.voice.demo',
-                localId: 'realtime-demo',
+                localId: 'realtime-elevenlabs',
                 providerId: EXTERNAL_PROVIDER_ID,
-                descriptor: externalDescriptor() as never,
+                descriptor,
                 adapter: null,
             }));
         });
@@ -497,7 +577,7 @@ describe('external provider registration reaches the surface', () => {
 describe('useVoiceAttemptControl availability ladder', () => {
     beforeEach(async () => {
         getStorage().setState(initialStorageState, true);
-        featureState.current = { 'voice.agent': true };
+        setVoiceAgentFeature(true);
         routerMock.instance?.spies.push.mock.calls.splice(0);
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
         setVoiceSessionSnapshot({
@@ -506,7 +586,7 @@ describe('useVoiceAttemptControl availability ladder', () => {
             status: 'disconnected',
             mode: 'idle',
             canStop: false,
-        } as any);
+        });
     });
 
     afterEach(async () => {
@@ -518,7 +598,7 @@ describe('useVoiceAttemptControl availability ladder', () => {
 
     async function renderIncompleteSetup() {
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
-        registerVoiceAdapters([createGlobalStartAdapter('happier.agent.codex/realtime-codex')]);
+        registerVoiceAdapters([getActivatedAdapter('happier.agent.codex/realtime-codex')]);
         // The same seed as the admission test above: a provider is selected, its connected-services
         // reference was never chosen, and no attempt has failed.
         seedVoiceSettings({
@@ -567,9 +647,8 @@ describe('useVoiceAttemptControl availability ladder', () => {
         artifact.seed(setHomeSetupStepHidden(HOME_HUB_DEFAULT_LAYOUT, VOICE_SETUP_STEP_ID, true));
         const webLocks = installWebLockManagerMock();
         const connection = await restoreServerAccountForTest({
-            serverUrl: 'https://voice-setup-dismissal.test', accountId: 'voice-dismissal-account', request: artifact.request,
+            serverUrl: 'https://voice-setup-dismissal.test', accountId: 'voice-dismissal-account', activation: 'switch', request: artifact.request,
         });
-        recoveryRuntime.useRealServerSnapshot = true;
         let hook: Awaited<ReturnType<typeof renderBothOwners>> | undefined;
         try {
             const scope = { serverId: connection.home.id, accountId: 'voice-dismissal-account' };
@@ -586,7 +665,6 @@ describe('useVoiceAttemptControl availability ladder', () => {
             expect(hook.getCurrent().control).toMatchObject({ availability: 'unavailable', primaryAction: null });
         } finally {
             await hook?.unmount();
-            recoveryRuntime.useRealServerSnapshot = false;
             await connection.dispose();
             webLocks.restore();
         }
@@ -594,11 +672,11 @@ describe('useVoiceAttemptControl availability ladder', () => {
     it('keeps the rest mic and opens Voice setup when the selected provider cannot run here', async () => {
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
         registerVoiceAdapters([
-            createGlobalStartAdapter('local_conversation', { requiresVoiceAgentFeature: true }),
+            getActivatedAdapter('local_conversation'),
         ]);
         // A server feature this provider needs is off. There is no recovery for the attempt, but
         // Voice setup is where another service is chosen, so the mic stays and opens it.
-        featureState.current = { 'voice.agent': false };
+        setVoiceAgentFeature(false);
         seedVoiceSettings({
             providerId: 'local_conversation',
             ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
@@ -637,23 +715,18 @@ describe('useVoiceAttemptControl availability ladder', () => {
  */
 describe('useVoiceAttemptControl recovery routing', () => {
     const CODEX_PROVIDER_ID = 'happier.agent.codex/realtime-codex';
-    const CODEX_RUNTIME = Object.freeze({
-        pluginId: 'happier.agent.codex',
-        localId: 'codex',
-    });
-    const CONNECTED_SERVICE_ENTRY: ConnectedServiceRegistryEntry = {
-        serviceId: 'openai-codex',
-        service: {
-            pluginId: 'happier.agent.codex',
-            localId: 'openai-codex',
-        },
-        // The projected entry for a released adapter carries its legacy service id; the canonical
-        // account-route resolver refuses to build a route for an entry that does not.
-        legacyServiceId: 'openai-codex',
-        connectCommand: 'happier connect acme.connected-accounts/codex-account',
-        supportsOauth: true,
-        executable: true,
-    };
+    function installCodexConnectedService(): void {
+        // A daemon descriptor enters the real projection owner; executable and
+        // released-service routing facts are derived there, never copied here.
+        const descriptor = ConnectedAccountUiProjectionEntryV1Schema.parse({
+            id: 'openai-codex', pluginId: 'happier.agent.codex', serviceId: 'openai-codex', title: 'Codex',
+            provenance: 'first_party', sourceKind: 'bundled', authentication: { defaultModeId: 'oauth', modes: [{
+                id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback',
+                pkce: 'required', outcomeReconciliation: 'none',
+            }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
+        });
+        installConnectedAccountDescriptorProjection({ scopeKey: recoveryRuntime.serverId, status: 'ready', descriptors: [descriptor], conflicts: [], errorReason: null });
+    }
     const SELECTED_PROFILE_VOICE_SETTINGS = {
         providerId: CODEX_PROVIDER_ID,
         ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
@@ -678,12 +751,10 @@ describe('useVoiceAttemptControl recovery routing', () => {
 
     beforeEach(async () => {
         getStorage().setState(initialStorageState, true);
-        featureState.current = { 'voice.agent': true };
-        connectedServices.snapshot = { entries: [] };
+        setVoiceAgentFeature(true);
         platformState.os = 'web';
         platformState.openSettings.mockClear();
         routerMock.instance?.spies.push.mock.calls.splice(0);
-        recoveryRuntime.serverIdentityId = 'server-identity-work';
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
         registerVoiceAdapters([]);
     });
@@ -692,14 +763,13 @@ describe('useVoiceAttemptControl recovery routing', () => {
         standardCleanup();
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
         registerVoiceAdapters([]);
-        connectedServices.snapshot = { entries: [] };
         getStorage().setState(initialStorageState, true);
     });
 
     async function renderBothRecoveryOwners(recoveryAction: 'connect_agent' | 'update_agent_runtime' | 'open_settings') {
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
-        registerVoiceAdapters([createGlobalStartAdapter(CODEX_PROVIDER_ID, { agentRuntime: CODEX_RUNTIME })]);
+        registerVoiceAdapters([getActivatedAdapter(CODEX_PROVIDER_ID)]);
         seedVoiceSettings(SELECTED_PROFILE_VOICE_SETTINGS);
         setVoiceSessionSnapshot({
             adapterId: CODEX_PROVIDER_ID,
@@ -709,12 +779,12 @@ describe('useVoiceAttemptControl recovery routing', () => {
             canStop: false,
             errorRecoveryAction: recoveryAction,
             errorPresentation: 'error',
-        } as never);
+        });
         return await renderBothOwners();
     }
 
     it('sends the same selected-profile Connect recovery from Horizon and placement-free consumers', async () => {
-        connectedServices.snapshot = { entries: [CONNECTED_SERVICE_ENTRY] };
+        installCodexConnectedService();
         const hook = await renderBothRecoveryOwners('connect_agent');
         const expectedRoute = {
             pathname: '/(app)/settings/connected-services/account',
@@ -743,7 +813,7 @@ describe('useVoiceAttemptControl recovery routing', () => {
                 agentId: 'codex',
                 pluginId: 'happier.agent.codex',
                 machineId: 'machine-work',
-                serverIdentityId: 'server-identity-work',
+                serverIdentityId: 'srv_voice_attempt_work',
                 installIntent: 'update',
             },
         };
@@ -759,9 +829,21 @@ describe('useVoiceAttemptControl recovery routing', () => {
     });
 
     it('withholds Agent runtime recovery when the routing server has no canonical portable identity', async () => {
-        recoveryRuntime.serverIdentityId = null;
-        connectedServices.snapshot = { entries: [CONNECTED_SERVICE_ENTRY] };
+        await connection?.dispose();
+        const features = createRootLayoutFeaturesResponse();
+        if (!tryWriteServerEnabledBitInPlace(features, 'voice', true)) throw new Error('Voice feature fixture unavailable');
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://unidentified-voice-home.test', accountId: 'attempt-account',
+            credentialScope: 'restored-home', activation: 'switch', request: async (url) => new URL(String(url)).pathname === '/v1/features' ? Response.json(features) : null });
+        primeServerFeaturesSnapshot({ serverId: connection.home.id, snapshot: { status: 'ready', features } });
+        const scope = { serverId: connection.home.id, accountId: 'attempt-account' };
+        const machine = createMachineFixture({ id: recoveryRuntime.machineId, activeAt: Date.now() });
+        getStorage().setState({ profileScope: scope, settingsScope: scope, machines: { [machine.id]: machine }, machineListByServerId: { [scope.serverId]: [machine] } });
+        installCodexConnectedService();
         const hook = await renderBothRecoveryOwners('update_agent_runtime');
+        const { resolveVoiceExecutionMachinePresentationFromState } = await import('@/voice/credentials/useExecutionMachinePresentation');
+        const { resolvePortableServerIdentityForRoutingId } = await import('@/sync/domains/server/resolvePortableServerIdentityForRoutingId');
+        expect(resolveVoiceExecutionMachinePresentationFromState(getStorage().getState()).machineId).toBe(recoveryRuntime.machineId);
+        expect(resolvePortableServerIdentityForRoutingId(connection.home.id)).toBeNull();
 
         // A separate incomplete Connected Services setup may still provide a recovery action,
         // but a device-local routing id must never become Agent Administration authority.
@@ -793,9 +875,9 @@ describe('useVoiceAttemptControl recovery routing', () => {
 describe('useVoiceAttemptControl capture and caption projection', () => {
     beforeEach(async () => {
         getStorage().setState(initialStorageState, true);
-        featureState.current = { 'voice.agent': true };
+        setVoiceAgentFeature(true);
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
-        registerVoiceAdapters([createGlobalStartAdapter('local_conversation')]);
+        registerVoiceAdapters([getActivatedAdapter('local_conversation')]);
         seedVoiceSettings({
             providerId: 'local_conversation',
             ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
@@ -812,9 +894,9 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
         getStorage().setState(initialStorageState, true);
     });
 
-    async function renderControl(snapshot: Readonly<Record<string, unknown>>, onRender?: () => void) {
+    async function renderControl(snapshot: VoiceSessionSnapshot, onRender?: () => void) {
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
-        setVoiceSessionSnapshot(snapshot as never);
+        setVoiceSessionSnapshot(snapshot);
         const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
         const { VoiceEnergyAppProvider } = await import('@/components/voice/light/VoiceEnergyAppProvider');
         function VoiceEnergyHookTestProvider(props: React.PropsWithChildren): React.ReactElement {
@@ -842,7 +924,7 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
         const mergeOwner = await import('@/components/voice/surface/mergeVoiceSurfaceTranscriptEntries');
         const merge = vi.spyOn(mergeOwner, 'mergeVoiceSurfaceTranscriptEntries');
         let renders = 0;
-        const snapshot = { adapterId: 'local_conversation', sessionId: 'latest-line-control', status: 'connected', mode: 'listening', canStop: true };
+        const snapshot: VoiceSessionSnapshot = { adapterId: 'local_conversation', sessionId: 'latest-line-control', status: 'connected', mode: 'listening', canStop: true };
         const hook = await renderControl(snapshot, () => { renders += 1; });
         const composer = await renderControl(snapshot, () => { renders += 1; });
         const closedContainer = await renderControl(snapshot, () => { renders += 1; });
@@ -972,6 +1054,7 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
             sessionId: 'control-1',
             status: 'error',
             mode: 'idle',
+            canStop: false,
             errorPresentation: 'permission_required',
             errorRecoveryAction: 'open_settings',
         });
@@ -994,6 +1077,7 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
             sessionId: 'control-1',
             status: 'error',
             mode: 'idle',
+            canStop: false,
             errorCode: 'provider_setup_required',
             errorRecoveryAction: 'open_settings',
         });
@@ -1111,7 +1195,7 @@ describe('useVoiceAttemptControl idle targeting', () => {
 
     beforeEach(async () => {
         getStorage().setState(initialStorageState, true);
-        featureState.current = { 'voice.agent': true };
+        setVoiceAgentFeature(true);
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
         setVoiceSessionSnapshot({
             adapterId: null,
@@ -1119,9 +1203,9 @@ describe('useVoiceAttemptControl idle targeting', () => {
             status: 'disconnected',
             mode: 'idle',
             canStop: false,
-        } as any);
+        });
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
-        registerVoiceAdapters([createGlobalStartAdapter('local_conversation')]);
+        registerVoiceAdapters([getActivatedAdapter('local_conversation')]);
         seedVoiceSettings(READY_LOCAL_CONVERSATION);
     });
 
@@ -1152,28 +1236,27 @@ describe('useVoiceAttemptControl idle targeting', () => {
         </DestinationInstanceHost>;
     }
 
-    async function spyOnLifecycleRouting() {
-        const { voiceSessionManager } = await import('@/voice/session/voiceSession');
-        return {
-            toggle: vi.spyOn(voiceSessionManager, 'toggle').mockResolvedValue(undefined),
-            stop: vi.spyOn(voiceSessionManager, 'stop').mockResolvedValue(undefined),
-        };
+    async function installRoutingLifecycle(target: SessionAddress | null = null) {
+        const runtime = await installElevenLabsLifecycle(target);
+        return { ...runtime, start: sdk.startSession, stop: sdk.endSession };
     }
 
     it('starts Global when the caller states the global idle target', async () => {
-        const routing = await spyOnLifecycleRouting();
+        const routing = await installRoutingLifecycle();
         const hook = await renderControl({ kind: 'global' });
 
         expect(hook.getCurrent().canStart).toBe(true);
         hook.getCurrent().onToggle();
 
-        expect(routing.toggle).toHaveBeenCalledWith(null);
+        await vi.waitFor(() => expect(routing.controller.getSnapshot().status).toBe('connected'));
+        expect(routing.controller.getAttemptTargetSessionAddress()).toBeNull();
+        expect(routing.start).toHaveBeenCalledTimes(1);
 
         await hook.unmount();
     });
 
     it('starts the exact session the caller states', async () => {
-        const routing = await spyOnLifecycleRouting();
+        const routing = await installRoutingLifecycle();
         const hook = await renderControl({
             kind: 'session',
             sessionAddress: { serverId: 'server-b', sessionId: 'session-42' },
@@ -1182,13 +1265,13 @@ describe('useVoiceAttemptControl idle targeting', () => {
         expect(hook.getCurrent().canStart).toBe(true);
         hook.getCurrent().onToggle();
 
-        expect(routing.toggle).toHaveBeenCalledWith({ serverId: 'server-b', sessionId: 'session-42' });
+        await vi.waitFor(() => expect(routing.controller.getAttemptTargetSessionAddress()).toEqual({ serverId: 'server-b', sessionId: 'session-42' }));
 
         await hook.unmount();
     });
 
     it('freezes the normalized idle target for the mounted attempt instead of observing later mutation', async () => {
-        const routing = await spyOnLifecycleRouting();
+        const routing = await installRoutingLifecycle();
         const suppliedAddress = { serverId: ' server-b ', sessionId: ' shared-session ' };
         const hook = await renderControl({ kind: 'session', sessionAddress: suppliedAddress });
 
@@ -1196,23 +1279,20 @@ describe('useVoiceAttemptControl idle targeting', () => {
         suppliedAddress.sessionId = 'different-session';
         hook.getCurrent().onToggle();
 
-        expect(routing.toggle).toHaveBeenCalledWith({
+        await vi.waitFor(() => expect(routing.controller.getAttemptTargetSessionAddress()).toEqual({
             serverId: 'server-b',
             sessionId: 'shared-session',
-        });
+        }));
         await hook.unmount();
     });
 
     it('settles the running attempt’s own session, not the idle target and not Global', async () => {
-        const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
-        setVoiceSessionSnapshot({
-            adapterId: 'local_conversation',
-            sessionId: 'attempt-session',
-            status: 'connected',
-            mode: 'listening',
-            canStop: true,
-        } as any);
-        const routing = await spyOnLifecycleRouting();
+        const target = { serverId: recoveryRuntime.serverId, sessionId: 'attempt-session' };
+        const routing = await installRoutingLifecycle(target);
+        await routing.controller.toggle(target);
+        expect(routing.controller.getSnapshot().status).toBe('connected');
+        expect(routing.controller.getSnapshot().sessionId).toBe('attempt-session');
+        const starts = routing.start.mock.calls.length;
         // A session-bound surface whose own session is *not* the running attempt's: the attempt is
         // immutable, so the surface controls that one rather than retargeting it.
         const hook = await renderControl({
@@ -1223,8 +1303,9 @@ describe('useVoiceAttemptControl idle targeting', () => {
         expect(hook.getCurrent().canStop).toBe(true);
         hook.getCurrent().onToggle();
 
-        expect(routing.stop).toHaveBeenCalledWith('attempt-session');
-        expect(routing.toggle).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(routing.controller.getSnapshot().status).toBe('disconnected'));
+        expect(routing.stop).toHaveBeenCalledTimes(1);
+        expect(routing.start).toHaveBeenCalledTimes(starts);
 
         await hook.unmount();
     });
@@ -1249,7 +1330,7 @@ describe('useVoiceAttemptControl idle targeting', () => {
             status: 'connected',
             mode: 'listening',
             canStop: true,
-        } as any);
+        });
 
         // The surface's idle target deliberately names a different session. Once an attempt is
         // active, opening the Orb must follow its immutable canonical binding instead.
@@ -1263,7 +1344,7 @@ describe('useVoiceAttemptControl idle targeting', () => {
         expect(hook.getCurrent().elapsedStartedAt).toEqual(expect.any(Number));
         await act(async () => hook.getCurrent().onOpenConversation());
         expect(hook.tree.root.findByProps({ testID: 'voice-open-destination' }).props.children)
-            .toBe('/session/active-conversation-session?serverId=server-work');
+            .toBe(`/session/active-conversation-session?serverId=${recoveryRuntime.serverId}`);
 
         await hook.unmount();
         voiceSessionBindingStore.getState().unbind('active-conversation-session');
@@ -1316,12 +1397,14 @@ describe('useVoiceAttemptControl idle targeting', () => {
                 voiceSessionBindingStore.getState().unbind(binding.conversationSessionId);
             });
             expect(hook.getCurrent().canOpenConversation).toBe(true);
+            expect(hook.getCurrent().targetSessionAddress).toEqual(target);
             hook.getCurrent().onOpenConversation();
             expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toBe(destination);
             expect(voiceSessionBindingStore.getState().getByControlSessionId(binding.controlSessionId)).toBeNull();
             const capturedOpenConversation = hook.getCurrent().onOpenConversation;
             await act(async () => { getStorage().setState({ profileScope: { ...accountScope, accountId: 'other-account' } }); });
             expect(hook.getCurrent().canOpenConversation).toBe(false);
+            expect(hook.getCurrent().targetSessionAddress).toBeNull();
             const previousRoute = routerMock.instance?.spies.push.mock.calls.at(-1);
             capturedOpenConversation();
             hook.getCurrent().onOpenConversation();
@@ -1347,7 +1430,7 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         const { resetVoiceSessionRuntimeStateForTests } = await import('@/voice/session/voiceSessionStore');
         await resetVoiceSessionRuntimeStateForTests();
         getStorage().setState(initialStorageState, true);
-        featureState.current = { 'voice.agent': true };
+        setVoiceAgentFeature(true);
         seedVoiceSettings({
             providerId: PROVIDER_ID,
             ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
@@ -1365,158 +1448,43 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         vi.restoreAllMocks();
     });
 
-    function createStartFailureAdapter(start: (input: Readonly<{
-        sessionId: string;
-        publish: (snapshot: VoiceSessionSnapshot) => void;
-    }>) => Promise<void>): VoiceAdapterController {
-        let snapshot: VoiceSessionSnapshot = {
-            adapterId: PROVIDER_ID,
-            sessionId: null,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-        };
-        const listeners = new Set<() => void>();
-        const publish = (next: VoiceSessionSnapshot) => {
-            snapshot = next;
-            for (const listener of listeners) listener();
-        };
-
-        return {
-            id: PROVIDER_ID,
-            engineKind: 'realtime',
-            start: async ({ sessionId }) => {
-                await start({ sessionId, publish });
-            },
-            stop: async () => undefined,
-            toggle: async () => undefined,
-            interrupt: async () => undefined,
-            bargeIn: async () => undefined,
-            setMuted: async () => undefined,
-            sendContextUpdate: () => undefined,
-            getSnapshot: () => snapshot,
-            subscribe: (listener) => {
-                listeners.add(listener);
-                return () => listeners.delete(listener);
-            },
-            resolveSurfaceCapabilities: () => ({
-                allowsGlobalStart: true,
-                controlSessionScope: 'global',
-                requiresVoiceAgentFeature: false,
-                bargeInEnabled: false,
-                cancelResponse: 'unsupported',
-            }),
-        } satisfies VoiceAdapterController;
-    }
-
-    async function renderWithLifecycle(adapter: VoiceAdapterController) {
-        const [
-            { getVoiceAdapterRegistry, registerVoiceAdapters },
-            { createVoiceSessionLifecycleController },
-            { setVoiceSessionLifecycleController },
-            { setVoiceSessionSnapshot },
-        ] = await Promise.all([
-            import('@/voice/session/voiceAdapterRegistry'),
-            import('@/voice/session/voiceSessionLifecycleController'),
-            import('@/voice/session/voiceSessionLifecycleControllerStore'),
-            import('@/voice/session/voiceSessionStore'),
-        ]);
-        registerVoiceAdapters([adapter]);
-        const controller = createVoiceSessionLifecycleController({
-            getRegistry: getVoiceAdapterRegistry,
-        });
-        controller.subscribe(() => setVoiceSessionSnapshot(controller.getSnapshot()));
-        setVoiceSessionLifecycleController(controller);
-        controller.setConfiguredProviderId(PROVIDER_ID);
-        setVoiceSessionSnapshot(controller.getSnapshot());
-        const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
-        return await renderHook(() => useVoiceAttemptControl(GLOBAL_TARGET));
-    }
-
     it('offers Retry during an owned reconnect backoff and routes it without restarting the session', async () => {
-        const retry = vi.fn(async () => undefined);
-        const start = vi.fn(async () => undefined);
-        const adapter: VoiceAdapterController = {
-            id: PROVIDER_ID,
-            engineKind: 'realtime',
-            start,
-            stop: async () => undefined,
-            toggle: async () => undefined,
-            retry,
-            interrupt: async () => undefined,
-            bargeIn: async () => undefined,
-            setMuted: async () => undefined,
-            sendContextUpdate: () => undefined,
-            getSnapshot: () => ({
-                adapterId: PROVIDER_ID,
-                sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                status: 'connecting',
-                mode: 'idle',
-                canStop: true,
-                presentationState: 'reconnecting',
-                reconnectRetryAvailable: true,
-            }),
-            subscribe: () => () => {},
-            resolveSurfaceCapabilities: () => ({
-                allowsGlobalStart: true,
-                controlSessionScope: 'global',
-                requiresVoiceAgentFeature: false,
-                bargeInEnabled: false,
-                cancelResponse: 'unsupported',
-            }),
-        };
-        const hook = await renderWithLifecycle(adapter);
-
-        await vi.waitFor(() => {
-            expect(hook.getCurrent().recoveryAvailable).toBe(true);
-        });
-        expect(hook.getCurrent().recoveryLabel).toBe(t('common.retry'));
-        expect(hook.getCurrent().recoveryIcon).toBe('arrow-clockwise');
-
-        await act(async () => {
-            hook.getCurrent().onRecover();
-            await Promise.resolve();
-        });
-
-        await vi.waitFor(() => {
-            expect(retry).toHaveBeenCalledWith({
-                sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                requestedTargetSessionAddress: null,
-            });
-        });
-        expect(start).not.toHaveBeenCalled();
-        await hook.unmount();
+        const { controller } = await installElevenLabsLifecycle();
+        const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
+        const { getVoiceSessionPresentedAttemptId } = await import('@/voice/session/voiceSessionStore');
+        await controller.toggle(null);
+        expect(controller.getSnapshot().status).toBe('connected');
+        const admittedAttempt = getVoiceSessionPresentedAttemptId();
+        const hook = await renderHook(() => useVoiceAttemptControl(GLOBAL_TARGET));
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            const options = sdk.startSession.mock.calls[0]?.[0];
+            if (!options?.onDisconnect) throw new Error('Vendor SDK did not receive its disconnect callback');
+            await act(async () => { options.onDisconnect?.({ reason: 'error', message: 'Transport closed', context: { type: 'close', code: 1006 } }); });
+            await vi.waitFor(() => expect(hook.getCurrent().recoveryAvailable).toBe(true));
+            expect(controller.getSnapshot()).toMatchObject({ presentationState: 'reconnecting', reconnectRetryAvailable: true });
+            expect(hook.getCurrent().recoveryLabel).toBe(t('common.retry'));
+            expect(hook.getCurrent().recoveryIcon).toBe('arrow-clockwise');
+            await act(async () => { hook.getCurrent().onRecover(); });
+            await vi.waitFor(() => expect(controller.getSnapshot().status).toBe('connected'));
+            expect(sdk.startSession).toHaveBeenCalledTimes(2);
+            expect(getVoiceSessionPresentedAttemptId()).toBe(admittedAttempt);
+            expect(controller.getAttemptTargetSessionAddress()).toBeNull();
+        } finally {
+            vi.useRealTimers();
+            await hook.unmount();
+        }
     });
 
     it('keeps a published connection failure recoverable without logging through fire-and-forget', async () => {
         const connectionFailure = Object.assign(new Error('voice_connection_failed'), {
             code: 'voice_connection_failed',
         });
-        const startSessionIds: string[] = [];
-        const adapter = createStartFailureAdapter(async ({ sessionId, publish }) => {
-            startSessionIds.push(sessionId);
-            publish({
-                adapterId: PROVIDER_ID,
-                sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                status: 'connecting',
-                mode: 'idle',
-                canStop: true,
-            });
-            publish({
-                adapterId: PROVIDER_ID,
-                sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                status: 'error',
-                mode: 'idle',
-                canStop: false,
-                errorCode: 'voice_connection_failed',
-                errorMessage: 'voice_connection_failed',
-                errorRecoveryAction: 'retry',
-                errorPresentation: 'error',
-            });
-            throw connectionFailure;
-        });
+        sdk.startSession.mockRejectedValue(connectionFailure);
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-        const hook = await renderWithLifecycle(adapter);
+        const { controller } = await installElevenLabsLifecycle();
+        const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
+        const hook = await renderHook(() => useVoiceAttemptControl(GLOBAL_TARGET));
 
         await act(async () => {
             hook.getCurrent().onToggle();
@@ -1534,7 +1502,8 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         await vi.waitFor(() => {
             // Retry retains the admitted Global target; the provider's synthetic carrier id
             // is not a new requested Session target.
-            expect(startSessionIds).toEqual(['', '']);
+            expect(sdk.startSession).toHaveBeenCalledTimes(2);
+            expect(controller.getAttemptTargetSessionAddress()).toBeNull();
         });
         expect(hook.getCurrent().canDismissFailedAttempt).toBe(true);
         expect(hook.getCurrent().ended).toBeNull();
@@ -1556,12 +1525,13 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
     });
 
     it('still sends an unannounced start rejection to fire-and-forget diagnostics', async () => {
-        const unexpectedFailure = new Error('unexpected_start_bug');
-        const adapter = createStartFailureAdapter(async () => {
-            throw unexpectedFailure;
-        });
+        await installElevenLabsLifecycle();
+        // A retained registry reference can outlive its public runtime lease.
+        // The real adapter rejects before publishing any machine error.
+        await providerAssembly?.dispose();
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-        const hook = await renderWithLifecycle(adapter);
+        const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
+        const hook = await renderHook(() => useVoiceAttemptControl(GLOBAL_TARGET));
 
         await act(async () => {
             hook.getCurrent().onToggle();
@@ -1571,7 +1541,7 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         await vi.waitFor(() => {
             expect(consoleError).toHaveBeenCalledWith(
                 '[fireAndForget] VoiceAttemptControl.toggle',
-                unexpectedFailure,
+                expect.objectContaining({ code: 'voice_runtime_generation_revoked' }),
             );
         });
 
@@ -1579,67 +1549,31 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
     });
 
     it('still sends a mismatched rejection to diagnostics after the retry recovery is rendered', async () => {
-        const unexpectedFailure = Object.assign(new Error('unexpected_start_bug'), {
-            code: 'unexpected_start_bug',
-        });
-        const adapter = createStartFailureAdapter(async ({ publish }) => {
-            publish({
-                adapterId: PROVIDER_ID,
-                sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                status: 'connecting',
-                mode: 'idle',
-                canStop: true,
-            });
-            publish({
-                adapterId: PROVIDER_ID,
-                sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                status: 'error',
-                mode: 'idle',
-                canStop: false,
-                errorCode: 'voice_connection_failed',
-                errorMessage: 'voice_connection_failed',
-                errorRecoveryAction: 'retry',
-                errorPresentation: 'error',
-            });
-            throw unexpectedFailure;
-        });
+        sdk.startSession.mockRejectedValue(Object.assign(new Error('voice_connection_failed'), { code: 'voice_connection_failed' }));
+        await installElevenLabsLifecycle();
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-        const hook = await renderWithLifecycle(adapter);
-
-        await act(async () => {
-            hook.getCurrent().onToggle();
-            await Promise.resolve();
-        });
-
-        await vi.waitFor(() => {
-            expect(hook.getCurrent().primaryAction).toBe('recover');
-        });
+        const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
+        const hook = await renderHook(() => useVoiceAttemptControl(GLOBAL_TARGET));
+        await act(async () => { hook.getCurrent().onToggle(); });
+        await vi.waitFor(() => expect(hook.getCurrent().primaryAction).toBe('recover'));
+        // Retiring the real public runtime does not rewrite its terminal error.
+        // Its next Start rejects with a different code before the controller,
+        // which must not be hidden merely because a Retry is already visible.
+        await providerAssembly?.dispose();
+        await act(async () => { hook.getCurrent().onRecover(); });
         await vi.waitFor(() => {
             expect(consoleError).toHaveBeenCalledWith(
-                '[fireAndForget] VoiceAttemptControl.toggle',
-                unexpectedFailure,
+                '[fireAndForget] VoiceAttemptControl.recover',
+                expect.objectContaining({ code: 'voice_runtime_generation_revoked' }),
             );
         });
-
+        expect(hook.getCurrent().primaryAction).toBe('recover');
         await hook.unmount();
     });
 });
 
 describe('Voice setup dismissal through the current Home Artifact owner', () => {
     it('hides the setup-pose mic after the real Home dismissal is persisted', async () => {
-        // Incumbent scenario fixtures above remain a separate P2 mock-family
-        // migration. This changed authority case admits no internal substitutes.
-        const internalModules = [
-            '@/hooks/server/useFeatureEnabled',
-            '@/voice/agent/getVoiceAgentSessionTeleportAvailability',
-            '@/components/appShell/plugins/AppShellPluginUiProjection',
-            '@/hooks/server/useActiveServerSnapshot',
-            '@/sync/domains/server/resolvePortableServerIdentityForRoutingId',
-            '@/voice/credentials/useExecutionMachinePresentation',
-        ] as const;
-        const incumbentModules = await Promise.all(internalModules.map((id) => vi.importMock(id)));
-        internalModules.forEach((id) => vi.doUnmock(id));
-        vi.resetModules();
         let connection: Awaited<ReturnType<typeof import('@/dev/testkit/harness/serverAccountConnectionHarness')['restoreServerAccountForTest']>> | undefined;
         let restoreActionLoader: (() => void) | undefined;
         let restoreWebLocks: (() => void) | undefined;
@@ -1664,6 +1598,7 @@ describe('Voice setup dismissal through the current Home Artifact owner', () => 
             connection = await restoreServerAccountForTest({
                 serverUrl: 'https://voice-dismiss.example.test',
                 accountId: 'voice-dismiss-account',
+                activation: 'switch',
                 request: (input, init) => new URL(String(input)).pathname === '/v1/features'
                     ? Promise.resolve(Response.json(features))
                     : artifact.request(input, init),
@@ -1716,8 +1651,6 @@ describe('Voice setup dismissal through the current Home Artifact owner', () => 
             await connection?.dispose();
             restoreActionLoader?.();
             restoreWebLocks?.();
-            internalModules.forEach((id, index) => vi.doMock(id, () => incumbentModules[index]));
-            vi.resetModules();
         }
     });
 });

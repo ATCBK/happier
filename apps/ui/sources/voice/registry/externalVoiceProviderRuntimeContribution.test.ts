@@ -1,3 +1,6 @@
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+
+const network = await installSessionOpsNetworkBoundary();
 import { readFile } from 'node:fs/promises';
 
 import type {
@@ -12,6 +15,7 @@ import type {
   VoiceRealtimeConnection,
 } from '@happier-dev/plugin-sdk/voice/client';
 import {
+  MACHINE_PLAIN_DATA_KEY_MARKER,
   DaemonPluginActionSchemasReadRequestSchema,
   DaemonPluginActionSchemasReadResponseSchema,
   createVoiceProviderRecipientContractFromCredentialsV1,
@@ -28,64 +32,50 @@ import {
   type CurrentUiContextSnapshotV1,
 } from '@happier-dev/protocol/plugins/ui';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
-import {
-  createPluginUiClientExecutableComposition,
-  getInstalledPluginUiClientExecutableComposition,
-  resolvePluginUiClientActionRegistration,
-  type PluginUiClientExecutableActivation,
-} from '@/components/plugins/reactNative/clientExecutableContributions';
-import {
-  EMPTY_PLUGIN_UI_PROJECTION,
-  type PluginUiProjectionModel,
-} from '@/sync/domains/plugins/ui/projection';
-import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
-import {
-  createCurrentUiContextVoiceToolPort,
-} from '@/components/appShell/currentUiContext/currentUiContextVoiceToolPort';
+const { createPluginReactNativeBundleCache } = await import("@/components/plugins/reactNative/bundleCache");
+const { createPluginUiClientExecutableComposition, getInstalledPluginUiClientExecutableComposition, resolvePluginUiClientActionRegistration } = await import("@/components/plugins/reactNative/clientExecutableContributions");
+import type { PluginUiClientExecutableActivation } from "@/components/plugins/reactNative/clientExecutableContributions";
+const { EMPTY_PLUGIN_UI_PROJECTION } = await import("@/sync/domains/plugins/ui/projection");
+import type { PluginUiProjectionModel } from "@/sync/domains/plugins/ui/projection";
+const { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } = await import("@/sync/domains/plugins/ui/projectionUnion");
+const { createCurrentUiContextVoiceToolPort } = await import("@/components/appShell/currentUiContext/currentUiContextVoiceToolPort");
 import type { CurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
-import {
-  createAppShellPluginUiInvocationHost,
-  type AppShellPluginUiActionExecute,
-} from '@/components/appShell/plugins/pluginUiInvocationHost';
-import {
-  loadPluginReactNativeBundleExport,
-  type PluginReactNativeExecutableExport,
-  type PluginReactNativeLoaderBackend,
-} from '@/components/plugins/reactNative/loader';
-import { createPluginUiCommonJsLoaderBackend } from '@/components/plugins/reactNative/commonJsLoaderBackend';
-import { createVoiceConversationController } from '@/voice/runtime/controller/VoiceConversationController';
-import {
-  createSdkHandleConnection,
-  createWebRtcConnection,
-  createWebSocketPcmConnection,
-} from '@/voice/runtime/connection/VoiceRealtimeConnection';
-import { createRealtimeToolBarrierForVoiceHandlers } from '@/voice/tools/defaultRealtimeToolBarrier';
-import { createVoiceToolHandlers } from '@/voice/tools/handlers';
+const { createAppShellPluginUiInvocationHost } = await import("@/components/appShell/plugins/pluginUiInvocationHost");
+import type { AppShellPluginUiActionExecute } from "@/components/appShell/plugins/pluginUiInvocationHost";
+const { loadPluginReactNativeBundleExport } = await import("@/components/plugins/reactNative/loader");
+import type { PluginReactNativeExecutableExport, PluginReactNativeLoaderBackend } from "@/components/plugins/reactNative/loader";
+const { createPluginUiCommonJsLoaderBackend } = await import("@/components/plugins/reactNative/commonJsLoaderBackend");
+const { createVoiceConversationController } = await import("@/voice/runtime/controller/VoiceConversationController");
+const { createSdkHandleConnection, createWebRtcConnection, createWebSocketPcmConnection } = await import("@/voice/runtime/connection/VoiceRealtimeConnection");
+const { createRealtimeToolBarrierForVoiceHandlers } = await import("@/voice/tools/defaultRealtimeToolBarrier");
+const { createVoiceToolHandlers } = await import("@/voice/tools/handlers");
 import type { VoiceAdapterController, VoiceSessionSnapshot } from '@/voice/session/types';
-import { storage } from '@/sync/domains/state/storage';
-import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
-import { activate as activateOpenAiVoice } from '../../../../../packages/plugins/openai/src/ui/voice/runtime';
+const { storage } = await import("@/sync/domains/state/storage");
+const { voiceSettingsParse } = await import("@/sync/domains/settings/voiceSettings");
+const { activate: activateOpenAiVoice } = await import("../../../../../packages/plugins/openai/src/ui/voice/runtime");
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
-import { createVoiceClientRawCredentialAccess } from '@/voice/credentials/rawCredentialClient';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
-import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+const { createVoiceClientRawCredentialAccess } = await import("@/voice/credentials/rawCredentialClient");
+const { createSessionFixture } = await import("@/dev/testkit/fixtures/sessionFixtures");
+const { createMachineFixture } = await import("@/dev/testkit/fixtures/machineFixtures");
+const { createPlainArtifactHomeFixture } = await import("@/dev/testkit/harness/artifactStoreBoundary");
+const { createConnectedPurposeCatalogHttpBoundary } = await import("@/dev/testkit/harness/connectedAccountCatalogBoundary");
+const { captureLazyActionAccountContext } = await import("@/sync/ops/actions/actionAccountContext");
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { createBundledConversationRuntimeHostLease } from './bundledConversationRuntimeHost';
-import { BUNDLED_FIRST_PARTY_VOICE_CONTRIBUTIONS } from './generatedBundledVoiceEntries';
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } = await import("@/sync/runtime/orchestration/appliedActiveServerRuntime");
+const { createBundledConversationRuntimeHostLease } = await import("./bundledConversationRuntimeHost");
+const { BUNDLED_FIRST_PARTY_VOICE_CONTRIBUTIONS } = await import("./generatedBundledVoiceEntries");
 
 let preparationHome: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
 let preparationPurposes: ReturnType<typeof createConnectedPurposeCatalogHttpBoundary>;
 beforeEach(async () => {
+  network.resetRequests();
+  await network.addHome('https://voice-preparation.example', 'artifact-account');
+  network.setRpcResponder(async request => await mediatedCredentialMachineRpc(request));
   preparationPurposes = createConnectedPurposeCatalogHttpBoundary();
   const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
-  preparationHome = await createPlainArtifactHomeFixture('https://voice-preparation.example', { handleRequest: async (path, init) =>
+  preparationHome = await createPlainArtifactHomeFixture('https://voice-preparation.example', { handleRequest: async (path, init) => path.startsWith('/v1/machines/') ? Response.json({ machine: { id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) :
     await preparationPurposes.handle(new URL(path, 'https://voice-preparation.example'), init)
       ?? (path === '/v2/account/settings' ? response({ version: 1, content: { t: 'plain', v: {} } })
       : path === PROMPT_LIBRARY_ROWS_ROUTE_V1 ? response({ status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
@@ -95,26 +85,17 @@ beforeEach(async () => {
   const machine = createMachineFixture({ activeAt: Date.now() });
   storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [preparationHome.home.id]: [machine] } });
 });
-afterEach(() => preparationHome.dispose());
+afterEach(async () => { await preparationHome.dispose(); mediatedCredentialMachineRpc.mockReset(); });
+afterAll(() => network.dispose());
 
-import {
-  bindVoiceProviderSettingsActions,
-  bindVoiceProviderSettingsOperations,
-  createExternalProtocol,
-  createExternalVoiceProviderActivationScope as createProductionExternalVoiceProviderActivationScope,
-  createExternalVoiceProviderRuntimeContribution,
-} from './externalVoiceProviderActivation';
-import { createExternalVoiceProviderActivationScope } from './externalVoiceProviderActivation.testkit';
-import { commitExternalVoiceProviderRegistration, getExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } from './externalVoiceProviderRegistrations';
-import {
-  createExternalVoiceProviderSettingsDescriptor,
-  projectExternalVoiceProviderSettings,
-} from '../settings/externalProviderSettings';
+const { bindVoiceProviderSettingsActions, bindVoiceProviderSettingsOperations, createExternalProtocol, createExternalVoiceProviderActivationScope: createProductionExternalVoiceProviderActivationScope, createExternalVoiceProviderRuntimeContribution } = await import("./externalVoiceProviderActivation");
+const { createExternalVoiceProviderActivationScope } = await import("./externalVoiceProviderActivation.testkit");
+const { commitExternalVoiceProviderRegistration, getExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } = await import("./externalVoiceProviderRegistrations");
+const { createExternalVoiceProviderSettingsDescriptor, projectExternalVoiceProviderSettings } = await import("../settings/externalProviderSettings");
 
-const mediatedCredentialMachineRpc = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-  machineRpcWithServerScope: mediatedCredentialMachineRpc,
-}));
+const mediatedCredentialMachineRpc = vi.fn();
+// Synthetic daemon replies enter only through the canonical Socket.IO boundary;
+// saved-Home admission, Account authority, RPC framing and strict readers stay real.
 
 function provideClientActionSchemas(action: PluginProjectedActionV2): void {
   const previousImplementation = mediatedCredentialMachineRpc.getMockImplementation();
@@ -287,7 +268,7 @@ function createClientActionFixture(handler: PluginClientActionHandler) {
       },
       backend,
       authority: {
-        serverId: 'server-1',
+        serverId: preparationHome.home.id,
         machineId: 'machine-1',
       },
       isCurrent: () => true,
@@ -1409,7 +1390,8 @@ describe('external Voice provider host composition', () => {
       expect(accountRequests).toEqual([declaredPhase]);
       expect(mediatedCredentialMachineRpc).toHaveBeenCalledTimes(1);
       expect(mediatedCredentialMachineRpc).toHaveBeenCalledWith(expect.objectContaining({
-        machineId: 'machine-1',
+        targetId: 'machine-1',
+        serverUrl: preparationHome.home.serverUrl,
         method: RPC_METHODS.DAEMON_VOICE_CLIENT_ACCOUNT_OPERATION,
         payload: expect.objectContaining({
           contribution,
@@ -1810,7 +1792,7 @@ describe('external Voice provider host composition', () => {
       contributionId: 'conversation',
       occurrenceId: fixture.action.occurrenceId,
       machineId: 'machine-1',
-      serverId: 'server-1',
+      serverId: preparationHome.home.id,
       signal,
       isCurrent: () => true,
       resolveContributedAction: fixture.resolve,
@@ -2211,7 +2193,7 @@ describe('external Voice provider host composition', () => {
           ...packedAction,
           [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: Object.freeze({
             machineId: packedOrigin.materializationRef.machineId,
-            serverId: 'server-packed-voice',
+            serverId: preparationHome.home.id,
             generation: 12,
             interactionEnabled: true,
             phase: 'current',
@@ -2351,7 +2333,7 @@ describe('external Voice provider host composition', () => {
       }),
       backend,
       authority: Object.freeze({
-        serverId: 'server-packed-voice',
+        serverId: preparationHome.home.id,
         machineId: 'machine-packed-voice',
       }),
       isCurrent: () => true,

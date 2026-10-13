@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit';
 import { readReanimatedFrameCallbacks, resetReanimatedFrameCallbacks } from '@/dev/testkit/mocks/reanimated';
@@ -18,7 +19,18 @@ import { HappierUiAnimationActivityProviderInternal } from '../../../../../../pa
 
 const publicArtHost = createPluginUiPrivatePresentationHost(undefined);
 
-const host = vi.hoisted(() => ({ viewed: true, reduced: false, repeats: 0, cancels: 0, timings: 0, viewListeners: new Set<() => void>() }));
+const host = vi.hoisted(() => ({ repeats: 0, cancels: 0, timings: 0 }));
+const appState = await vi.hoisted(async () => {
+    const { createReactNativeAppStateEmitter } = await import('@/dev/testkit/runtime/reactNativeRuntime');
+    return createReactNativeAppStateEmitter();
+});
+vi.mock('react-native', async () => {
+    const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+    const native = await createReactNativeNativeMock({ platformOS: 'ios' });
+    // Keep the emitter's live currentState getter; the native factory's generic
+    // object merge otherwise samples it once and freezes background state.
+    return { ...native, AppState: appState.appState };
+});
 // Reanimated is the native animation boundary; preserve the shared-value/frame testkit beneath it.
 vi.mock('react-native-reanimated', async () => {
     const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
@@ -30,23 +42,12 @@ vi.mock('react-native-reanimated', async () => {
         withTiming: (...args: Parameters<typeof mock.withTiming>) => { host.timings += 1; return mock.withTiming(...args); },
     };
 });
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({ useReducedMotionPreference: () => host.reduced }));
-vi.mock('@/utils/runtime/useHostActivelyViewed', async () => {
-    const React = await import('react');
-    const subscribe = (listener: () => void) => {
-        host.viewListeners.add(listener);
-        return () => { host.viewListeners.delete(listener); };
-    };
-    const read = () => host.viewed;
-    const useViewed = () => React.useSyncExternalStore(subscribe, read, read);
-    return { useHostActivelyViewed: useViewed, useHostActivelyFocused: useViewed };
-});
 
 let screen: RenderScreenResult | null = null;
 let input: VoiceRuntimeLevelWriter | null = null;
 beforeEach(() => {
-    host.viewed = true;
-    host.reduced = false;
+    appState.emit('active');
+    setReducedMotionPreferenceOverride(false);
     host.repeats = 0;
     host.cancels = 0;
     host.timings = 0;
@@ -58,6 +59,7 @@ afterEach(async () => {
     await screen?.unmount();
     screen = null;
     vi.useRealTimers();
+    setReducedMotionPreferenceOverride(null);
 });
 
 function scene(presented: boolean, otherVisible = false) {
@@ -126,21 +128,19 @@ describe('Voice retained presentation demand', () => {
     it('pauses elapsed work in the background and catches up on the same mounted host when foregrounded', async () => {
         vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
         vi.setSystemTime(200_000);
-        host.viewed = false;
+        appState.emit('background');
         screen = await renderScreen(<VoiceElapsed startedAt={80_000} />);
         expect(screen.getTextContent()).toBe('2:00');
         expect(vi.getTimerCount()).toBe(0);
         act(() => { vi.advanceTimersByTime(30_000); });
         expect(screen.getTextContent()).toBe('2:00');
         act(() => {
-            host.viewed = true;
-            host.viewListeners.forEach((listener) => listener());
+            appState.emit('active');
         });
         expect(screen.getTextContent()).toBe('2:30');
         expect(vi.getTimerCount()).toBe(1);
         act(() => {
-            host.viewed = false;
-            host.viewListeners.forEach((listener) => listener());
+            appState.emit('background');
         });
         expect(vi.getTimerCount()).toBe(0);
         act(() => { vi.advanceTimersByTime(30_000); });
@@ -161,10 +161,10 @@ describe('Voice retained presentation demand', () => {
         expect(host.timings).toBe(0);
         await screen.update(mark(true, 'mic'));
         expect(host.timings).toBe(1);
-        host.viewed = false;
+        act(() => { appState.emit('background'); });
         await screen.update(mark(true, 'shadow'));
         expect(host.timings).toBe(1);
-        host.viewed = true;
+        act(() => { appState.emit('active'); });
         await screen.update(mark(true, 'shadow'));
         expect(host.timings).toBe(1);
     });
@@ -230,12 +230,14 @@ describe('Voice retained presentation demand', () => {
     });
 
     it('also suppresses presentation in the background and with reduced motion', async () => {
-        host.viewed = false;
+        appState.emit('background');
         screen = await renderScreen(scene(true));
         expect(readReanimatedFrameCallbacks()[0]!.handle.isActive).toBe(false);
         expect(host.repeats).toBe(0);
-        host.viewed = true;
-        host.reduced = true;
+        act(() => {
+            appState.emit('active');
+            setReducedMotionPreferenceOverride(true);
+        });
         await screen.update(scene(true));
         expect(readReanimatedFrameCallbacks()[0]!.handle.isActive).toBe(false);
         expect(host.repeats).toBe(0);

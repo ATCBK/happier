@@ -1,426 +1,300 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-import { installVoiceAgentCommonModuleMocks } from '@/voice/agent/voiceAgentTestHelpers';
-
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
+import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import {
-    readVoiceAgentActionEffectId,
-    type VoiceAgentClient,
-    type VoiceAgentHandle,
-    type VoiceAgentTurnStreamEvent,
-} from '@/voice/agent/types';
+    createRetainedVoiceAgentRpcBoundary, createStandaloneVoicePolicyHarness, prepareStandaloneVoicePolicyHarness,
+} from '@/dev/testkit/harness/standaloneVoicePolicyHarness';
+import {
+    ExecutionRunTurnStreamStartRequestSchema, ExecutionRunTurnStreamReadRequestSchema,
+    ExecutionRunTurnStreamStartResponseSchema, ExecutionRunTurnStreamReadResponseSchema,
+    type ExecutionRunTurnStreamEvent,
+} from '@happier-dev/protocol/execution/runs/streaming';
+import { ExecutionRunEnsureOrStartRequestSchema, ExecutionRunPublicStateSchema } from '@happier-dev/protocol/execution/runs/index';
+import { AgentRuntimeFacetsV1Schema } from '@happier-dev/protocol/sessions/metadata/agentRuntimeFacetsV1';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { readVoiceAgentActionEffectId } from '@/voice/agent/types';
 
-const patchSessionMetadataWithRetry = vi.hoisted(() => vi.fn(async (sessionId: string, updater: (metadata: any) => any) => {
-    const session = stateRef.current.sessions[sessionId];
-    if (!session) return;
-    session.metadata = updater(session.metadata ?? {});
-}));
-
-const stateRef = vi.hoisted(() => ({
-    current: {} as any,
-}));
-
-const storageListeners = new Set<() => void>();
-
-installVoiceAgentCommonModuleMocks({
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            storage: {
-                getState: () => stateRef.current,
-                subscribe: (listener: () => void) => {
-                    storageListeners.add(listener);
-                    return () => storageListeners.delete(listener);
-                },
-            } as any,
-        });
-    },
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const route = vi.hoisted(() => ({ segments: ['(app)', 'settings', 'voice'], pathname: '/settings/voice' }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    segments: () => route.segments, pathname: () => route.pathname, params: {},
+}).module);
+await prepareStandaloneVoicePolicyHarness();
+let disposeStreamingFixture: (() => Promise<void>) | undefined;
+afterEach(async () => {
+    // Retire the real Run while Account HTTP/currentness is still installed;
+    // the global afterEach resets those boundaries before onTestFinished.
+    standardCleanup();
+    try { await disposeStreamingFixture?.(); }
+    finally { disposeStreamingFixture = undefined; }
 });
 
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        patchSessionMetadataWithRetry: (sessionId: string, updater: (metadata: any) => any) =>
-            patchSessionMetadataWithRetry(sessionId, updater),
-    },
-}));
-
-function createState(): any {
-    return {
-        settings: {
-            voice: {
-                providerId: 'local_conversation',
-                providers: {
-                    local_conversation: { schemaVersion: 1, config: {
-                        streaming: {
-                            enabled: true,
-                            turnReadPollIntervalMs: 50,
-                            turnReadMaxEvents: 7,
-                            turnStreamTimeoutMs: 1200,
-                        },
-                        agent: {
-                            backend: 'daemon',
-                            resumabilityMode: 'provider_resume',
-                            transcript: {
-                                persistenceMode: 'persistent',
-                                epoch: 0,
-                            },
-                        },
-                        networkTimeoutMs: 15_000,
-                    } },
-                },
-            },
+async function createStreamingFixture(options: Readonly<{ streaming?: boolean; target?: boolean; persistent?: boolean; staleRpc?: boolean }> = {}) {
+    const starts: Array<ReturnType<typeof ExecutionRunTurnStreamStartRequestSchema.parse>> = [];
+    const reads: Array<ReturnType<typeof ExecutionRunTurnStreamReadRequestSchema.parse>> = [];
+    let events: ExecutionRunTurnStreamEvent[] = [{ t: 'done', assistantText: 'assistant reply', actions: [] }];
+    let nextStartError: Readonly<{ error: string; errorCode: string }> | null = null;
+    let transcript: NonNullable<ReturnType<typeof ExecutionRunEnsureOrStartRequestSchema.parse>['start']>['transcript'];
+    const rpc = await createRetainedVoiceAgentRpcBoundary({ runId: 'streaming-run',
+        onRpc(method, input) {
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
+                || method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) {
+                transcript = ExecutionRunEnsureOrStartRequestSchema.parse(input).start?.transcript;
+            }
         },
-        sessions: {
-            sys_voice: {
-                id: 'sys_voice',
-                updatedAt: 10,
-                metadata: {
-                    systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
-                    agentRuntimeFacetsV1: {
-                        v: 1,
-                        transcriptSource: {
-                            supported: true,
-                            followLeaseSupported: true,
-                        },
-                    },
-                    voiceConversationBindingV1: {
-                        v: 1,
-                        adapterId: 'local_conversation',
-                        controlSessionId: '__voice_agent__',
-                        transcriptMode: 'native_session',
-                        targetSessionId: 's1',
-                        updatedAt: 111,
-                    },
-                    voiceAgentRunV1: {
-                        v: 1,
-                        runId: 'run_1',
-                        backendId: 'claude',
-                        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-                        resumeHandle: null,
-                        streamId: null,
-                        transcriptContractVersion: 2,
-                        updatedAtMs: 222,
-                    },
-                },
-            },
-            stale_rpc: {
-                id: 'stale_rpc',
-                updatedAt: 5,
-                metadata: {
-                    systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
-                },
-            },
-            s1: {
-                id: 's1',
-                updatedAt: 1,
-                metadata: { flavor: 'claude' },
-            },
+        async handleOtherRpc(method, input) {
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START) {
+                const request = ExecutionRunTurnStreamStartRequestSchema.parse(input);
+                starts.push(request);
+                if (rpc.readRetainedRun()?.runId !== request.runId) {
+                    return { ok: false, error: 'execution_run_not_found', errorCode: 'execution_run_not_found' };
+                }
+                if (nextStartError) {
+                    const error = nextStartError;
+                    nextStartError = null;
+                    return { ok: false, ...error };
+                }
+                return ExecutionRunTurnStreamStartResponseSchema.parse({ streamId: 'streaming-turn' });
+            }
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
+                reads.push(ExecutionRunTurnStreamReadRequestSchema.parse(input));
+                return ExecutionRunTurnStreamReadResponseSchema.parse({
+                    streamId: 'streaming-turn', events, nextCursor: events.length, done: true,
+                });
+            }
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) return { ok: true };
+            throw new Error(`Unexpected streaming daemon method: ${method}`);
         },
-        sessionMessages: {},
-        sessionListRowsByServerId: {},
-        ordinarySessionListMembershipByServerId: {},
-        sessionListIndexByServerId: {},
-        concurrentSessionListCacheByServerId: {},
-    };
-}
-
-function createHandle(client: VoiceAgentClient): VoiceAgentHandle {
-    return {
-        accountLifetime: {
-            scope: { serverId: 'server-a', accountId: 'account-a' },
-            isCurrent: () => true,
-            onRetire: () => ({ dispose() {} }),
-        },
-        metadataSessionId: 'sys_voice',
-        client,
-        voiceAgentId: 'run_1',
-        backend: 'daemon',
-        rpcSessionId: 'stale_rpc',
-        agentBackendId: 'claude',
-    };
-}
-
-// Initialize the boundary snapshot before loading the real owner graph once at collection.
-// Each case below replaces that snapshot; module reloads are not state isolation.
-stateRef.current = createState();
-await import('./voiceTurnStreaming');
-
-describe('createVoiceTurnStreaming', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-        stateRef.current = createState();
-        storageListeners.clear();
     });
+    const target = createSessionFixture({ id: 'streaming-target', active: true, activeAt: Date.now(), metadata: {
+        ...createSessionFixture().metadata!, flavor: 'claude', summary: { text: 'STREAMING_TARGET_SENTINEL', updatedAt: 1 },
+        path: '/private/STREAMING_PATH_SENTINEL', agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+    } });
+    const fixture = await createStandaloneVoicePolicyHarness({
+        mode: 'off', sessions: [
+            ...(options.target ? [target] : []),
+            ...(options.staleRpc ? [createSessionFixture({ id: 'current-resume-publication', metadata: {
+                ...createSessionFixture().metadata!,
+                agentRuntimeFacetsV1: AgentRuntimeFacetsV1Schema.parse({ v: 1, transcriptSource: { supported: true, followLeaseSupported: true } }),
+            } })] : []),
+        ],
+        existingSession: { metadata: { ...createSessionFixture().metadata!, flavor: 'claude',
+            agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+            ...(!options.staleRpc ? { agentRuntimeFacetsV1: AgentRuntimeFacetsV1Schema.parse({ v: 1, transcriptSource: { supported: true, followLeaseSupported: true } }) } : {}),
+        } },
+        async dispatch(method, input) {
+            const result = await rpc.dispatch(method, input);
+            // The external daemon projects the transcript admitted in the actual
+            // Ensure request; the initializer's handle is never reconstructed.
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && result && typeof result === 'object' && 'run' in result) {
+                return { ...result, run: ExecutionRunPublicStateSchema.parse({ ...ExecutionRunPublicStateSchema.parse(result.run), transcript }) };
+            }
+            return result;
+        },
+    });
+    let active: Awaited<ReturnType<typeof fixture.activateLocalAgent>> | null = null;
+    disposeStreamingFixture = async () => {
+        try {
+            await active?.dispose();
+            if (active) expect(rpc.readRetainedRun()).toBeNull();
+        }
+        finally { await fixture.dispose(); }
+    };
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    const { readLocalConversationVoiceSettings, writeVoiceProviderSettingsConfig } = await import('@/sync/domains/settings/voiceSettings');
+    const local = readLocalConversationVoiceSettings(storage.getState().settings.voice);
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: writeVoiceProviderSettingsConfig(storage.getState().settings.voice, 'local_conversation', {
+        ...local, streaming: { ...local.streaming, enabled: options.streaming !== false },
+        agent: { ...local.agent, resumabilityMode: 'provider_resume',
+            transcript: { ...local.agent.transcript, persistenceMode: options.persistent ? 'persistent' : 'ephemeral' } },
+    }) }, storage.getState().settings));
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('Streaming Account lifetime unavailable');
+    active = await fixture.activateLocalAgent(options.target ? { serverId: lifetime.scope.serverId, sessionId: target.id } : null);
+    const { voiceAgentSessions: transport } = await import('@/voice/agent/voiceAgentSessions');
+    const { VOICE_AGENT_GLOBAL_SESSION_ID: controlSessionId } = await import('@/voice/agent/voiceAgentGlobalSessionId');
+    return {
+        starts, reads, rpc, transport, controlSessionId, fixture, storage,
+        setEvents(value: ExecutionRunTurnStreamEvent[]) { events = value; },
+        rejectNextStart(error: string, errorCode: string) { nextStartError = { error, errorCode }; },
+        setPrivacy(currentUiContextMode: 'automatic' | 'on_demand' | 'off') {
+            const voice = storage.getState().settings.voice;
+            act(() => storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...voice, privacy: { ...voice.privacy, currentUiContextMode } } }, storage.getState().settings)));
+        },
+    };
+}
 
-    it('passes resume=true when the resolved metadata session exposes transcriptSource even if the rpc session is stale', async () => {
-        const startTurnStream = vi.fn(async () => ({ streamId: 'stream_1' }));
-        const events: VoiceAgentTurnStreamEvent[] = [{ t: 'done', assistantText: 'assistant reply', actions: [] }];
-        const readTurnStreamResponse: Awaited<ReturnType<VoiceAgentClient['readTurnStream']>> = {
-            streamId: 'stream_1',
-            events,
-            nextCursor: 1,
-            done: true,
-        };
-        const client: VoiceAgentClient = {
-            start: vi.fn(async () => ({ voiceAgentId: 'run_1' })),
-            sendTurn: vi.fn(async () => ({ assistantText: 'unused', actions: [] })),
-            welcome: vi.fn(async () => ({ assistantText: 'unused' })),
-            startTurnStream,
-            readTurnStream: vi.fn(async (_params: Parameters<VoiceAgentClient['readTurnStream']>[0]) => readTurnStreamResponse),
-            cancelTurnStream: vi.fn(async (_params: Parameters<VoiceAgentClient['cancelTurnStream']>[0]) => ({ ok: true as const })),
-            commit: vi.fn(async () => ({ commitText: 'unused' })),
-            stop: vi.fn(async (_params: Parameters<VoiceAgentClient['stop']>[0]) => ({ ok: true as const })),
-        };
+async function mountAutomaticUiContext() {
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const credentials = await TokenStorage.getCredentialsForServerUrl(getActiveServerSnapshot().serverUrl);
+    if (!credentials) throw new Error('Current UI requires the actual restored Account');
+    const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+    const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+    const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+    const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+    const { CurrentUiContextProvider, useOptionalCurrentUiContextReader, usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
+    const { createCurrentUiContextAutomaticUpdateProjector } = await import('@/voice/context/voiceHooks');
+    const current: { reader: ReturnType<typeof useOptionalCurrentUiContextReader> } = { reader: null };
+    const enrichment = { entity: { kind: 'streaming_ui', label: 'PRIVATE_UI_ENTITY_SENTINEL' }, commands: [] };
+    function Publication() {
+        usePublishCurrentUiContext(enrichment);
+        current.reader = useOptionalCurrentUiContextReader();
+        return null;
+    }
+    const tree = () => React.createElement(InjectedAuthProvider, { credentials, children:
+        React.createElement(MainAppTabStateProvider, { children: React.createElement(AppPaneProvider, { children:
+            React.createElement(CurrentUiContextProvider, { children: React.createElement(PluginSurfaceFocusEligibilityProvider,
+                { active: true, currentUiContextActive: true, children: React.createElement(Publication) }) }) }) }) });
+    route.segments = ['(app)', 'settings', 'voice'];
+    route.pathname = '/settings/voice';
+    const screen = await renderScreen(tree());
+    onTestFinished(screen.unmount);
+    const projector = createCurrentUiContextAutomaticUpdateProjector();
+    const read = () => {
+        const snapshot = current.reader?.readCurrentUiContext();
+        if (!snapshot) throw new Error('Mounted Current UI producer unavailable');
+        expect(snapshot.entity?.label).toBe('PRIVATE_UI_ENTITY_SENTINEL');
+        const update = projector.project(snapshot);
+        if (!update) throw new Error('Current UI projection did not change');
+        projector.markDelivered(update);
+        return update;
+    };
+    return {
+        read,
+        async navigate() {
+            route.segments = ['(app)', 'settings', 'voice', 'advanced'];
+            route.pathname = '/settings/voice/advanced';
+            await screen.update(tree());
+            return read();
+        },
+    };
+}
 
-        const { createVoiceTurnStreaming } = await import('./voiceTurnStreaming');
-        const turnStreaming = createVoiceTurnStreaming({
-            getVoiceAgentHandle: async () => createHandle(client),
-            interruptActiveTurn: () => undefined,
-            resetCachedHandle: () => undefined,
-            trackActiveTurn: async (_sessionId, task) => await task(),
-            voiceAttemptExplicitContextBySessionId: new Map(),
-            deferredTargetSessionContextBySessionId: new Map(),
-            latestAutomaticUiContextBySessionId: new Map(),
-            voiceAgentTurnAbortControllerBySessionId: new Map(),
-        });
-
-        await turnStreaming.sendTurn('__voice_agent__', 'hello');
-
-        expect(startTurnStream).toHaveBeenCalledWith(expect.objectContaining({
-            sessionId: 'stale_rpc',
-            resume: true,
+describe('Voice streaming through retained initialization, execution transport and daemon RPC', () => {
+    it('admits provider resume from the current bound publication while the retained RPC Session is stale', async () => {
+        const f = await createStreamingFixture({ persistent: true, staleRpc: true });
+        const { voiceSessionBindingStore, bindVoiceRuntimeAttemptBinding, createVoiceRuntimeAttemptBindingOwner } = await import('@/voice/binding/voiceConversationBindingStore');
+        const original = voiceSessionBindingStore.getState().getByControlSessionId(f.controlSessionId);
+        if (!original) throw new Error('Actual retained control binding unavailable');
+        bindVoiceRuntimeAttemptBinding({ owner: createVoiceRuntimeAttemptBindingOwner(), binding: {
+            ...original, conversationSessionId: 'current-resume-publication',
+            conversationSessionAddress: { ...original.conversationSessionAddress, sessionId: 'current-resume-publication' },
+            updatedAt: original.updatedAt + 1,
+        } });
+        onTestFinished(() => voiceSessionBindingStore.getState().unbind('current-resume-publication'));
+        const sockets = [...new Set(f.fixture.rpcSockets)].map(socket => ({
+            socket, before: vi.mocked(socket.emitWithAck).mock.calls.length,
         }));
+        expect((await f.transport.sendTurn(f.controlSessionId, 'hello')).assistantText).toBe('assistant reply');
+        expect(f.starts).toEqual([expect.objectContaining({ runId: 'streaming-run', resume: true })]);
+        const startMethods = sockets.flatMap(({ socket, before }) =>
+            vi.mocked(socket.emitWithAck).mock.calls.slice(before).flatMap(([event, payload]) => {
+                if (event !== 'rpc-call' || !payload || typeof payload !== 'object' || !('method' in payload)
+                    || typeof payload.method !== 'string' || !payload.method.endsWith(`:${SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START}`)) return [];
+                return [payload.method];
+            }));
+        expect(startMethods).toEqual([`${f.fixture.sessionId}:${SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START}`]);
     });
 
     it('preserves process-local effect identity while normalizing the streamed turn response', async () => {
-        const events: VoiceAgentTurnStreamEvent[] = [
-            {
-                t: 'voice_output',
-                output: {
-                    v: 1,
-                    kind: 'side_effect',
-                    turnId: 'stream_effect',
-                    seq: 0,
-                    effectId: 'effect-normalized',
-                    action: { t: 'sendSessionMessage', args: { message: 'Do it' } },
-                },
-            },
-            {
-                t: 'voice_output',
-                output: {
-                    v: 1,
-                    kind: 'turn_final',
-                    turnId: 'stream_effect',
-                    seq: 1,
-                    text: 'Working on it.',
-                },
-            },
-        ];
-        const client: VoiceAgentClient = {
-            start: vi.fn(async () => ({ voiceAgentId: 'run_1' })),
-            sendTurn: vi.fn(async () => ({ assistantText: 'unused', actions: [] })),
-            welcome: vi.fn(async () => ({ assistantText: 'unused' })),
-            startTurnStream: vi.fn(async () => ({ streamId: 'stream_effect' })),
-            readTurnStream: vi.fn(async () => ({
-                streamId: 'stream_effect', events, nextCursor: 2, done: true,
-            })),
-            cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-            commit: vi.fn(async () => ({ commitText: 'unused' })),
-            stop: vi.fn(async () => ({ ok: true as const })),
-        };
-
-        const { createVoiceTurnStreaming } = await import('./voiceTurnStreaming');
-        const turnStreaming = createVoiceTurnStreaming({
-            getVoiceAgentHandle: async () => createHandle(client),
-            interruptActiveTurn: () => undefined,
-            resetCachedHandle: () => undefined,
-            trackActiveTurn: async (_sessionId, task) => await task(),
-            voiceAttemptExplicitContextBySessionId: new Map(),
-            deferredTargetSessionContextBySessionId: new Map(),
-            latestAutomaticUiContextBySessionId: new Map(),
-            voiceAgentTurnAbortControllerBySessionId: new Map(),
-        });
-
-        const result = await turnStreaming.sendTurn('__voice_agent__', 'hello');
-
-        expect(result.actions).toEqual([{ t: 'sendSessionMessage', args: { message: 'Do it' } }]);
+        const f = await createStreamingFixture();
+        f.setEvents([
+            { t: 'voice_output', output: { v: 1, kind: 'side_effect', turnId: 'streaming-turn', seq: 0,
+                effectId: 'effect-normalized', action: { t: 'sendSessionMessage', args: { message: 'Do it' } } } },
+            { t: 'voice_output', output: { v: 1, kind: 'turn_final', turnId: 'streaming-turn', seq: 1, text: 'Working on it.' } },
+        ]);
+        const result = await f.transport.sendTurn(f.controlSessionId, 'hello');
+        expect(result).toEqual({ assistantText: 'Working on it.', actions: [{ t: 'sendSessionMessage', args: { message: 'Do it' } }] });
         expect(readVoiceAgentActionEffectId(result.actions[0])).toBe('effect-normalized');
     });
 
-    it('uses the non-eager client turn when speech streaming is disabled', async () => {
-        stateRef.current.settings.voice.providers.local_conversation.config.streaming.enabled = false;
-        const sendTurn = vi.fn(async () => ({
-            assistantText: 'legacy reply',
-            actions: [{ t: 'sendSessionMessage' as const, args: { message: 'Legacy action' } }],
-        }));
-        const startTurnStream = vi.fn(async () => ({ streamId: 'stream_1' }));
-        const client: VoiceAgentClient = {
-            start: vi.fn(async () => ({ voiceAgentId: 'run_1' })),
-            sendTurn,
-            welcome: vi.fn(async () => ({ assistantText: 'unused' })),
-            startTurnStream,
-            readTurnStream: vi.fn(async () => ({ streamId: 'stream_1', events: [], nextCursor: 0, done: true })),
-            cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-            commit: vi.fn(async () => ({ commitText: 'unused' })),
-            stop: vi.fn(async () => ({ ok: true as const })),
-        };
-
-        const { createVoiceTurnStreaming } = await import('./voiceTurnStreaming');
-        const turnStreaming = createVoiceTurnStreaming({
-            getVoiceAgentHandle: async () => createHandle(client),
-            interruptActiveTurn: () => undefined,
-            resetCachedHandle: () => undefined,
-            trackActiveTurn: async (_sessionId, task) => await task(),
-            voiceAttemptExplicitContextBySessionId: new Map(),
-            deferredTargetSessionContextBySessionId: new Map(),
-            latestAutomaticUiContextBySessionId: new Map(),
-            voiceAgentTurnAbortControllerBySessionId: new Map(),
-        });
-
-        const result = await turnStreaming.sendTurn('__voice_agent__', 'hello');
-        expect(result).toEqual({
-            assistantText: 'legacy reply',
-            actions: [{ t: 'sendSessionMessage', args: { message: 'Legacy action' } }],
-        });
-        expect(readVoiceAgentActionEffectId(result.actions[0])).toBe('stale_rpc:client:1:0');
-        expect(sendTurn).toHaveBeenCalledTimes(1);
-        expect(startTurnStream).not.toHaveBeenCalled();
+    it('uses the canonical client read-loop and distinct client-turn effect identity when eager speech is disabled', async () => {
+        const f = await createStreamingFixture({ streaming: false });
+        f.setEvents([{ t: 'done', assistantText: 'legacy reply', actions: [{ t: 'sendSessionMessage', args: { message: 'Legacy action' } }] }]);
+        const first = await f.transport.sendTurn(f.controlSessionId, 'hello');
+        const second = await f.transport.sendTurn(f.controlSessionId, 'again');
+        expect(first).toEqual({ assistantText: 'legacy reply', actions: [{ t: 'sendSessionMessage', args: { message: 'Legacy action' } }] });
+        expect(readVoiceAgentActionEffectId(first.actions[0])).toBe(`${f.fixture.sessionId}:client:1:0`);
+        expect(readVoiceAgentActionEffectId(second.actions[0])).toBe(`${f.fixture.sessionId}:client:2:0`);
+        expect(f.reads.map(read => read.cursor)).toEqual([0, 0]);
+        expect(f.starts.every(start => start.resume !== true)).toBe(true);
     });
 
-    it('injects only the latest automatic UI projection beside deferred session context', async () => {
-        stateRef.current.settings.voice.providers.local_conversation.config.streaming.enabled = false;
-        stateRef.current.settings.voice.privacy = { currentUiContextMode: 'automatic' };
-        const sendTurn = vi.fn(async (_params: Parameters<VoiceAgentClient['sendTurn']>[0]) => ({
-            assistantText: 'reply',
-            actions: [],
-        }));
-        const client: VoiceAgentClient = {
-            start: vi.fn(async () => ({ voiceAgentId: 'run_1' })),
-            sendTurn,
-            welcome: vi.fn(async () => ({ assistantText: 'unused' })),
-            startTurnStream: vi.fn(async () => ({ streamId: 'stream_1' })),
-            readTurnStream: vi.fn(async () => ({ streamId: 'stream_1', events: [], nextCursor: 0, done: true })),
-            cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-            commit: vi.fn(async () => ({ commitText: 'unused' })),
-            stop: vi.fn(async () => ({ ok: true as const })),
-        };
-        const attemptExplicitContextBySessionId = new Map<string, string[]>();
-        const latestAutomaticUiContextBySessionId = new Map([
-            ['__voice_agent__', 'CURRENT UI CONTEXT\n\n{"navigation":{"title":"LATEST_NAVIGATION_SENTINEL"}}'],
-        ]);
-
-        const { createVoiceTurnStreaming } = await import('./voiceTurnStreaming');
-        const turnStreaming = createVoiceTurnStreaming({
-            getVoiceAgentHandle: async () => createHandle(client),
-            interruptActiveTurn: () => undefined,
-            resetCachedHandle: () => undefined,
-            trackActiveTurn: async (_sessionId, task) => await task(),
-            voiceAttemptExplicitContextBySessionId: attemptExplicitContextBySessionId,
-            deferredTargetSessionContextBySessionId: new Map<string, string | null>([
-                ['__voice_agent__', 'TARGET_CONTEXT:__voice_agent__->s1'],
-            ]),
-            latestAutomaticUiContextBySessionId,
-            voiceAgentTurnAbortControllerBySessionId: new Map(),
-        });
-
-        await turnStreaming.sendTurn('__voice_agent__', 'hello');
-
-        const payloadText = String(sendTurn.mock.calls[0]?.[0]?.userText ?? '');
-        expect(payloadText).toContain('TARGET_CONTEXT:__voice_agent__->s1');
-        expect(payloadText.match(/TARGET_CONTEXT:__voice_agent__->s1/g)).toHaveLength(1);
-        expect(payloadText).toContain('LATEST_NAVIGATION_SENTINEL');
-        expect(payloadText.match(/CURRENT UI CONTEXT/g)).toHaveLength(1);
-        expect(attemptExplicitContextBySessionId.has('__voice_agent__')).toBe(false);
-        expect(latestAutomaticUiContextBySessionId.has('__voice_agent__')).toBe(false);
+    it('injects only the latest automatic UI projection beside one deferred redacted Session context', async () => {
+        const f = await createStreamingFixture({ streaming: false, target: true });
+        f.setPrivacy('automatic');
+        const ui = await mountAutomaticUiContext();
+        const oldUpdate = ui.read();
+        f.transport.appendAutomaticUiContextUpdate(f.controlSessionId, oldUpdate);
+        const latestUpdate = await ui.navigate();
+        expect(latestUpdate).not.toBe(oldUpdate);
+        f.transport.appendAutomaticUiContextUpdate(f.controlSessionId, latestUpdate);
+        await f.transport.sendTurn(f.controlSessionId, 'hello');
+        await f.transport.sendTurn(f.controlSessionId, 'again');
+        const payload = f.starts[0]?.message ?? '';
+        expect(payload).toContain('STREAMING_TARGET_SENTINEL');
+        expect(payload.match(/THIS IS THE CURRENT TARGET SESSION/g)).toHaveLength(1);
+        expect(payload).not.toContain('STREAMING_PATH_SENTINEL');
+        expect(payload).toContain(latestUpdate);
+        expect(payload).not.toContain(oldUpdate);
+        expect(payload).not.toContain('PRIVATE_UI_ENTITY_SENTINEL');
+        expect(payload.match(/CURRENT UI CONTEXT/g)).toHaveLength(1);
+        expect(f.starts[1]?.message).toBe('again');
     });
 
-    it('retires explicit attempt context only after the provider accepts a turn', async () => {
-        stateRef.current.settings.voice.providers.local_conversation.config.streaming.enabled = false;
-        const sendTurn = vi.fn()
-            .mockRejectedValueOnce(new Error('provider unavailable'))
-            .mockResolvedValue({ assistantText: 'reply', actions: [] });
-        const client: VoiceAgentClient = {
-            start: vi.fn(async () => ({ voiceAgentId: 'run_1' })),
-            sendTurn,
-            welcome: vi.fn(async () => ({ assistantText: 'unused' })),
-            startTurnStream: vi.fn(async () => ({ streamId: 'stream_1' })),
-            readTurnStream: vi.fn(async () => ({ streamId: 'stream_1', events: [], nextCursor: 0, done: true })),
-            cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-            commit: vi.fn(async () => ({ commitText: 'unused' })),
-            stop: vi.fn(async () => ({ ok: true as const })),
-        };
-        const attemptExplicitContextBySessionId = new Map([
-            ['__voice_agent__', ['EXPLICIT_ATTEMPT_CONTEXT_SENTINEL']],
-        ]);
-        const { createVoiceTurnStreaming } = await import('./voiceTurnStreaming');
-        const turnStreaming = createVoiceTurnStreaming({
-            getVoiceAgentHandle: async () => createHandle(client),
-            interruptActiveTurn: () => undefined,
-            resetCachedHandle: () => undefined,
-            trackActiveTurn: async (_sessionId, task) => await task(),
-            voiceAttemptExplicitContextBySessionId: attemptExplicitContextBySessionId,
-            deferredTargetSessionContextBySessionId: new Map(),
-            latestAutomaticUiContextBySessionId: new Map(),
-            voiceAgentTurnAbortControllerBySessionId: new Map(),
-        });
-
-        await expect(turnStreaming.sendTurn('__voice_agent__', 'first')).rejects.toThrow('provider unavailable');
-        expect(attemptExplicitContextBySessionId.get('__voice_agent__')).toEqual([
-            'EXPLICIT_ATTEMPT_CONTEXT_SENTINEL',
-        ]);
-
-        await turnStreaming.sendTurn('__voice_agent__', 'retry');
-        expect(String(sendTurn.mock.calls[1]?.[0]?.userText ?? '')).toContain('EXPLICIT_ATTEMPT_CONTEXT_SENTINEL');
-        expect(attemptExplicitContextBySessionId.has('__voice_agent__')).toBe(false);
+    it('retains explicit attempt context after rejected start and retires it after acceptance', async () => {
+        const f = await createStreamingFixture({ streaming: false });
+        f.transport.appendAttemptContextUpdate(f.controlSessionId, 'EXPLICIT_ATTEMPT_CONTEXT_SENTINEL');
+        f.rejectNextStart('provider unavailable', 'execution_run_busy');
+        await expect(f.transport.sendTurn(f.controlSessionId, 'first')).rejects.toThrow('provider unavailable');
+        await f.transport.sendTurn(f.controlSessionId, 'retry');
+        await f.transport.sendTurn(f.controlSessionId, 'next');
+        expect(f.starts[0]?.message).toContain('EXPLICIT_ATTEMPT_CONTEXT_SENTINEL');
+        expect(f.starts[1]?.message).toContain('EXPLICIT_ATTEMPT_CONTEXT_SENTINEL');
+        expect(f.starts[2]?.message).toBe('next');
     });
 
-    it.each(['on_demand', 'off'] as const)(
-        'clears queued automatic UI context when disclosure changes to %s before turn admission',
-        async (currentUiContextMode) => {
-            stateRef.current.settings.voice.providers.local_conversation.config.streaming.enabled = false;
-            stateRef.current.settings.voice.privacy = { currentUiContextMode: 'automatic' };
-            const sendTurn = vi.fn(async (_params: Parameters<VoiceAgentClient['sendTurn']>[0]) => ({
-                assistantText: 'reply',
-                actions: [],
-            }));
-            const client: VoiceAgentClient = {
-                start: vi.fn(async () => ({ voiceAgentId: 'run_1' })),
-                sendTurn,
-                welcome: vi.fn(async () => ({ assistantText: 'unused' })),
-                startTurnStream: vi.fn(async () => ({ streamId: 'stream_1' })),
-                readTurnStream: vi.fn(async () => ({ streamId: 'stream_1', events: [], nextCursor: 0, done: true })),
-                cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-                commit: vi.fn(async () => ({ commitText: 'unused' })),
-                stop: vi.fn(async () => ({ ok: true as const })),
-            };
-            const attemptExplicitContextBySessionId = new Map([
-                ['__voice_agent__', ['ORDINARY_CONTEXT_SENTINEL']],
-            ]);
-            const latestAutomaticUiContextBySessionId = new Map([
-                ['__voice_agent__', 'CURRENT UI CONTEXT\n\n{"navigation":{"title":"REVOKED_NAVIGATION_SENTINEL"}}'],
-            ]);
+    it.each(['on_demand', 'off'] as const)('redacts queued automatic context when disclosure changes to %s before admission', async currentUiContextMode => {
+        const f = await createStreamingFixture({ streaming: false });
+        f.setPrivacy('automatic');
+        f.transport.appendAttemptContextUpdate(f.controlSessionId, 'ORDINARY_CONTEXT_SENTINEL');
+        const ui = await mountAutomaticUiContext();
+        const revokedUpdate = ui.read();
+        f.transport.appendAutomaticUiContextUpdate(f.controlSessionId, revokedUpdate);
+        f.setPrivacy(currentUiContextMode);
+        await f.transport.sendTurn(f.controlSessionId, 'hello');
+        f.setPrivacy('automatic');
+        await f.transport.sendTurn(f.controlSessionId, 'again');
+        expect(f.starts[0]?.message).toContain('ORDINARY_CONTEXT_SENTINEL');
+        expect(f.starts[0]?.message).not.toContain(revokedUpdate);
+        expect(f.starts[1]?.message).toBe('again');
+    });
 
-            // The projection was accepted while automatic disclosure was enabled,
-            // then the user changed its disclosure policy before the next turn.
-            stateRef.current.settings.voice.privacy = { currentUiContextMode };
-
-            const { createVoiceTurnStreaming } = await import('./voiceTurnStreaming');
-            const turnStreaming = createVoiceTurnStreaming({
-                getVoiceAgentHandle: async () => createHandle(client),
-                interruptActiveTurn: () => undefined,
-                resetCachedHandle: () => undefined,
-                trackActiveTurn: async (_sessionId, task) => await task(),
-                voiceAttemptExplicitContextBySessionId: attemptExplicitContextBySessionId,
-                deferredTargetSessionContextBySessionId: new Map(),
-                latestAutomaticUiContextBySessionId,
-                voiceAgentTurnAbortControllerBySessionId: new Map(),
-            });
-
-            await turnStreaming.sendTurn('__voice_agent__', 'hello');
-
-            const payloadText = String(sendTurn.mock.calls[0]?.[0]?.userText ?? '');
-            expect(payloadText).toContain('ORDINARY_CONTEXT_SENTINEL');
-            expect(payloadText).not.toContain('REVOKED_NAVIGATION_SENTINEL');
-            expect(latestAutomaticUiContextBySessionId.has('__voice_agent__')).toBe(false);
-        },
-    );
+    it('recovers an absent daemon Run without duplicating prepared context or requeueing deferred context', async () => {
+        const f = await createStreamingFixture({ streaming: false, target: true });
+        f.transport.appendAttemptContextUpdate(f.controlSessionId, 'RECOVERED_ATTEMPT_SENTINEL');
+        await f.rpc.dispatch(SESSION_RPC_METHODS.EXECUTION_RUN_STOP, { runId: 'streaming-run' });
+        expect(f.rpc.readRetainedRun()).toBeNull();
+        const afterRetirement = f.rpc.requests.length;
+        await expect(f.transport.sendTurn(f.controlSessionId, 'recover')).resolves.toEqual({ assistantText: 'assistant reply', actions: [] });
+        const recoveryRequests = f.rpc.requests.slice(afterRetirement);
+        const ensureIndex = recoveryRequests.findIndex(request =>
+            request.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
+            || request.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1);
+        expect(ensureIndex).toBeGreaterThan(recoveryRequests.findIndex(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START));
+        expect(ensureIndex).toBeLessThan(recoveryRequests.map(request => request.method).lastIndexOf(SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START));
+        expect(ExecutionRunEnsureOrStartRequestSchema.parse(recoveryRequests[ensureIndex]?.input).start?.intent).toBe('voice_agent');
+        expect(f.rpc.readRetainedRun()?.runId).toBe('streaming-run');
+        await f.transport.sendTurn(f.controlSessionId, 'next');
+        expect(f.starts[1]?.message).toBe(f.starts[0]?.message);
+        expect(f.starts[1]?.message.match(/RECOVERED_ATTEMPT_SENTINEL/g)).toHaveLength(1);
+        expect(f.starts[1]?.message.match(/THIS IS THE CURRENT TARGET SESSION/g)).toHaveLength(1);
+        expect(f.starts[2]?.message).toBe('next');
+        expect(f.transport.isActive(f.controlSessionId)).toBe(true);
+    });
 });

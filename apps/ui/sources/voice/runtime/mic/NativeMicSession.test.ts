@@ -1,7 +1,34 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+// The installed native module and package registry have one identity per app
+// process. Observe/reset SDK operations, never replace the registry's getter.
+const nativeAudio = createNativeVoicePcmCaptureHarness();
+vi.mock('expo-modules-core', async importOriginal => {
+    const actual = await importOriginal<typeof import('expo-modules-core')>();
+    return { ...actual, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative'
+        ? nativeAudio.nativeModule : actual.requireOptionalNativeModule(name) };
+});
+vi.mock('expo-audio', async importOriginal => {
+    const actual = await importOriginal<typeof import('expo-audio')>();
+    return { ...actual, AudioModule: { ...actual.AudioModule, setAudioModeAsync: vi.fn(async () => {}) } };
+});
+vi.mock('expo-file-system', () => ({ File: class {
+    exists = true;
+    async delete() { this.exists = false; }
+} }));
 
-import { createExpoAudioRecordingMicSession, createNativeMicSession } from './NativeMicSession';
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { createVoiceFileRecording, getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
+const coordinator = getSharedVoiceAudioSessionCoordinator();
+if (!coordinator) throw new Error('Installed native audio SDK coordination unavailable');
+const audioSession = { nativeModule: nativeAudio.nativeModule, coordinator };
+const { createExpoAudioRecordingMicSession, createNativeMicSession } = await import('./NativeMicSession');
+afterAll(async () => {
+    await coordinator.dispose();
+    await nativeAudio.coordinator.dispose();
+});
 
 describe('NativeMicSession', () => {
     const originalPlatformOs = Platform.OS;
@@ -19,14 +46,17 @@ describe('NativeMicSession', () => {
         stop: stopRecorder,
     };
     const createRecorder = vi.fn(() => recorder);
-    const releaseAudioMode = vi.fn(async () => {});
-    const acquireAudioMode = vi.fn(async () => ({ release: releaseAudioMode }));
+    const recordingSessions: Array<ReturnType<typeof createExpoAudioRecordingMicSession>> = [];
+    function createRecordingSession(options: Parameters<typeof createExpoAudioRecordingMicSession>[0]) {
+        const session = createExpoAudioRecordingMicSession(options);
+        recordingSessions.push(session);
+        return session;
+    }
 
     beforeEach(() => {
         vi.clearAllMocks();
         (Platform as { OS: string }).OS = 'android';
         recorder.uri = 'file:///tmp/rec.m4a';
-        acquireAudioMode.mockResolvedValue({ release: releaseAudioMode });
     });
 
     it('owns one native WebRTC microphone stream through mute, teardown, and reacquisition', async () => {
@@ -212,16 +242,17 @@ describe('NativeMicSession', () => {
         expect(releaseStream).not.toHaveBeenCalled();
     });
 
-    afterEach(() => {
+    afterEach(async () => {
+        for (const session of recordingSessions.splice(0)) await session.teardown();
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
         (Platform as { OS: string }).OS = originalPlatformOs;
     });
 
     it('owns permission and recorder start for recording flows', async () => {
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await session.beginRecording();
@@ -230,24 +261,23 @@ describe('NativeMicSession', () => {
         expect(createRecorder).toHaveBeenCalledTimes(1);
         expect(prepareToRecordAsync).toHaveBeenCalledTimes(1);
         expect(record).toHaveBeenCalledTimes(1);
-        expect(acquireAudioMode).toHaveBeenCalledTimes(1);
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(1);
     });
 
     it('uses the coordinator-owned native file recorder on iOS and never constructs Expo Audio', async () => {
         (Platform as { OS: string }).OS = 'ios';
         const nativeStart = vi.fn(async () => {});
-        const nativeSetMuted = vi.fn(async () => {});
+        const nativeSetMuted = vi.fn(async (_muted: boolean) => {});
         const nativeStop = vi.fn(async () => 'file:///tmp/native-rec.m4a');
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
-            createNativeFileRecording: () => ({
-                start: nativeStart,
-                setMuted: nativeSetMuted,
-                stop: nativeStop,
+            createNativeFileRecording: () => createVoiceFileRecording({ ...audioSession.nativeModule,
+                startFileRecording: async () => { await nativeStart(); return { recordingId: 'native-file' }; },
+                setFileRecordingMuted: async ({ muted }) => { await nativeSetMuted(muted); },
+                stopFileRecording: async () => ({ uri: await nativeStop() }),
             }),
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await session.beginRecording();
@@ -259,32 +289,30 @@ describe('NativeMicSession', () => {
         expect(nativeSetMuted).toHaveBeenCalledWith(true);
         expect(nativeStop).toHaveBeenCalledOnce();
         expect(uri).toBe('file:///tmp/native-rec.m4a');
-        expect(releaseAudioMode).toHaveBeenCalledOnce();
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
     });
 
     it('fails closed on iOS when the paired native module lacks file recording', async () => {
         (Platform as { OS: string }).OS = 'ios';
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
-            createNativeFileRecording: () => null,
+            createNativeFileRecording: () => createVoiceFileRecording(audioSession.nativeModule),
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await expect(session.beginRecording()).rejects.toThrow('voice_native_file_recording_unavailable');
 
         expect(createRecorder).not.toHaveBeenCalled();
-        expect(releaseAudioMode).toHaveBeenCalledOnce();
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
     });
 
     it('lets the web recorder own its single microphone acquisition without a permission-probe stream', async () => {
         (Platform as { OS: string }).OS = 'web';
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await session.beginRecording();
@@ -299,18 +327,17 @@ describe('NativeMicSession', () => {
         prepareToRecordAsync.mockRejectedValueOnce(
             Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' }),
         );
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await expect(session.beginRecording()).rejects.toThrow('mic_permission_denied');
 
         expect(requestPermission).not.toHaveBeenCalled();
         expect(showPermissionDenied).toHaveBeenCalledWith(false);
-        expect(releaseAudioMode).toHaveBeenCalledTimes(1);
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
     });
 
     it('does not acquire or publish a recorder after permission resolves for an aborted start, and permits retry', async () => {
@@ -321,11 +348,10 @@ describe('NativeMicSession', () => {
         requestPermission.mockImplementationOnce(() => new Promise((resolve) => {
             resolvePermission = resolve;
         }));
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
         const abortController = new AbortController();
 
@@ -338,12 +364,12 @@ describe('NativeMicSession', () => {
         await starting;
 
         expect(createRecorder).not.toHaveBeenCalled();
-        expect(acquireAudioMode).not.toHaveBeenCalled();
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
         expect(record).not.toHaveBeenCalled();
 
         await session.beginRecording();
         expect(createRecorder).toHaveBeenCalledTimes(1);
-        expect(acquireAudioMode).toHaveBeenCalledTimes(1);
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(1);
         expect(record).toHaveBeenCalledTimes(1);
     });
 
@@ -355,30 +381,29 @@ describe('NativeMicSession', () => {
         });
         const staleStop = vi.fn(async () => 'file:///tmp/stale-after-cancel.m4a');
         const retryStop = vi.fn(async () => 'file:///tmp/retry.m4a');
-        const createNativeFileRecording = vi.fn()
-            .mockReturnValueOnce({
-                start: vi.fn(() => lateStart),
-                setMuted: vi.fn(async () => {}),
-                stop: staleStop,
-            })
-            .mockReturnValueOnce({
-                start: vi.fn(async () => {}),
-                setMuted: vi.fn(async () => {}),
-                stop: retryStop,
-            });
+        const nativeFileStart = vi.fn()
+            .mockImplementationOnce(async () => { await lateStart; return { recordingId: 'stale' }; })
+            .mockResolvedValueOnce({ recordingId: 'retry' });
+        const nativeFileModule = { ...audioSession.nativeModule,
+            startFileRecording: nativeFileStart,
+            setFileRecordingMuted: async () => {},
+            stopFileRecording: async ({ recordingId }: { recordingId: string }) => ({
+                uri: recordingId === 'stale' ? await staleStop() : await retryStop(),
+            }),
+        };
+        const createNativeFileRecording = () => createVoiceFileRecording(nativeFileModule);
         const deleteRecordedAudio = vi.fn(async () => {});
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             createNativeFileRecording,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
             deleteRecordedAudio,
         });
         const abortController = new AbortController();
 
         const starting = session.beginRecording(abortController.signal);
-        await vi.waitFor(() => expect(createNativeFileRecording).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(nativeFileStart).toHaveBeenCalledTimes(1));
         abortController.abort();
         await session.teardown();
         resolveLateStart();
@@ -395,11 +420,10 @@ describe('NativeMicSession', () => {
     });
 
     it('tracks muted state and pauses an active recorder until unmuted', async () => {
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await session.beginRecording();
@@ -414,11 +438,10 @@ describe('NativeMicSession', () => {
     });
 
     it('applies mute to recordings that start while the session is already muted', async () => {
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         session.setMuted(true);
@@ -430,18 +453,17 @@ describe('NativeMicSession', () => {
     });
 
     it('stops the active recorder and returns the recorded uri', async () => {
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await session.beginRecording();
         const uri = await session.stopRecording();
 
         expect(stopRecorder).toHaveBeenCalledTimes(1);
-        expect(releaseAudioMode).toHaveBeenCalledTimes(1);
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
         expect(uri).toBe('file:///tmp/rec.m4a');
     });
 
@@ -450,48 +472,45 @@ describe('NativeMicSession', () => {
         stopRecorder.mockImplementationOnce(async () => {
             recorder.uri = 'blob:http://localhost/recorded-turn';
         });
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await session.beginRecording();
         const uri = await session.stopRecording();
 
         expect(uri).toBe('blob:http://localhost/recorded-turn');
-        expect(releaseAudioMode).toHaveBeenCalledTimes(1);
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
     });
 
     it('releases the audio-session lease when stopping the recorder fails', async () => {
         stopRecorder.mockRejectedValueOnce(new Error('recorder_stop_failed'));
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await session.beginRecording();
 
         await expect(session.stopRecording()).rejects.toThrow('recorder_stop_failed');
-        expect(releaseAudioMode).toHaveBeenCalledTimes(1);
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
     });
 
     it('releases the exclusive audio-session lease when recorder preparation fails', async () => {
         prepareToRecordAsync.mockRejectedValueOnce(new Error('recorder_prepare_failed'));
-        const session = createExpoAudioRecordingMicSession({
+        const session = createRecordingSession({
             createRecorder,
             requestPermission,
             showPermissionDenied,
-            acquireAudioMode,
         });
 
         await expect(session.beginRecording()).rejects.toThrow('recorder_prepare_failed');
 
-        expect(releaseAudioMode).toHaveBeenCalledTimes(1);
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
         await session.teardown();
-        expect(releaseAudioMode).toHaveBeenCalledTimes(1);
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
     });
 });

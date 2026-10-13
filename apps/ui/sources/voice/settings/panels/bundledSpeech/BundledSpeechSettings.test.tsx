@@ -1,24 +1,38 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+// Native discovery and transport boundaries must register before Account/Sync consumers.
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
 
 import {
   VoiceProviderContributionSchema,
   type VoiceProviderSettingsJsonValueV1,
 } from '@happier-dev/protocol';
+import { VoiceProviderCatalogResponseSchema } from '@happier-dev/protocol/voice/providerOperations';
+import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
-import { createDeferred, createMachineFixture, renderScreen } from '@/dev/testkit';
-import { getStorage as getActualStorage } from '@/sync/domains/state/storageStore';
+import { createDeferred, createMachineFixture, flushHookEffects, renderScreen as renderAppScreen, standardCleanup } from '@/dev/testkit';
+import { getStorage as getActualStorage, storage } from '@/sync/domains/state/storageStore';
+import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { applyAccountVoiceCredentialSourceSelection, resolveExactAccountVoiceCredentialSecretId, upsertAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { VoiceLocalTtsSchema } from '@/sync/domains/settings/voiceLocalTtsSettings';
 import {
   readLocalConversationVoiceSettings,
   readVoiceProviderSettingsConfig,
   voiceSettingsDefaults,
+  voiceSettingsParse,
   writeLocalConversationVoiceSettings,
   writeVoiceProviderSettingsConfig,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
-import { installLocalSttProviderCommonModuleMocks } from '../localStt/providers/localSttProviderTestHelpers';
 import { PLUGIN_MANIFEST as OPENAI_COMPAT_MANIFEST } from '../../../../../../../packages/plugins/openai-compat/src/manifest';
 import { VOICE_PROVIDER_PRESENTATIONS as OPENAI_COMPAT_PRESENTATIONS } from '../../../../../../../packages/plugins/openai-compat/src/ui/voice/entries';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
@@ -32,26 +46,34 @@ import {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const prompt = vi.hoisted(() => vi.fn());
-const alert = vi.hoisted(() => vi.fn());
-const confirm = vi.hoisted(() => vi.fn(async () => true));
-const synthesize = vi.hoisted(() => vi.fn());
 const executeSettingsAction = vi.hoisted(() => vi.fn());
-const playAudioBytesWithStopper = vi.hoisted(() => vi.fn());
-const fireAndForgetPromises = vi.hoisted(() => [] as Promise<unknown>[]);
-const settingsActionState = vi.hoisted(() => ({
-  voice: null as unknown,
-  settingsVersion: 4,
-  mutationApplied: false,
-  settingsScope: { serverId: 'server-1', accountId: 'account-1' },
-}));
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
+const speechBoundary = createVoiceSpeechOutputBoundary({ getAccount: () => ({
+  home: { id: account.scope.serverId, serverUrl: getAppliedActiveServerSnapshot().serverUrl }, credentials: account.credentials,
+}) });
+const synthesize = speechBoundary.speechSynthesizeRpc;
+let playbackFilesystem: ReturnType<typeof speechBoundary.reset>['filesystem'];
+// The actual shared relay owner requires both its enabled bit and advertised caps.
+const speechFeatures = FeaturesResponseSchema.parse({ features: {
+  voice: { enabled: true },
+  machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+}, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+  maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000,
+  maxDurationMs: 60_000, maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2,
+  maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1,
+} } } } } });
+const initialStorage = storage.getState();
+const settingsActionState = {
+  get voice() { return storage.getState().settings.voice; },
+  set voice(value: unknown) { account.replaceVoice(voiceSettingsParse(value)); },
+  get settingsScope() { return storage.getState().settingsScope; },
+  set settingsScope(value: ReturnType<typeof storage.getState>['settingsScope']) { storage.setState({ settingsScope: value }); },
+};
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
-installLocalSttProviderCommonModuleMocks({
-  modal: async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { alert, prompt, confirm } }).module;
-  },
-});
+vi.mock('react-native-unistyles', async () =>
+  (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 
 type CatalogRows = readonly Readonly<{
   id: string;
@@ -244,12 +266,23 @@ const fetchCatalog = vi.hoisted(() => vi.fn(
     : [{ id: 'en-US-Test-A', name: 'English Test', metadata: {} }],
 ));
 const executionMachine = {
-  machineId: 'machine-a' as string | null,
-  machineLabel: 'Machine A' as string | null,
-};
-const credentialPresentation = {
-  exists: true,
-  credentialIdentity: 'account-secret-a' as string | null,
+  currentId: 'machine-a' as string | null,
+  currentLabel: 'Machine A' as string | null,
+  get machineId() { return this.currentId; },
+  set machineId(value: string | null) {
+    this.currentId = value;
+    const machine = value ? createMachineFixture({ id: value, activeAt: Date.now(),
+      metadata: { ...createMachineFixture().metadata!, displayName: this.currentLabel ?? undefined },
+    }) : null;
+    storage.setState({ machines: machine ? { [machine.id]: machine } : {},
+      machineListByServerId: { [account.scope.serverId]: machine ? [machine] : [] },
+    });
+  },
+  get machineLabel() { return this.currentLabel; },
+  set machineLabel(value: string | null) {
+    this.currentLabel = value;
+    this.machineId = this.currentId;
+  },
 };
 const connectedAccountSelection = Object.freeze({
   kind: 'connectedAccount' as const,
@@ -261,143 +294,20 @@ const connectedAccountSelection = Object.freeze({
     }),
   }),
 });
-const credentialSourcePresentation: {
-  selection:
-    | Readonly<{ kind: 'none' }>
-    | Readonly<{ kind: 'savedSecret' }>
-    | typeof connectedAccountSelection;
-  usable: boolean;
-} = {
-  selection: connectedAccountSelection,
-  usable: true,
-};
 
-vi.mock('@/voice/credentials/bundledSpeechClient', () => ({
-  bundledSpeechDaemonClient: {
-    fetchCatalog,
-    synthesize,
-    executeSettingsAction,
-  },
-}));
+vi.mock('@expo/vector-icons', async () =>
+  (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+// Registry collection resolves this vendor leaf; these speech settings never start a conversation.
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: () => {
+  throw new Error('Unexpected ElevenLabs conversation in speech settings');
+} } }));
 
-vi.mock('@/utils/system/fireAndForget', () => ({
-  fireAndForget: (promise: Promise<unknown> | null | undefined) => {
-    if (!promise) return;
-    fireAndForgetPromises.push(promise);
-    void promise.catch(() => undefined);
-  },
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-  const {
-    createLiveStorageStoreMock,
-    createStorageModuleStub,
-  } = await import('@/dev/testkit/mocks/storage');
-  return createStorageModuleStub({
-    storage: createLiveStorageStoreMock(() => ({
-      settings: { voice: settingsActionState.voice } as never,
-      settingsScope: settingsActionState.settingsScope,
-      settingsVersion: settingsActionState.settingsVersion,
-      machines: executionMachine.machineId ? {
-        [executionMachine.machineId]: createMachineFixture({
-          id: executionMachine.machineId, activeAt: 0,
-          metadata: { ...createMachineFixture().metadata!, displayName: executionMachine.machineLabel ?? undefined },
-        }),
-      } : {},
-    })),
-  });
-});
-
-// Mounted scope hooks and async readers share the same persisted Account boundary.
-vi.mock('@/sync/domains/state/storageStore', async () => {
-  const { storage } = await import('@/sync/domains/state/storage');
-  return { storage, getStorage: () => storage };
-});
-
-vi.mock('@/sync/runtime/getSyncSingleton', () => ({
-  getSyncSingleton: () => ({
-    prepareAccountSettingsForDaemonSpawn: async () => ({
-      accountSettingsVersionHint: settingsActionState.settingsVersion,
-    }),
-    mutateAccountSettingsOnce: async (input: Readonly<{
-      mutate: (settings: Readonly<{ voiceSettingsV1: unknown }>) => Readonly<{
-        settings: Readonly<{ voiceSettingsV1: unknown }>;
-        value: undefined;
-      }>;
-    }>) => {
-      const result = input.mutate({ voiceSettingsV1: settingsActionState.voice });
-      settingsActionState.voice = result.settings.voiceSettingsV1;
-      settingsActionState.mutationApplied = true;
-      return { status: 'applied' as const, settingsVersion: settingsActionState.settingsVersion + 1, value: result.value };
-    },
-  }),
-}));
-
-vi.mock('@/voice/output/playAudioBytesWithStopper', () => ({
-  playAudioBytesWithStopper,
-}));
-
-vi.mock('@/voice/credentials/CredentialItem', () => ({
-  VoiceCredentialItem: (props: {
-    onStatusChanged?: (status: {
-      exists: boolean;
-      source: 'account' | null;
-      credentialIdentity: string | null;
-    }) => void;
-  }) => {
-    React.useEffect(() => {
-      props.onStatusChanged?.({
-        exists: credentialPresentation.exists,
-        source: credentialPresentation.exists ? 'account' : null,
-        credentialIdentity: credentialPresentation.credentialIdentity,
-      });
-    }, [props.onStatusChanged]);
-    return React.createElement('VoiceCredentialItem', props);
-  },
-}));
-
-vi.mock('@/voice/credentials/VoiceRawCredentialAccessReview', () => ({
-  VoiceRawCredentialAccessReview: (props: object) => React.createElement('VoiceRawCredentialAccessReview', props),
-}));
-
-vi.mock('../realtime/VoiceCredentialSourceField', () => ({
-  VoiceCredentialSourceField: (props: {
-    onStatusChanged?: (status: typeof credentialSourcePresentation) => void;
-  }) => {
-    React.useEffect(() => {
-      props.onStatusChanged?.(credentialSourcePresentation);
-    }, [props.onStatusChanged]);
-    return React.createElement('VoiceCredentialSourceField', props);
-  },
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: object) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-  DropdownMenu: (props: object) => React.createElement('DropdownMenu', props),
-}));
-
-vi.mock('@/components/ui/forms/Switch', () => ({
-  Switch: (props: object) => React.createElement('Switch', props),
-}));
-
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-  RoundButton: (props: object) => React.createElement('RoundButton', props),
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-  Text: (props: object) => React.createElement('Text', props),
-  TextInput: (props: object) => React.createElement('TextInput', props),
-}));
-
-vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
-
-/** The inline field of a manifest row (the row is a mocked Item, so its field is its right element). */
-function rowField(rendered: Awaited<ReturnType<typeof renderScreen>>, title: string): React.ReactElement<any> {
-  const row = rendered.tree.root.findAllByType('Item' as never)
-    .find((node) => node.props.title === title && node.props.rightElement !== undefined);
+/** Inspect the real manifest row's field while keeping its control mounted. */
+function rowField(rendered: Awaited<ReturnType<typeof renderScreen>>, title: string): React.ReactElement<{
+  value: string; onChangeText(value: string): void; onBlur(): void;
+}> {
+  const row = rendered.tree.root.findAll(node => node.props.rightElement !== undefined)
+    .find((node) => node.props.title === tLoose(title) && node.props.rightElement !== undefined);
   if (!row) throw new Error(`missing field row ${title}`);
   return row.props.rightElement;
 }
@@ -405,11 +315,58 @@ function rowField(rendered: Awaited<ReturnType<typeof renderScreen>>, title: str
 async function typeIntoRow(rendered: Awaited<ReturnType<typeof renderScreen>>, title: string, text: string) {
   await act(async () => { rowField(rendered, title).props.onChangeText(text); });
   await act(async () => { rowField(rendered, title).props.onBlur(); });
-  await act(async () => { await Promise.all(fireAndForgetPromises); });
 }
 
-// Initialize the real settings graph outside individual interaction budgets.
+// Install HTTP/Socket before loading real controls and Sync consumers.
+await loadSyncSingletonForTests();
+const { Alert } = await import('react-native');
+const nativeAlert = vi.spyOn(Alert, 'alert');
+const { tLoose, setPreferredLanguageFromSettings } = await import('@/text');
+const { ModalProvider, useOptionalModal } = await import('@/modal');
+let modalContext: ReturnType<typeof useOptionalModal>;
+function ModalStateProbe() {
+  modalContext = useOptionalModal();
+  return null;
+}
+function SpeechSettingsTestProviders({ children }: React.PropsWithChildren) {
+  return React.createElement(ModalProvider, { children: React.createElement(React.Fragment, null,
+    React.createElement(ModalStateProbe), children,
+  ) });
+}
+function renderScreen(element: Parameters<typeof renderAppScreen>[0]) {
+  return renderAppScreen(element, { wrapper: SpeechSettingsTestProviders });
+}
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { VoiceCredentialItem } = await import('@/voice/credentials/CredentialItem');
+const CredentialComponent = Reflect.get(VoiceCredentialItem, 'type') as React.ComponentType<React.ComponentProps<typeof VoiceCredentialItem>>;
+const { VoiceRawCredentialAccessReview } = await import('@/voice/credentials/VoiceRawCredentialAccessReview');
+const { VoiceCredentialSourceField } = await import('../realtime/VoiceCredentialSourceField');
 await import('./BundledSpeechSettings');
+
+async function saveCredential(providerId: string, secretId = 'account-secret-a') {
+  const [pluginId, localId] = providerId.split('/');
+  const contribution = { pluginId, localId };
+  const expectedSecretId = resolveExactAccountVoiceCredentialSecretId({ settings: account.settings, contribution, credentialSlotId: 'api_key' });
+  const existing = account.settings.secrets.find(secret => secret.id === expectedSecretId);
+  account.replaceSettings(upsertAccountVoiceCredential({ settings: account.settings,
+    contribution, credentialSlotId: 'api_key', value: `test-only-${secretId}`,
+    generateId: () => secretId, now: 1, expectedSecretId, expectedSecretUpdatedAt: existing?.updatedAt ?? null,
+  }).settings);
+  await refreshSavedSecretCatalog(account.scope);
+}
+
+async function selectCredentialSource(entry: NonNullable<ReturnType<ReturnType<typeof createVoiceProviderRegistry>['get']>>,
+  selection: typeof connectedAccountSelection | Readonly<{ kind: 'none' | 'savedSecret' }>) {
+  if (!entry.declaration?.credentials) throw new Error('Missing credential declaration');
+  const result = applyAccountVoiceCredentialSourceSelection({ settings: account.settings,
+    connectedPurposes: account.purposes.value, currentDeclaration: entry.declaration,
+    mutation: { contribution: { pluginId: entry.pluginId, localId: entry.declaration.id },
+      credentialSlotId: entry.declaration.credentials.slot.id,
+      selection, expectedSettingsVersion: storage.getState().settingsVersion ?? 1 },
+  });
+  account.replaceSettings(result.settings);
+  await account.replaceConnectedPurposes(result.connectedPurposes);
+}
 
 describe('BundledSpeechSettings', () => {
   it.each(['execution machine', 'Account', 'provider', 'retired provider', 'retired projection', 'unrelated settings', 'installed first-party'] as const)('applies an endpoint approval only to its current context while retaining unrelated changes: %s', async (change) => {
@@ -441,13 +398,15 @@ describe('BundledSpeechSettings', () => {
     const rendered = await renderScreen(React.createElement(spec.Settings, {
       cfgTts: VoiceLocalTtsSchema.parse({ provider: OPENAI_COMPAT_TTS_ID }), setTts: vi.fn(), voice, setVoice, popoverBoundaryRef: null, networkTimeoutMs: 15_000,
     }));
-    const pending = createDeferred<boolean>();
-    confirm.mockImplementationOnce(() => pending.promise);
-    expect(rendered.tree.root.findAllByType('VoiceCredentialItem' as never)[0]?.props.machineId).toBe('machine-a');
+    let approveEndpoint: (() => void) | undefined;
+    nativeAlert.mockImplementationOnce((_title, _message, buttons) => {
+      approveEndpoint = buttons?.find(button => button.style !== 'cancel')?.onPress;
+    });
+    expect(rendered.tree.root.findAllByType(CredentialComponent)[0]?.props.machineId).toBe('machine-a');
     await act(async () => { rowField(rendered, 'settingsVoice.local.ttsBaseUrl').props.onChangeText('http://localhost:11434/v1'); });
     expect(rowField(rendered, 'settingsVoice.local.ttsBaseUrl').props.value).toBe('http://localhost:11434/v1');
     await act(async () => { rowField(rendered, 'settingsVoice.local.ttsBaseUrl').props.onBlur(); });
-    await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
+    await vi.waitFor(() => expect(approveEndpoint).toBeTypeOf('function'));
     if (change === 'execution machine') {
       executionMachine.machineId = 'machine-b';
       executionMachine.machineLabel = 'Machine B';
@@ -470,7 +429,10 @@ describe('BundledSpeechSettings', () => {
         ...entry.providerSettings.defaultConfig, baseUrl: 'https://speech.example/v1', model: 'new-model',
       });
     }
-    await act(async () => { pending.resolve(true); await Promise.all(fireAndForgetPromises); });
+    await act(async () => { approveEndpoint!(); });
+    // After the modal decision this owner only has promise continuations and React work;
+    // drain them through the canonical testkit before checking a stale-context no-write.
+    await flushHookEffects();
     if (change === 'unrelated settings' || change === 'installed first-party') {
       expect(setVoice).toHaveBeenLastCalledWith(expect.objectContaining({ providers: expect.objectContaining({
         [OPENAI_COMPAT_TTS_ID]: expect.objectContaining({ config: expect.objectContaining({
@@ -480,31 +442,48 @@ describe('BundledSpeechSettings', () => {
       }) }));
     } else expect(setVoice.mock.calls.length).toBe(0);
   });
-  beforeEach(() => {
+  beforeEach(async () => {
+    playbackFilesystem = speechBoundary.reset().filesystem;
+    const nativeMachineRpc = speechBoundary.machineRpc.getMockImplementation()!;
+    speechBoundary.machineRpc.mockImplementation(async request => {
+      if (request.method === RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG) return VoiceProviderCatalogResponseSchema.parse({
+        ok: true, items: await fetchCatalog(request, request.payload.catalog),
+      });
+      // Raw recipient inspection is unavailable at this transport boundary.
+      if (request.method === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_INSPECT) return DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema.parse({
+        ok: false, errorCode: 'unavailable',
+      });
+      return await nativeMachineRpc(request);
+    });
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: voiceSettingsDefaults }), { features: speechFeatures });
+    setRuntimeFetch(async (url, init) => speechBoundary.answerMachineHttpRequest(url, executionMachine.currentId ?? 'machine-a', 'account-a')
+      ?? await account.request(url, init));
     executionMachine.machineId = 'machine-a';
     executionMachine.machineLabel = 'Machine A';
-    credentialPresentation.exists = true;
-    credentialPresentation.credentialIdentity = 'account-secret-a';
-    credentialSourcePresentation.selection = connectedAccountSelection;
-    credentialSourcePresentation.usable = true;
     fetchCatalog.mockReset();
     fetchCatalog.mockImplementation(async (_entry: unknown, catalog: string): Promise<CatalogRows> => catalog === 'models'
       ? [{ id: 'gemini-test', name: 'Gemini Test', metadata: {} }]
       : [{ id: 'en-US-Test-A', name: 'English Test', metadata: {} }]);
-    prompt.mockReset();
-    alert.mockReset();
-    confirm.mockReset();
-    confirm.mockResolvedValue(true);
+    nativeAlert.mockReset();
+    // Only native presentation is substituted. Each endpoint case separately
+    // chooses the real ModalManager's approval button after changing context.
     synthesize.mockReset();
     synthesize.mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), mimeType: 'audio/mpeg' });
     executeSettingsAction.mockReset();
-    fireAndForgetPromises.length = 0;
     settingsActionState.voice = voiceSettingsDefaults;
-    settingsActionState.settingsVersion = 4;
-    settingsActionState.mutationApplied = false;
-    settingsActionState.settingsScope = { serverId: 'server-1', accountId: 'account-1' };
-    playAudioBytesWithStopper.mockReset();
-    playAudioBytesWithStopper.mockResolvedValue(undefined);
+    await saveCredential(GOOGLE_GEMINI_STT_ID);
+    setPreferredLanguageFromSettings('en');
+    modalContext = undefined;
+  });
+  afterEach(async () => {
+    standardCleanup();
+    await account?.dispose();
+    speechBoundary.disposeNativeSdkBridge();
+    storage.setState(initialStorage, true);
+  });
+  afterAll(async () => {
+    await speechBoundary.disposeAudioSession();
+    nativeAlert.mockRestore();
   });
 
   it('renders package-owned STT fields and writes the provider envelope', async () => {
@@ -528,8 +507,8 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     }));
     await act(async () => undefined);
-    const model = rendered.tree.root.findAllByType('DropdownMenu' as never)
-      .find((row) => row.props.searchPlaceholder === 'settingsVoice.local.googleGeminiStt.model.searchPlaceholder');
+    const model = rendered.tree.root.findAllByType(DropdownMenu)
+      .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'));
     expect(model).toBeTruthy();
     await act(async () => model!.props.onSelect('gemini-test'));
     expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
@@ -605,10 +584,8 @@ describe('BundledSpeechSettings', () => {
     if (!spec) throw new Error('speech settings spec is required');
     const voice = localConversationVoiceWithSttProvider(providerId, { model: 'speech-1' });
     settingsActionState.voice = voice;
-    executeSettingsAction.mockResolvedValueOnce({ patch: { model: 'speech-2' } });
     const settingsStore = getActualStorage();
     const previousSettingsScope = settingsStore.getState().settingsScope;
-    settingsStore.setState({ settingsScope: { serverId: 'server-1', accountId: 'account-1' } });
     onTestFinished(() => settingsStore.setState({ settingsScope: previousSettingsScope }));
     const rendered = await renderScreen(React.createElement(spec.Settings, {
       cfgStt: {
@@ -629,19 +606,22 @@ describe('BundledSpeechSettings', () => {
       testID: 'voice-settings-action-refresh-model',
     });
 
-    let pressedAction: Promise<unknown> | undefined;
-    await act(async () => {
-      action.props.onPress();
-      pressedAction = fireAndForgetPromises.at(-1);
-      if (!pressedAction) throw new Error('settings action press did not start');
-      await pressedAction;
+    const actionResponse = createDeferred<{ patch: { model: string } }>();
+    executeSettingsAction.mockImplementationOnce(() => actionResponse.promise);
+    await act(async () => action.props.onPress());
+    await vi.waitFor(() => expect(action.props.loading).toBe(true));
+    await act(async () => actionResponse.resolve({ patch: { model: 'speech-2' } }));
+    await vi.waitFor(() => {
+      expect(action.props.loading).toBe(false);
+      expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)).toEqual({ model: 'speech-2' });
     });
     expect(executeSettingsAction).toHaveBeenCalledWith({
       entry,
       actionId: 'refresh-model',
       signal: expect.any(AbortSignal),
     });
-    expect(settingsActionState.mutationApplied).toBe(true);
+    expect(account.writes.length).toBeGreaterThan(0);
+    expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)).toEqual({ model: 'speech-2' });
     expect(readVoiceProviderSettingsConfig(settingsActionState.voice as VoiceSettings, providerId))
       .toEqual({ model: 'speech-2' });
   });
@@ -677,8 +657,8 @@ describe('BundledSpeechSettings', () => {
     await act(async () => undefined);
 
     expect(fetchCatalog).not.toHaveBeenCalled();
-    const model = rendered.tree.root.findAllByType('DropdownMenu' as never)
-      .find((row) => row.props.searchPlaceholder === 'settingsVoice.local.googleGeminiStt.model.searchPlaceholder');
+    const model = rendered.tree.root.findAllByType(DropdownMenu)
+      .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'));
     expect(model).toBeTruthy();
     act(() => model!.props.onSelect('gemini-test'));
     expect(setVoice).not.toHaveBeenCalled();
@@ -790,10 +770,10 @@ describe('BundledSpeechSettings', () => {
     })));
 
     await typeIntoRow(rendered, 'settingsVoice.local.sttModel', '');
-    expect(alert).toHaveBeenCalledWith('common.error');
+    expect(nativeAlert.mock.calls[0]?.[0]).toBe(tLoose('common.error'));
     expect(setVoice).toHaveBeenCalledTimes(1);
     expect(rowField(rendered, 'settingsVoice.local.sttModel').props.value).toBe('whisper-1');
-    expect(prompt).not.toHaveBeenCalled();
+    expect(modalContext?.state.modals.filter(modal => modal.type === 'prompt')).toHaveLength(0);
   });
 
   it('edits a signed manifest number inline within its declared bounds', async () => {
@@ -817,7 +797,7 @@ describe('BundledSpeechSettings', () => {
     await act(async () => undefined);
 
     await typeIntoRow(rendered, 'settingsVoice.local.googleCloudTts.pitch.title', '25');
-    expect(alert).toHaveBeenCalled();
+    expect(nativeAlert).toHaveBeenCalled();
     expect(setVoice).not.toHaveBeenCalled();
 
     await typeIntoRow(rendered, 'settingsVoice.local.googleCloudTts.pitch.title', '-2.5');
@@ -826,7 +806,7 @@ describe('BundledSpeechSettings', () => {
         [GOOGLE_CLOUD_TTS_ID]: expect.objectContaining({ config: expect.objectContaining({ pitch: -2.5 }) }),
       }),
     }));
-    expect(prompt).not.toHaveBeenCalled();
+    expect(modalContext?.state.modals.filter(modal => modal.type === 'prompt')).toHaveLength(0);
   });
 
   it('renders package-owned TTS fields and writes voice selection without a vendor panel', async () => {
@@ -850,8 +830,8 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     } as never));
     await act(async () => undefined);
-    const voice = rendered.tree.root.findAllByType('DropdownMenu' as never)
-      .find((row) => row.props.searchPlaceholder === 'settingsVoice.local.googleCloudTts.voice.searchPlaceholder');
+    const voice = rendered.tree.root.findAllByType(DropdownMenu)
+      .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleCloudTts.voice.searchPlaceholder'));
     expect(voice).toBeTruthy();
     await act(async () => voice!.props.onSelect('en-US-Test-A'));
     expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
@@ -951,14 +931,14 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     }));
 
-    expect(rendered.tree.root.findAllByType('VoiceCredentialItem' as never)).toHaveLength(0);
+    expect(rendered.tree.root.findAllByType(CredentialComponent)).toHaveLength(0);
     const instructions = rendered.tree.root.findByProps({
       testID: 'voice-speech-setting:instructions.input',
     });
     const instructionsSave = rendered.tree.root.findByProps({
       testID: 'voice-speech-setting:instructions.save',
     });
-    const enhance = rendered.tree.root.findAllByType('Item' as never)
+    const enhance = rendered.tree.root.findAll(node => node.props.rightElement !== undefined)
       .find((row) => row.props.title === 'Enhance speech')!;
     const metadata = rendered.tree.root.findByProps({
       testID: 'voice-speech-setting:metadata.input',
@@ -1004,20 +984,26 @@ describe('BundledSpeechSettings', () => {
     }));
 
     setVoice.mockClear();
-    alert.mockClear();
+    nativeAlert.mockClear();
     act(() => metadata.props.onChangeText('{'));
     await act(async () => metadataSave.props.onPress());
     expect(setVoice).not.toHaveBeenCalled();
-    expect(alert).toHaveBeenCalledOnce();
+    expect(nativeAlert).toHaveBeenCalledOnce();
 
-    alert.mockClear();
+    nativeAlert.mockClear();
     act(() => metadata.props.onChangeText('[]'));
     await act(async () => metadataSave.props.onPress());
     expect(setVoice).not.toHaveBeenCalled();
-    expect(alert).toHaveBeenCalledOnce();
+    expect(nativeAlert).toHaveBeenCalledOnce();
   });
 
   it('validates descriptor-configured OpenAI-compatible TTS settings without carrying them over RPC', async () => {
+    let playedBytes: Uint8Array | undefined;
+    speechBoundary.encodedAudio.start.mockImplementationOnce(async uri => {
+      playedBytes = playbackFilesystem.files.get(uri)?.slice();
+      speechBoundary.encodedAudio.emit('started');
+      speechBoundary.encodedAudio.emit('finished');
+    });
     const { createBundledLocalTtsProviderSpec } = await import('./BundledSpeechSettings');
     const entry = createVoiceProviderRegistry({
       bundledContributions: (OPENAI_COMPAT_MANIFEST.contributes.voiceProviders ?? []).map((value) => VoiceProviderContributionSchema.parse(value)).map((declaration) => ({
@@ -1057,12 +1043,14 @@ describe('BundledSpeechSettings', () => {
     });
 
     expect(synthesize).toHaveBeenCalledWith(expect.objectContaining({
-      entry,
+      target: { pluginId: entry.pluginId, localId: entry.declaration!.id },
       input: 'Hello',
     }));
     expect(synthesize.mock.calls[0]?.[0]).not.toHaveProperty('model');
     expect(synthesize.mock.calls[0]?.[0]).not.toHaveProperty('voiceName');
-    expect(playAudioBytesWithStopper).toHaveBeenCalledTimes(1);
+    expect(speechBoundary.encodedAudio.start).toHaveBeenCalledTimes(1);
+    expect(playedBytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(speechBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
   });
 
   it('validates contribution catalog correspondence without carrying it over RPC', async () => {
@@ -1155,7 +1143,7 @@ describe('BundledSpeechSettings', () => {
     });
 
     expect(synthesize).toHaveBeenCalledWith(expect.objectContaining({
-      entry,
+      target: { pluginId: entry.pluginId, localId: entry.declaration!.id },
       input: 'Hello',
     }));
     expect(synthesize.mock.calls[0]?.[0]).not.toHaveProperty('model');
@@ -1189,7 +1177,7 @@ describe('BundledSpeechSettings', () => {
       sample: 'Hello',
     });
 
-    expect(alert).toHaveBeenCalledWith('common.error', 'settingsVoice.local.testTtsMissingBaseUrl');
+    expect(nativeAlert.mock.calls[0]?.slice(0, 2)).toEqual([tLoose('common.error'), tLoose('settingsVoice.local.testTtsMissingBaseUrl')]);
     expect(synthesize).not.toHaveBeenCalled();
   });
 
@@ -1205,7 +1193,7 @@ describe('BundledSpeechSettings', () => {
       sample: 'Hello',
     });
 
-    expect(alert).toHaveBeenCalledWith('common.error', 'settingsVoice.local.testTtsMissingBaseUrl');
+    expect(nativeAlert.mock.calls[0]?.slice(0, 2)).toEqual([tLoose('common.error'), tLoose('settingsVoice.local.testTtsMissingBaseUrl')]);
     expect(synthesize).not.toHaveBeenCalled();
   });
 
@@ -1231,7 +1219,7 @@ describe('BundledSpeechSettings', () => {
       setVoice: vi.fn(),
       popoverBoundaryRef: null,
     }));
-    const credential = rendered.tree.root.findByType('VoiceCredentialItem' as never);
+    const credential = rendered.tree.root.findByType(CredentialComponent);
     expect(credential.props).toMatchObject({
       contribution: { pluginId: 'happier.voice.google', localId: 'gemini-stt' },
       credentialSlotId: 'api_key',
@@ -1243,15 +1231,30 @@ describe('BundledSpeechSettings', () => {
   });
 
   it('passes an admitted mediated speech recipient contract to the canonical credential approval surface', async () => {
-    const recipientContract = Object.freeze({ marker: 'exact admitted recipient contract' });
+    const { normalizeRecipientContractV1, createRecipientContractDigestV1 } = await import('@happier-dev/protocol');
+    const recipientContract = normalizeRecipientContractV1({ version: 1,
+      package: { pluginId: openAiCompatTtsEntry.pluginId, source: { kind: 'package', locator: '@acme/speech' } },
+      publisher: { trust: 'verified', identity: 'npm:acme' },
+      contribution: { pluginId: openAiCompatTtsEntry.pluginId, localId: 'tts' },
+      credentialSlot: { id: 'api_key', scope: 'account' },
+      operations: [{ id: 'catalog', purpose: 'voice.speech.catalog', credentialSlotId: 'api_key', effect: 'read',
+        request: { origin: 'https://speech.example', pathTemplate: '/v1/voices', method: 'GET',
+          queryTemplate: [], headerTemplate: [], bodyTemplate: { kind: 'none' },
+          credential: { kind: 'httpHeader', name: 'authorization', format: 'bearer' }, redirect: 'error',
+          maxBodyBytes: 0, contentTypes: [] },
+        parameters: { schema: { type: 'object', properties: {}, additionalProperties: false }, mapping: [] },
+        response: { maxBytes: 32768, contentTypes: ['application/json'] },
+      }],
+    });
+    const recipientContractDigest = createRecipientContractDigestV1(recipientContract);
     const entry = Object.freeze({
       ...openAiCompatTtsEntry,
       accountCredentialSlot: Object.freeze({
         id: 'api_key',
         scope: 'account' as const,
         kind: 'apiKey' as const,
-        recipientContract: recipientContract as never,
-        recipientContractDigest: `sha256:${'a'.repeat(64)}`,
+        recipientContract,
+        recipientContractDigest,
       }),
     });
     const { createBundledLocalTtsProviderSpec } = await import('./BundledSpeechSettings');
@@ -1272,9 +1275,9 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     }));
 
-    expect(rendered.tree.root.findByType('VoiceCredentialItem' as never).props).toMatchObject({
+    expect(rendered.tree.root.findByType(CredentialComponent).props).toMatchObject({
       recipientContract,
-      recipientContractDigest: `sha256:${'a'.repeat(64)}`,
+      recipientContractDigest,
     });
   });
 
@@ -1286,8 +1289,6 @@ describe('BundledSpeechSettings', () => {
     sourceSelection,
     expectedPurpose,
   ) => {
-    credentialSourcePresentation.selection = sourceSelection;
-    credentialSourcePresentation.usable = sourceSelection.kind === 'connectedAccount';
     const { createBundledLocalSttProviderSpec } = await import('./BundledSpeechSettings');
     const declaration = parseSpeechDeclaration({
       id: 'multi-source-stt',
@@ -1352,6 +1353,7 @@ describe('BundledSpeechSettings', () => {
         }),
       }],
     }).get(providerId)!;
+    await selectCredentialSource(entry, sourceSelection);
     const spec = createBundledLocalSttProviderSpec(entry);
     const rendered = await renderScreen(React.createElement(spec!.Settings, {
       cfgStt: { provider: providerId, providers: {} },
@@ -1361,12 +1363,12 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     }));
 
-    expect(rendered.tree.root.findByType('VoiceCredentialSourceField' as never).props)
+    expect(rendered.tree.root.findByType(VoiceCredentialSourceField).props)
       .toMatchObject({
         contribution: { pluginId: 'acme.speech', localId: 'multi-source-stt' },
         credentials: { slot: { id: 'api_key', purpose: 'voice.speech.transcribe' } },
     });
-    expect(rendered.tree.root.findByType('VoiceCredentialItem' as never).props.credentialSourcePurpose)
+    expect(rendered.tree.root.findByType(CredentialComponent).props.credentialSourcePurpose)
       .toBe(expectedPurpose);
   });
 
@@ -1428,6 +1430,7 @@ describe('BundledSpeechSettings', () => {
       }],
     }).get(providerId)!;
     const spec = createBundledLocalSttProviderSpec(entry);
+    await selectCredentialSource(entry, connectedAccountSelection);
     const rendered = await renderScreen(React.createElement(spec!.Settings, {
       cfgStt: { provider: providerId, providers: {} },
       setStt: vi.fn(),
@@ -1437,14 +1440,15 @@ describe('BundledSpeechSettings', () => {
     }));
 
     expect({
-      sourceSelectors: rendered.tree.root.findAllByType('VoiceCredentialSourceField' as never).length,
-      savedSecretEditors: rendered.tree.root.findAllByType('VoiceCredentialItem' as never).length,
-      rawAccessReviews: rendered.tree.root.findAllByType('VoiceRawCredentialAccessReview' as never).length,
+      sourceSelectors: rendered.tree.root.findAllByType(VoiceCredentialSourceField).length,
+      savedSecretEditors: rendered.tree.root.findAllByType(CredentialComponent).length,
+      rawAccessReviews: rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview).length,
     }).toEqual({ sourceSelectors: 1, savedSecretEditors: 0, rawAccessReviews: 1 });
   });
 
   it('passes the exact selected SavedSecret speech grant through the canonical credential item', async () => {
-    credentialSourcePresentation.selection = { kind: 'savedSecret' };
+    await saveCredential(OPENAI_COMPAT_TTS_ID, 'openai-secret-a');
+    await selectCredentialSource(openAiCompatTtsEntry, { kind: 'savedSecret' });
     const { createBundledLocalTtsProviderSpec } = await import('./BundledSpeechSettings');
     const spec = createBundledLocalTtsProviderSpec(openAiCompatTtsEntry);
     const rendered = await renderScreen(React.createElement(spec!.Settings, {
@@ -1463,7 +1467,7 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     }));
 
-    expect(rendered.tree.root.findByType('VoiceCredentialItem' as never).props)
+    expect(rendered.tree.root.findByType(CredentialComponent).props)
       .toMatchObject({
         rawCredentialReviewGrants: [{
           realm: 'daemon',
@@ -1471,8 +1475,13 @@ describe('BundledSpeechSettings', () => {
           request: { kind: 'environment', keys: ['VOICE_API_KEY'] },
         }],
       });
-    expect(rendered.tree.root.findAllByType('VoiceRawCredentialAccessReview' as never))
-      .toHaveLength(0);
+    const credential = rendered.tree.root.findByType(CredentialComponent);
+    const reviews = rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview);
+    expect(reviews).toHaveLength(1);
+    expect(credential.findAllByType(VoiceRawCredentialAccessReview)).toEqual(reviews);
+    expect(reviews[0].props.rawGrant).toEqual({ realm: 'daemon', phase: 'speech',
+      request: { kind: 'environment', keys: ['VOICE_API_KEY'] },
+    });
   });
 
   it('refreshes the Google catalog for credential and execution-machine changes without publishing stale results', async () => {
@@ -1480,11 +1489,8 @@ describe('BundledSpeechSettings', () => {
     const credentialRequest = createDeferred<CatalogRows>();
     const machineRequest = createDeferred<CatalogRows>();
     const accountRequest = createDeferred<CatalogRows>();
-    fetchCatalog
-      .mockImplementationOnce(async () => await firstRequest.promise)
-      .mockImplementationOnce(async () => await credentialRequest.promise)
-      .mockImplementationOnce(async () => await accountRequest.promise)
-      .mockImplementationOnce(async () => await machineRequest.promise);
+    let currentRequest = firstRequest;
+    fetchCatalog.mockImplementation(async () => await currentRequest.promise);
     const { createBundledLocalSttProviderSpec } = await import('./BundledSpeechSettings');
     const spec = createBundledLocalSttProviderSpec(createDefaultVoiceProviderRegistry().get(GOOGLE_GEMINI_STT_ID)!);
     const voiceSettings = voiceWithRootProviderConfig(
@@ -1507,39 +1513,47 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     });
     const rendered = await renderScreen(renderSettings());
-    await vi.waitFor(() => expect(fetchCatalog).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchCatalog).toHaveBeenCalled());
+    const modelItems = () => rendered.tree.root.findAllByType(DropdownMenu)
+      .find(row => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'))?.props.items;
 
-    const credential = rendered.tree.root.findByType('VoiceCredentialItem' as never);
+    const credential = rendered.tree.root.findByType(CredentialComponent);
+    currentRequest = credentialRequest;
     act(() => credential.props.onChanged());
-    await vi.waitFor(() => expect(fetchCatalog).toHaveBeenCalledTimes(2));
     await act(async () => credentialRequest.resolve([
       { id: 'credential-model', name: 'Credential model', metadata: {} },
     ]));
+    await vi.waitFor(() => expect(modelItems()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'credential-model' }),
+    ])));
 
-    credentialPresentation.credentialIdentity = 'account-secret-b';
-    act(() => credential.props.onStatusChanged({
-      exists: true,
-      source: 'account',
-      credentialIdentity: credentialPresentation.credentialIdentity,
-    }));
-    await vi.waitFor(() => expect(fetchCatalog).toHaveBeenCalledTimes(3));
+    currentRequest = accountRequest;
+    await act(async () => await saveCredential(GOOGLE_GEMINI_STT_ID, 'account-secret-b'));
     await act(async () => accountRequest.resolve([
       { id: 'account-model', name: 'Account model', metadata: {} },
     ]));
+    await vi.waitFor(() => expect(modelItems()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'account-model' }),
+    ])));
 
-    executionMachine.machineId = 'machine-b';
-    executionMachine.machineLabel = 'Machine B';
+    currentRequest = machineRequest;
+    await act(async () => {
+      executionMachine.machineId = 'machine-b';
+      executionMachine.machineLabel = 'Machine B';
+    });
     await rendered.update(renderSettings());
-    await vi.waitFor(() => expect(fetchCatalog).toHaveBeenCalledTimes(4));
     await act(async () => machineRequest.resolve([
       { id: 'machine-model', name: 'Machine model', metadata: {} },
     ]));
+    await vi.waitFor(() => expect(modelItems()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'machine-model' }),
+    ])));
     await act(async () => firstRequest.resolve([
       { id: 'stale-model', name: 'Stale model', metadata: {} },
     ]));
 
-    const model = rendered.tree.root.findAllByType('DropdownMenu' as never)
-      .find((row) => row.props.searchPlaceholder === 'settingsVoice.local.googleGeminiStt.model.searchPlaceholder');
+    const model = rendered.tree.root.findAllByType(DropdownMenu)
+      .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'));
     expect(model?.props.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'machine-model' }),
     ]));
@@ -1551,9 +1565,7 @@ describe('BundledSpeechSettings', () => {
   });
 
   it('keeps a failed Google catalog visible and retryable instead of presenting an empty list', async () => {
-    fetchCatalog
-      .mockRejectedValueOnce(new Error('catalog unavailable'))
-      .mockResolvedValueOnce([{ id: 'retry-model', name: 'Retry model', metadata: {} }]);
+    fetchCatalog.mockRejectedValue(new Error('catalog unavailable'));
     const { createBundledLocalSttProviderSpec } = await import('./BundledSpeechSettings');
     const spec = createBundledLocalSttProviderSpec(createDefaultVoiceProviderRegistry().get(GOOGLE_GEMINI_STT_ID)!);
     const rendered = await renderScreen(React.createElement(spec!.Settings, {
@@ -1565,19 +1577,20 @@ describe('BundledSpeechSettings', () => {
     }));
 
     await vi.waitFor(() => {
-      const model = rendered.tree.root.findAllByType('DropdownMenu' as never)
-        .find((row) => row.props.searchPlaceholder === 'settingsVoice.local.googleGeminiStt.model.searchPlaceholder');
+      const model = rendered.tree.root.findAllByType(DropdownMenu)
+        .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'));
       expect(model?.props.items).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: '__retry__' }),
       ]));
     });
-    const model = rendered.tree.root.findAllByType('DropdownMenu' as never)
-      .find((row) => row.props.searchPlaceholder === 'settingsVoice.local.googleGeminiStt.model.searchPlaceholder');
+    const model = rendered.tree.root.findAllByType(DropdownMenu)
+      .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'));
+    fetchCatalog.mockResolvedValue([{ id: 'retry-model', name: 'Retry model', metadata: {} }]);
     await act(async () => model?.props.onSelect('__retry__'));
 
     await vi.waitFor(() => {
-      const refreshed = rendered.tree.root.findAllByType('DropdownMenu' as never)
-        .find((row) => row.props.searchPlaceholder === 'settingsVoice.local.googleGeminiStt.model.searchPlaceholder');
+      const refreshed = rendered.tree.root.findAllByType(DropdownMenu)
+        .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'));
       expect(refreshed?.props.items).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: 'retry-model' }),
       ]));

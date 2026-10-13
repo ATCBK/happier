@@ -1,41 +1,47 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 
 const setAudioModeAsync = vi.fn(async (_mode: unknown) => {});
 const audioRuntime = vi.hoisted(() => ({
   platform: 'ios' as 'ios' | 'web',
-  acquire: vi.fn(),
   coordinatorEnabled: true,
 }));
+const audioSession = createNativeVoicePcmCaptureHarness();
+const nativeLookup = vi.fn(() => audioRuntime.coordinatorEnabled ? audioSession.nativeModule : null);
 
-vi.mock('react-native', () => ({
-  Platform: {
-    get OS() {
-      return audioRuntime.platform;
+vi.mock('react-native', async () => {
+  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+  return createReactNativeWebMock({
+    Platform: {
+      get OS() {
+        return audioRuntime.platform;
+      },
     },
-  },
-}));
+  });
+});
 
-vi.mock('expo-audio', () => ({
-  AudioModule: {
-    setAudioModeAsync: (mode: unknown) => setAudioModeAsync(mode),
-  },
-}));
+vi.mock('expo-audio', async () => (
+  await import('@/dev/testkit/mocks/expoAudio')
+).expoAudioModuleMock({ setAudioModeAsync: mode => setAudioModeAsync(mode) }));
 
-vi.mock('@happier-dev/audio-stream-native', () => ({
-  getSharedVoiceAudioSessionCoordinator: () => (
-    audioRuntime.coordinatorEnabled ? { acquire: audioRuntime.acquire } : null
-  ),
-}));
+vi.mock('expo-modules-core', async (importOriginal) => {
+  const original = await importOriginal<typeof import('expo-modules-core')>();
+  return { ...original, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative'
+    ? nativeLookup() : original.requireOptionalNativeModule(name) };
+});
 
 describe('voiceAudioMode', () => {
   beforeEach(() => {
     audioRuntime.platform = 'ios';
     audioRuntime.coordinatorEnabled = true;
     setAudioModeAsync.mockReset();
-    audioRuntime.acquire.mockReset();
+    nativeLookup.mockClear();
+    vi.mocked(audioSession.nativeModule.configureAudioSession).mockClear();
+    vi.mocked(audioSession.nativeModule.restoreAudioSession).mockClear();
     (globalThis as typeof globalThis & { __DEV__?: boolean }).__DEV__ = true;
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it('uses the browser audio-mode boundary without requiring a native coordinator', async () => {
     audioRuntime.platform = 'web';
@@ -44,7 +50,7 @@ describe('voiceAudioMode', () => {
 
     const lease = await acquireVoiceForegroundRecordingAudioMode('expo-audio-recorder');
 
-    expect(audioRuntime.acquire).not.toHaveBeenCalled();
+    expect(nativeLookup).not.toHaveBeenCalled();
     expect(setAudioModeAsync).toHaveBeenCalledWith(expect.objectContaining({
       allowsRecording: true,
       shouldPlayInBackground: false,
@@ -54,38 +60,39 @@ describe('voiceAudioMode', () => {
   });
 
   it('acquires provider-managed native call mode through the sole audio-session coordinator', async () => {
-    const release = vi.fn(async () => {});
-    audioRuntime.acquire.mockResolvedValueOnce({ release, capabilities: { aecAvailable: true, aecActive: true, route: 'speaker' } });
     const { acquireVoiceBackgroundCallAudioMode } = await import('./voiceAudioMode');
+    const { getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
 
     const lease = await acquireVoiceBackgroundCallAudioMode('happier.voice.elevenlabs/realtime-elevenlabs');
 
-    expect(audioRuntime.acquire).toHaveBeenCalledWith({
-      ownerId: 'realtime-provider:happier.voice.elevenlabs/realtime-elevenlabs',
+    expect(getSharedVoiceAudioSessionCoordinator()?.getSnapshot()).toMatchObject({ leaseCount: 1, configuration: {
       mode: 'conversation', input: true, output: true, aec: 'preferred',
       capture: 'provider_managed_exclusive',
-    });
+    } });
+    expect(audioSession.nativeModule.configureAudioSession).toHaveBeenCalledWith(expect.objectContaining({
+      configuration: { mode: 'conversation', input: true, output: true, aec: 'preferred', capture: 'provider_managed_exclusive' },
+    }));
     expect(setAudioModeAsync).not.toHaveBeenCalled();
     await lease.release();
     await lease.release();
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(audioSession.nativeModule.restoreAudioSession).toHaveBeenCalledOnce();
+    expect(getSharedVoiceAudioSessionCoordinator()?.getSnapshot()).toMatchObject({ leaseCount: 0, configuration: null });
     expect(setAudioModeAsync).not.toHaveBeenCalled();
   });
 
   it('acquires host-managed native playback mode through the sole audio-session coordinator', async () => {
-    const release = vi.fn(async () => {});
-    audioRuntime.acquire.mockResolvedValueOnce({ release });
     const { acquireVoicePlaybackAudioMode } = await import('./voiceAudioMode');
+    const { getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
 
     const lease = await acquireVoicePlaybackAudioMode('device-speech');
 
-    expect(audioRuntime.acquire).toHaveBeenCalledWith({
-      ownerId: 'playback:device-speech',
+    expect(getSharedVoiceAudioSessionCoordinator()?.getSnapshot()).toMatchObject({ leaseCount: 1, configuration: {
       mode: 'playback', input: false, output: true, aec: 'off',
       capture: 'host_managed',
-    });
+    } });
     await lease.release();
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(audioSession.nativeModule.restoreAudioSession).toHaveBeenCalledOnce();
+    expect(getSharedVoiceAudioSessionCoordinator()?.getSnapshot()).toMatchObject({ leaseCount: 0, configuration: null });
     expect(setAudioModeAsync).not.toHaveBeenCalled();
   });
 
@@ -97,7 +104,8 @@ describe('voiceAudioMode', () => {
     const lease = await acquireVoicePlaybackAudioMode('web-audio');
     await lease.release();
 
-    expect(audioRuntime.acquire).not.toHaveBeenCalled();
+    expect(nativeLookup).not.toHaveBeenCalled();
+    expect(audioSession.nativeModule.configureAudioSession).not.toHaveBeenCalled();
     expect(setAudioModeAsync).not.toHaveBeenCalled();
   });
 

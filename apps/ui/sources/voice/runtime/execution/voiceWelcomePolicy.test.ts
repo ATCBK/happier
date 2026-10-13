@@ -1,237 +1,143 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { standardCleanup } from '@/dev/testkit';
+import {
+    createRetainedVoiceAgentRpcBoundary, createStandaloneVoicePolicyHarness, prepareStandaloneVoicePolicyHarness,
+} from '@/dev/testkit/harness/standaloneVoicePolicyHarness';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { ExecutionRunActionRequestSchema, ExecutionRunActionResponseSchema } from '@happier-dev/protocol/execution/runs/index';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { installVoiceAgentCommonModuleMocks } from '@/voice/agent/voiceAgentTestHelpers';
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
-import type { VoiceAgentClient, VoiceAgentHandle } from '@/voice/agent/types';
+let fixture: Awaited<ReturnType<typeof createStandaloneVoicePolicyHarness>>;
+let execution: ReturnType<typeof import('./VoiceExecutionTransport').createVoiceExecutionTransport>;
+let storage: typeof import('@/sync/domains/state/storage').storage;
+let artifacts: ReturnType<typeof createArtifactStoreBoundary>;
+let rpc: Awaited<ReturnType<typeof createRetainedVoiceAgentRpcBoundary>>;
+const welcomeRequests: Array<ReturnType<typeof ExecutionRunActionRequestSchema.parse>> = [];
+let assistantReplyText = 'Welcome!';
 
-const stateRef = vi.hoisted(() => ({
-    current: {} as any,
-}));
+await prepareStandaloneVoicePolicyHarness();
 
-const shouldFailPersistRef = vi.hoisted(() => ({
-    current: false,
-}));
+async function applyWelcomePreference(options: Readonly<{ assistantLanguage?: string; templateId?: string | null }> = {}) {
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    const { readLocalConversationVoiceSettings, writeVoiceProviderSettingsConfig } = await import('@/sync/domains/settings/voiceSettings');
+    const current = storage.getState().settings;
+    const local = readLocalConversationVoiceSettings(current.voice);
+    const voice = writeVoiceProviderSettingsConfig(current.voice, 'local_conversation', {
+        ...local, agent: { ...local.agent, transcript: { ...local.agent.transcript, persistenceMode: 'persistent', epoch: 1 } },
+    });
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: {
+        ...voice,
+        ...(options.assistantLanguage ? { assistantLanguage: options.assistantLanguage } : {}),
+        welcome: { ...voice.welcome, enabled: true, mode: 'immediate',
+            ...(options.templateId !== undefined ? { templateId: options.templateId } : {}) },
+    } }, current));
+}
 
-installVoiceAgentCommonModuleMocks({
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            storage: {
-                getState: () => stateRef.current,
-            } as any,
+async function readRunMetadata() {
+    const { readVoiceAgentRunMetadataFromSession } = await import('@/voice/persistence/voiceAgentRunMetadata');
+    return readVoiceAgentRunMetadataFromSession({
+        sessionId: fixture.sessionId, serverId: fixture.handle.accountLifetime.scope.serverId,
+    });
+}
+
+describe('Voice welcome through retained initialization, execution cache and Home persistence', () => {
+    beforeEach(async () => {
+        welcomeRequests.length = 0;
+        assistantReplyText = 'Welcome!';
+        ({ storage } = await import('@/sync/domains/state/storage'));
+        artifacts = createArtifactStoreBoundary({
+            ownerAccountId: () => storage.getState().profileScope?.accountId ?? null, encryptionMode: 'plain',
         });
-    },
-});
-
-vi.mock('@/voice/agent/voiceAgentRunState', () => ({
-    persistVoiceAgentWelcomedEpoch: async (metadataSessionId: string | null, welcomedEpoch: number) => {
-        if (!metadataSessionId) return;
-        if (shouldFailPersistRef.current) {
-            throw new Error('persist_failed');
-        }
-        const session = stateRef.current.sessions[metadataSessionId];
-        if (!session) return;
-        session.metadata = {
-            ...(session.metadata ?? {}),
-            voiceAgentRunV1: {
-                ...(session.metadata?.voiceAgentRunV1 ?? {}),
-                welcomedEpoch,
+        rpc = await createRetainedVoiceAgentRpcBoundary({ runId: 'welcome-run',
+            async handleOtherRpc(method, input) {
+                if (method !== SESSION_RPC_METHODS.EXECUTION_RUN_ACTION) throw new Error('Unexpected Voice RPC: ' + method);
+                const request = ExecutionRunActionRequestSchema.parse(input);
+                if (request.actionId !== 'voice_agent.welcome') throw new Error('Unexpected Voice Action: ' + request.actionId);
+                welcomeRequests.push(request);
+                return ExecutionRunActionResponseSchema.parse({ ok: true, result: { assistantText: assistantReplyText } });
             },
-        };
-    },
-    resolveVoiceRunMetadataSessionId: (_managedSessionId: string, _backend: 'daemon', conversationSessionId?: string | null) =>
-        conversationSessionId ?? 'sys_voice',
-}));
+        });
+        fixture = await createStandaloneVoicePolicyHarness({
+            mode: 'immediate', existingSession: { id: 'sys_voice' }, dispatch: rpc.dispatch,
+            handleRequest: async (path, init) => await artifacts.handle(path, init),
+        });
+        await applyWelcomePreference();
+        const { createVoiceExecutionTransport } = await import('./VoiceExecutionTransport');
+        execution = createVoiceExecutionTransport();
+        // Cache admission remains the real initializer/recovery path. Rejection
+        // below is armed only after its initial metadata publication completes.
+        await execution.ensureRunning(fixture.sessionId);
+        expect(execution.isActive(fixture.sessionId)).toBe(true);
+    });
 
-vi.mock('@/voice/persistence/voiceAgentRunMetadata', () => ({
-    readVoiceAgentRunMetadataFromSession: ({ sessionId }: { sessionId: string }) =>
-        stateRef.current.sessions[sessionId]?.metadata?.voiceAgentRunV1 ?? null,
-}));
-
-vi.mock('@/voice/binding/voiceConversationBindingPersistence', () => ({
-    readPersistedVoiceConversationRuntimeState: ({ managedSessionId }: { managedSessionId: string }) => {
-        if (managedSessionId !== '__voice_agent__') return null;
-        return {
-            metadataSessionId: 'sys_voice',
-        };
-    },
-}));
-
-function createState(): any {
-    return {
-        settings: {
-            voice: {
-                providerId: 'local_conversation',
-                welcome: {
-                    enabled: true,
-                    mode: 'immediate',
-                    templateId: null,
-                },
-                providers: {
-                    local_conversation: { schemaVersion: 1, config: {
-                        agent: {
-                            backend: 'daemon',
-                            transcript: {
-                                persistenceMode: 'persistent',
-                                epoch: 1,
-                            },
-                        },
-                    } },
-                },
-            },
-        },
-        sessions: {
-            sys_voice: {
-                id: 'sys_voice',
-                metadata: {
-                    voiceAgentRunV1: {
-                        v: 1,
-                        runId: 'run_1',
-                        backendId: 'claude',
-                        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-                        resumeHandle: null,
-                        transcriptContractVersion: 2,
-                        updatedAtMs: 1,
-                    },
-                },
-            },
-        },
-        sessionListRowsByServerId: {},
-        ordinarySessionListMembershipByServerId: {},
-        sessionListIndexByServerId: {},
-        concurrentSessionListCacheByServerId: {},
-    };
-}
-
-function createHandle(client: VoiceAgentClient): VoiceAgentHandle {
-    return {
-        accountLifetime: {
-            scope: { serverId: 'server-a', accountId: 'account-a' },
-            isCurrent: () => true,
-            onRetire: () => ({ dispose() {} }),
-        },
-        metadataSessionId: 'sys_voice',
-        client,
-        voiceAgentId: 'run_1',
-        backend: 'daemon',
-        rpcSessionId: 'sys_voice',
-        agentBackendId: 'claude',
-    };
-}
-
-function createClient(welcome: VoiceAgentClient['welcome']): VoiceAgentClient {
-    return {
-        start: vi.fn(async () => ({ voiceAgentId: 'run_1' })),
-        sendTurn: vi.fn(async () => ({ assistantText: '', actions: [] })),
-        welcome,
-        startTurnStream: vi.fn(),
-        readTurnStream: vi.fn(),
-        cancelTurnStream: vi.fn(),
-        commit: vi.fn(async () => ({ commitText: '' })),
-        stop: vi.fn(async () => ({ ok: true as const })),
-    };
-}
-
-describe('createVoiceWelcomePolicy', () => {
-    beforeEach(() => {
-        vi.resetModules();
-        vi.clearAllMocks();
-        shouldFailPersistRef.current = false;
-        stateRef.current = createState();
-        stateRef.current.settings.voice.assistantLanguage = 'fr-FR';
+    afterEach(async () => {
+        try { await execution?.stop(fixture.sessionId); }
+        finally { await fixture?.dispose(); standardCleanup(); }
     });
 
     it('retries immediate welcome when welcomedEpoch was not persisted', async () => {
-        shouldFailPersistRef.current = true;
+        fixture.sessionHttp.rejectNextPatch(fixture.sessionId);
+        await expect(execution.ensureRunningAndMaybeWelcome(fixture.sessionId)).resolves.toBe('Welcome!');
+        fixture.sessionHttp.rejectNextPatch(fixture.sessionId);
+        await expect(execution.ensureRunningAndMaybeWelcome(fixture.sessionId)).resolves.toBe('Welcome!');
 
-        const welcome = vi.fn(async (_params: Parameters<VoiceAgentClient['welcome']>[0]) => ({ assistantText: 'Welcome!' }));
-        const client: VoiceAgentClient = {
-            start: vi.fn(async () => ({ voiceAgentId: 'run_1' })),
-            sendTurn: vi.fn(async () => ({ assistantText: '', actions: [] })),
-            welcome,
-            startTurnStream: vi.fn(),
-            readTurnStream: vi.fn(),
-            cancelTurnStream: vi.fn(),
-            commit: vi.fn(async () => ({ commitText: '' })),
-            stop: vi.fn(async () => ({ ok: true as const })),
-        };
-
-        const { createVoiceWelcomePolicy } = await import('./voiceWelcomePolicy');
-        const welcomePolicy = createVoiceWelcomePolicy({
-            getVoiceAgentHandle: async () => createHandle(client),
-            resetCachedHandle: () => undefined,
-        });
-
-        await expect(welcomePolicy.ensureRunningAndMaybeWelcome('__voice_agent__')).resolves.toBe('Welcome!');
-        await expect(welcomePolicy.ensureRunningAndMaybeWelcome('__voice_agent__')).resolves.toBe('Welcome!');
-
-        expect(welcome).toHaveBeenCalledTimes(2);
-        expect(welcome.mock.calls[0]?.[0]).toMatchObject({ welcomeText: expect.stringMatching(/Bonjour/) });
-        expect(stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1.welcomedEpoch).toBeUndefined();
+        expect(welcomeRequests).toHaveLength(2);
+        expect(welcomeRequests[0]?.input).toMatchObject({ welcomeText: expect.stringMatching(/Bonjour/) });
+        expect((await readRunMetadata())?.welcomedEpoch).toBeUndefined();
     });
 
     it('suppresses duplicate welcome once welcomedEpoch is persisted', async () => {
-        const welcome = vi.fn(async () => ({ assistantText: 'Welcome!' }));
-        const client: VoiceAgentClient = {
-            start: vi.fn(async () => ({ voiceAgentId: 'run_1' })),
-            sendTurn: vi.fn(async () => ({ assistantText: '', actions: [] })),
-            welcome,
-            startTurnStream: vi.fn(),
-            readTurnStream: vi.fn(),
-            cancelTurnStream: vi.fn(),
-            commit: vi.fn(async () => ({ commitText: '' })),
-            stop: vi.fn(async () => ({ ok: true as const })),
-        };
+        await expect(execution.ensureRunningAndMaybeWelcome(fixture.sessionId)).resolves.toBe('Welcome!');
+        await expect(execution.ensureRunningAndMaybeWelcome(fixture.sessionId)).resolves.toBeNull();
 
-        const { createVoiceWelcomePolicy } = await import('./voiceWelcomePolicy');
-        const welcomePolicy = createVoiceWelcomePolicy({
-            getVoiceAgentHandle: async () => createHandle(client),
-            resetCachedHandle: () => undefined,
-        });
-
-        await expect(welcomePolicy.ensureRunningAndMaybeWelcome('__voice_agent__')).resolves.toBe('Welcome!');
-        await expect(welcomePolicy.ensureRunningAndMaybeWelcome('__voice_agent__')).resolves.toBeNull();
-
-        expect(welcome).toHaveBeenCalledTimes(1);
-        expect(stateRef.current.sessions.sys_voice.metadata.voiceAgentRunV1).toMatchObject({
-            welcomedEpoch: 1,
-        });
+        expect(welcomeRequests).toHaveLength(1);
+        expect(fixture.sessionHttp.writes).toContain(fixture.sessionId);
+        expect(await readRunMetadata()).toMatchObject({ welcomedEpoch: 1 });
     });
 
     it('uses the retained run reply language instead of changed preferences', async () => {
-        const welcome = vi.fn(async (_params: Parameters<VoiceAgentClient['welcome']>[0]) => ({ assistantText: 'Bonjour!' }));
-        const client = createClient(welcome);
-        const handle: VoiceAgentHandle = {
-            ...createHandle(client),
-            voicePolicy: { assistantLanguage: 'fr-FR', welcome: { enabled: true, mode: 'immediate' } },
-        };
-        stateRef.current.settings.voice.assistantLanguage = 'de-DE';
-        const { createVoiceWelcomePolicy } = await import('./voiceWelcomePolicy');
-        await createVoiceWelcomePolicy({ getVoiceAgentHandle: async () => handle, resetCachedHandle: () => {} })
-            .ensureRunningAndMaybeWelcome('__voice_agent__');
-        expect(welcome.mock.calls[0]?.[0]).toMatchObject({ welcomeText: expect.stringMatching(/Bonjour/) });
+        assistantReplyText = 'Bonjour!';
+        expect(rpc.readRetainedRun()?.voicePolicy?.assistantLanguage).toBe('fr-FR');
+        await applyWelcomePreference({ assistantLanguage: 'de-DE' });
+        // A fresh process-local cache must reattach to the daemon's retained
+        // policy, not snapshot the newly changed Account preference.
+        const { createVoiceExecutionTransport } = await import('./VoiceExecutionTransport');
+        execution = createVoiceExecutionTransport();
+        await execution.ensureRunningAndMaybeWelcome(fixture.sessionId);
+        expect(welcomeRequests[0]?.input).toMatchObject({ welcomeText: expect.stringMatching(/Bonjour/) });
     });
 
     it.each(['  Bonjour Atlas.\nKeep this spacing.  ', ' \n ', ''])('delivers the admitted custom greeting byte-for-byte instead of replacing it with the language default: %j', async text => {
-        const welcome = vi.fn(async (_params: Parameters<VoiceAgentClient['welcome']>[0]) => ({ assistantText: 'Custom welcome' }));
-        const client = createClient(welcome);
-        const handle: VoiceAgentHandle = {
-            ...createHandle(client),
-            voicePolicy: { assistantLanguage: 'fr-FR', welcome: { enabled: true, mode: 'immediate', text } },
-        };
-        const { createVoiceWelcomePolicy } = await import('./voiceWelcomePolicy');
-        await createVoiceWelcomePolicy({ getVoiceAgentHandle: async () => handle, resetCachedHandle: () => {} })
-            .ensureRunningAndMaybeWelcome('__voice_agent__');
-        expect(welcome.mock.calls[0]?.[0].welcomeText).toBe(text);
+        assistantReplyText = 'Custom welcome';
+        // A selected Account Doc is the real producer of literal policy bytes.
+        // Retire the initial Run before selecting the new greeting, so the
+        // fresh public Ensure admission (not an authored handle) captures it.
+        await execution.stop(fixture.sessionId);
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const account = await captureLazyActionAccountContext(fixture.handle.accountLifetime.scope.serverId);
+        try {
+            await account.createArtifactDocument({ artifactId: 'welcome-doc',
+                header: { v: 1, kind: 'prompt_doc.v2', title: 'Welcome' },
+                body: JSON.stringify({ v: 1, markdown: text, createdAtMs: 1, updatedAtMs: 1 }),
+            });
+        } finally { account.dispose(); }
+        await applyWelcomePreference({ templateId: 'welcome-doc' });
+        await execution.ensureRunningAndMaybeWelcome(fixture.sessionId);
+        expect(rpc.readRetainedRun()?.voicePolicy?.welcome.text).toBe(text);
+        expect(welcomeRequests[0]?.input).toEqual({ welcomeText: text });
+        expect(artifacts.readPlainBody('welcome-doc')).toBe(JSON.stringify({ v: 1, markdown: text, createdAtMs: 1, updatedAtMs: 1 }));
     });
 
     it('leaves unsupported reply languages to the run model greeting policy', async () => {
-        const welcome = vi.fn(async (_params: Parameters<VoiceAgentClient['welcome']>[0]) => ({ assistantText: 'مرحبا' }));
-        const client = createClient(welcome);
-        stateRef.current.settings.voice.assistantLanguage = 'ar-SA';
-        const { createVoiceWelcomePolicy } = await import('./voiceWelcomePolicy');
-        await createVoiceWelcomePolicy({ getVoiceAgentHandle: async () => createHandle(client), resetCachedHandle: () => {} })
-            .ensureRunningAndMaybeWelcome('__voice_agent__');
-        expect(welcome.mock.calls[0]?.[0]).not.toHaveProperty('welcomeText');
+        assistantReplyText = 'مرحبا';
+        await execution.stop(fixture.sessionId);
+        await applyWelcomePreference({ assistantLanguage: 'ar-SA' });
+        await execution.ensureRunningAndMaybeWelcome(fixture.sessionId);
+        expect(rpc.readRetainedRun()?.voicePolicy).toMatchObject({ assistantLanguage: 'ar-SA' });
+        expect(welcomeRequests).toHaveLength(1);
+        expect(welcomeRequests[0]?.input).toBeUndefined();
     });
 });

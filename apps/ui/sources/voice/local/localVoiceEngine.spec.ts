@@ -6,7 +6,9 @@ import {
     getStorage,
     loadLocalVoiceEngineWithCompatState,
     registerLocalVoiceEngineHarnessHooks,
-    submitMessage,
+    localVoicePendingEnqueue,
+    localVoiceSpeechTranscription,
+    localVoiceUploadedAudio,
 } from './localVoiceEngine.testHarness';
 
 const restoreHarnessModuleLoader = await warmLocalVoiceEngineHarnessGraph();
@@ -16,10 +18,7 @@ describe('local voice engine (turn-based) smoke', () => {
     registerLocalVoiceEngineHarnessHooks();
 
     it('records then transcribes and sends a message on stop', async () => {
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { toggleLocalVoiceTurn, getLocalVoiceState } = await loadLocalVoiceEngineWithCompatState();
 
@@ -27,12 +26,13 @@ describe('local voice engine (turn-based) smoke', () => {
         expect(getLocalVoiceState().status).toBe('recording');
 
         await toggleLocalVoiceTurn('s1');
-        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-        expect(submitMessage).toHaveBeenCalledWith('s1', 'hello world', undefined, undefined, {
-            callerSurface: 'voice_turn',
-            forceImmediate: true,
-            hostAdmissionOrigin: 'voice',
-        });
+        expect(localVoiceSpeechTranscription).toHaveBeenCalledTimes(1);
+        expect(localVoiceUploadedAudio).toEqual(new Uint8Array([1, 2, 3]));
+        expect(localVoicePendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 's1', body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
+                role: 'user', content: { type: 'text', text: 'hello world' },
+            }) } }),
+        }));
         // After a turn completes, the local voice session remains active (ready for another turn)
         // until the user explicitly hangs up.
         expect(getLocalVoiceState()).toMatchObject({ status: 'idle', sessionId: 's1' });
@@ -61,45 +61,35 @@ describe('local voice engine (turn-based) smoke', () => {
 
         // Local voice should not start recording while a realtime call is active.
         expect(getLocalVoiceState().status).toBe('idle');
-        expect(submitMessage).not.toHaveBeenCalled();
+        expect(localVoicePendingEnqueue).not.toHaveBeenCalled();
     });
 
-    it('does not start a local voice turn while any registered realtime adapter owns the machine', async () => {
+    it('does not start a local voice turn while another contributed realtime adapter owns the machine', async () => {
         const { toggleLocalVoiceTurn, getLocalVoiceState } = await loadLocalVoiceEngineWithCompatState();
         const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
-        registerVoiceAdapters([{
-            id: 'future_realtime',
-            engineKind: 'realtime',
-            start: async () => {},
-            stop: async () => {},
-            toggle: async () => {},
-            interrupt: async () => {},
-            setMuted: async () => {},
-            sendContextUpdate: () => {},
-            getSnapshot: () => ({
-                adapterId: 'future_realtime',
-                sessionId: 's-future',
-                status: 'connected',
-                mode: 'idle',
-                canStop: true,
-            }),
-        }]);
+        const { createBuiltinVoiceAdapterAssembly } = await import('@/voice/adapters/registerBuiltinVoiceAdapters');
+        const assembly = createBuiltinVoiceAdapterAssembly();
+        const contributed = assembly.adapters.find(adapter => adapter.engineKind === 'realtime'
+            && adapter.id !== 'happier.voice.elevenlabs/realtime-elevenlabs');
+        if (!contributed) throw new Error('Expected another first-party realtime contribution');
+        registerVoiceAdapters(assembly.adapters);
         const { voiceConversationRuntimeMachine } = await import(
             '@/voice/runtime/machine/VoiceConversationRuntimeMachine'
         );
         voiceConversationRuntimeMachine.transitionToConnecting({
             controlSessionId: 's-future',
-            adapterId: 'future_realtime',
+            adapterId: contributed.id,
         });
         voiceConversationRuntimeMachine.transitionToConnected({
             controlSessionId: 's-future',
-            adapterId: 'future_realtime',
+            adapterId: contributed.id,
         });
 
-        await toggleLocalVoiceTurn('s1');
-
-        expect(getLocalVoiceState().status).toBe('idle');
-        expect(submitMessage).not.toHaveBeenCalled();
+        try {
+            await toggleLocalVoiceTurn('s1');
+            expect(getLocalVoiceState().status).toBe('idle');
+            expect(localVoicePendingEnqueue).not.toHaveBeenCalled();
+        } finally { await assembly.dispose(); }
     });
 
     it('does not start a local voice turn when realtime is the selected voice provider', async () => {
@@ -119,7 +109,7 @@ describe('local voice engine (turn-based) smoke', () => {
         await toggleLocalVoiceTurn('s1');
 
         expect(getLocalVoiceState().status).toBe('idle');
-        expect(submitMessage).not.toHaveBeenCalled();
-        expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(localVoicePendingEnqueue).not.toHaveBeenCalled();
+        expect(localVoiceSpeechTranscription).not.toHaveBeenCalled();
     });
 });

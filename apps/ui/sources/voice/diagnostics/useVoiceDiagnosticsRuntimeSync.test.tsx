@@ -1,73 +1,41 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDeferred } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, createPlainMachineRowFixture, registerStandardCleanupTarget, renderHook, standardCleanup } from '@/dev/testkit';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { VoiceSpeechDiagnosticsConfigureRequestV1Schema, VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema, VoiceSpeechDiagnosticsSettingsV1Schema, VoiceSpeechDiagnosticsStatusResponseV1Schema,
+  resolveVoiceSpeechDiagnosticsStoragePolicy } from '@happier-dev/protocol/voice/diagnostics';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
+import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccountScope';
+import { addPersistedVoiceDiagnosticsMachineRevocation, readPersistedVoiceDiagnosticsMachineRevocations } from './revocationObligationPersistence';
 
-vi.mock('@/sync/store/hooks', () => ({
-  useActiveServerAccountScope: () => machineState.persistenceScope,
-  useMachineCliDetectionTarget: (machineId: string | null) => {
-    const target = runtimeTargetsByMachineId.get(machineId ?? '');
-    if (target) return target;
-    if (machineId === machineState.machineId) {
-      return {
-        daemonStateVersion: machineState.daemonStateVersion,
-        isOnline: machineState.isOnline,
-      };
-    }
-    return { daemonStateVersion: 0, isOnline: false };
-  },
-  useMachineCliDetectionTargets: (machineIds: readonly string[]) => Object.fromEntries(machineIds.map((machineId) => {
-    const target = runtimeTargetsByMachineId.get(machineId);
-    if (target) return [machineId, target];
-    if (machineId === machineState.machineId) {
-      return [machineId, {
-        daemonStateVersion: machineState.daemonStateVersion,
-        isOnline: machineState.isOnline,
-      }];
-    }
-    return [machineId, { daemonStateVersion: 0, isOnline: false }];
-  })),
-}));
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 
 const reactActEnvironment = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean;
 };
 reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
 
-const machineState = vi.hoisted(() => ({
+const machineState = {
   machineId: 'm1' as string | null,
   daemonStateVersion: 1,
   isOnline: true,
-  persistenceScope: null as Readonly<{ serverId: string; accountId: string }> | null,
-}));
-const runtimeTargetsByMachineId = vi.hoisted(() => new Map<string, Readonly<{
+};
+const runtimeTargetsByMachineId = new Map<string, Readonly<{
   daemonStateVersion: number;
   isOnline: boolean;
-}>>());
-const persistedRevocations = vi.hoisted(() => new Map<string, string[]>());
-vi.mock('./revocationObligationPersistence', () => ({
-  addPersistedVoiceDiagnosticsMachineRevocation: (
-    scope: Readonly<{ serverId: string; accountId: string }>,
-    machineId: string,
-  ) => {
-    const key = `${scope.serverId}:${scope.accountId}`;
-    persistedRevocations.set(key, [...new Set([...(persistedRevocations.get(key) ?? []), machineId])]);
-  },
-  clearPersistedVoiceDiagnosticsMachineRevocation: (
-    scope: Readonly<{ serverId: string; accountId: string }>,
-    machineId: string,
-  ) => {
-    const key = `${scope.serverId}:${scope.accountId}`;
-    persistedRevocations.set(
-      key,
-      (persistedRevocations.get(key) ?? []).filter((candidate) => candidate !== machineId),
-    );
-  },
-  readPersistedVoiceDiagnosticsMachineRevocations: (
-    scope: Readonly<{ serverId: string; accountId: string }>,
-  ) => persistedRevocations.get(`${scope.serverId}:${scope.accountId}`) ?? [],
-}));
+}>>();
+let home: Awaited<ReturnType<typeof serveAccountHomes>>;
+let disconnect: (() => Promise<void>) | undefined;
+let scope: Readonly<{ serverId: string; accountId: string }>;
+function clearPersistedFixtures() {
+  getPersistenceStorage().delete(serverAccountScopedStorageKey('voice-diagnostics-machine-revocations-v1', scope));
+}
 const configureCalls = vi.hoisted(() => [] as Array<{
   machineId: string;
   settings: unknown;
@@ -92,17 +60,26 @@ const revokeImpl = vi.hoisted(() => vi.fn(async (
 ) => {
   revokeCalls.push({ machineId, authorizationId });
 }));
-vi.mock('./client', () => ({
-  createVoiceDiagnosticsClientForMachine: (machineId: string) => ({
-    configure: (settings: unknown, signal?: AbortSignal | null) => configureImpl(machineId, settings, signal),
-    revokeCaptureAuthorization: (authorizationId: string, signal?: AbortSignal | null) => (
-      revokeImpl(machineId, authorizationId, signal)
-    ),
-  }),
-}));
-vi.mock('@/voice/credentials/useExecutionMachinePresentation', () => ({
-  useVoiceExecutionMachinePresentation: () => ({ machineId: machineState.machineId, machineLabel: machineState.machineId }),
-}));
+installSessionActionRpcBoundary(async (request, context) => {
+  const machineId = request.method.slice(0, request.method.indexOf(':'));
+  const method = request.method.slice(request.method.indexOf(':') + 1);
+  if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_REVOKE_CAPTURE) {
+    const payload = VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema.parse(request.params);
+    await revokeImpl(machineId, payload.authorizationId, context.signal);
+    return { ok: true };
+  }
+  if (method !== RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE) throw new Error(`Unexpected daemon RPC: ${method}`);
+  const payload = VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params);
+  const result = await configureImpl(machineId, payload.settings, context.signal);
+  return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({ ...result, root: `/private/${machineId}`, artifacts: [],
+    health: { captureFailure: false, cleanup: { status: 'healthy', code: null, ownedEntryCount: 0 } },
+    backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop') });
+});
+const { storage } = await import('@/sync/domains/state/storage');
+const { voiceSettingsParse } = await import('@/sync/domains/settings/voiceSettings');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const { useMachineCliDetectionTarget } = await import('@/sync/store/hooks');
+const { resolveVoiceExecutionMachinePresentationFromState } = await import('@/voice/credentials/useExecutionMachinePresentation');
 
 import { useVoiceDiagnosticsRuntimeSync } from './useVoiceDiagnosticsRuntimeSync';
 import {
@@ -111,11 +88,12 @@ import {
   resetVoiceDiagnosticsRuntimeStatusForTests,
 } from './runtimeStatus';
 import {
+  applyVoiceDiagnosticsMachinePolicy,
   resetVoiceDiagnosticsRevocationForTests,
   revokeVoiceDiagnosticsSessionAuthorization,
   retryVoiceDiagnosticsRevocation,
 } from './runtimeRevocation';
-import { resetVoiceDiagnosticsSessionPolicyForTests } from './capturePolicy';
+import { resetVoiceDiagnosticsSessionPolicyForTests, resolveVoiceDiagnosticsCaptureAuthorizationId } from './capturePolicy';
 
 type RequestedDiagnosticsSettings = Readonly<{ enabled?: boolean }>;
 
@@ -125,25 +103,68 @@ function readRequestedDiagnosticsEnabled(settings: unknown): boolean | undefined
   return typeof enabled === 'boolean' ? enabled : undefined;
 }
 
-function Harness(props: { voice: unknown }) {
+function RuntimeSync(props: { voice: unknown }) {
   useVoiceDiagnosticsRuntimeSync(props.voice);
   return null;
 }
 
-const diagnostics = Object.freeze({
+function createHarness(props: { voice: unknown }) {
+  const machines = ['m1', 'm2', 'm3'].map(id => {
+    const target = runtimeTargetsByMachineId.get(id) ?? (id === machineState.machineId ? machineState : { daemonStateVersion: 0, isOnline: false });
+    return createMachineFixture({ id, active: target.isOnline, activeAt: target.isOnline ? Date.now() : 0,
+      daemonStateVersion: target.daemonStateVersion });
+  });
+  storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+    machineListByServerId: { [scope.serverId]: machines } });
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceSettingsParse(props.voice) }, storage.getState().settings));
+  return React.createElement(RuntimeSync, props);
+}
+
+async function mountHarness(props: { voice: unknown }) {
+  // Mount the actual hook while this Account's machine list is still loading.
+  // Its own credential-presence subscription settles before publishing targets;
+  // warming a different hook cannot settle this reader's scoped lifetime.
+  storage.setState({ machines: {}, machineListByServerId: { [scope.serverId]: [] } });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => {
+    tree = renderer.create(React.createElement(RuntimeSync, props));
+    registerStandardCleanupTarget(tree);
+  });
+  await act(async () => { tree.update(createHarness(props)); });
+  return tree;
+}
+
+const diagnostics = VoiceSpeechDiagnosticsSettingsV1Schema.parse({
   v: 1, enabled: true, consentVersion: 1,
   captureSttInput: true, captureTtsOutput: false,
-  maxAgeMs: 86_400_000, maxFiles: 20, maxBytes: 104_857_600, maxDurationMs: 300_000,
 });
 
 describe('useVoiceDiagnosticsRuntimeSync', () => {
-  beforeEach(() => {
+  afterEach(async () => {
+    standardCleanup();
+    clearPersistedFixtures();
+    await disconnect?.();
+    await home?.dispose();
+  });
+  beforeEach(async () => {
+    home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://runtime-diagnostics.test', accountId: 'account-a' }],
+      route: ({ path }) => path.startsWith('/v1/machines/')
+        ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
+        : undefined });
+    disconnect = await home.restoreActiveConnection();
+    scope = { serverId: home.homes.diagnostics!.id, accountId: 'account-a' };
+    const machine = createMachineFixture({ id: 'm1', activeAt: Date.now(), daemonStateVersion: 1 });
+    storage.setState({ machines: { m1: machine }, machineListByServerId: { [scope.serverId]: [machine] },
+      settings: { ...storage.getState().settings, voice: voiceSettingsParse({ diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } }) } });
+    const readiness = await renderHook(() => useMachineCliDetectionTarget('m1'));
+    await vi.waitFor(() => expect(readiness.getCurrent().isOnline).toBe(true));
+    await readiness.unmount();
     machineState.machineId = 'm1';
     machineState.daemonStateVersion = 1;
     machineState.isOnline = true;
-    machineState.persistenceScope = null;
+
     runtimeTargetsByMachineId.clear();
-    persistedRevocations.clear();
+    clearPersistedFixtures();
     configureCalls.length = 0;
     configureImpl.mockReset();
     configureImpl.mockImplementation(async (machineId: string, settings: unknown, signal?: AbortSignal | null) => {
@@ -164,11 +185,11 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     let tree!: renderer.ReactTestRenderer;
     const first = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
     const second = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm2' } };
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: first })); });
+    tree = await mountHarness({ voice: first });
     expect(configureCalls).toEqual([expect.objectContaining({ machineId: 'm1', settings: diagnostics })]);
     expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({ machineId: 'm1', phase: 'active' });
     machineState.machineId = 'm2';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: second })); });
+    await act(async () => { tree.update(createHarness({ voice: second })); });
     expect(configureCalls.slice(1)).toEqual([
       expect.objectContaining({ machineId: 'm1', settings: expect.objectContaining({ enabled: false, consentVersion: null }) }),
       expect.objectContaining({ machineId: 'm2', settings: diagnostics }),
@@ -176,7 +197,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({ machineId: 'm2', phase: 'active' });
     await act(async () => { tree.unmount(); });
 
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: second })); });
+    tree = await mountHarness({ voice: second });
     expect(configureCalls.at(-1)).toEqual(expect.objectContaining({ machineId: 'm2', settings: diagnostics }));
     await act(async () => { tree.unmount(); });
   });
@@ -184,11 +205,11 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
   it('reapplies consent when the same selected daemon restarts', async () => {
     let tree!: renderer.ReactTestRenderer;
     const voice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     expect(configureCalls).toHaveLength(1);
 
     machineState.daemonStateVersion = 2;
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
 
     expect(configureCalls).toEqual([
       expect.objectContaining({ machineId: 'm1', settings: diagnostics }),
@@ -199,9 +220,9 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
   });
 
   it('does not turn a default-off daemon restart race into a durable shutdown warning', async () => {
-    const persistenceScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
+    const persistenceScope = scope;
     const disabledDiagnostics = Object.freeze({ ...diagnostics, enabled: false, consentVersion: null });
-    machineState.persistenceScope = persistenceScope;
+
     configureImpl.mockImplementation(async (machineId: string, settings: unknown, signal?: AbortSignal | null) => {
       configureCalls.push({ machineId, settings, signal });
       throw new Error('daemon_restarting');
@@ -212,7 +233,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     };
 
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'status_unknown',
@@ -222,7 +243,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     // exists to turn this default-off reconciliation into a durable revocation
     // obligation. A later successful reconciliation can still confirm off.
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]);
-    expect(persistedRevocations.get('server-a:account-a') ?? []).toEqual([]);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope) ?? []).toEqual([]);
     expect(configureCalls).toEqual([
       expect.objectContaining({
         machineId: 'm1',
@@ -243,25 +264,25 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     });
     const voice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
 
     const oldRuntimeResult = revokeVoiceDiagnosticsSessionAuthorization({
       machineId: 'm1',
       sessionId: 'session-1',
-      authorizationId: 'authorization-1',
+      authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1'),
     });
     await vi.waitFor(() => expect(revokeCalls).toEqual([
-      { machineId: 'm1', authorizationId: 'authorization-1' },
+      { machineId: 'm1', authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1') },
     ]));
 
     machineState.daemonStateVersion = 2;
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     oldRuntimeRevoke.reject(new Error('old_daemon_runtime_lost'));
     await expect(oldRuntimeResult).resolves.toMatchObject({ ok: false });
 
     await vi.waitFor(() => expect(revokeCalls).toEqual([
-      { machineId: 'm1', authorizationId: 'authorization-1' },
-      { machineId: 'm1', authorizationId: 'authorization-1' },
+      { machineId: 'm1', authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1') },
+      { machineId: 'm1', authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1') },
     ]));
     expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       phase: 'transitioning',
@@ -271,7 +292,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
             kind: 'session_authorization',
             machineId: 'm1',
             sessionId: 'session-1',
-            authorizationId: 'authorization-1',
+            authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1'),
           },
           status: 'pending',
         }),
@@ -281,8 +302,8 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     currentRuntimeRevoke.resolve();
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]));
     await act(async () => {
-      tree.update(React.createElement(Harness, { voice }));
-      tree.update(React.createElement(Harness, { voice }));
+      tree.update(createHarness({ voice }));
+      tree.update(createHarness({ voice }));
     });
     expect(revokeCalls).toHaveLength(2);
     await act(async () => { tree.unmount(); });
@@ -296,17 +317,17 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     });
     const voice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
 
     const oldRuntimeResult = revokeVoiceDiagnosticsSessionAuthorization({
       machineId: 'm1',
       sessionId: 'session-1',
-      authorizationId: 'authorization-1',
+      authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1'),
     });
     await vi.waitFor(() => expect(revokeCalls).toHaveLength(1));
 
     machineState.daemonStateVersion = 2;
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     oldRuntimeRevoke.resolve();
     await expect(oldRuntimeResult).resolves.toMatchObject({ ok: true });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
@@ -314,7 +335,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       phase: 'active',
       revocationObligations: [],
     }));
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     expect(revokeCalls).toHaveLength(1);
     await act(async () => { tree.unmount(); });
   });
@@ -328,24 +349,24 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     });
     const voice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
 
     await expect(revokeVoiceDiagnosticsSessionAuthorization({
       machineId: 'm1',
       sessionId: 'session-1',
-      authorizationId: 'authorization-1',
+      authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1'),
     })).resolves.toMatchObject({ ok: false });
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({ status: 'failed' }),
     ]);
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     expect(revokeCalls).toHaveLength(1);
 
     machineState.daemonStateVersion = 2;
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]));
     expect(revokeCalls).toHaveLength(2);
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     expect(revokeCalls).toHaveLength(2);
     await act(async () => { tree.unmount(); });
   });
@@ -382,19 +403,19 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       executionMachine: { mode: 'fixed', machineId: 'm1' },
     };
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: enabledVoice })); });
+    tree = await mountHarness({ voice: enabledVoice });
     await expect(revokeVoiceDiagnosticsSessionAuthorization({
       machineId: 'm1',
       sessionId: 'session-1',
-      authorizationId: 'authorization-1',
+      authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1'),
     })).resolves.toMatchObject({ ok: false });
 
     machineState.daemonStateVersion = 2;
-    await act(async () => { tree.update(React.createElement(Harness, { voice: enabledVoice })); });
+    await act(async () => { tree.update(createHarness({ voice: enabledVoice })); });
     await vi.waitFor(() => expect(reconnectSignal).toBeInstanceOf(AbortSignal));
 
     machineState.daemonStateVersion = 3;
-    await act(async () => { tree.update(React.createElement(Harness, { voice: disabledVoice })); });
+    await act(async () => { tree.update(createHarness({ voice: disabledVoice })); });
     await vi.waitFor(() => expect(readReconnectSignal()?.aborted).toBe(true));
     await vi.waitFor(() => expect(currentDisableSignal).toBeInstanceOf(AbortSignal));
     expect(revokeCalls).toHaveLength(2);
@@ -422,21 +443,21 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       executionMachine: { mode: 'fixed', machineId: 'm1' },
     };
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: enabledVoice })); });
+    tree = await mountHarness({ voice: enabledVoice });
 
     const manualRevocation = revokeVoiceDiagnosticsSessionAuthorization({
       machineId: 'm1',
       sessionId: 'session-1',
-      authorizationId: 'authorization-1',
+      authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1'),
     });
     await vi.waitFor(() => expect(revokeCalls).toHaveLength(1));
 
     machineState.daemonStateVersion = 2;
-    await act(async () => { tree.update(React.createElement(Harness, { voice: enabledVoice })); });
+    await act(async () => { tree.update(createHarness({ voice: enabledVoice })); });
     expect(revokeCalls).toHaveLength(1);
 
     machineState.daemonStateVersion = 3;
-    await act(async () => { tree.update(React.createElement(Harness, { voice: disabledVoice })); });
+    await act(async () => { tree.update(createHarness({ voice: disabledVoice })); });
     let disabledConfigureStartedBeforeManualRelease = false;
     try {
       await vi.waitFor(() => expect(disabledConfigureStarted).toBe(true));
@@ -457,9 +478,9 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
   });
 
   it('settles a restored exact-machine shutdown after the selected daemon confirms diagnostics off', async () => {
-    const persistenceScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
-    machineState.persistenceScope = persistenceScope;
-    persistedRevocations.set('server-a:account-a', ['m1']);
+    const persistenceScope = scope;
+
+    (['m1']).forEach(machineId => addPersistedVoiceDiagnosticsMachineRevocation(scope, machineId));
     const disabledDiagnostics = Object.freeze({ ...diagnostics, enabled: false, consentVersion: null });
     const voice = {
       diagnostics: disabledDiagnostics,
@@ -467,23 +488,23 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     };
 
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'inactive_confirmed',
       revocationObligations: [],
     }));
 
-    expect(persistedRevocations.get('server-a:account-a')).toEqual([]);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual([]);
     await act(async () => { tree.unmount(); });
   });
 
   it('retains a persisted former-machine shutdown when a different selected daemon cannot acknowledge its retry', async () => {
-    const persistenceScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
+    const persistenceScope = scope;
     const disabledDiagnostics = Object.freeze({ ...diagnostics, enabled: false, consentVersion: null });
     machineState.machineId = 'm2';
-    machineState.persistenceScope = persistenceScope;
-    persistedRevocations.set('server-a:account-a', ['m1']);
+
+    (['m1']).forEach(machineId => addPersistedVoiceDiagnosticsMachineRevocation(scope, machineId));
     configureImpl.mockImplementation(async (machineId: string, settings: unknown, signal?: AbortSignal | null) => {
       configureCalls.push({ machineId, settings, signal });
       if (machineId === 'm1' && readRequestedDiagnosticsEnabled(settings) === false) {
@@ -497,7 +518,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     };
 
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm2',
       phase: 'inactive_confirmed',
@@ -528,7 +549,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       ({ machineId, settings }) => machineId === 'm2'
         && readRequestedDiagnosticsEnabled(settings) === false,
     )).toHaveLength(selectedDisableCallsBeforeRetry);
-    expect(persistedRevocations.get('server-a:account-a')).toEqual(['m1']);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual(['m1']);
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: { kind: 'machine_policy', machineId: 'm1' },
@@ -539,19 +560,19 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
   });
 
   it('retries a persisted former-machine shutdown only when that exact daemon reconnects', async () => {
-    const persistenceScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
+    const persistenceScope = scope;
     const disabledDiagnostics = Object.freeze({ ...diagnostics, enabled: false, consentVersion: null });
     machineState.machineId = 'm2';
-    machineState.persistenceScope = persistenceScope;
+
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 1, isOnline: false });
-    persistedRevocations.set('server-a:account-a', ['m1']);
+    (['m1']).forEach(machineId => addPersistedVoiceDiagnosticsMachineRevocation(scope, machineId));
     const voice = {
       diagnostics: disabledDiagnostics,
       executionMachine: { mode: 'fixed', machineId: 'm2' },
     };
 
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm2',
       phase: 'inactive_confirmed',
@@ -568,7 +589,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     )).toHaveLength(0);
 
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 2, isOnline: true });
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
 
     await vi.waitFor(() => expect(configureCalls.filter(
       ({ machineId, settings }) => machineId === 'm1'
@@ -578,26 +599,26 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       ({ machineId, settings }) => machineId === 'm2'
         && readRequestedDiagnosticsEnabled(settings) === false,
     )).toHaveLength(1);
-    expect(persistedRevocations.get('server-a:account-a')).toEqual([]);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual([]);
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]);
     await act(async () => { tree.unmount(); });
   });
 
   it('replays every independently current persisted former-machine shutdown', async () => {
-    const persistenceScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
+    const persistenceScope = scope;
     const disabledDiagnostics = Object.freeze({ ...diagnostics, enabled: false, consentVersion: null });
     machineState.machineId = 'm2';
-    machineState.persistenceScope = persistenceScope;
+
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 1, isOnline: false });
     runtimeTargetsByMachineId.set('m3', { daemonStateVersion: 2, isOnline: true });
-    persistedRevocations.set('server-a:account-a', ['m1', 'm3']);
+    (['m1', 'm3']).forEach(machineId => addPersistedVoiceDiagnosticsMachineRevocation(scope, machineId));
     const voice = {
       diagnostics: disabledDiagnostics,
       executionMachine: { mode: 'fixed', machineId: 'm2' },
     };
 
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
 
     await vi.waitFor(() => expect(configureCalls.filter(
       ({ machineId, settings }) => machineId === 'm3'
@@ -607,7 +628,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       ({ machineId, settings }) => machineId === 'm1'
         && readRequestedDiagnosticsEnabled(settings) === false,
     )).toHaveLength(0);
-    expect(persistedRevocations.get('server-a:account-a')).toEqual(['m1']);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual(['m1']);
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: { kind: 'machine_policy', machineId: 'm1' },
@@ -618,13 +639,13 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
   });
 
   it('does not replay an unchanged former-machine failure for an unrelated runtime status update', async () => {
-    const persistenceScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
+    const persistenceScope = scope;
     const disabledDiagnostics = Object.freeze({ ...diagnostics, enabled: false, consentVersion: null });
     machineState.machineId = 'm2';
-    machineState.persistenceScope = persistenceScope;
+
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 1, isOnline: false });
     runtimeTargetsByMachineId.set('m3', { daemonStateVersion: 2, isOnline: true });
-    persistedRevocations.set('server-a:account-a', ['m1', 'm3']);
+    (['m1', 'm3']).forEach(machineId => addPersistedVoiceDiagnosticsMachineRevocation(scope, machineId));
     let m3ShutdownAttempts = 0;
     configureImpl.mockImplementation(async (machineId: string, settings: unknown, signal?: AbortSignal | null) => {
       configureCalls.push({ machineId, settings, signal });
@@ -640,7 +661,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     };
 
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({ target: { kind: 'machine_policy', machineId: 'm1' }, status: 'failed' }),
       expect.objectContaining({ target: { kind: 'machine_policy', machineId: 'm3' }, status: 'failed' }),
@@ -657,12 +678,12 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
   });
 
   it('retains a failed former-machine shutdown until that exact daemon advances again', async () => {
-    const persistenceScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
+    const persistenceScope = scope;
     const disabledDiagnostics = Object.freeze({ ...diagnostics, enabled: false, consentVersion: null });
     machineState.machineId = 'm2';
-    machineState.persistenceScope = persistenceScope;
+
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 1, isOnline: false });
-    persistedRevocations.set('server-a:account-a', ['m1']);
+    (['m1']).forEach(machineId => addPersistedVoiceDiagnosticsMachineRevocation(scope, machineId));
     let formerMachineShutdownAttempts = 0;
     configureImpl.mockImplementation(async (machineId: string, settings: unknown, signal?: AbortSignal | null) => {
       configureCalls.push({ machineId, settings, signal });
@@ -678,7 +699,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     };
 
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: { kind: 'machine_policy', machineId: 'm1' },
@@ -688,7 +709,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     expect(formerMachineShutdownAttempts).toBe(0);
 
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 2, isOnline: true });
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     await vi.waitFor(() => expect(formerMachineShutdownAttempts).toBe(1));
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
@@ -696,26 +717,26 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
         status: 'failed',
       }),
     ]));
-    expect(persistedRevocations.get('server-a:account-a')).toEqual(['m1']);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual(['m1']);
 
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     expect(formerMachineShutdownAttempts).toBe(1);
 
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 3, isOnline: true });
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     await vi.waitFor(() => expect(formerMachineShutdownAttempts).toBe(2));
-    expect(persistedRevocations.get('server-a:account-a')).toEqual([]);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual([]);
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]);
     await act(async () => { tree.unmount(); });
   });
 
   it('replaces an in-flight former-machine replay when that exact daemon advances', async () => {
-    const persistenceScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
+    const persistenceScope = scope;
     const disabledDiagnostics = Object.freeze({ ...diagnostics, enabled: false, consentVersion: null });
     machineState.machineId = 'm2';
-    machineState.persistenceScope = persistenceScope;
+
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 1, isOnline: false });
-    persistedRevocations.set('server-a:account-a', ['m1']);
+    (['m1']).forEach(machineId => addPersistedVoiceDiagnosticsMachineRevocation(scope, machineId));
     let formerMachineShutdownAttempts = 0;
     let firstReplaySignal: AbortSignal | undefined;
     configureImpl.mockImplementation(async (machineId: string, settings: unknown, signal?: AbortSignal | null) => {
@@ -737,7 +758,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     };
 
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: { kind: 'machine_policy', machineId: 'm1' },
@@ -746,14 +767,14 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     ]));
 
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 2, isOnline: true });
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     await vi.waitFor(() => expect(firstReplaySignal).toBeDefined());
 
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 3, isOnline: true });
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     await vi.waitFor(() => expect(firstReplaySignal?.aborted).toBe(true));
     await vi.waitFor(() => expect(formerMachineShutdownAttempts).toBe(2));
-    expect(persistedRevocations.get('server-a:account-a')).toEqual([]);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual([]);
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]);
     await act(async () => { tree.unmount(); });
   });
@@ -781,11 +802,11 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       diagnostics: disabledDiagnostics,
       executionMachine: { mode: 'fixed', machineId: 'm1' },
     };
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     expect(configureCalls).toHaveLength(1);
 
     machineState.daemonStateVersion = 2;
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     await Promise.resolve();
     const firstWasAborted = firstSignal?.aborted === true;
     const callsBeforeManualRelease = configureCalls.length;
@@ -807,7 +828,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
   it('recovers desired consent when the selected daemon returns online', async () => {
     let tree!: renderer.ReactTestRenderer;
     const voice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice })); });
+    tree = await mountHarness({ voice });
     configureImpl.mockImplementation(async (machineId: string, settings: unknown, signal?: AbortSignal | null) => {
       configureCalls.push({ machineId, settings, signal });
       if (!machineState.isOnline) throw new Error('daemon_offline');
@@ -815,11 +836,14 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     });
 
     machineState.isOnline = false;
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
-    expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({ machineId: 'm1', phase: 'status_unknown' });
+    await act(async () => { tree.update(createHarness({ voice })); });
+    expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({ machineId: null, phase: 'status_unknown' });
+    expect(resolveVoiceExecutionMachinePresentationFromState(storage.getState())).toMatchObject({
+      selectedMachineId: 'm1', machineId: null, selectionKind: 'selected_unreachable',
+    });
 
     machineState.isOnline = true;
-    await act(async () => { tree.update(React.createElement(Harness, { voice })); });
+    await act(async () => { tree.update(createHarness({ voice })); });
     expect(configureCalls).toHaveLength(3);
     expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({ machineId: 'm1', phase: 'active' });
     await act(async () => { tree.unmount(); });
@@ -827,19 +851,18 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
   it('aborts the in-flight configure request during runtime teardown', async () => {
     let observedSignal: AbortSignal | undefined;
+    const response = createDeferred<void>();
     configureImpl.mockImplementationOnce(async (_machineId: string, _settings: unknown, signal?: AbortSignal | null) => {
       observedSignal = signal ?? undefined;
+      await response.promise;
       return { ok: true, settings: _settings };
     });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(React.createElement(Harness, {
-        voice: { diagnostics, executionMachine: { mode: 'auto', machineId: null } },
-      }));
-    });
-    expect(observedSignal?.aborted).toBe(false);
+    tree = await mountHarness({ voice: { diagnostics, executionMachine: { mode: 'auto', machineId: null } } });
+    await vi.waitFor(() => expect(observedSignal?.aborted).toBe(false));
     await act(async () => { tree.unmount(); });
     expect(observedSignal?.aborted).toBe(true);
+    response.resolve();
   });
 
   it('settles a late old-machine configure before disabling it and never republishes it as active', async () => {
@@ -854,11 +877,11 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     let tree!: renderer.ReactTestRenderer;
     const firstVoice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
     const secondVoice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm2' } };
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: firstVoice })); });
+    tree = await mountHarness({ voice: firstVoice });
     await vi.waitFor(() => expect(configureCalls).toHaveLength(1));
 
     machineState.machineId = 'm2';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: secondVoice })); });
+    await act(async () => { tree.update(createHarness({ voice: secondVoice })); });
     releaseFirst();
     await vi.waitFor(() => expect(configureCalls).toHaveLength(3));
 
@@ -900,14 +923,14 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       executionMachine: { mode: 'fixed', machineId },
     });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    tree = await mountHarness({ voice: voiceFor('m1') });
 
     machineState.machineId = 'm2';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m2') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
     await vi.waitFor(() => expect(cleanupSignal).toBeDefined());
 
     machineState.daemonStateVersion = 2;
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m2') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm2',
       phase: 'active',
@@ -943,10 +966,10 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       executionMachine: { mode: 'fixed', machineId },
     });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    tree = await mountHarness({ voice: voiceFor('m1') });
 
     machineState.machineId = 'm2';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m2') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: expect.objectContaining({ kind: 'machine_policy', machineId: 'm1' }),
@@ -957,7 +980,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     failM1Disable = false;
     machineState.machineId = 'm1';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
@@ -987,9 +1010,9 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       executionMachine: { mode: 'fixed', machineId },
     });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    tree = await mountHarness({ voice: voiceFor('m1') });
     machineState.machineId = 'm2';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m2') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toHaveLength(1));
     const obligation = readVoiceDiagnosticsRuntimeStatus().revocationObligations[0]!;
 
@@ -1013,7 +1036,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     await vi.waitFor(() => expect(retryStarted).toBe(true));
 
     machineState.machineId = 'm1';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
     expect(configureCalls.filter(
       ({ machineId, settings }) => machineId === 'm1' && readRequestedDiagnosticsEnabled(settings) === true,
     )).toHaveLength(enabledM1CallsBeforeRetry);
@@ -1049,10 +1072,10 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       executionMachine: { mode: 'fixed', machineId },
     });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    tree = await mountHarness({ voice: voiceFor('m1') });
 
     machineState.machineId = 'm2';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m2') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: expect.objectContaining({ kind: 'machine_policy', machineId: 'm1' }),
@@ -1063,7 +1086,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     failM1Disable = false;
     failM1Enable = true;
     machineState.machineId = 'm1';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'status_unknown',
@@ -1104,9 +1127,9 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       executionMachine: { mode: 'fixed', machineId },
     });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    tree = await mountHarness({ voice: voiceFor('m1') });
     machineState.machineId = 'm2';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m2') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toHaveLength(1));
     const staleObligation = readVoiceDiagnosticsRuntimeStatus().revocationObligations[0]!;
 
@@ -1119,7 +1142,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       return { ok: true, settings };
     });
     machineState.machineId = 'm1';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
     await vi.waitFor(() => expect(configureCalls.some(
       ({ machineId, settings }) => machineId === 'm1' && readRequestedDiagnosticsEnabled(settings) === true,
     )).toBe(true));
@@ -1162,12 +1185,19 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       executionMachine: { mode: 'fixed', machineId: 'm1' },
     });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: voiceWith(diagnostics) })); });
+    // A request owned by another caller has no mounted-hook abort signal.
+    // Keep that real queue head pending so the hook's disable and newer enable
+    // are genuinely queued intents, not a disable already sent before the user
+    // changes their mind. The real Socket client otherwise aborts immediately.
+    const firstEnable = applyVoiceDiagnosticsMachinePolicy({ machineId: 'm1', settings: diagnostics });
+    await vi.waitFor(() => expect(configureCalls).toHaveLength(1));
+    tree = await mountHarness({ voice: voiceWith(diagnostics) });
     await vi.waitFor(() => expect(configureCalls).toHaveLength(1));
 
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceWith(disabledDiagnostics) })); });
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceWith(diagnostics) })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceWith(disabledDiagnostics) })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceWith(diagnostics) })); });
     releaseFirstEnable();
+    await firstEnable;
 
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
@@ -1216,22 +1246,22 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       executionMachine: { mode: 'fixed', machineId },
     });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = renderer.create(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    tree = await mountHarness({ voice: voiceFor('m1') });
     machineState.machineId = 'm2';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m2') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toHaveLength(1));
 
     failInitialM1Disable = false;
     blockM1Enable = true;
     machineState.machineId = 'm1';
-    await act(async () => { tree.update(React.createElement(Harness, { voice: voiceFor('m1') })); });
+    await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
     await vi.waitFor(() => expect(configureCalls.some(
       ({ machineId, settings }) => machineId === 'm1' && readRequestedDiagnosticsEnabled(settings) === true,
     )).toBe(true));
 
     blockFinalM1Disable = true;
     await act(async () => {
-      tree.update(React.createElement(Harness, { voice: voiceFor('m1', disabledDiagnostics) }));
+      tree.update(createHarness({ voice: voiceFor('m1', disabledDiagnostics) }));
     });
     const newerDisableObligation = readVoiceDiagnosticsRuntimeStatus().revocationObligations[0]!;
     expect(newerDisableObligation).toMatchObject({
@@ -1269,20 +1299,13 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       return { ok: true, settings };
     });
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(React.createElement(Harness, {
-        voice: {
-          diagnostics,
-          executionMachine: { mode: 'fixed', machineId: 'm1' },
-        },
-      }));
-    });
+    tree = await mountHarness({ voice: { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } } });
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
     }));
     await act(async () => {
-      tree.update(React.createElement(Harness, {
+      tree.update(createHarness({
         voice: {
           diagnostics: disabledDiagnostics,
           executionMachine: { mode: 'fixed', machineId: 'm1' },

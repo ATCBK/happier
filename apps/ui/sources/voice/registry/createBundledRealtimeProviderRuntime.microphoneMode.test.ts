@@ -1,267 +1,480 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
+import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { storage } from '@/sync/domains/state/storage';
+import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
+import { createBuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
+import { getVoiceAdapterRegistry, registerVoiceAdapters } from '@/voice/session/voiceAdapterRegistry';
+import { resetVoiceSessionRuntimeStateForTests } from '@/voice/session/voiceSessionStore';
+import { createVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleController';
+import { getVoiceSessionLifecycleController, setVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
+import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
+import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
+import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from './generatedBundledVoiceRuntimeEntries';
+import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
+import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
+import type { RealtimeVoiceProviderRuntime } from '@happier-dev/plugin-sdk/voice/client';
+import { PluginContributesV2Schema } from '@happier-dev/protocol';
+import { createBundledConversationRuntimeHostLease, getCurrentBundledConversationRuntimeHost } from './bundledConversationRuntimeHost';
+import { createExternalVoiceProviderActivationScope } from './externalVoiceProviderActivation.testkit';
+import { getExternalVoiceProviderRegistration } from './externalVoiceProviderRegistrations';
+import { createWebSocketPcmMedia as createNativeWebSocketPcmMedia } from '@/voice/runtime/connection/WebSocketPcmMedia.native';
 
-import {
-  createVoiceConversationController,
-  type VoiceConversationController,
-  type VoiceConversationControllerDeps,
-} from '@/voice/runtime/controller/VoiceConversationController';
-import type { BundledRealtimeProviderRuntimeHost } from '@/voice/registry/bundledConversationRuntimeContract';
-
-import { createBundledRealtimeProviderRuntime } from './createBundledRealtimeProviderRuntime';
+vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const vendor = vi.hoisted(() => ({ platform: 'web' as 'web' | 'ios', startSession: vi.fn(), setAudioModeAsync: vi.fn(async () => undefined), requestRecordingPermissionsAsync: vi.fn(async () => ({ granted: true, canAskAgain: true })) }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { get OS() { return vendor.platform; } } }));
+const nativeAudio = createNativeVoicePcmCaptureHarness();
+vi.mock('expo-modules-core', async original => {
+  const actual = await original<typeof import('expo-modules-core')>();
+  return { ...actual, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative' ? nativeAudio.nativeModule : actual.requireOptionalNativeModule(name) };
+});
+// The vendor owns its microphone. The generated entry, activation, codecs,
+// runtime host, controller, lifecycle and projection below all remain real.
+vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: vendor.startSession } }));
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: vendor.startSession } }));
+vi.mock('@elevenlabs/client/internal', () => ({ setSetupStrategy: vi.fn(), createConnection: vi.fn(), setupWebRTCSession: vi.fn() }));
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vendor.setAudioModeAsync, requestRecordingPermissionsAsync: vendor.requestRecordingPermissionsAsync } }));
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
 type MicrophoneMode = 'host_webrtc' | 'host_pcm' | 'provider_managed';
 
-function createRuntimeForMode(
+/** Authored external provider: only its SDK mute/connection boundary is controlled. */
+async function createRuntimeForMode(
   mode: MicrophoneMode,
   input?: Readonly<{ setInputMuted?: (muted: boolean) => Promise<void> | void }>,
 ) {
-  let resources: VoiceConversationControllerDeps['resources'] | undefined;
-  let ownedAttemptId = 1;
-  const mic = {
-    ensurePermission: vi.fn(async () => undefined),
-    ensureActive: vi.fn(async () => undefined),
-    teardown: vi.fn(async () => undefined),
-    setMuted: vi.fn(),
-    isMuted: vi.fn(() => false),
-    getStream: vi.fn(() => ({}) as MediaStream),
-  };
-  const acquireAudioMode = vi.fn(async () => ({ release: vi.fn(async () => undefined) }));
+  const platform = mode === 'host_pcm' ? 'ios' : 'web';
+  vendor.platform = platform;
+  vendor.setAudioModeAsync.mockClear();
+  vendor.requestRecordingPermissionsAsync.mockClear();
+  const environment = await createOpenAiVoiceRuntimeEnvironment();
+  const browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer(peer) {
+    peer.setRemoteDescription.mockImplementation(async () => {
+      peer.channel.open();
+      peer.connectionState = 'connected';
+      peer.dispatchEvent(new Event('connectionstatechange'));
+    });
+  } });
+  const hostLease = createBundledConversationRuntimeHostLease();
+  const declaration = PluginContributesV2Schema.parse({ voiceProviders: [{
+    id: 'microphone', title: 'Public microphone authority', kind: 'conversation',
+    roles: ['realtime_conversation'], platforms: [platform],
+    capabilities: { turn: { cancelResponse: false, bargeIn: false, interruptionPolicy: 'disabled' } },
+    client: { artifactId: 'microphone-client', exportName: 'activate' },
+  }] }).voiceProviders[0]!;
+  if (declaration.kind !== 'conversation') throw new Error('Expected conversation declaration');
+  const pluginId = 'conformance.voice.microphone';
+  const providerId = `${pluginId}/${declaration.id}`;
+  const sdk = { open: vi.fn(async () => undefined), close: vi.fn(async () => undefined) };
   const setInputMuted = vi.fn(input?.setInputMuted ?? (async () => undefined));
-  // Existing resource/mute overrides do not establish coupled Hold correctness:
-  // the real delegate remains idle when this legacy start override executes.
-  const controller = {
-    async start(input) {
-      await resources?.prepare?.({
-        controlSessionId: input.controlSessionId,
-        attemptId: ownedAttemptId,
-        request: {},
-        signal: new AbortController().signal,
-      });
-      return { status: 'connected' };
-    },
-    stop: vi.fn(async () => undefined),
-    fail: vi.fn(async () => undefined),
-    performTurnControl: vi.fn(async () => ({ status: 'unavailable' as const, code: 'voice_turn_action_unsupported' as const })),
-    sendClientControl: vi.fn(async () => ({ status: 'sent' as const })),
-    getActiveControlSessionId: vi.fn(() => null),
-    canCommitInput: () => false,
-    getOwnedControlSessionId: vi.fn(() => 'voice-test'),
-    getOwnedAttemptId: vi.fn(() => ownedAttemptId),
-    requestReconnect: vi.fn(async () => false),
-    playbackCursorMs: vi.fn(() => null),
-    beginOutputInterruptionCandidate: vi.fn(() => 'unsupported' as const),
-    resolveOutputInterruptionCandidate: vi.fn(),
-  } satisfies Partial<VoiceConversationController>;
-  const host = {
-    // This focused microphone test has no Session-address fixture. Treat its
-    // synthetic control id as Global so address admission remains out of scope.
-    globalVoiceSessionId: 'voice-test',
-    runCurrentGenerationEffect(callback: () => void) {
-      callback();
-      return true;
-    },
-    getPlatform: () => 'ios' as const,
-    getRealtimeClientToolDefinitions: () => [],
-    getSettings: () => ({ voice: { providerId: 'test-provider' } }),
-    projectVoiceSettings: () => ({ providerId: 'test-provider', providerConfig: {} }),
-    machine: {
-      transitionToAcquiringMic: vi.fn(),
-      transitionToConnecting: vi.fn(),
-      setReconnecting: vi.fn(),
-      transitionToConnected: vi.fn(),
-      transitionToSpeaking: vi.fn(),
-      transitionToEnding: vi.fn(),
-      transitionToDisconnected: vi.fn(),
-      setError: vi.fn(),
-      setMuted: vi.fn(),
-      getSnapshot: vi.fn(() => ({ status: 'disconnected' })),
-      projectSnapshot: vi.fn(() => ({
-        adapterId: 'test-provider',
-        sessionId: null,
-        status: 'disconnected' as const,
-        mode: 'idle' as const,
-        canStop: false,
-      })),
-      subscribe: vi.fn(() => vi.fn()),
-    },
-    createConversationController: vi.fn((input: VoiceConversationControllerDeps) => {
-      resources = input.resources;
-      return { ...createVoiceConversationController(input), ...controller };
-    }),
-    createMicSession: vi.fn(() => mic),
-    createSdkHandleConnection: vi.fn(() => { throw new Error('unused'); }),
-    createWebRtcConnection: vi.fn(() => { throw new Error('unused'); }),
-    createWebSocketPcmMedia: vi.fn(() => { throw new Error('unused'); }),
-    createWebSocketPcmConnection: vi.fn(() => { throw new Error('unused'); }),
-    ensureBound: vi.fn(async () => undefined),
-    acquireDirectMediaConversation: vi.fn(async ({ controlSessionId }) => ({
-      conversationSessionId: controlSessionId,
-    })),
-    releaseDirectMediaConversation: vi.fn(async () => undefined),
-    resolveConversationSessionId: vi.fn((controlSessionId: string) => controlSessionId),
-    applyTargetSelection: vi.fn(async () => undefined),
-    acquireAudioMode,
-    openLevelWriter: vi.fn(() => ({ write: vi.fn(), reset: vi.fn(), close: vi.fn() })),
-    projectTranscript: vi.fn(() => null),
-    admitTranscriptPersistenceEvent: vi.fn(() => null),
-    commitAdmittedTranscriptPersistenceEvent: vi.fn(() => null),
-    releaseAdmittedTranscriptPersistenceEvent: vi.fn(() => false),
-    settleTranscriptPersistence: vi.fn(async () => undefined),
-    beginTranscriptAttempt: vi.fn(() => ({ epoch: 1, attemptIdentity: 'attempt-1' })),
-    presentHostedLeaseNotice: vi.fn(),
-    presentAttemptDiagnostic: vi.fn(),
-    clearAttemptStatus: vi.fn(),
-    createToolBarrier: vi.fn(() => ({ run: vi.fn(async () => ({ status: 'submitted' })), detach: vi.fn(), cancel: vi.fn(), dispose: vi.fn() })),
-    voiceHooks: { onStarted: vi.fn(() => ''), onStopped: vi.fn() },
-    createMachineError: vi.fn((input) => ({
-      ...input,
-      phase: 'runtime' as const,
-      retryPolicy: 'user_action' as const,
-      recoveryAction: 'retry' as const,
-      presentation: 'error' as const,
-      recoverable: true,
-    })),
-  } as unknown as BundledRealtimeProviderRuntimeHost;
-  const runtime = createBundledRealtimeProviderRuntime(host, {
-    providerId: 'test-provider',
-    execution: { kind: 'direct_media' },
+  const microphoneConfig = mode === 'provider_managed'
+    ? { microphoneMode: 'provider_managed' as const, setInputMuted }
+    : { microphoneMode: mode, ...(input?.setInputMuted ? { setInputMuted } : {}) };
+  const publicRuntime: RealtimeVoiceProviderRuntime = {
+    kind: 'conversation', ...microphoneConfig,
     protocol: {
-      id: 'test-provider',
-      turnControls: {
-        cancelResponse: 'unsupported',
-        truncatePlayback: 'unsupported',
-        clearInput: false,
-        stopSession: false,
-        resumption: 'none',
-        replay: 'none',
-        exactMessage: true,
+      async prepare({ signal }) {
+        return signal.aborted ? { kind: 'aborted' } : { kind: 'prepared', session: { config: null, safeMetadata: null } };
       },
-      prepare: vi.fn(async () => ({ kind: 'prepared' as const, session: { config: null, safeMetadata: null } })),
-      decodeControl: vi.fn(() => []),
-      encodeTurnControl: vi.fn(() => null),
+      decodeControl: () => [], encodeTurnControl: () => null,
     },
-    microphoneMode: mode,
-    ...(
-      mode === 'provider_managed' || input?.setInputMuted
-        ? { setInputMuted }
-        : {}
-    ),
-    createConnection: vi.fn(async () => { throw new Error('unused'); }),
-    encodeToolResults: vi.fn(() => []),
-    encodeToolContinuation: vi.fn(() => null),
-    encodeContextUpdate: vi.fn(() => []),
-    encodeTextTurn: vi.fn(() => []),
-    resolveSurfaceCapabilities: vi.fn(() => null),
-  } as never);
-
+    async createConnection({ media }) {
+      if (mode === 'host_webrtc') return media.createWebRtcConnection({
+        signaling: { async exchangeOffer() { await sdk.open(); return { answerSdp: 'v=0\r\na=microphone-answer\r\n' }; } },
+        control: { label: 'microphone-events', onOpen: () => undefined },
+      });
+      if (mode === 'host_pcm') return media.createPcmConnection({
+        driver: { open: sdk.open, sendControl: async () => undefined, close: sdk.close },
+        input: { sampleRate: 24_000, chunkMs: 100 }, output: { sampleRate: 24_000 }, onInputChunk: () => undefined,
+      }).connection;
+      return media.createSdkHandleConnection({ driver: {
+        open: sdk.open, sendControl: async () => undefined, close: sdk.close,
+      } });
+    },
+    encodeToolResults: () => [], encodeToolContinuation: () => null,
+    encodeContextUpdate: () => [], encodeTextTurn: () => [],
+  };
+  const scope = createExternalVoiceProviderActivationScope({
+    pluginId, occurrenceId: 'microphone-mode-occurrence', declarations: [declaration], hostPlatform: platform,
+    // Select Metro's real platform producer in the Node source runner.
+    runtimeHost: platform === 'web'
+      ? { ...hostLease.host, createMicSession: browser.createMicSession }
+      : { ...hostLease.host, createWebSocketPcmMedia: createNativeWebSocketPcmMedia },
+    isRuntimeHostCurrent: () => getCurrentBundledConversationRuntimeHost() === hostLease.host,
+  });
+  scope.api.voiceProviders.register(declaration.id, publicRuntime);
+  await scope.commit();
+  const adapter = getExternalVoiceProviderRegistration(providerId)?.adapter;
+  if (!adapter) throw new Error('Public microphone provider activation failed');
+  registerVoiceAdapters([adapter]);
+  await environment.configureVoice({ ...environment.persistedAccountSettings.voice, providerId,
+    providers: { [providerId]: { schemaVersion: 1, config: {} } } });
+  voiceSessionBindingStore.getState().bind({
+    adapterId: providerId, controlSessionId: hostLease.host.globalVoiceSessionId,
+    conversationSessionId: environment.historySessionId,
+    conversationSessionAddress: { serverId: environment.accountConnection.home.id, sessionId: environment.historySessionId },
+    targetSessionAddress: null, lifetime: 'runtime_attempt', transcriptMode: 'synthetic', updatedAt: 1,
+  });
   return {
-    runtime,
-    mic,
-    acquireAudioMode,
-    setInputMuted,
-    controller,
-    resources: () => resources,
-    setOwnedAttemptId(attemptId: number) {
-      ownedAttemptId = attemptId;
+    adapter, browser, sdk, setInputMuted, controlSessionId: hostLease.host.globalVoiceSessionId,
+    async dispose() {
+      try { await scope.unwind(); }
+      finally {
+        hostLease.revoke();
+        browser.restore();
+        await environment.dispose();
+        vendor.platform = 'web';
+      }
     },
   };
 }
 
-describe('createBundledRealtimeProviderRuntime microphone mode', () => {
+describe('public provider microphone mode', () => {
   it('chooses one declared microphone authority before connection creation', async () => {
-    const webRtc = createRuntimeForMode('host_webrtc');
-    await webRtc.runtime.adapter.start({ sessionId: 'voice-test', requestedTargetSessionAddress: null });
-    expect(webRtc.mic.ensurePermission).toHaveBeenCalledTimes(1);
-    expect(webRtc.mic.ensureActive).toHaveBeenCalledTimes(1);
-    expect(webRtc.acquireAudioMode).toHaveBeenCalledTimes(1);
+    const webRtc = await createRuntimeForMode('host_webrtc');
+    try {
+      await webRtc.adapter.start({ sessionId: webRtc.controlSessionId, requestedTargetSessionAddress: null });
+      expect(webRtc.adapter.getSnapshot().status).toBe('connected');
+      expect(webRtc.browser.micTrack.readyState).toBe('live');
+      expect(vendor.setAudioModeAsync).toHaveBeenCalledWith(expect.objectContaining({ allowsRecording: true }));
+      expect(vendor.setAudioModeAsync.mock.invocationCallOrder[0]).toBeLessThan(webRtc.sdk.open.mock.invocationCallOrder[0]!);
+    } finally { await webRtc.dispose(); }
 
-    const pcm = createRuntimeForMode('host_pcm');
-    await pcm.runtime.adapter.start({ sessionId: 'voice-test', requestedTargetSessionAddress: null });
-    expect(pcm.mic.ensurePermission).toHaveBeenCalledTimes(1);
-    expect(pcm.mic.ensureActive).not.toHaveBeenCalled();
-    expect(pcm.acquireAudioMode).not.toHaveBeenCalled();
-
-    const providerManaged = createRuntimeForMode('provider_managed');
-    await providerManaged.runtime.adapter.start({ sessionId: 'voice-test', requestedTargetSessionAddress: null });
-    expect(providerManaged.mic.ensurePermission).not.toHaveBeenCalled();
-    expect(providerManaged.mic.ensureActive).not.toHaveBeenCalled();
-    expect(providerManaged.acquireAudioMode).toHaveBeenCalledTimes(1);
-    expect(providerManaged.mic.setMuted).not.toHaveBeenCalled();
-    await providerManaged.runtime.adapter.setMuted({ sessionId: 'voice-test', muted: true });
-    expect(providerManaged.setInputMuted).toHaveBeenCalledWith(true);
-    expect(providerManaged.mic.setMuted).not.toHaveBeenCalled();
-  });
-
-  it('holds the audio-mode lease before host WebRTC capture opens its track', async () => {
-    const webRtc = createRuntimeForMode('host_webrtc');
-    await webRtc.runtime.adapter.start({ sessionId: 'voice-test', requestedTargetSessionAddress: null });
-
-    // The platform decides the capture route and echo cancellation when the
-    // track is created: Android reads `AudioManager.mode` and AEC availability
-    // at `AudioRecord` construction. Acquiring the canonical lease afterwards
-    // leaves the whole call on the media route with no AEC. Permission is
-    // prompted first so an unanswered prompt never holds the exclusive session.
-    const permissionOrder = webRtc.mic.ensurePermission.mock.invocationCallOrder[0];
-    const leaseOrder = webRtc.acquireAudioMode.mock.invocationCallOrder[0];
-    const captureOrder = webRtc.mic.ensureActive.mock.invocationCallOrder[0];
-    expect(permissionOrder).toBeDefined();
-    expect(leaseOrder).toBeDefined();
-    expect(captureOrder).toBeDefined();
-    expect(permissionOrder!).toBeLessThan(leaseOrder!);
-    expect(leaseOrder!).toBeLessThan(captureOrder!);
+    const pcm = await createRuntimeForMode('host_pcm');
+    try {
+      await pcm.adapter.start({ sessionId: pcm.controlSessionId, requestedTargetSessionAddress: null });
+      expect(pcm.adapter.getSnapshot().status).toBe('connected');
+      expect(vendor.requestRecordingPermissionsAsync).toHaveBeenCalledTimes(1);
+      expect(vendor.requestRecordingPermissionsAsync.mock.invocationCallOrder[0]).toBeLessThan(pcm.sdk.open.mock.invocationCallOrder[0]!);
+      expect(pcm.browser.micTracks).toHaveLength(0);
+      expect(vendor.setAudioModeAsync).not.toHaveBeenCalled();
+      expect(nativeAudio.nativeModule.start).toHaveBeenCalled();
+    } finally { await pcm.dispose(); }
   });
 
   it('retires host capture when a secondary provider mute hook rejects silence', async () => {
-    const webRtc = createRuntimeForMode('host_webrtc', {
-      setInputMuted: async (muted) => {
+    const webRtc = await createRuntimeForMode('host_webrtc', {
+      setInputMuted: async muted => {
         if (muted) throw new Error('secondary_capture_mute_rejected');
       },
     });
-    await webRtc.runtime.adapter.start({ sessionId: 'voice-test', requestedTargetSessionAddress: null });
-
-    await expect(webRtc.runtime.adapter.setMuted({
-      sessionId: 'voice-test',
-      muted: true,
-    })).rejects.toThrow('secondary_capture_mute_rejected');
-
-    expect(webRtc.mic.setMuted).toHaveBeenCalledWith(true);
-    expect(webRtc.controller.fail).toHaveBeenCalledWith('voice_input_mute_failed');
+    try {
+      await webRtc.adapter.start({ sessionId: webRtc.controlSessionId, requestedTargetSessionAddress: null });
+      const track = webRtc.browser.micTrack;
+      expect(track.readyState).toBe('live');
+      await expect(webRtc.adapter.setMuted({ sessionId: webRtc.controlSessionId, muted: true })).rejects.toThrow('secondary_capture_mute_rejected');
+      await vi.waitFor(() => expect(track.readyState).toBe('ended'));
+      expect(webRtc.adapter.getSnapshot().status).not.toBe('connected');
+      expect(webRtc.browser.peer.connectionState).toBe('closed');
+    } finally { await webRtc.dispose(); }
   });
 
   it('fails a fresh mute closed until the retired provider mute operation settles', async () => {
     let releaseOldMute!: () => void;
-    const oldMute = new Promise<void>((resolve) => { releaseOldMute = resolve; });
+    const oldMute = new Promise<void>(resolve => { releaseOldMute = resolve; });
     const providerCalls: boolean[] = [];
-    const providerManaged = createRuntimeForMode('provider_managed', {
-      setInputMuted: async (muted) => {
+    let captureMuted = false;
+    const providerManaged = await createRuntimeForMode('provider_managed', {
+      setInputMuted: async muted => {
         providerCalls.push(muted);
         if (muted && providerCalls.filter(Boolean).length === 1) await oldMute;
+        captureMuted = muted;
       },
     });
-    await providerManaged.runtime.adapter.start({ sessionId: 'voice-test', requestedTargetSessionAddress: null });
-    const staleMute = providerManaged.runtime.adapter.setMuted({
-      sessionId: 'voice-test',
-      muted: true,
-    });
-    await vi.waitFor(() => expect(providerCalls).toEqual([false, true]));
+    try {
+      const { adapter, controlSessionId } = providerManaged;
+      await adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null });
+      const initialCalls = [...providerCalls];
+      expect(initialCalls.length).toBeGreaterThan(0);
+      expect(initialCalls.every(value => value === false)).toBe(true);
+      const staleMute = adapter.setMuted({ sessionId: controlSessionId, muted: true });
+      await vi.waitFor(() => expect(providerCalls).toEqual([...initialCalls, true]));
+      await adapter.stop({ sessionId: controlSessionId });
+      await expect(adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null })).rejects.toMatchObject({ code: 'voice_input_mute_failed' });
+      expect(adapter.getSnapshot().status).not.toBe('connected');
+      expect(providerCalls).toEqual([...initialCalls, true]);
+      expect(providerManaged.sdk.open).toHaveBeenCalledTimes(1);
+      releaseOldMute();
+      await expect(staleMute).resolves.toBeUndefined();
+      await adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null });
+      expect(adapter.getSnapshot().status).toBe('connected');
+      expect(captureMuted).toBe(false);
+      await adapter.setMuted({ sessionId: controlSessionId, muted: true });
+      expect(providerCalls.filter(Boolean)).toHaveLength(2);
+      expect(providerCalls.at(-1)).toBe(true);
+      expect(captureMuted).toBe(true);
+      expect(adapter.getSnapshot().micMuted).toBe(true);
+    } finally {
+      releaseOldMute();
+      await providerManaged.dispose();
+    }
+  });
+});
 
-    await providerManaged.resources()?.release({
-      controlSessionId: 'voice-test',
-      attemptId: 1,
-      reason: { code: 'replaced' },
+async function withGeneratedElevenLabs(
+  run: (fixture: Readonly<{
+    lifecycle: ReturnType<typeof createVoiceSessionLifecycleController>;
+    adapter: ReturnType<typeof createBuiltinVoiceAdapterAssembly>['adapters'][number];
+    assembly: ReturnType<typeof createBuiltinVoiceAdapterAssembly>;
+    getUserMedia: MediaDevices['getUserMedia'];
+  }>) => Promise<void>,
+  platform: 'web' | 'ios' = 'web',
+): Promise<void> {
+  const previousState = storage.getState();
+  const previousAdapters = getVoiceAdapterRegistry().list();
+  const previousLifecycle = getVoiceSessionLifecycleController();
+  voiceConversationRuntimeMachine.reset();
+  const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.elevenlabs');
+  if (!entry) throw new Error('Missing generated ElevenLabs contribution');
+  vendor.setAudioModeAsync.mockReset().mockResolvedValue(undefined);
+  vendor.platform = platform;
+  const browser = installVoiceWebRtcBrowserBoundary();
+  const getUserMedia = vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockRejectedValue(new Error('Host must not acquire the provider microphone'));
+  const environment = await createOpenAiVoiceRuntimeEnvironment();
+  await environment.configureVoice({
+    ...writeVoiceProviderSettingsConfig(environment.persistedAccountSettings.voice, entry.providerId, ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS),
+    providerId: entry.providerId,
+  });
+  // Compose the hosted service's HTTP boundary with the incumbent Account
+  // bootstrap. Tokens/leases remain parsed by the real hosted owner.
+  setRuntimeFetch(async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/voice/token') return Response.json({ allowed: true, token: 'mode-hosted-token', leaseId: 'mode-lease', bindingNonce: 'mode-nonce', expiresAtMs: Date.now() + 60_000 });
+    if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
+    if (path === '/health' || path === '/v1/auth/ping') return Response.json({ status: 'ok' });
+    return await environment.homeRequest(url, init) ?? new Response('{}', { status: 404 });
+  });
+  // The incumbent environment restored the Account through real TokenStorage
+  // and hydrated the canonical settings document through Sync.
+  const account = environment.accountConnection;
+  const assembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [entry] });
+  const adapter = assembly.adapters.find(value => value.id === entry.providerId);
+  if (!adapter) throw new Error('Generated ElevenLabs entry was not activated');
+  registerVoiceAdapters(assembly.adapters);
+  voiceSessionBindingStore.getState().bind({ adapterId: entry.providerId, controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID, conversationSessionId: environment.historySessionId, conversationSessionAddress: { serverId: account.home.id, sessionId: environment.historySessionId }, targetSessionAddress: null, lifetime: 'runtime_attempt', transcriptMode: 'synthetic', updatedAt: 1 });
+  const lifecycle = createVoiceSessionLifecycleController();
+  setVoiceSessionLifecycleController(lifecycle);
+  lifecycle.setConfiguredProviderId(entry.providerId);
+  try {
+    await run({ lifecycle, adapter, assembly, getUserMedia });
+  } finally {
+    await lifecycle.dispose();
+    setVoiceSessionLifecycleController(previousLifecycle);
+    await assembly.dispose();
+    await resetVoiceSessionRuntimeStateForTests();
+    voiceConversationRuntimeMachine.reset();
+    await environment.dispose();
+    browser.restore();
+    registerVoiceAdapters(previousAdapters);
+    storage.setState(previousState, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vendor.platform = 'web';
+  }
+}
+
+function createVendorConversation(id = 'mode-conversation') {
+  let muted = false;
+  const setMicMuted = vi.fn((value: boolean) => { muted = value; });
+  return {
+    endSession: vi.fn(async () => undefined),
+    setMicMuted,
+    setVolume: vi.fn(),
+    sendUserMessage: vi.fn(),
+    sendContextualUpdate: vi.fn(),
+    getId: () => id,
+    isMuted: () => muted,
+  };
+}
+
+describe('generated ElevenLabs provider microphone authority', () => {
+  it('reports a fallible native release while the real coordinator retains cleanup and the SDK is already closed', async () => {
+    const conversation = createVendorConversation();
+    vendor.startSession.mockReset().mockResolvedValue(conversation);
+    const restore = vi.mocked(nativeAudio.nativeModule.restoreAudioSession);
+    restore.mockReset().mockRejectedValueOnce(new Error('native_restore_failed')).mockResolvedValue(undefined);
+    await withGeneratedElevenLabs(async ({ lifecycle, assembly, getUserMedia }) => {
+      try {
+        await lifecycle.toggle(null);
+        await expect(assembly.dispose()).rejects.toThrow('native_restore_failed');
+        expect(conversation.endSession).toHaveBeenCalledTimes(1);
+        const coordinator = getSharedVoiceAudioSessionCoordinator();
+        if (!coordinator) throw new Error('Missing real native audio coordinator');
+        // Reacquisition is a public recovery path: it joins the coordinator's
+        // retained failed release before admitting a fresh lease.
+        const next = await coordinator.acquire({ ownerId: 'mode-release-recovery', mode: 'conversation', input: true, output: true, aec: 'preferred', capture: 'provider_managed_exclusive' });
+        expect(coordinator.getSnapshot().pendingReleaseCount).toBe(0);
+        await next.release();
+        await assembly.dispose();
+        expect(coordinator.getSnapshot()).toMatchObject({ leaseCount: 0, pendingReleaseCount: 0, configuration: null });
+        expect(conversation.endSession).toHaveBeenCalledTimes(1);
+        expect(getUserMedia).not.toHaveBeenCalled();
+      } finally {
+        restore.mockResolvedValue(undefined);
+      }
+    }, 'ios');
+  });
+
+  it('keeps coalesced disposal pending behind native audio release and the vendor teardown', async () => {
+    const conversation = createVendorConversation();
+    let finishSdkStop!: () => void;
+    const sdkStop = new Promise<void>(resolve => { finishSdkStop = resolve; });
+    conversation.endSession.mockImplementation(() => sdkStop);
+    vendor.startSession.mockReset().mockResolvedValue(conversation);
+    const configure = vi.mocked(nativeAudio.nativeModule.configureAudioSession);
+    const restore = vi.mocked(nativeAudio.nativeModule.restoreAudioSession);
+    configure.mockClear();
+    let finishNativeRestore!: () => void;
+    const nativeRestore = new Promise<void>(resolve => { finishNativeRestore = resolve; });
+    restore.mockReset().mockImplementationOnce(() => nativeRestore);
+    await withGeneratedElevenLabs(async ({ lifecycle, assembly, adapter, getUserMedia }) => {
+      try {
+        await lifecycle.toggle(null);
+        expect(adapter.getSnapshot().status).toBe('connected');
+        expect(configure).toHaveBeenCalledWith(expect.objectContaining({ configuration: expect.objectContaining({ input: true, output: true, capture: 'provider_managed_exclusive' }) }));
+        const firstDispose = assembly.dispose();
+        const secondDispose = assembly.dispose();
+        expect(secondDispose).toBe(firstDispose);
+        let settled = false;
+        void firstDispose.then(() => { settled = true; });
+        await vi.waitFor(() => expect(restore).toHaveBeenCalledTimes(1));
+        expect(settled).toBe(false);
+        finishNativeRestore();
+        await vi.waitFor(() => expect(conversation.endSession).toHaveBeenCalledTimes(1));
+        expect(settled).toBe(false);
+        finishSdkStop();
+        await Promise.all([firstDispose, secondDispose]);
+        expect(conversation.endSession).toHaveBeenCalledTimes(1);
+        expect(getUserMedia).not.toHaveBeenCalled();
+        expect(vendor.setAudioModeAsync).not.toHaveBeenCalled();
+      } finally {
+        finishNativeRestore();
+        finishSdkStop();
+        restore.mockResolvedValue(undefined);
+      }
+    }, 'ios');
+  });
+
+  it('cannot start SDK capture when the generated adapter registration is removed', async () => {
+    vendor.startSession.mockReset().mockResolvedValue(createVendorConversation());
+    await withGeneratedElevenLabs(async ({ lifecycle, adapter, assembly, getUserMedia }) => {
+      await assembly.dispose();
+      registerVoiceAdapters(assembly.adapters.filter(value => value.id !== adapter.id));
+      await lifecycle.toggle(null);
+      expect(lifecycle.getSnapshot().status).not.toBe('connected');
+      expect(vendor.startSession).not.toHaveBeenCalled();
+      expect(vendor.setAudioModeAsync).not.toHaveBeenCalled();
+      expect(getUserMedia).not.toHaveBeenCalled();
     });
-    providerManaged.setOwnedAttemptId(2);
-    await expect(providerManaged.runtime.adapter.start({ sessionId: 'voice-test', requestedTargetSessionAddress: null }))
-      .rejects.toMatchObject({ code: 'voice_input_mute_failed' });
-    expect(providerCalls).toEqual([false, true]);
-    releaseOldMute();
-    await expect(staleMute).resolves.toBeUndefined();
-    providerManaged.setOwnedAttemptId(3);
-    await providerManaged.runtime.adapter.start({ sessionId: 'voice-test', requestedTargetSessionAddress: null });
-    await expect(providerManaged.runtime.adapter.setMuted({
-      sessionId: 'voice-test',
-      muted: true,
-    })).resolves.toBeUndefined();
-    expect(providerCalls).toEqual([false, true, false, true]);
+  });
+
+  it('acquires the canonical audio lease before SDK capture, projects physical mute and releases the lease at End', async () => {
+    const conversation = createVendorConversation();
+    vendor.startSession.mockReset().mockResolvedValue(conversation);
+    await withGeneratedElevenLabs(async ({ lifecycle, adapter, getUserMedia }) => {
+      await lifecycle.toggle(null);
+      expect(lifecycle.getSnapshot().status).toBe('connected');
+      expect(adapter.getSnapshot().status).toBe('connected');
+      expect(vendor.setAudioModeAsync.mock.calls[0]?.[0]).toMatchObject({ allowsRecording: true, shouldPlayInBackground: true });
+      expect(vendor.setAudioModeAsync.mock.invocationCallOrder[0]).toBeLessThan(vendor.startSession.mock.invocationCallOrder[0]!);
+      expect(getUserMedia).not.toHaveBeenCalled();
+      await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true });
+      expect(conversation.isMuted()).toBe(true);
+      expect(adapter.getSnapshot().micMuted).toBe(true);
+      await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: false });
+      expect(conversation.isMuted()).toBe(false);
+      expect(adapter.getSnapshot().micMuted === true).toBe(false);
+      await lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+      expect(conversation.endSession).toHaveBeenCalledTimes(1);
+      expect(adapter.getSnapshot().status).toBe('disconnected');
+      expect(vendor.setAudioModeAsync.mock.calls.at(-1)?.[0]).toEqual({ shouldPlayInBackground: false });
+      expect(getUserMedia).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([false, true])('applies the latest provider mute (%s) before a delayed SDK conversation becomes connected', async muted => {
+    const conversation = createVendorConversation();
+    let connect: (() => void) | undefined;
+    vendor.startSession.mockReset().mockImplementation(() => new Promise<typeof conversation>(resolve => { connect = () => resolve(conversation); }));
+    await withGeneratedElevenLabs(async ({ lifecycle, adapter }) => {
+      const starting = lifecycle.toggle(null);
+      await vi.waitFor(() => expect(connect).toBeTypeOf('function'));
+      expect(adapter.getSnapshot().status).toBe('connecting');
+      await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: !muted });
+      await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted });
+      expect(conversation.setMicMuted).not.toHaveBeenCalled();
+      connect?.();
+      await starting;
+      expect(conversation.isMuted()).toBe(muted);
+      expect(adapter.getSnapshot().status).toBe('connected');
+      expect(adapter.getSnapshot().micMuted === true).toBe(muted);
+      expect(conversation.setMicMuted.mock.calls[0]).toEqual([muted]);
+    });
+  });
+
+  it('retires the actual provider attempt and audio lease when SDK muting rejects silence', async () => {
+    const conversation = createVendorConversation();
+    vendor.startSession.mockReset().mockResolvedValue(conversation);
+    await withGeneratedElevenLabs(async ({ lifecycle, adapter, getUserMedia }) => {
+      await lifecycle.toggle(null);
+      conversation.setMicMuted.mockImplementation(value => {
+        if (value) throw new Error('vendor_capture_mute_rejected');
+      });
+      await expect(adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true })).rejects.toThrow('vendor_capture_mute_rejected');
+      await vi.waitFor(() => expect(adapter.getSnapshot().status).not.toBe('connected'));
+      expect(conversation.endSession).toHaveBeenCalledTimes(1);
+      expect(vendor.setAudioModeAsync.mock.calls.at(-1)?.[0]).toEqual({ shouldPlayInBackground: false });
+      expect(getUserMedia).not.toHaveBeenCalled();
+    });
+  });
+
+  it('preserves the connected muted capture when the SDK refuses an Unmute', async () => {
+    const conversation = createVendorConversation();
+    vendor.startSession.mockReset().mockResolvedValue(conversation);
+    await withGeneratedElevenLabs(async ({ lifecycle, adapter }) => {
+      await lifecycle.toggle(null);
+      await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true });
+      conversation.setMicMuted.mockImplementation(value => {
+        if (!value) throw new Error('vendor_unmute_rejected');
+      });
+      await expect(adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: false })).rejects.toThrow('vendor_unmute_rejected');
+      expect(conversation.isMuted()).toBe(true);
+      expect(adapter.getSnapshot()).toMatchObject({ status: 'connected', micMuted: true });
+      expect(conversation.endSession).not.toHaveBeenCalled();
+      await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true });
+      expect(conversation.isMuted()).toBe(true);
+      expect(adapter.getSnapshot()).toMatchObject({ status: 'connected', micMuted: true });
+    });
+  });
+
+  it('closes a late SDK conversation after cancellation without publishing connected or retaining its audio lease', async () => {
+    const conversation = createVendorConversation();
+    let connect: (() => void) | undefined;
+    vendor.startSession.mockReset().mockImplementation(() => new Promise<typeof conversation>(resolve => { connect = () => resolve(conversation); }));
+    await withGeneratedElevenLabs(async ({ lifecycle, adapter, getUserMedia }) => {
+      const statuses: string[] = [];
+      const unsubscribe = adapter.subscribe?.(() => statuses.push(adapter.getSnapshot().status));
+      try {
+        const starting = lifecycle.toggle(null);
+        await vi.waitFor(() => expect(connect).toBeTypeOf('function'));
+        await lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+        expect(adapter.getSnapshot().status).toBe('disconnected');
+        expect(vendor.setAudioModeAsync.mock.calls.at(-1)?.[0]).toEqual({ shouldPlayInBackground: false });
+        connect?.();
+        await starting;
+        await vi.waitFor(() => expect(conversation.endSession).toHaveBeenCalledTimes(1));
+        expect(statuses).not.toContain('connected');
+        expect(getUserMedia).not.toHaveBeenCalled();
+      } finally {
+        unsubscribe?.();
+        connect?.();
+      }
+    });
   });
 });

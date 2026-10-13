@@ -1,25 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VoiceSpeechDiagnosticsConfigureRequestV1Schema, VoiceSpeechDiagnosticsSettingsV1Schema, VoiceSpeechDiagnosticsStatusResponseV1Schema,
+  resolveVoiceSpeechDiagnosticsStoragePolicy } from '@happier-dev/protocol/voice/diagnostics';
+import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
+import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccountScope';
+import { addPersistedVoiceDiagnosticsMachineRevocation, readPersistedVoiceDiagnosticsMachineRevocations } from './revocationObligationPersistence';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 
-const persistedByScope = new Map<string, string[]>();
-const configure = vi.fn();
+const configure = vi.hoisted(() => vi.fn());
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 
-vi.mock('./revocationObligationPersistence', () => ({
-  addPersistedVoiceDiagnosticsMachineRevocation: (scope: { serverId: string; accountId: string }, machineId: string) => {
-    const key = `${scope.serverId}:${scope.accountId}`;
-    persistedByScope.set(key, [...new Set([...(persistedByScope.get(key) ?? []), machineId])]);
-  },
-  clearPersistedVoiceDiagnosticsMachineRevocation: (scope: { serverId: string; accountId: string }, machineId: string) => {
-    const key = `${scope.serverId}:${scope.accountId}`;
-    persistedByScope.set(key, (persistedByScope.get(key) ?? []).filter((candidate) => candidate !== machineId));
-  },
-  readPersistedVoiceDiagnosticsMachineRevocations: (scope: { serverId: string; accountId: string }) => (
-    persistedByScope.get(`${scope.serverId}:${scope.accountId}`) ?? []
-  ),
-}));
-
-vi.mock('./client', () => ({
-  createVoiceDiagnosticsClientForMachine: () => ({ configure }),
-}));
+installSessionActionRpcBoundary(request => {
+  VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params);
+  return configure(request);
+});
+const { storage } = await import('@/sync/domains/state/storage');
 
 import {
   applyVoiceDiagnosticsMachinePolicy,
@@ -34,22 +32,47 @@ import {
   resetVoiceDiagnosticsRuntimeStatusForTests,
 } from './runtimeStatus';
 
-const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
-const settings = Object.freeze({
+let home: Awaited<ReturnType<typeof serveAccountHomes>>;
+let disconnect: (() => Promise<void>) | undefined;
+let scope: Readonly<{ serverId: string; accountId: string }>;
+const settings = VoiceSpeechDiagnosticsSettingsV1Schema.parse({
   v: 1 as const,
   enabled: true,
   consentVersion: 1 as const,
   captureSttInput: true,
   captureTtsOutput: false,
-  maxAgeMs: 60_000,
-  maxFiles: 10,
-  maxBytes: 1024,
-  maxDurationMs: 60_000,
+});
+
+function response(policy: typeof settings) {
+  return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({ ok: true,
+    root: '/private/voice-diagnostics', settings: policy, artifacts: [],
+    health: { captureFailure: false, cleanup: { status: 'healthy', code: null, ownedEntryCount: 0 } },
+    backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop'),
+  });
+}
+
+function clearPersistedFixtures() {
+  for (const accountId of ['account-a', 'account-b']) getPersistenceStorage().delete(
+    serverAccountScopedStorageKey('voice-diagnostics-machine-revocations-v1', { serverId: scope.serverId, accountId }),
+  );
+}
+afterEach(async () => {
+  clearPersistedFixtures();
+  await disconnect?.();
+  await home?.dispose();
 });
 
 describe('voice diagnostics revocation reload continuity', () => {
-  beforeEach(() => {
-    persistedByScope.clear();
+  beforeEach(async () => {
+    home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics.test', accountId: 'account-a' }],
+      route: ({ path }) => path.startsWith('/v1/machines/')
+        ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
+        : undefined });
+    disconnect = await home.restoreActiveConnection();
+    scope = { serverId: home.homes.diagnostics!.id, accountId: 'account-a' };
+    const machine = createMachineFixture({ id: 'machine-former', activeAt: Date.now() });
+    storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [scope.serverId]: [machine] } });
+    clearPersistedFixtures();
     configure.mockReset();
     resetVoiceDiagnosticsRevocationForTests();
     resetVoiceDiagnosticsRuntimeStatusForTests();
@@ -58,7 +81,7 @@ describe('voice diagnostics revocation reload continuity', () => {
   it('restores an unresolved former-machine shutdown after process state is lost and clears it only on acknowledgement', async () => {
     // A durable shutdown obligation represents a prior enabled (or otherwise
     // already tracked) machine policy, not a first default-off reconciliation.
-    configure.mockResolvedValueOnce({ settings });
+    configure.mockResolvedValueOnce(response(settings));
     await applyVoiceDiagnosticsMachinePolicy({
       machineId: 'machine-former',
       settings,
@@ -74,7 +97,7 @@ describe('voice diagnostics revocation reload continuity', () => {
       settings,
       intent,
     })).resolves.toMatchObject({ ok: false });
-    expect(persistedByScope.get('server-a:account-a')).toEqual(['machine-former']);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual(['machine-former']);
 
     resetVoiceDiagnosticsRevocationForTests();
     resetVoiceDiagnosticsRuntimeStatusForTests();
@@ -85,26 +108,34 @@ describe('voice diagnostics revocation reload continuity', () => {
       status: 'failed',
     });
 
+    // Omitting the real client's strict-consumer fields must not acknowledge
+    // shutdown or erase the durable obligation (the old client stub did).
     configure.mockResolvedValueOnce({ ok: true, settings: { ...settings, enabled: false, consentVersion: null } });
+    await expect(retryVoiceDiagnosticsRevocation({ obligation: restored, settings, persistenceScope: scope }))
+      .resolves.toMatchObject({ ok: false });
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual(['machine-former']);
+    const retry = readVoiceDiagnosticsRuntimeStatus().revocationObligations[0]!;
+    expect(retry.status).toBe('failed');
+    configure.mockResolvedValueOnce(response({ ...settings, enabled: false, consentVersion: null }));
     await expect(retryVoiceDiagnosticsRevocation({
-      obligation: restored,
+      obligation: retry,
       settings,
       persistenceScope: scope,
     })).resolves.toEqual({ ok: true, acknowledged: true });
-    expect(persistedByScope.get('server-a:account-a')).toEqual([]);
+    expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual([]);
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]);
   });
 
   it('replaces machine obligations when the active account scope changes', () => {
-    persistedByScope.set('server-a:account-a', ['machine-a']);
-    persistedByScope.set('server-a:account-b', ['machine-b']);
+    addPersistedVoiceDiagnosticsMachineRevocation(scope, 'machine-a');
+    addPersistedVoiceDiagnosticsMachineRevocation({ ...scope, accountId: 'account-b' }, 'machine-b');
 
     restorePersistedVoiceDiagnosticsMachineRevocations(scope);
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({ target: { kind: 'machine_policy', machineId: 'machine-a' } }),
     ]);
 
-    restorePersistedVoiceDiagnosticsMachineRevocations({ serverId: 'server-a', accountId: 'account-b' });
+    restorePersistedVoiceDiagnosticsMachineRevocations({ ...scope, accountId: 'account-b' });
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({ target: { kind: 'machine_policy', machineId: 'machine-b' } }),
     ]);

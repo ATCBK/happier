@@ -1,134 +1,142 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Socket } from 'socket.io-client';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-import {
-    acquireAdmittedSessionReferenceCorpusOptions,
-} from './admittedSessionReferenceCorpus';
-
-// The two transport seams a bare-reference acquisition reaches. Everything below
-// them — the pane reader, the coverage composition and the address projection —
-// stays real, so this proves the acquisition and its coverage, not a stub.
-const {
-    listServerProfiles,
-    fetchSessionListQueryPageForHome,
-    isSessionListQueryHomeOnline,
-    resolveOrdinarySessionListHomeOwner,
-} = vi.hoisted(() => ({
-    listServerProfiles: vi.fn(),
-    fetchSessionListQueryPageForHome: vi.fn(),
-    isSessionListQueryHomeOnline: vi.fn(),
-    resolveOrdinarySessionListHomeOwner: vi.fn(),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importActual) => ({
-    ...await importActual<typeof import('@/sync/domains/server/serverProfiles')>(),
-    listServerProfiles,
-}));
-
-vi.mock('@/sync/domains/session/listing/sessionListQueryRuntime', async (importActual) => ({
-    ...await importActual<typeof import('@/sync/domains/session/listing/sessionListQueryRuntime')>(),
-    fetchSessionListQueryPageForHome,
-    isSessionListQueryHomeOnline,
-    resolveOrdinarySessionListHomeOwner,
-}));
-
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const sockets = new Map<string, Socket>();
+installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+    if (serverUrl) sockets.set(new URL(serverUrl).origin, socket);
+    socket.connected = true;
+    vi.mocked(socket.connect).mockImplementation(() => {
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
+});
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+const { isSessionListQueryHomeOnline, resolveOrdinarySessionListHomeOwner } = await import('@/sync/domains/session/listing/sessionListQueryRuntime');
+const { resetSessionListPaneRetentionForTests } = await import('@/components/sessions/shell/sessionListPaneRetention');
+const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+const { acquireAdmittedSessionReferenceCorpusOptions } = await import('./admittedSessionReferenceCorpus');
+const initialState = storage.getState();
+const initialConcurrentFlag = process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
 const NO_ORDINARY_MEMBERSHIP = { ordinarySessionListMembershipByServerId: {} } as const;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+
+function page(sessionId: string, options: { hasNext?: boolean; metadataUpgradeRequiredCount?: number } = {}) {
+    return V2SessionListResponseSchema.parse({
+        sessions: [{
+            id: sessionId, seq: 0, createdAt: 1, updatedAt: 2, active: true, activeAt: 2,
+            encryptionMode: 'plain', metadata: JSON.stringify({ path: '/repo', host: 'test' }), metadataVersion: 1,
+            agentState: null, agentStateVersion: 0, dataEncryptionKey: null,
+        }],
+        hasNext: options.hasNext ?? false, nextCursor: options.hasNext ? 'next' : null,
+        ...(options.metadataUpgradeRequiredCount !== undefined ? { metadataUpgradeRequiredCount: options.metadataUpgradeRequiredCount } : {}),
+    });
+}
+
+async function arrangeHomes(twoMounted = true) {
+    const a = await home.addHome({ name: 'A', serverUrl: 'https://voice-corpus-a.test', accountId: 'account-a' });
+    const b = await home.addHome({ name: 'B', serverUrl: 'https://voice-corpus-b.test', accountId: 'account-b', active: false });
+    home.answer(a, '/v2/sessions', { body: V2SessionListResponseSchema.parse({ sessions: [], hasNext: false }) });
+    home.answer(b, '/v2/sessions', { body: V2SessionListResponseSchema.parse({ sessions: [], hasNext: false }) });
+    for (const serverId of [a, b]) home.answer(serverId, '/v1/auth/ping', { body: { ok: true } });
+    connection = await restoreServerAccountForTest({
+        serverUrl: 'https://voice-corpus-a.test', accountId: 'account-a',
+        request: async (url, init) => home.request(url, init),
+    });
+    installHomeGovernanceBoundaries(home);
+    // The real secondary reachability owner probes the same network port as
+    // Account restoration, which otherwise admits only the restored Home.
+    setRuntimeFetch(home.request);
+    storage.setState({ socketStatus: 'connected' });
+    startConcurrentSessionCacheSync();
+    await home.selectHomes(twoMounted ? [a, b] : [a]);
+    if (twoMounted) await waitForHomeGovernance(() => {
+        expect(resolveOrdinarySessionListHomeOwner(b)).toBe('concurrent');
+        expect(isSessionListQueryHomeOnline(b)).toBe(true);
+    });
+    return { a, b };
+}
+
+beforeEach(async () => {
+    process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
+    await home.reset();
+    storage.setState(initialState, true);
+    resetSessionListPaneRetentionForTests();
+});
+afterEach(async () => {
+    stopConcurrentSessionCacheSync();
+    await connection?.dispose();
+    connection = undefined;
+    await home.reset();
+    sockets.clear();
+    if (initialConcurrentFlag === undefined) delete process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
+    else process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = initialConcurrentFlag;
+    storage.setState(initialState, true);
+});
 
 describe('acquireAdmittedSessionReferenceCorpusOptions', () => {
-    beforeEach(() => {
-        listServerProfiles.mockReset();
-        fetchSessionListQueryPageForHome.mockReset();
-        isSessionListQueryHomeOnline.mockReset();
-        isSessionListQueryHomeOnline.mockReturnValue(true);
-        resolveOrdinarySessionListHomeOwner.mockReset();
-        resolveOrdinarySessionListHomeOwner.mockReturnValue('concurrent');
-    });
-
-    it('acquires the authorized corpus through the row-only session.list read when no pane owns one', async () => {
-        listServerProfiles.mockReturnValue([{ id: 'home-a' }, { id: 'home-b' }]);
-        fetchSessionListQueryPageForHome.mockImplementation(async (serverId: string) => ({
-            current: true,
-            sessionIds: serverId === 'home-a' ? ['s-alpha'] : ['s-beta'],
-            hasNext: false,
-        }));
-
+    it('acquires the authorized corpus through real row-only Home list reads when no pane owns one', async () => {
+        const { a, b } = await arrangeHomes();
+        home.answer(a, '/v2/sessions', { body: page('s-alpha') });
+        home.answer(b, '/v2/sessions', { body: page('s-beta') });
+        const ordinaryMembershipBefore = structuredClone(storage.getState().ordinarySessionListMembershipByServerId);
         const corpus = await acquireAdmittedSessionReferenceCorpusOptions(NO_ORDINARY_MEMBERSHIP);
-
-        // Off the Sessions list there is no pane, so the canonical list operation is
-        // the authority — read once per reachable Home, without publishing ordinary,
-        // archived or mounted-query membership.
-        expect(fetchSessionListQueryPageForHome).toHaveBeenCalledTimes(2);
-        expect(fetchSessionListQueryPageForHome).toHaveBeenCalledWith('home-a', expect.objectContaining({
-            membership: 'rowOnly',
-            source: { kind: 'ordinary', path: '/v2/sessions', allowV1Fallback: true },
-        }));
-        expect(corpus).toEqual({
-            knownServerIds: ['home-a', 'home-b'],
-            coverage: 'complete',
-            addresses: [
-                { serverId: 'home-a', sessionId: 's-alpha' },
-                { serverId: 'home-b', sessionId: 's-beta' },
-            ],
+        expect(corpus).toEqual({ knownServerIds: [a, b], coverage: 'complete', addresses: [
+            { serverId: a, sessionId: 's-alpha' }, { serverId: b, sessionId: 's-beta' },
+        ] });
+        expect(storage.getState().sessionListRowsByServerId[a]?.['s-alpha']).toBeDefined();
+        expect(storage.getState().sessionListRowsByServerId[b]?.['s-beta']).toBeDefined();
+        expect(storage.getState().ordinarySessionListMembershipByServerId).toEqual(ordinaryMembershipBefore);
+    });
+    it('reports incomplete coverage when a mounted Home read fails or another Home has more pages', async () => {
+        const { a, b } = await arrangeHomes();
+        home.answer(a, '/v2/sessions', { body: page('s-alpha', { hasNext: true }) });
+        home.answer(b, '/v2/sessions', { status: 503, body: {} });
+        await expect(acquireAdmittedSessionReferenceCorpusOptions(NO_ORDINARY_MEMBERSHIP)).resolves.toMatchObject({
+            coverage: 'incomplete', addresses: [{ serverId: a, sessionId: 's-alpha' }],
         });
     });
-
-    it('reports incomplete coverage when a reachable Home could not be read or has more pages', async () => {
-        listServerProfiles.mockReturnValue([{ id: 'home-a' }, { id: 'home-b' }]);
-        fetchSessionListQueryPageForHome.mockImplementation(async (serverId: string) => {
-            if (serverId === 'home-b') throw new Error('unreachable');
-            return { current: true, sessionIds: ['s-alpha'], hasNext: true };
-        });
-
-        // An unread Home and an unexhausted page both leave the corpus unproven, so a
-        // single local match must resolve as incomplete rather than unique.
-        await expect(acquireAdmittedSessionReferenceCorpusOptions(NO_ORDINARY_MEMBERSHIP))
-            .resolves.toMatchObject({ coverage: 'incomplete', addresses: [{ serverId: 'home-a', sessionId: 's-alpha' }] });
-    });
-
     it('does not read an offline Home and reports no corpus when none is reachable', async () => {
-        listServerProfiles.mockReturnValue([{ id: 'home-a' }]);
-        isSessionListQueryHomeOnline.mockReturnValue(false);
-
+        await arrangeHomes(false);
+        storage.setState({ socketStatus: 'disconnected' });
+        const readsBefore = home.requestsFor('/v2/sessions').length;
         await expect(acquireAdmittedSessionReferenceCorpusOptions(NO_ORDINARY_MEMBERSHIP)).resolves.toBeNull();
-        expect(fetchSessionListQueryPageForHome).not.toHaveBeenCalled();
+        expect(home.requestsFor('/v2/sessions')).toHaveLength(readsBefore);
     });
-
     it('keeps an offline mounted Home in the corpus as uncovered instead of dropping it', async () => {
-        listServerProfiles.mockReturnValue([{ id: 'home-a' }, { id: 'home-b' }]);
-        isSessionListQueryHomeOnline.mockImplementation((serverId: string) => serverId === 'home-a');
-        fetchSessionListQueryPageForHome.mockResolvedValue({ current: true, sessionIds: ['deploy'], hasNext: false });
-
-        // Home A is exhausted, but Home B is part of the selection and could hold another match.
+        const { a, b } = await arrangeHomes();
+        home.answer(a, '/v2/sessions', { body: page('deploy') });
+        const socket = sockets.get('https://voice-corpus-b.test');
+        if (!socket) throw new Error('Mounted Home Socket boundary missing');
+        socket.disconnect();
+        await waitForHomeGovernance(() => expect(isSessionListQueryHomeOnline(b)).toBe(false));
+        expect(resolveOrdinarySessionListHomeOwner(b)).toBe('concurrent');
         await expect(acquireAdmittedSessionReferenceCorpusOptions(NO_ORDINARY_MEMBERSHIP)).resolves.toEqual({
-            knownServerIds: ['home-a', 'home-b'],
-            coverage: 'incomplete',
-            addresses: [{ serverId: 'home-a', sessionId: 'deploy' }],
+            knownServerIds: [a, b], coverage: 'incomplete', addresses: [{ serverId: a, sessionId: 'deploy' }],
         });
-        expect(fetchSessionListQueryPageForHome).toHaveBeenCalledTimes(1);
     });
-
     it('does not count a saved Home that no runtime mounts', async () => {
-        listServerProfiles.mockReturnValue([{ id: 'home-a' }, { id: 'unmounted' }]);
-        resolveOrdinarySessionListHomeOwner.mockImplementation((serverId: string) => serverId === 'home-a' ? 'sync' : null);
-        isSessionListQueryHomeOnline.mockImplementation((serverId: string) => serverId === 'home-a');
-        fetchSessionListQueryPageForHome.mockResolvedValue({ current: true, sessionIds: ['deploy'], hasNext: false });
-
+        const { a, b } = await arrangeHomes(false);
+        home.answer(a, '/v2/sessions', { body: page('deploy') });
+        expect(resolveOrdinarySessionListHomeOwner(b)).toBeNull();
         await expect(acquireAdmittedSessionReferenceCorpusOptions(NO_ORDINARY_MEMBERSHIP)).resolves.toEqual({
-            knownServerIds: ['home-a'],
-            coverage: 'complete',
-            addresses: [{ serverId: 'home-a', sessionId: 'deploy' }],
+            knownServerIds: [a], coverage: 'complete', addresses: [{ serverId: a, sessionId: 'deploy' }],
         });
     });
-
-    it('reports incomplete coverage when a Home withheld historical rows pending their owner\'s upgrade', async () => {
-        listServerProfiles.mockReturnValue([{ id: 'home-a' }]);
-        fetchSessionListQueryPageForHome.mockResolvedValue({
-            current: true,
-            sessionIds: ['deploy'],
-            hasNext: false,
-            metadataUpgradeRequiredCount: 1,
-        });
-
-        await expect(acquireAdmittedSessionReferenceCorpusOptions(NO_ORDINARY_MEMBERSHIP))
-            .resolves.toMatchObject({ coverage: 'incomplete' });
+    it('reports incomplete coverage when a Home withholds historical rows pending the owner upgrade', async () => {
+        const { a } = await arrangeHomes(false);
+        home.answer(a, '/v2/sessions', { body: page('deploy', { metadataUpgradeRequiredCount: 1 }) });
+        await expect(acquireAdmittedSessionReferenceCorpusOptions(NO_ORDINARY_MEMBERSHIP)).resolves.toMatchObject({ coverage: 'incomplete' });
     });
 });

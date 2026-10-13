@@ -1,49 +1,104 @@
-import { afterAll, beforeEach as beforeAccountCase, afterEach as afterAccountCase } from 'vitest';
-import { installLocalVoiceAccountHarness, localVoiceHomeId, warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
+import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
+import { afterAll } from 'vitest';
+import { localVoiceHomeId, warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
-import { renderScreen } from '@/dev/testkit';
+import { createSessionFixture, renderScreen } from '@/dev/testkit';
 
 import {
-    daemonVoiceAgentCancelTurnStream,
-    createdAudioPlayers,
-    daemonVoiceAgentReadTurnStream,
-    daemonVoiceAgentSendTurn,
-    daemonVoiceAgentStart,
-    daemonVoiceAgentStartTurnStream,
-    daemonVoiceAgentWelcome,
     emitSpeechRecEvent,
     expoSpeechSpeak,
     getStorage,
     loadLocalVoiceEngineWithCompatState,
     registerLocalVoiceEngineHarnessHooks,
-    routerNavigate,
     sessionRpcWithServerScope,
-    setActiveServerAndSwitch,
-    sessionExecutionRunStart,
-    sendSessionMessageWithServerScope,
-    sendMessage,
     speechRecStart,
     speechRecStop,
     audioSessionRelease,
+    machineRpcWithServerScope,
+    localVoicePendingEnqueue,
+    localVoiceSpeechTranscription,
+    localVoiceRouteState,
+    switchLocalVoiceAccount,
+    readLocalVoiceMachinePrerequisites,
 } from './localVoiceEngine.testHarness';
-import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { VOICE_TOOL_RESULTS_JSON_PREFIX } from '@happier-dev/protocol';
-import type { CurrentUiContextSnapshotV1 } from '@happier-dev/protocol/plugins/ui';
+import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonVoiceInferenceModelsWarmResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
+import { VOICE_TOOL_RESULTS_JSON_PREFIX, type VoiceAssistantAction } from '@happier-dev/protocol';
+import { ExecutionRunEnsureOrStartResponseSchema, ExecutionRunActionResponseSchema } from '@happier-dev/protocol/execution/runs/index';
+import { ExecutionRunTurnStreamReadRequestSchema, ExecutionRunTurnStreamReadResponseSchema } from '@happier-dev/protocol/execution/runs/streaming';
+import { VoiceAssistantActionSchema } from '@happier-dev/protocol/voice/actions';
+import type { CurrentUiContextMountedEnrichment } from '@/components/appShell/currentUiContext/currentUiContextModel';
+import type { CurrentUiContextVoiceToolPort } from '@/components/appShell/currentUiContext/currentUiContextVoiceToolPort';
 import {
     attachVoiceAgentActionEffectId,
-    type VoiceAgentClient,
 } from '@/voice/agent/types';
 
-const warmDaemonVoiceInferenceOnVoiceHomeAttachMock = vi.hoisted(() => vi.fn());
+type SessionRequest = Parameters<typeof sessionRpcWithServerScope>[0];
+type VoiceRunStartAck = ReturnType<typeof ExecutionRunEnsureOrStartResponseSchema.parse>;
+const ensureAgentRpc = vi.fn<(request: SessionRequest) => Promise<unknown>>();
+const startTurnRpc = vi.fn<(request: SessionRequest) => Promise<unknown>>();
+const readTurnRpc = vi.fn<(request: SessionRequest) => Promise<unknown>>();
+const cancelTurnRpc = vi.fn<(request: SessionRequest) => Promise<unknown>>();
+const welcomeActionRpc = vi.fn<(request: SessionRequest) => Promise<unknown>>();
 
-vi.mock('@/voice/runtime/daemonInference/warmDaemonVoiceInferenceOnVoiceHomeAttach', () => ({
-    warmDaemonVoiceInferenceOnVoiceHomeAttach: (...args: any[]) => warmDaemonVoiceInferenceOnVoiceHomeAttachMock(...args),
-}));
+// The genuine Socket responder receives full wire requests. No private client
+// methods, streaming parser, run cache, acceptance or lifecycle owner is replaced.
+function configureSessionRpcObservers() {
+  const incumbent = sessionRpcWithServerScope.getMockImplementation();
+  if (!incumbent) throw new Error('Missing local Voice Socket RPC boundary');
+  for (const responder of [ensureAgentRpc, startTurnRpc, readTurnRpc, cancelTurnRpc, welcomeActionRpc]) {
+    responder.mockReset();
+    responder.mockImplementation(incumbent);
+  }
+  ensureAgentRpc.mockResolvedValue(undefined);
+  sessionRpcWithServerScope.mockImplementation(async request => {
+    if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
+      || request.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) {
+      const override = await ensureAgentRpc(request);
+      if (override !== undefined) {
+        const response = ExecutionRunEnsureOrStartResponseSchema.parse(override);
+        // A daemon refusal precedes run creation; do not secretly create a
+        // retained run beneath an externally supplied negative wire reply.
+        if (!response.ok) return response;
+      }
+      const admitted = await incumbent(request);
+      return override === undefined ? admitted : ExecutionRunEnsureOrStartResponseSchema.parse(override);
+    }
+    if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START
+      || request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2) return startTurnRpc(request);
+    if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) return readTurnRpc(request);
+    if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) return cancelTurnRpc(request);
+    if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_ACTION) return welcomeActionRpc(request);
+    return incumbent(request);
+  });
+}
+function createTurnReadReply(reply: { assistantText: string; actions?: readonly VoiceAssistantAction[] }) {
+  return ExecutionRunTurnStreamReadResponseSchema.parse({ streamId: 'stream-1',
+    events: [{ t: 'done', assistantText: reply.assistantText,
+      actions: reply.actions?.map(action => VoiceAssistantActionSchema.parse(action)) ?? [] }], nextCursor: 1, done: true });
+}
 
-type VoiceAgentTurnStreamReadResult = Awaited<ReturnType<VoiceAgentClient['readTurnStream']>>;
+type MachineRequest = Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc')['machineRpcWithServerScope']>[0];
+
+function readWarmRequests(): MachineRequest[] {
+    return machineRpcWithServerScope.mock.calls
+        .map(([request]) => request as MachineRequest)
+        .filter(request => request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM);
+}
+
+function configureWarmTransport(reply: (request: MachineRequest) => Promise<unknown>) {
+    const incumbent = machineRpcWithServerScope.getMockImplementation();
+    machineRpcWithServerScope.mockImplementation((request: MachineRequest) => {
+        if (request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM) return reply(request);
+        if (!incumbent) throw new Error('Missing local Voice machine RPC fixture');
+        return incumbent(request);
+    });
+}
+
+type VoiceAgentTurnStreamReadResult = ReturnType<typeof ExecutionRunTurnStreamReadResponseSchema.parse>;
 
 type MockWithCalls = {
     mock: {
@@ -67,34 +122,87 @@ async function flushMicrotasks(iterations: number) {
     }
 }
 
-async function waitForCreatedAudioPlayerListener(eventName: string) {
-    await waitForCondition(() => createdAudioPlayers[0]?.__hasListener?.(eventName) === true, `audio player listener: ${eventName}`);
-}
-
-async function waitForCreatedAudioPlayer() {
-    await waitForCondition(() => createdAudioPlayers.length > 0, 'created audio player');
-}
-
 let localVoiceEngine: Awaited<ReturnType<typeof loadLocalVoiceEngineWithCompatState>>;
 let useVoiceTargetStore: typeof import('@/voice/runtime/voiceTargetStore').useVoiceTargetStore;
 
-const accountHarness = await installLocalVoiceAccountHarness();
 const restoreHarnessModuleLoader = await warmLocalVoiceEngineHarnessGraph();
 afterAll(() => restoreHarnessModuleLoader());
+// These are the mounted AppShell owners used by the application. Warm their
+// graph during collection; test leaves publish only their authored UI content.
+const [
+    { InjectedAuthProvider },
+    { MainAppTabStateProvider },
+    { AppPaneProvider },
+    { CurrentUiContextProvider, usePublishCurrentUiContext },
+    { PluginSurfaceFocusEligibilityProvider },
+    { useCurrentUiContextVoiceToolPort },
+    { TokenStorage },
+    { getActiveServerSnapshot },
+    { voiceAgentSessions },
+] = await Promise.all([
+    import('@/auth/context/AuthContext'),
+    import('@/components/navigation/mobile/chrome/MainAppTabStateProvider'),
+    import('@/components/appShell/panes/AppPaneProvider'),
+    import('@/components/appShell/currentUiContext/CurrentUiContextProvider'),
+    import('@/components/ui/presentation/PluginSurfaceFocusEligibility'),
+    import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort'),
+    import('@/auth/storage/tokenStorage'),
+    import('@/sync/domains/server/serverRuntime'),
+    import('@/voice/agent/voiceAgentSessions'),
+]);
+const mountedUiScreens = new Set<Awaited<ReturnType<typeof renderScreen>>>();
+
+async function mountCurrentUi(enrichment: CurrentUiContextMountedEnrichment) {
+    localVoiceRouteState.pathname = '/settings/voice';
+    localVoiceRouteState.segments = ['(app)', 'settings', 'voice'];
+    const credentials = await TokenStorage.getCredentialsForServerUrl(getActiveServerSnapshot().serverUrl);
+    if (!credentials) throw new Error('Mounted AppShell requires restored Account credentials');
+    const mountedPort: { current: CurrentUiContextVoiceToolPort | null } = { current: null };
+    function Publication(props: { enrichment: CurrentUiContextMountedEnrichment }) {
+        usePublishCurrentUiContext(props.enrichment);
+        mountedPort.current = useCurrentUiContextVoiceToolPort();
+        return null;
+    }
+    const tree = (next: CurrentUiContextMountedEnrichment, auth = credentials) => {
+        const publication = React.createElement(Publication, { enrichment: next });
+        const focused = React.createElement(PluginSurfaceFocusEligibilityProvider, {
+            active: true, currentUiContextActive: true, children: publication,
+        });
+        const context = React.createElement(CurrentUiContextProvider, { children: focused });
+        const panes = React.createElement(AppPaneProvider, { children: context });
+        const tabs = React.createElement(MainAppTabStateProvider, { children: panes });
+        return React.createElement(InjectedAuthProvider, { credentials: auth, children: tabs });
+    };
+    const screen = await renderScreen(tree(enrichment));
+    mountedUiScreens.add(screen);
+    const admittedPort = mountedPort.current;
+    if (!admittedPort) throw new Error('Actual mounted Current UI port unavailable');
+    return {
+        port: admittedPort,
+        update: (next: CurrentUiContextMountedEnrichment) => screen.update(tree(next)),
+        async switchAccount(accountId: string, next: CurrentUiContextMountedEnrichment) {
+            await switchLocalVoiceAccount(accountId);
+            const nextCredentials = await TokenStorage.getCredentialsForServerUrl(getActiveServerSnapshot().serverUrl);
+            if (!nextCredentials) throw new Error('Switched AppShell credentials unavailable');
+            await screen.update(tree(next, nextCredentials));
+        },
+        async unmount() { await screen.unmount(); mountedUiScreens.delete(screen); },
+    };
+}
 
 describe('local voice engine agent behavior', () => {
     registerLocalVoiceEngineHarnessHooks({ resetModulesBetweenTests: false });
-    beforeAccountCase(() => accountHarness.setup());
-    afterAccountCase(() => accountHarness.dispose());
 
     beforeEach(async () => {
-        warmDaemonVoiceInferenceOnVoiceHomeAttachMock.mockReset();
-        warmDaemonVoiceInferenceOnVoiceHomeAttachMock.mockResolvedValue(undefined);
+        configureSessionRpcObservers();
+        configureWarmTransport(async () => DaemonVoiceInferenceModelsWarmResponseSchema.parse({ ok: true, models: [] }));
         ({ useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore'));
         localVoiceEngine = await loadLocalVoiceEngineWithCompatState();
     }, 180_000);
 
     afterEach(async () => {
+        for (const screen of mountedUiScreens) await screen.unmount();
+        mountedUiScreens.clear();
         await localVoiceEngine.stopLocalVoiceSession();
         await localVoiceEngine.stopLocalVoiceAgent('s1');
         await localVoiceEngine.stopLocalVoiceAgent(VOICE_AGENT_GLOBAL_SESSION_ID);
@@ -148,14 +256,14 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                         } },
@@ -164,7 +272,7 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'session-model', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'session-model', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
             machines: {
                 ...storage.getState().machines,
@@ -176,27 +284,24 @@ describe('local voice engine agent behavior', () => {
             },
         });
 
-        const error: any = new Error('unsupported');
-        error.rpcErrorCode = 'VOICE_AGENT_UNSUPPORTED';
-        daemonVoiceAgentStart.mockRejectedValueOnce(error);
+        ensureAgentRpc.mockResolvedValue(ExecutionRunEnsureOrStartResponseSchema.parse({
+            ok: false, error: 'unsupported', errorCode: 'VOICE_AGENT_UNSUPPORTED',
+        }));
 
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { toggleLocalVoiceTurn, getLocalVoiceState } = localVoiceEngine;
+        const beforeCapture = await readLocalVoiceMachinePrerequisites();
         await toggleLocalVoiceTurn('s1');
+        const afterCapture = await readLocalVoiceMachinePrerequisites();
         await toggleLocalVoiceTurn('s1');
 
-        expect(daemonVoiceAgentStart).toHaveBeenCalledTimes(2);
-        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-        expect(
-            (globalThis.fetch as any).mock.calls.some((call: any[]) =>
-                String(call?.[0] ?? '').includes('/v1/chat/completions'),
-            ),
-        ).toBe(false);
-        expect(sendMessage).not.toHaveBeenCalled();
+        expect(ensureAgentRpc, JSON.stringify({ beforeCapture, afterCapture,
+            afterTranscription: await readLocalVoiceMachinePrerequisites(), runtime: getLocalVoiceState(),
+        })).toHaveBeenCalledTimes(2);
+        expect(localVoiceSpeechTranscription).toHaveBeenCalledTimes(1);
+        expect(localVoicePendingEnqueue.mock.calls.filter(([request]) => request.sessionId === 's1')).toEqual([]);
+        expect(readLocalConversationVoiceSettings(storage.getState().settings.voice).conversationMode).toBe('agent');
         expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
             sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
@@ -215,18 +320,18 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                             },
                         } },
                     },
@@ -234,28 +339,25 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
-        daemonVoiceAgentStart
-            .mockResolvedValueOnce({ voiceAgentId: 'va1' })
-            .mockResolvedValueOnce({ voiceAgentId: 'va2' });
-        daemonVoiceAgentSendTurn
+        ensureAgentRpc
+            .mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true })
+            .mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
+        readTurnRpc
             .mockRejectedValueOnce(Object.assign(new Error('not found'), { rpcErrorCode: 'VOICE_AGENT_NOT_FOUND' }))
-            .mockResolvedValueOnce({ assistantText: 'Recovered reply' });
+            .mockResolvedValueOnce(createTurnReadReply({ assistantText: 'Recovered reply' }));
 
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
         await toggleLocalVoiceTurn('s1');
 
-        expect(daemonVoiceAgentStart).toHaveBeenCalledTimes(2);
-        expect(daemonVoiceAgentSendTurn).toHaveBeenCalledTimes(2);
+        expect(ensureAgentRpc).toHaveBeenCalledTimes(2);
+        expect(readTurnRpc).toHaveBeenCalledTimes(2);
     });
 
     it('uses daemon streaming agent methods when streaming is enabled', async () => {
@@ -269,21 +371,21 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: true,
                             },
                         } },
@@ -292,30 +394,26 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
-        daemonVoiceAgentStartTurnStream.mockResolvedValueOnce({ streamId: 'stream-abc' });
-        daemonVoiceAgentReadTurnStream.mockResolvedValueOnce({
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
+        startTurnRpc.mockResolvedValueOnce({ streamId: 'stream-abc' });
+        readTurnRpc.mockResolvedValueOnce({
             streamId: 'stream-abc',
             events: [{ t: 'done', assistantText: 'streamed reply' }],
             nextCursor: 1,
             done: true,
         });
 
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
         await toggleLocalVoiceTurn('s1');
 
-        expect(daemonVoiceAgentStartTurnStream).toHaveBeenCalledTimes(1);
-        expect(daemonVoiceAgentReadTurnStream).toHaveBeenCalledTimes(1);
-        expect(daemonVoiceAgentSendTurn).not.toHaveBeenCalled();
+        expect(startTurnRpc).toHaveBeenCalledTimes(1);
+        expect(readTurnRpc).toHaveBeenCalledTimes(1);
     });
 
     it('prewarmOnConnect starts the daemon voice agent when recording begins (before STT completes)', async () => {
@@ -329,22 +427,22 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                                 prewarmOnConnect: true,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: false,
                             },
                         } },
@@ -353,18 +451,18 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
 
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
 
-        await flushMicrotasks(4000);
+        await waitForMockCalls(ensureAgentRpc, 1);
 
-        expect(daemonVoiceAgentStart).toHaveBeenCalledTimes(1);
+        expect(ensureAgentRpc).toHaveBeenCalledTimes(1);
     });
 
     it('delivers automatic bounded current UI metadata through the active local agent attempt only', async () => {
@@ -382,22 +480,22 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                                 prewarmOnConnect: true,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: false,
                             },
                         } },
@@ -406,40 +504,26 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
         const agentStart = {
-            resolve: null as ((value: { voiceAgentId: string }) => void) | null,
+            resolve: null as ((value: VoiceRunStartAck) => void) | null,
         };
-        daemonVoiceAgentStart.mockImplementationOnce(
-            () => new Promise<{ voiceAgentId: string }>((resolve) => {
+        ensureAgentRpc.mockImplementationOnce(
+            () => new Promise<VoiceRunStartAck>((resolve) => {
                 agentStart.resolve = resolve;
             }),
         );
-        let snapshot: CurrentUiContextSnapshotV1 | null = {
-            navigation: {
-                area: 'settings',
-                screen: 'settings_page',
-                title: 'VOICE_TITLE_SENTINEL',
-                presentation: 'screen',
-            },
+        const currentUi = await mountCurrentUi({
             entity: { kind: 'issue', label: 'PRIVATE_ENTITY_SENTINEL' },
             detail: { secret: 'PRIVATE_DETAIL_SENTINEL' },
             commands: [],
-        };
-        const currentUiSubscription = {
-            listener: null as (() => void) | null,
-        };
-        const currentUiContext = {
-            readCurrentUiContext: vi.fn(() => snapshot),
-            resolveCurrentUiCommand: vi.fn(() => null),
-            subscribe: vi.fn((nextListener: () => void) => {
-                currentUiSubscription.listener = nextListener;
-                return () => { currentUiSubscription.listener = null; };
-            }),
-        };
+        });
+        const authoredNavigation = currentUi.port.readCurrentUiContext()?.navigation;
+        expect(authoredNavigation).toMatchObject({ area: 'settings', screen: 'settings/voice' });
+        expect(authoredNavigation?.title).toBeTruthy();
 
         const setCurrentUiContextMode = (mode: 'automatic' | 'on_demand' | 'off') => {
             const state = storage.getState();
@@ -457,7 +541,7 @@ describe('local voice engine agent behavior', () => {
             });
         };
         const readLastProviderUserText = () => String(
-            (daemonVoiceAgentSendTurn.mock.calls.at(-1)?.[0] as { userText?: unknown } | undefined)?.userText ?? '',
+            (startTurnRpc.mock.calls.at(-1)?.[0]?.payload as { message?: unknown } | undefined)?.message ?? '',
         );
 
         const { voiceSessionBindingManager } = await import('@/voice/binding/voiceConversationBindingRuntime');
@@ -470,18 +554,16 @@ describe('local voice engine agent behavior', () => {
             conversationSessionId: 'voice-home-session',
         });
 
-        const { voiceHooks } = await import('@/voice/context/voiceHooks');
-        const currentUiContextChangedSpy = vi.spyOn(voiceHooks, 'onCurrentUiContextChanged');
-
-        const toggle = localVoiceEngine.toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID, currentUiContext);
-        await waitForMockCalls(daemonVoiceAgentStart, 1);
+        const toggle = localVoiceEngine.toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID, currentUi.port);
+        await waitForMockCalls(ensureAgentRpc, 1);
         await toggle;
-        expect(currentUiContext.subscribe).not.toHaveBeenCalled();
+        expect(startTurnRpc).not.toHaveBeenCalled();
 
         const resolveAgentStart = agentStart.resolve;
         if (!resolveAgentStart) throw new Error('missing local voice agent start resolver');
-        resolveAgentStart({ voiceAgentId: 'va1' });
-        await waitForMockCalls(currentUiContext.subscribe, 1);
+        resolveAgentStart({ ok: true, runId: 'local-agent-run', created: true });
+        await waitForCondition(() => voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID), 'actual local Agent start');
+        await flushMicrotasks(4000);
 
         await localVoiceEngine.sendLocalVoiceAgentTextTurn(
             VOICE_AGENT_GLOBAL_SESSION_ID,
@@ -491,16 +573,14 @@ describe('local voice engine agent behavior', () => {
         const automaticProviderText = readLastProviderUserText();
         expect(automaticProviderText).toContain('CURRENT UI CONTEXT');
         expect(automaticProviderText).toContain('"area":"settings"');
-        expect(automaticProviderText).toContain('"screen":"settings_page"');
-        expect(automaticProviderText).toContain('VOICE_TITLE_SENTINEL');
+        expect(automaticProviderText).toContain('"screen":"settings/voice"');
+        expect(automaticProviderText).toContain(authoredNavigation!.title!);
         expect(automaticProviderText).not.toContain('PRIVATE_ENTITY_SENTINEL');
         expect(automaticProviderText).not.toContain('PRIVATE_DETAIL_SENTINEL');
 
-        const attemptListener = currentUiSubscription.listener;
-        if (!attemptListener) throw new Error('missing local current UI subscription');
-        snapshot = null;
-        attemptListener();
-        attemptListener();
+        // The real mounted owner withdraws its snapshot and publishes retirement.
+        await currentUi.unmount();
+        expect(currentUi.port.readCurrentUiContext()).toBeNull();
         await localVoiceEngine.sendLocalVoiceAgentTextTurn(
             VOICE_AGENT_GLOBAL_SESSION_ID,
             'Has the screen retired?',
@@ -513,11 +593,6 @@ describe('local voice engine agent behavior', () => {
         expect(retirementProviderText).not.toContain('PRIVATE_DETAIL_SENTINEL');
 
         setCurrentUiContextMode('on_demand');
-        snapshot = {
-            navigation: { area: 'settings', screen: 'settings_page', title: 'ON_DEMAND_NAVIGATION_SENTINEL' },
-            commands: [],
-        };
-        attemptListener();
         await localVoiceEngine.sendLocalVoiceAgentTextTurn(
             VOICE_AGENT_GLOBAL_SESSION_ID,
             'Read only when I ask.',
@@ -526,11 +601,6 @@ describe('local voice engine agent behavior', () => {
         expect(readLastProviderUserText()).toBe('Read only when I ask.');
 
         setCurrentUiContextMode('off');
-        snapshot = {
-            navigation: { area: 'settings', screen: 'settings_page', title: 'OFF_NAVIGATION_SENTINEL' },
-            commands: [],
-        };
-        attemptListener();
         await localVoiceEngine.sendLocalVoiceAgentTextTurn(
             VOICE_AGENT_GLOBAL_SESSION_ID,
             'No current UI context.',
@@ -548,40 +618,31 @@ describe('local voice engine agent behavior', () => {
         );
         const stop = localVoiceEngine.stopLocalVoiceSession();
         await waitForMockCalls(audioSessionRelease, 1);
-        expect(currentUiSubscription.listener).toBeNull();
+        expect(currentUi.port.readCurrentUiContext()).toBeNull();
         const releasePendingNativeAudio = pendingNativeAudio.release;
         if (!releasePendingNativeAudio) throw new Error('missing pending native audio release');
         releasePendingNativeAudio();
         await stop;
-        const providerCallsAfterStop = daemonVoiceAgentSendTurn.mock.calls.length;
+        const providerCallsAfterStop = readTurnRpc.mock.calls.length;
         setCurrentUiContextMode('automatic');
-        attemptListener();
-        expect(currentUiSubscription.listener).toBeNull();
-        expect(daemonVoiceAgentSendTurn).toHaveBeenCalledTimes(providerCallsAfterStop);
-        expect(currentUiContextChangedSpy).toHaveBeenCalled();
-        expect(currentUiContextChangedSpy.mock.calls.every(([sessionId]) => sessionId === VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true);
-        expect(currentUiContextChangedSpy.mock.calls.some(([sessionId]) => sessionId === 'voice-home-session')).toBe(false);
+        expect(readTurnRpc).toHaveBeenCalledTimes(providerCallsAfterStop);
 
         const retiringAgentStart = {
-            resolve: null as ((value: { voiceAgentId: string }) => void) | null,
+            resolve: null as ((value: VoiceRunStartAck) => void) | null,
         };
-        daemonVoiceAgentStart.mockImplementationOnce(
-            () => new Promise<{ voiceAgentId: string }>((resolve) => {
+        ensureAgentRpc.mockImplementationOnce(
+            () => new Promise<VoiceRunStartAck>((resolve) => {
                 retiringAgentStart.resolve = resolve;
             }),
         );
-        const retiringCurrentUiContext = {
-            readCurrentUiContext: vi.fn(() => snapshot),
-            resolveCurrentUiCommand: vi.fn(() => null),
-            subscribe: vi.fn(() => () => {}),
-        };
+        const retiringCurrentUi = await mountCurrentUi({ detail: { secret: 'LATE_START_CONTEXT_SENTINEL' } });
         const retiringToggle = localVoiceEngine.toggleLocalVoiceTurn(
             VOICE_AGENT_GLOBAL_SESSION_ID,
-            retiringCurrentUiContext,
+            retiringCurrentUi.port,
         );
-        await waitForMockCalls(daemonVoiceAgentStart, 2);
+        await waitForMockCalls(ensureAgentRpc, 2);
         await retiringToggle;
-        expect(retiringCurrentUiContext.subscribe).not.toHaveBeenCalled();
+        const providerCallsBeforeRetiringStart = startTurnRpc.mock.calls.length;
 
         const retiringNativeAudio = {
             release: null as (() => void) | null,
@@ -595,13 +656,16 @@ describe('local voice engine agent behavior', () => {
         await waitForMockCalls(audioSessionRelease, 2);
         const resolveRetiringAgentStart = retiringAgentStart.resolve;
         if (!resolveRetiringAgentStart) throw new Error('missing retiring local voice agent start resolver');
-        resolveRetiringAgentStart({ voiceAgentId: 'va2' });
+        resolveRetiringAgentStart({ ok: true, runId: 'local-agent-run', created: true });
         await flushMicrotasks(4000);
-        expect(retiringCurrentUiContext.subscribe).not.toHaveBeenCalled();
+        await retiringCurrentUi.update({ detail: { secret: 'LATE_START_CONTEXT_SENTINEL' } });
+        expect(startTurnRpc).toHaveBeenCalledTimes(providerCallsBeforeRetiringStart);
         const releaseRetiringNativeAudio = retiringNativeAudio.release;
         if (!releaseRetiringNativeAudio) throw new Error('missing retiring native audio release');
         releaseRetiringNativeAudio();
         await retiringStop;
+        expect(localVoiceEngine.getLocalVoiceState()).toMatchObject({ status: 'idle' });
+        expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(false);
     });
 
     it('does not read or invoke Account B after Account A capture retires during transcription', async () => {
@@ -612,6 +676,7 @@ describe('local voice engine agent behavior', () => {
                 voice: {
                     ...storage.getState().settings.voice,
                     providerId: 'local_conversation',
+                    executionMachine: { mode: 'fixed', machineId: 'machine-1' },
                     privacy: {
                         ...storage.getState().settings.voice.privacy,
                         currentUiContextMode: 'on_demand',
@@ -619,18 +684,18 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
-                                baseUrl: 'http://localhost:8000',
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
+                                provider: 'happier.voice.openai-compat/stt',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: false,
                             },
                         } },
@@ -638,77 +703,68 @@ describe('local voice engine agent behavior', () => {
                 },
             },
         });
+        // This keeper deliberately holds recorded-provider transcription.
+        // Provider URL/consent are already authored in the canonical root
+        // provider config; an obsolete inline URL is not an STT selection.
+        expect(readLocalConversationVoiceSettings(storage.getState().settings.voice).stt.provider)
+            .toBe('happier.voice.openai-compat/stt');
 
-        let currentAccount: 'account-a' | 'account-b' = 'account-a';
-        const readAccounts: Array<'account-a' | 'account-b'> = [];
-        const readCurrentUiContext = vi.fn((): CurrentUiContextSnapshotV1 => {
-            readAccounts.push(currentAccount);
-            return {
-                navigation: {
-                    area: 'settings',
-                    screen: 'settings_page',
-                    title: currentAccount === 'account-a'
-                        ? 'ACCOUNT_A_CURRENT_UI_SENTINEL'
-                        : 'ACCOUNT_B_CURRENT_UI_SENTINEL',
-                    presentation: 'screen',
-                },
-                commands: [],
-            };
+        const invokedAccounts: string[] = [];
+        const uiForAccount = (accountId: string): CurrentUiContextMountedEnrichment => ({
+            entity: { kind: 'issue', label: `${accountId}_CURRENT_UI_SENTINEL` },
+            commands: [{ title: `${accountId} visible command`, command: { kind: 'hostLocal',
+                invoke: () => { invokedAccounts.push(accountId); return { ok: true }; },
+            } }],
         });
-        const invokeCurrentUiCommand = vi.fn(async () => ({ ok: true as const }));
-        const currentUiContext = {
-            readCurrentUiContext,
-            resolveCurrentUiCommand: vi.fn(() => null),
-            subscribe: vi.fn(() => () => {}),
-            invokeCurrentUiCommand,
-        };
+        const currentUi = await mountCurrentUi(uiForAccount('account-a'));
 
-        let resolveTranscription!: (value: { ok: true; json: () => Promise<{ text: string }> }) => void;
-        (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementationOnce(() => (
-            new Promise<{ ok: true; json: () => Promise<{ text: string }> }>((resolve) => {
+        let resolveTranscription!: (value: string) => void;
+        let markTranscriptionStarted!: () => void;
+        const transcriptionStarted = new Promise<void>(resolve => { markTranscriptionStarted = resolve; });
+        localVoiceSpeechTranscription.mockImplementationOnce(() => (
+            new Promise<string>((resolve) => {
                 resolveTranscription = resolve;
+                markTranscriptionStarted();
             })
         ));
-        daemonVoiceAgentStart.mockResolvedValue({ voiceAgentId: 'va-account-a' });
-        daemonVoiceAgentSendTurn
-            .mockResolvedValueOnce({
-                assistantText: 'Checking the current interface.',
-                actions: [
-                    { t: 'readCurrentUiContext', args: {} },
-                    attachVoiceAgentActionEffectId({
-                        t: 'invokeCurrentUiCommand',
-                        args: { commandId: 'account-b-command' },
-                    }, 'account-retired-current-ui-effect'),
-                ],
-            })
-            .mockResolvedValueOnce({ assistantText: 'Done.', actions: [] });
-
-        await localVoiceEngine.toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID, currentUiContext);
-        const pendingTurn = localVoiceEngine.toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID);
-        await waitForCondition(
-            () => (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length === 1,
-            'recorded transcription request',
-        );
-        const daemonTurnsBeforeEnd = daemonVoiceAgentSendTurn.mock.calls.length;
-        const currentUiReadsBeforeEnd = readCurrentUiContext.mock.calls.length;
-        const currentUiInvocationsBeforeEnd = invokeCurrentUiCommand.mock.calls.length;
+        ensureAgentRpc.mockResolvedValue({ ok: true, runId: 'local-agent-run', created: true });
+        await act(async () => { await localVoiceEngine.toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID, currentUi.port); });
+        expect(localVoiceEngine.getLocalVoiceState()).toMatchObject({ status: 'recording' });
+        let pendingTurn!: Promise<void>;
+        await act(async () => { pendingTurn = localVoiceEngine.toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID); });
+        // Await the genuine held daemon acknowledgement admission. The outer
+        // case budget owns this composed operation, not a one-second observer.
+        await transcriptionStarted;
+        const daemonTurnsBeforeEnd = readTurnRpc.mock.calls.length;
+        const providerTurnsBeforeEnd = startTurnRpc.mock.calls.length;
 
         // VoiceSessionRuntime invokes this exact local stop when Account A's
         // active-scope lifetime retires. The raw AppShell port then follows the
         // next render and would otherwise expose Account B after transcription.
-        await localVoiceEngine.stopLocalVoiceSession();
-        currentAccount = 'account-b';
-        resolveTranscription({
-            ok: true,
-            json: async () => ({ text: 'What is on the screen now?' }),
-        });
+        await act(async () => { await localVoiceEngine.stopLocalVoiceSession(); });
+        await currentUi.switchAccount('account-b', uiForAccount('account-b'));
+        const accountBSnapshot = currentUi.port.readCurrentUiContext();
+        expect(accountBSnapshot?.entity?.label).toBe('account-b_CURRENT_UI_SENTINEL');
+        const accountBCommand = accountBSnapshot?.commands.find(command => command.title === 'account-b visible command');
+        if (!accountBCommand) throw new Error('Mounted Account B command unavailable');
+        readTurnRpc.mockResolvedValueOnce(createTurnReadReply({
+            assistantText: 'Checking the current interface.',
+            actions: [{ t: 'readCurrentUiContext', args: {} }, attachVoiceAgentActionEffectId({
+                t: 'invokeCurrentUiCommand', args: { commandId: accountBCommand.id },
+            }, 'account-retired-current-ui-effect')],
+        }));
+        resolveTranscription('What is on the screen now?');
         await pendingTurn;
 
-        expect(daemonVoiceAgentSendTurn).toHaveBeenCalledTimes(daemonTurnsBeforeEnd);
-        expect(readCurrentUiContext).toHaveBeenCalledTimes(currentUiReadsBeforeEnd);
-        expect(invokeCurrentUiCommand).toHaveBeenCalledTimes(currentUiInvocationsBeforeEnd);
-        expect(readAccounts).not.toContain('account-b');
-        expect(invokeCurrentUiCommand).not.toHaveBeenCalled();
+        expect(readTurnRpc).toHaveBeenCalledTimes(daemonTurnsBeforeEnd);
+        expect(startTurnRpc).toHaveBeenCalledTimes(providerTurnsBeforeEnd);
+        expect(invokedAccounts).toEqual([]);
+        // Positive control: B's real mounted command is reachable now, but the
+        // old captured/transcribing attempt was unable to read or invoke it.
+        await act(async () => {
+            await expect(currentUi.port.invokeCurrentUiCommand?.({ commandId: accountBCommand.id })).resolves.toMatchObject({ ok: true });
+        });
+        expect(invokedAccounts).toEqual(['account-b']);
     });
 
     it('suppresses expected daemon-unavailable prewarm errors while still starting the local recording flow', async () => {
@@ -722,22 +778,22 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                                 prewarmOnConnect: true,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: false,
                             },
                         } },
@@ -746,13 +802,12 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
-        const consoleErrorSpy = vi.fn();
-        console.error = consoleErrorSpy as any;
-        daemonVoiceAgentStart.mockRejectedValueOnce(
+        const consoleErrorSpy = vi.spyOn(console, 'error');
+        ensureAgentRpc.mockRejectedValueOnce(
             Object.assign(new Error('RPC method not available'), {
                 rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
             }),
@@ -763,8 +818,10 @@ describe('local voice engine agent behavior', () => {
 
         await flushMicrotasks(4000);
 
-        expect(daemonVoiceAgentStart).toHaveBeenCalledTimes(1);
-        expect(consoleErrorSpy).not.toHaveBeenCalled();
+        expect(ensureAgentRpc).toHaveBeenCalledTimes(1);
+        expect(consoleErrorSpy.mock.calls.filter(([tag]) =>
+            tag === '[fireAndForget] localVoiceEngine.prewarmLocalVoiceAgentOnConnect',
+        )).toEqual([]);
         expect(getLocalVoiceState().status).toBe('recording');
     });
 
@@ -780,19 +837,19 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
-                                baseUrl: 'http://localhost:8000',
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
+                                provider: 'happier.voice.openai-compat/stt',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 provider: 'device',
                                 autoSpeakReplies: true,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                                 prewarmOnConnect: true,
 
                             },
@@ -802,19 +859,21 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
+        expect(readLocalConversationVoiceSettings(storage.getState().settings.voice).stt.provider)
+            .toBe('happier.voice.openai-compat/stt');
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
-        daemonVoiceAgentWelcome.mockResolvedValueOnce({ assistantText: 'Welcome!' });
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
+        welcomeActionRpc.mockResolvedValueOnce(ExecutionRunActionResponseSchema.parse({ ok: true, result: { assistantText: 'Welcome!' } }));
 
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
 
-        await waitForMockCalls(daemonVoiceAgentWelcome, 1);
+        await waitForMockCalls(welcomeActionRpc, 1);
 
-        expect(daemonVoiceAgentWelcome).toHaveBeenCalledTimes(1);
+        expect(welcomeActionRpc).toHaveBeenCalledTimes(1);
         await waitForMockCalls(expoSpeechSpeak, 1);
         expect(expoSpeechSpeak).toHaveBeenCalled();
     });
@@ -830,10 +889,10 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'local_neural',
                                 localNeural: {
                                     assetId: 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17',
@@ -842,7 +901,7 @@ describe('local voice engine agent behavior', () => {
                                 },
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 provider: 'local_neural',
                                 autoSpeakReplies: false,
                                 localNeural: {
@@ -854,11 +913,11 @@ describe('local voice engine agent behavior', () => {
                                 },
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                                 prewarmOnConnect: true,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: false,
                             },
                         } },
@@ -867,32 +926,29 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
 
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
 
-        await waitForMockCalls(warmDaemonVoiceInferenceOnVoiceHomeAttachMock, 1);
-        expect(warmDaemonVoiceInferenceOnVoiceHomeAttachMock).toHaveBeenCalledWith(
-            expect.objectContaining({
-                sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-                settings: expect.objectContaining({
-                    voice: expect.objectContaining({
-                        providerId: 'local_conversation',
-                    }),
-                }),
-            }),
-        );
+        await vi.waitFor(() => expect(readWarmRequests()).toHaveLength(1));
+        expect(readWarmRequests()[0]).toMatchObject({
+            machineId: 'machine-1',
+            payload: { packIds: [
+                'kokoro-82m-v1.0-onnx-q8-wasm',
+                'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17',
+            ] },
+        });
     }, 60_000);
 
     it('surfaces an attach-time daemon model warm failure through the canonical runtime error state', async () => {
         let rejectWarm!: (error: unknown) => void;
-        warmDaemonVoiceInferenceOnVoiceHomeAttachMock.mockReturnValueOnce(
-            new Promise<void>((_resolve, reject) => {
+        configureWarmTransport(() =>
+            new Promise<unknown>((_resolve, reject) => {
                 rejectWarm = reject;
             }),
         );
@@ -906,10 +962,10 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 provider: 'local_neural',
                                 autoSpeakReplies: false,
                                 localNeural: {
@@ -929,27 +985,46 @@ describe('local voice engine agent behavior', () => {
         const { getLocalVoiceState, toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID);
         expect(getLocalVoiceState().status).toBe('recording');
+        await vi.waitFor(() => expect(rejectWarm).toBeTypeOf('function'));
 
         rejectWarm(Object.assign(
             new Error('daemon_voice_inference_model_not_installed'),
             { code: 'model_not_installed' },
         ));
-        await flushMicrotasks(4);
-
-        expect(getLocalVoiceState()).toMatchObject({
+        await vi.waitFor(() => expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
             sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
             error: 'daemon_voice_inference_model_not_installed',
-        });
+        }));
     }, 60_000);
 
     it('does not revive a stopped Voice session when its attach-time warm fails late', async () => {
         let rejectWarm!: (error: unknown) => void;
-        warmDaemonVoiceInferenceOnVoiceHomeAttachMock.mockReturnValueOnce(
-            new Promise<void>((_resolve, reject) => {
+        configureWarmTransport(() =>
+            new Promise<unknown>((_resolve, reject) => {
                 rejectWarm = reject;
             }),
         );
+
+        const storage = await getStorage();
+        const voice = storage.getState().settings.voice;
+        const config = readLocalConversationVoiceSettings(voice);
+        storage.__setState({ settings: { ...storage.getState().settings, voice: {
+            ...voice, providerId: 'local_conversation', providers: { ...voice.providers,
+                local_conversation: { schemaVersion: 1, config: { ...config,
+                    conversationMode: 'agent',
+                    tts: { ...config.tts, provider: 'local_neural', autoSpeakReplies: false,
+                        localNeural: { ...config.tts.localNeural, execution: 'daemon',
+                            assetId: 'kokoro-82m-v1.0-onnx-q8-wasm' } },
+                } },
+            },
+        } }, sessions: { ...storage.getState().sessions,
+            'voice-warm-cancelled': createSessionFixture({
+                id: 'voice-warm-cancelled', serverId: localVoiceHomeId, active: true,
+                metadata: { machineId: 'machine-1', path: '/workspace/voice-warm-cancelled', flavor: 'claude',
+                    agentRuntimeCapabilitiesV1: { localControl: { supported: true } } },
+            }),
+        } });
 
         const {
             getLocalVoiceState,
@@ -957,10 +1032,10 @@ describe('local voice engine agent behavior', () => {
             toggleLocalVoiceTurn,
         } = localVoiceEngine;
         await toggleLocalVoiceTurn('voice-warm-cancelled');
-        const warmSignal = warmDaemonVoiceInferenceOnVoiceHomeAttachMock.mock.calls.at(-1)?.[0]?.signal;
-        expect(warmSignal).toBeInstanceOf(AbortSignal);
+        await vi.waitFor(() => expect(readWarmRequests()).toHaveLength(1));
+        // Stop must settle while the real RPC acknowledgement remains held;
+        // its private AbortSignal is not part of the daemon's wire contract.
         await stopLocalVoiceSession();
-        expect(warmSignal.aborted).toBe(true);
 
         rejectWarm(Object.assign(
             new Error('daemon_voice_inference_runtime_unavailable'),
@@ -970,7 +1045,7 @@ describe('local voice engine agent behavior', () => {
 
         expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
-            sessionId: 'voice-warm-cancelled',
+            sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
             error: null,
         });
     }, 60_000);
@@ -986,10 +1061,10 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                                 prewarmOnConnect: true,
                                 transcript: { persistenceMode: 'persistent', epoch: 1 },
                             },
@@ -1014,7 +1089,7 @@ describe('local voice engine agent behavior', () => {
             },
         });
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
 
         const { toggleLocalVoiceTurn, resetLocalVoiceAgentPersistence } = localVoiceEngine;
         await toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID);
@@ -1037,21 +1112,21 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: true,
                             },
                         } },
@@ -1060,31 +1135,28 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
-        daemonVoiceAgentStartTurnStream.mockRejectedValueOnce(
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
+        startTurnRpc.mockRejectedValueOnce(
             Object.assign(new Error('Method not found'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }),
         );
 
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { getLocalVoiceState, toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
         await expect(toggleLocalVoiceTurn('s1')).resolves.toBeUndefined();
 
-        expect(daemonVoiceAgentStartTurnStream, JSON.stringify({
+        expect(startTurnRpc, JSON.stringify({
             runtime: getLocalVoiceState(),
-            settings: storage.getState().settings.voice.providers.local_conversation.config.streaming,
-            start: daemonVoiceAgentStart.mock.calls,
-            send: daemonVoiceAgentSendTurn.mock.calls,
+            settings: readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
+            start: ensureAgentRpc.mock.calls,
+            send: readTurnRpc.mock.calls,
         })).toHaveBeenCalledTimes(1);
-        expect(daemonVoiceAgentSendTurn).not.toHaveBeenCalled();
+        expect(readTurnRpc).not.toHaveBeenCalled();
         expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
             sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
@@ -1103,17 +1175,17 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: true,
                             },
                         } },
@@ -1122,12 +1194,12 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
-        daemonVoiceAgentStartTurnStream.mockRejectedValueOnce(
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
+        startTurnRpc.mockRejectedValueOnce(
             Object.assign(new Error('Method not found'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }),
         );
         const onAccepted = vi.fn(async () => {});
@@ -1143,8 +1215,8 @@ describe('local voice engine agent behavior', () => {
             pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
         });
 
-        expect(daemonVoiceAgentStartTurnStream).toHaveBeenCalledTimes(1);
-        expect(daemonVoiceAgentSendTurn).not.toHaveBeenCalled();
+        expect(startTurnRpc).toHaveBeenCalledTimes(1);
+        expect(readTurnRpc).not.toHaveBeenCalled();
         expect(onAccepted).not.toHaveBeenCalled();
     });
 
@@ -1159,21 +1231,21 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: true,
                             },
                         } },
@@ -1182,27 +1254,23 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
-        daemonVoiceAgentStartTurnStream.mockResolvedValueOnce({ streamId: 'stream-1' });
-        daemonVoiceAgentReadTurnStream.mockRejectedValueOnce(
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
+        startTurnRpc.mockResolvedValueOnce({ streamId: 'stream-1' });
+        readTurnRpc.mockRejectedValueOnce(
             Object.assign(new Error('Method not found'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }),
         );
 
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { getLocalVoiceState, toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
         await expect(toggleLocalVoiceTurn('s1')).resolves.toBeUndefined();
 
-        expect(daemonVoiceAgentCancelTurnStream).toHaveBeenCalledTimes(1);
-        expect(daemonVoiceAgentSendTurn).not.toHaveBeenCalled();
+        expect(cancelTurnRpc).toHaveBeenCalledTimes(1);
         expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
             sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
@@ -1221,17 +1289,17 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: true,
                             },
                         } },
@@ -1240,11 +1308,11 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
 
         let resolveFirstRead: (value: VoiceAgentTurnStreamReadResult) => void = () => {
             throw new Error('Expected first stream read resolver');
@@ -1252,10 +1320,11 @@ describe('local voice engine agent behavior', () => {
         const firstReadPromise = new Promise<VoiceAgentTurnStreamReadResult>((resolve) => {
             resolveFirstRead = resolve;
         });
-        daemonVoiceAgentStartTurnStream
+        startTurnRpc
             .mockResolvedValueOnce({ streamId: 'stream-1' })
             .mockResolvedValueOnce({ streamId: 'stream-2' });
-        daemonVoiceAgentReadTurnStream.mockImplementation(async ({ streamId }: any) => {
+        readTurnRpc.mockImplementation(async ({ payload }: SessionRequest) => {
+            const { streamId } = ExecutionRunTurnStreamReadRequestSchema.parse(payload);
             if (streamId === 'stream-1') {
                 return await firstReadPromise;
             }
@@ -1280,10 +1349,10 @@ describe('local voice engine agent behavior', () => {
         const { sendLocalVoiceAgentTextUpdate } = localVoiceEngine;
 
         const first = sendLocalVoiceAgentTextUpdate('s1', 'Initial coding request');
-        await waitForMockCalls(daemonVoiceAgentStartTurnStream, 1);
+        await waitForMockCalls(startTurnRpc, 1);
 
         const second = sendLocalVoiceAgentTextUpdate('s1', 'Permission required. Ask the human whether to allow it.');
-        await waitForMockCalls(daemonVoiceAgentCancelTurnStream, 1);
+        await waitForMockCalls(cancelTurnRpc, 1);
 
         resolveFirstRead({
             streamId: 'stream-1',
@@ -1295,12 +1364,13 @@ describe('local voice engine agent behavior', () => {
         await expect(first).resolves.toBeUndefined();
         await expect(second).resolves.toBeUndefined();
 
-        expect(daemonVoiceAgentCancelTurnStream).toHaveBeenCalledWith({
+        expect(cancelTurnRpc).toHaveBeenCalledWith({
             sessionId: 'voice-home-session',
-            streamId: 'stream-1',
-            voiceAgentId: 'va1',
+            serverId: localVoiceHomeId,
+            method: SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL,
+            payload: { streamId: 'stream-1', runId: 'local-agent-run' },
         });
-        expect(daemonVoiceAgentStartTurnStream).toHaveBeenCalledTimes(2);
+        expect(startTurnRpc).toHaveBeenCalledTimes(2);
     });
 
     it('streams agent deltas into chunked device TTS playback when enabled', async () => {
@@ -1314,22 +1384,22 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: true,
                                 provider: 'device',
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: true,
                                 ttsEnabled: true,
                                 ttsChunkChars: 32,
@@ -1340,7 +1410,7 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
         storage.__setState({
@@ -1351,8 +1421,8 @@ describe('local voice engine agent behavior', () => {
             },
         });
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
-        daemonVoiceAgentStartTurnStream.mockResolvedValueOnce({ streamId: 'stream-tts-1' });
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
+        startTurnRpc.mockResolvedValueOnce({ streamId: 'stream-tts-1' });
         // The canonical settings parser may retain the released 200-character
         // chunk size rather than this legacy fixture's smaller override. Keep
         // the stream comfortably above two admitted chunks so this composed
@@ -1360,7 +1430,7 @@ describe('local voice engine agent behavior', () => {
         const firstStreamedDelta = 'First streamed assistant sentence with enough content to cross the canonical chunk boundary. '.repeat(3).trim();
         const secondStreamedDelta = 'Second streamed assistant sentence continues beyond another canonical chunk boundary. '.repeat(3).trim();
         const finalStreamedText = `${firstStreamedDelta} ${secondStreamedDelta}`;
-        daemonVoiceAgentReadTurnStream.mockResolvedValueOnce({
+        readTurnRpc.mockResolvedValueOnce({
             streamId: 'stream-tts-1',
             events: [
                 {
@@ -1399,21 +1469,18 @@ describe('local voice engine agent behavior', () => {
             nextCursor: 3,
             done: true,
         });
-        expoSpeechSpeak.mockImplementation((_text: string, options: any) => {
+        expoSpeechSpeak.mockImplementation((_text, options) => {
             options?.onStart?.();
             queueMicrotask(() => options?.onDone?.());
         });
 
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
         await toggleLocalVoiceTurn('s1');
 
-        expect(daemonVoiceAgentStartTurnStream).toHaveBeenCalledTimes(1);
+        expect(startTurnRpc).toHaveBeenCalledTimes(1);
         await waitForMockCalls(expoSpeechSpeak, 2);
         expect(expoSpeechSpeak.mock.calls.length).toBeGreaterThan(1);
     });
@@ -1429,22 +1496,22 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: true,
                                 provider: 'device',
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: true,
                                 ttsEnabled: false,
                             },
@@ -1454,13 +1521,13 @@ describe('local voice engine agent behavior', () => {
             },
             sessions: {
                 ...storage.getState().sessions,
-                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude', agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } },
             },
         });
 
-        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
-        daemonVoiceAgentStartTurnStream.mockResolvedValueOnce({ streamId: 'stream-tts-2' });
-        daemonVoiceAgentReadTurnStream.mockResolvedValueOnce({
+        ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
+        startTurnRpc.mockResolvedValueOnce({ streamId: 'stream-tts-2' });
+        readTurnRpc.mockResolvedValueOnce({
             streamId: 'stream-tts-2',
             events: [
                 { t: 'delta', textDelta: 'hello world. this is chunk one. ' },
@@ -1470,21 +1537,18 @@ describe('local voice engine agent behavior', () => {
             nextCursor: 3,
             done: true,
         });
-        expoSpeechSpeak.mockImplementation((_text: string, options: any) => {
+        expoSpeechSpeak.mockImplementation((_text, options) => {
             options?.onStart?.();
             queueMicrotask(() => options?.onDone?.());
         });
 
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
+        localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
         await toggleLocalVoiceTurn('s1');
 
-        expect(daemonVoiceAgentStartTurnStream).toHaveBeenCalledTimes(1);
+        expect(startTurnRpc).toHaveBeenCalledTimes(1);
         expect(expoSpeechSpeak).toHaveBeenCalledTimes(1);
     });
 
@@ -1512,22 +1576,22 @@ describe('local voice engine agent behavior', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_conversation: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_conversation.config,
+                            ...readLocalConversationVoiceSettings(storage.getState().settings.voice),
                             conversationMode: 'agent',
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.stt,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).stt,
                                 baseUrl: 'http://localhost:8000',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.tts,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             agent: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.agent,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).agent,
                                 prewarmOnConnect: true,
                             },
                             streaming: {
-                                ...storage.getState().settings.voice.providers.local_conversation.config.streaming,
+                                ...readLocalConversationVoiceSettings(storage.getState().settings.voice).streaming,
                                 enabled: false,
                             },
                         } },
@@ -1543,44 +1607,19 @@ describe('local voice engine agent behavior', () => {
             },
         });
 
-        let currentAccount: 'account-a' | 'account-b' = 'account-a';
-        const reads: Array<'account-a' | 'account-b'> = [];
-        const invocations: Array<'account-a' | 'account-b'> = [];
-        const subscription = {
-            listener: null as (() => void) | null,
-            unsubscribeCalls: 0,
-        };
-        const currentUiContext = {
-            readCurrentUiContext: () => {
-                reads.push(currentAccount);
-                return {
-                    navigation: {
-                        area: 'settings' as const,
-                        screen: 'settings_page',
-                        title: currentAccount === 'account-a' ? 'ACCOUNT_A_CONTEXT' : 'ACCOUNT_B_CONTEXT',
-                        presentation: 'screen' as const,
-                    },
-                    commands: [],
-                };
-            },
-            resolveCurrentUiCommand: () => null,
-            subscribe: (listener: () => void) => {
-                subscription.listener = listener;
-                return () => {
-                    subscription.unsubscribeCalls += 1;
-                    if (subscription.listener === listener) subscription.listener = null;
-                };
-            },
-            invokeCurrentUiCommand: async () => {
-                invocations.push(currentAccount);
-                return { ok: true as const };
-            },
-        };
+        const invocations: string[] = [];
+        const uiForAccount = (accountId: string): CurrentUiContextMountedEnrichment => ({
+            entity: { kind: 'issue', label: `${accountId}_CONTEXT` },
+            commands: [{ title: `${accountId} command`, command: { kind: 'hostLocal',
+                invoke: () => { invocations.push(accountId); return { ok: true }; },
+            } }],
+        });
+        const currentUi = await mountCurrentUi(uiForAccount('account-a'));
         const agentStart = {
-            resolve: null as ((value: { voiceAgentId: string }) => void) | null,
+            resolve: null as ((value: VoiceRunStartAck) => void) | null,
         };
-        daemonVoiceAgentStart.mockImplementationOnce(
-            () => new Promise<{ voiceAgentId: string }>((resolve) => {
+        ensureAgentRpc.mockImplementationOnce(
+            () => new Promise<VoiceRunStartAck>((resolve) => {
                 agentStart.resolve = resolve;
             }),
         );
@@ -1601,42 +1640,45 @@ describe('local voice engine agent behavior', () => {
         // retained Local Voice port itself is fenced.
         const start = localVoiceEngine.toggleLocalVoiceTurn(
             VOICE_AGENT_GLOBAL_SESSION_ID,
-            currentUiContext,
+            currentUi.port,
         );
         await waitForCondition(
-            () => daemonVoiceAgentStart.mock.calls.length >= 1,
+            () => ensureAgentRpc.mock.calls.length >= 1,
             'local Agent start admission',
         );
         const resolveAgentStart = agentStart.resolve;
         if (!resolveAgentStart) throw new Error('missing local agent start resolver');
-        resolveAgentStart({ voiceAgentId: 'local-agent-account-a' });
+        resolveAgentStart({ ok: true, runId: 'local-agent-run', created: true });
         await start;
-        await waitForCondition(() => subscription.listener !== null, 'local current UI subscription');
-        const retainedAutomaticListener = subscription.listener;
-        if (!retainedAutomaticListener) throw new Error('missing retained local current UI subscription');
+        await waitForCondition(() => voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID), 'actual local Agent admission');
+        await flushMicrotasks(4000);
+        const localAdapter = getVoiceAdapterRegistry().get('local_conversation');
+        if (!localAdapter?.sendTextTurn) throw new Error('local conversation adapter unavailable');
+        const settingsBeforeRetirement = storage.getState().settings;
 
         // Retirement is synchronous at the Account owner. It revokes the exact
         // admitted Current UI port independently from later resource teardown.
         retireActiveServerAccountScopeLifetime();
-        currentAccount = 'account-b';
-        const readsBeforeLateEvents = reads.length;
-        const invocationsBeforeLateEvents = invocations.length;
-        retainedAutomaticListener();
-        expect(reads).toHaveLength(readsBeforeLateEvents);
-        expect(invocations).toHaveLength(invocationsBeforeLateEvents);
-
-        const localAdapter = getVoiceAdapterRegistry().get('local_conversation');
-        if (!localAdapter?.sendTextTurn) throw new Error('local conversation adapter unavailable');
-        daemonVoiceAgentSendTurn.mockResolvedValueOnce({
+        expect(admittedAccountLifetime?.isCurrent()).toBe(false);
+        const wireTurnsBeforeLateEvents = startTurnRpc.mock.calls.length;
+        await currentUi.switchAccount('account-b', uiForAccount('account-b'));
+        storage.__setState({ settings: settingsBeforeRetirement });
+        const accountBSnapshot = currentUi.port.readCurrentUiContext();
+        expect(accountBSnapshot?.entity?.label).toBe('account-b_CONTEXT');
+        const accountBCommand = accountBSnapshot?.commands.find(command => command.title === 'account-b command');
+        if (!accountBCommand) throw new Error('Mounted Account B command unavailable');
+        expect(startTurnRpc).toHaveBeenCalledTimes(wireTurnsBeforeLateEvents);
+        expect(invocations).toEqual([]);
+        readTurnRpc.mockResolvedValueOnce(createTurnReadReply({
             assistantText: 'This must not reach Account B.',
             actions: [
                 { t: 'readCurrentUiContext', args: {} },
                 attachVoiceAgentActionEffectId({
                     t: 'invokeCurrentUiCommand',
-                    args: { commandId: 'retired-account-command' },
+                    args: { commandId: accountBCommand.id },
                 }, 'retired-local-agent-tool'),
             ],
-        });
+        }));
         await localAdapter.sendTextTurn({
             controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
             conversationSessionId: 'voice-home-session',
@@ -1652,12 +1694,11 @@ describe('local voice engine agent behavior', () => {
         await localVoiceEngine.stopLocalVoiceSession();
         retireActiveServerAccountScopeLifetime();
 
-        expect(subscription.unsubscribeCalls).toBeGreaterThan(0);
-        expect(subscription.listener).toBeNull();
-        expect(reads).toHaveLength(readsBeforeLateEvents);
-        expect(invocations).toHaveLength(invocationsBeforeLateEvents);
-        expect(reads).not.toContain('account-b');
-        expect(invocations).not.toContain('account-b');
+        expect(invocations).toEqual([]);
+        expect(startTurnRpc.mock.calls.slice(wireTurnsBeforeLateEvents)
+            .map(([request]) => JSON.stringify(request.payload)).join('\n')).not.toContain('account-b_CONTEXT');
+        await currentUi.unmount();
+        expect(currentUi.port.readCurrentUiContext()).toBeNull();
     });
 
 

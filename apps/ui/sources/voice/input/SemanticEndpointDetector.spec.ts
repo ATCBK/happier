@@ -52,6 +52,9 @@ describe('SemanticEndpointDetector', () => {
     });
 
     it('a "complete" semantic verdict shortens the wait to the confident floor (never below 0)', () => {
+        // Authored typed extension input to scalar delay composition, not an SDK
+        // boundary or model invocation/readiness proof. The real host fallback
+        // deliberately cannot claim semantic completion.
         const eagerDetector: SemanticEndpointDetector = {
             evaluate: () => ({ kind: 'complete', reason: 'model_complete', confidence: 0.9 }),
         };
@@ -66,14 +69,12 @@ describe('SemanticEndpointDetector', () => {
     });
 
     it('an "incomplete" semantic verdict extends the wait by the silence preference', () => {
-        const patientDetector: SemanticEndpointDetector = {
-            evaluate: () => ({ kind: 'incomplete', reason: 'model_incomplete', confidence: 0.8 }),
-        };
+        const patientDetector = createStructuralEndpointHeuristic();
         const resolved = resolveSemanticEndpointDelayMs({
             detector: patientDetector,
             policy,
             baseDelayMs: 700,
-            transcript: 'and then i also need',
+            transcript: 'and then i also need the logs and',
             speechElapsedMs: 1_500,
         });
         expect(resolved).toBe(1_400);

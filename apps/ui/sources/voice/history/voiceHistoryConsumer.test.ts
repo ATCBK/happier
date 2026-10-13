@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Message } from "@happier-dev/session-core/messages";
+import { buildRealtimeConversationTurnMeta } from '@/voice/transcript/VoiceTranscriptProjector';
+import { VoiceProviderContributionSchema } from '@happier-dev/protocol/plugins/contributions/voice';
+import { createVoiceProviderRegistry } from '@/voice/registry/providerRegistry';
+import { resolveVoiceHistoryProviderLabel } from './defaultVoiceHistoryConsumer';
+import { tLoose } from '@/text';
 
 import {
   createVoiceHistoryConsumer,
@@ -22,6 +27,26 @@ const ELEVENLABS_SOURCE = Object.freeze({
   contributionId: 'realtime-elevenlabs',
 });
 
+const providerRegistry = createVoiceProviderRegistry({ bundledContributions: [
+  { source: OPENAI_SOURCE, title: 'OpenAI Realtime' },
+  { source: XAI_SOURCE, title: 'Grok Realtime' },
+  { source: ELEVENLABS_SOURCE, title: 'ElevenLabs Realtime' },
+].map(({ source, title }) => ({
+  pluginId: source.pluginId,
+  providerId: `${source.pluginId}/${source.contributionId}`,
+  declaration: VoiceProviderContributionSchema.parse({
+    id: source.contributionId, title, kind: 'conversation', roles: ['realtime_conversation'], platforms: ['web'],
+    capabilities: { turn: { cancelResponse: true, bargeIn: true }, tools: { effectCalls: 'none' } },
+    client: { artifactId: 'voice', exportName: 'activate' },
+  }),
+})), bundledPresentations: [OPENAI_SOURCE, XAI_SOURCE, ELEVENLABS_SOURCE].map(source => ({
+  providerId: `${source.pluginId}/${source.contributionId}`,
+  settingsSectionId: 'voice.fixture',
+  selectionOptions: [{ id: 'byo', modeId: 'byo', order: 1, titleKey: 'unused.fixture.title' }],
+})) });
+const readProviderLabel = (source: VoiceHistoryProviderSource | null) =>
+  resolveVoiceHistoryProviderLabel(providerRegistry, source, tLoose);
+
 function voiceMessage(input: Readonly<{
   id: string;
   role: 'user' | 'assistant';
@@ -34,18 +59,7 @@ function voiceMessage(input: Readonly<{
     localId: null,
     createdAt: input.createdAt,
     text: input.text,
-    meta: {
-      happier: {
-        kind: 'conversation_turn.v1' as const,
-        payload: { v: 1 },
-        conversationTurnOriginV1: {
-          v: 1 as const,
-          channel: 'realtime_conversation' as const,
-          modality: 'voice' as const,
-          ...(input.source ? { source: input.source } : {}),
-        },
-      },
-    },
+    meta: buildRealtimeConversationTurnMeta(input.source),
   };
   return input.role === 'user'
     ? { ...common, kind: 'user-text' }
@@ -76,11 +90,7 @@ function createDeps(overrides: Partial<VoiceHistoryConsumerDeps> = {}): VoiceHis
     readMessages: vi.fn(() => []),
     readMessagesRevision: () => 0,
     subscribeHistorySources: () => () => {},
-    resolveProviderLabel: (source) => source?.pluginId === OPENAI_SOURCE.pluginId
-      ? 'OpenAI Realtime'
-      : source?.pluginId === XAI_SOURCE.pluginId
-        ? 'Grok Realtime'
-        : 'Voice provider',
+    resolveProviderLabel: readProviderLabel,
     deleteSession: vi.fn(async () => ({ success: true })),
     retireLocalSession: vi.fn(),
     runCarrierOperation: async (operation) => await operation(),
@@ -130,14 +140,7 @@ describe('projectVoiceHistoryRows', () => {
         source: OPENAI_SOURCE,
       }),
     ];
-    const resolveProviderLabel = (source: VoiceHistoryProviderSource | null) =>
-      source?.pluginId === XAI_SOURCE.pluginId
-        ? 'Grok Realtime'
-        : source?.pluginId === ELEVENLABS_SOURCE.pluginId
-          ? 'ElevenLabs Realtime'
-          : 'OpenAI Realtime';
-
-    expect(projectVoiceHistoryRows(messages, resolveProviderLabel)).toEqual([
+    expect(projectVoiceHistoryRows(messages, readProviderLabel)).toEqual([
       expect.objectContaining({
         id: 'user-1',
         role: 'user',
@@ -155,10 +158,10 @@ describe('projectVoiceHistoryRows', () => {
         providerLabel: 'Grok Realtime',
       }),
     ]);
-    expect(projectVoiceHistoryRows(messages, resolveProviderLabel, 'gRoK')).toEqual([
+    expect(projectVoiceHistoryRows(messages, readProviderLabel, 'gRoK')).toEqual([
       expect.objectContaining({ id: 'assistant-2' }),
     ]);
-    expect(projectVoiceHistoryRows(messages, resolveProviderLabel, 'first answer')).toEqual([
+    expect(projectVoiceHistoryRows(messages, readProviderLabel, 'first answer')).toEqual([
       expect.objectContaining({ id: 'assistant-1' }),
     ]);
   });
@@ -166,7 +169,7 @@ describe('projectVoiceHistoryRows', () => {
 
 describe('createVoiceHistoryConsumer', () => {
   it('projects loaded messages once when applying a local search query', async () => {
-    const resolveProviderLabel = vi.fn(() => 'OpenAI Realtime');
+    const resolveProviderLabel = vi.fn(readProviderLabel);
     const consumer = createVoiceHistoryConsumer(createDeps({
       readMessages: () => [
         voiceMessage({
@@ -212,7 +215,7 @@ describe('createVoiceHistoryConsumer', () => {
       }),
     ];
     let projectionRevision = 1;
-    const resolveProviderLabel = vi.fn(() => 'OpenAI Realtime');
+    const resolveProviderLabel = vi.fn(readProviderLabel);
     const consumer = createVoiceHistoryConsumer(createDeps({
       readMessages: () => messages,
       readProjectionRevision: () => projectionRevision,
@@ -252,7 +255,7 @@ describe('createVoiceHistoryConsumer', () => {
       }),
     ];
     let messagesRevision = 7;
-    const resolveProviderLabel = vi.fn(() => 'OpenAI Realtime');
+    const resolveProviderLabel = vi.fn(readProviderLabel);
     const consumer = createVoiceHistoryConsumer(createDeps({
       readMessages: () => [...messages],
       readMessagesRevision: () => messagesRevision,
@@ -515,8 +518,7 @@ describe('createVoiceHistoryConsumer', () => {
         status: pages.length > 0 ? 'loaded' as const : 'no_more' as const,
       };
     });
-    const resolveProviderLabel = vi.fn((source: VoiceHistoryProviderSource | null) =>
-      source?.pluginId === XAI_SOURCE.pluginId ? 'Grok Realtime' : 'OpenAI Realtime');
+    const resolveProviderLabel = vi.fn(readProviderLabel);
     const consumer = createVoiceHistoryConsumer(createDeps({
       readMessages: () => loaded,
       readMessagesRevision: () => messagesRevision,

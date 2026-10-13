@@ -1,154 +1,78 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
-const fakeSink = vi.hoisted(() => ({
-  sendContextualUpdate: vi.fn(),
-  sendTextMessage: vi.fn(),
-}));
-const setVoiceLiveContextSessionAddresses = vi.hoisted(() => vi.fn());
+installDisconnectedServerSocketBoundary();
+vi.stubEnv('PUBLIC_EXPO_DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING', '1');
 
-const voiceConfigState = vi.hoisted(() => ({
-  DISABLE_PERMISSION_REQUESTS: false,
-  DISABLE_SESSION_STATUS: true,
-  DISABLE_MESSAGES: false,
-  DISABLE_READY_EVENTS: false,
-  ENABLE_DEBUG_LOGGING: true,
-}));
+const { storage } = await import('@/sync/domains/state/storage');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore');
+const { registerVoiceAdapters, resetVoiceAdapterRegistryForTests } = await import('@/voice/session/voiceAdapterRegistry');
+const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+const { voiceHooks } = await import('./voiceHooks');
 
-vi.mock('./contextFormatters', () => ({
-  formatNewMessages: vi.fn(() => 'TOP_SECRET_CONTEXT'),
-  formatUserActionRequest: vi.fn(() => null),
-  formatPermissionRequest: vi.fn(() => null),
-  formatReadyEvent: vi.fn(() => null),
-  formatSessionFull: vi.fn(() => 'TOP_SECRET_CONTEXT'),
-  formatSessionOffline: vi.fn(() => null),
-  formatSessionOnline: vi.fn(() => null),
-  summarizeMessagesForVoiceHuman: vi.fn(() => null),
-  summarizeAgentRequestForVoiceHuman: vi.fn(() => null),
-}));
-
-vi.mock('@/sync/domains/messages/readStoredSessionMessagesForAddress', () => ({
-  readStoredSessionMessagesForAddress: vi.fn(() => []),
-}));
-
-const storageMock = createStorageModuleStub({
-  storage: {
-    getState: () => ({
-      settings: {},
-    }),
-  } as any,
-});
-
-vi.mock('@/sync/domains/state/storage', () => storageMock);
-
-vi.mock('@/sync/domains/settings/readVoicePrivacySettings', () => ({
-  readVoicePrivacySettings: vi.fn(() => ({
-    shareRecentMessages: true,
-    sharePermissionRequests: true,
-  })),
-}));
-
-vi.mock('@/voice/runtime/voiceConfig', () => ({
-  VOICE_CONFIG: voiceConfigState,
-}));
-
-vi.mock('@/voice/context/getVoiceContextSinkForSession', () => ({
-  getVoiceContextSinkForSession: vi.fn(() => fakeSink),
-}));
-
-vi.mock('@/voice/context/resolveEffectiveVoiceTargetState', () => ({
-  resolveEffectiveVoiceTargetState: vi.fn(() => ({
-    voiceLiveContextSessionAddresses: [{ serverId: 'server-a', sessionId: 's1' }],
-    primaryActionSessionAddress: { serverId: 'server-a', sessionId: 's1' },
-  })),
-}));
-
-vi.mock('@/voice/context/voiceContextPrefs', () => ({
-  getVoiceContextFormatterPrefs: vi.fn(() => ({})),
-}));
-
-vi.mock('@/voice/runtime/voiceTargetStore', () => ({
-  useVoiceTargetStore: {
-    getState: () => ({
-      setPrimaryActionSessionId: vi.fn(),
-      setTrackedSessionIds: vi.fn(),
-      setVoiceLiveContextSessionAddresses,
-    }),
-  },
-}));
-
-vi.mock('@/voice/runtime/voiceUpdatePolicy', () => ({
-  readSessionIncludedInVoiceFromState: vi.fn(() => true),
-  resolveVoiceSessionUpdatePolicy: vi.fn(() => ({
-    level: 'snippets',
-    snippetsMaxMessages: 3,
-    includeUserMessagesInSnippets: false,
-  })),
-}));
-
-vi.mock('@/voice/context/resolveVoiceContextSession', () => ({
-  resolveVoiceContextSessionFromState: vi.fn(() => ({
-    id: 's1',
-    metadata: { summary: { text: 'Summary' } },
-  })),
-}));
-
-vi.mock('@/voice/tools/actionImpl/sessionReference', () => ({
-  resolveVoiceSessionRef: vi.fn((target: string | { serverId: string; sessionId: string }) => ({
-    address: typeof target === 'string'
-      ? { serverId: 'server-a', sessionId: target }
-      : target,
-  })),
-}));
+const address = { serverId: getActiveServerSnapshot().serverId, sessionId: 's1' };
+const delivered: string[] = [];
+afterAll(() => vi.unstubAllEnvs());
 
 function collectConsoleOutput(calls: unknown[][]): string {
-  return calls
-    .flatMap((call) =>
-      call.map((arg) => {
-        if (typeof arg === 'string') return arg;
-        try {
-          return JSON.stringify(arg);
-        } catch {
-          return String(arg);
-        }
-      }),
-    )
-    .join('\n');
+  return calls.flatMap((call) => call.map((arg) => {
+    if (typeof arg === 'string') return arg;
+    try { return JSON.stringify(arg); } catch { return String(arg); }
+  })).join('\n');
 }
 
 describe('voiceHooks debug diagnostics', () => {
-  afterEach(() => {
-    fakeSink.sendContextualUpdate.mockReset();
-    fakeSink.sendTextMessage.mockReset();
-    vi.restoreAllMocks();
-    vi.resetModules();
+  beforeEach(() => {
+    voiceHooks.onVoiceStopped();
+    delivered.length = 0;
+    const snapshot = { adapterId: 'test.diagnostics', sessionId: 'voice-control', status: 'connected' as const, mode: 'idle' as const, canStop: true };
+    resetVoiceAdapterRegistryForTests();
+    // Only the provider output transport is synthetic; context formatting,
+    // privacy, targets, adapter selection and sink composition stay real.
+    registerVoiceAdapters([{
+      id: snapshot.adapterId, engineKind: 'realtime', start: async () => {}, stop: async () => {},
+      toggle: async () => {}, interrupt: async () => {}, setMuted: async () => {}, sendContextUpdate: () => {},
+      getSnapshot: () => snapshot,
+      resolveContextChannel: () => ({ hostAuthoredContext: 'session_context',
+        sendContextualUpdate: (text) => { delivered.push(text); },
+        sendTextMessage: (text) => { delivered.push(text); },
+      }),
+    }]);
+    setVoiceSessionSnapshot(snapshot);
+    storage.setState({ settings: settingsParse({ voice: {
+      privacy: { shareSessionSummary: true, shareRecentMessages: true },
+      ui: { updates: { activeSession: 'snippets' } },
+    } }), sessions: { s1: createSessionFixture({ id: 's1', serverId: address.serverId,
+      metadata: { ...createSessionFixture().metadata!, summary: { text: 'TOP_SECRET_CONTEXT', updatedAt: 1 } },
+    }) } });
+    useVoiceTargetStore.getState().setPrimaryActionSessionAddress(address);
+    useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([address]);
   });
 
-  it('emits safe diagnostics without logging raw voice context payloads', async () => {
+  afterEach(() => {
+    voiceHooks.onVoiceStopped();
+    resetVoiceAdapterRegistryForTests();
+    setVoiceSessionSnapshot({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+    vi.restoreAllMocks();
+  });
+
+  it('emits safe diagnostics without logging raw voice context payloads', () => {
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
-    const { voiceHooks } = await import('./voiceHooks');
-    let output = '';
-
-    try {
-      voiceHooks.onReady({ serverId: 'server-a', sessionId: 's1' });
-      output = collectConsoleOutput([
-        ...consoleLogSpy.mock.calls,
-        ...consoleDebugSpy.mock.calls,
-      ]);
-    } finally {
-      consoleLogSpy.mockRestore();
-      consoleDebugSpy.mockRestore();
-    }
-
+    voiceHooks.onReady(address);
+    const output = collectConsoleOutput([...consoleLogSpy.mock.calls, ...consoleDebugSpy.mock.calls]);
+    expect(delivered.join('\n')).toContain('TOP_SECRET_CONTEXT');
     expect(output).toContain('voice_contextual_update');
     expect(output).not.toContain('TOP_SECRET_CONTEXT');
   });
 
-  it('retires the released tracked-target presentation with the Voice attempt', async () => {
-    const { voiceHooks } = await import('./voiceHooks');
+  it('retires the released tracked-target presentation with the Voice attempt', () => {
+    expect(useVoiceTargetStore.getState().voiceLiveContextSessionAddresses).toEqual([address]);
     voiceHooks.onVoiceStopped();
-    expect(setVoiceLiveContextSessionAddresses).toHaveBeenCalledWith([]);
+    expect(useVoiceTargetStore.getState().voiceLiveContextSessionAddresses).toEqual([]);
   });
 });

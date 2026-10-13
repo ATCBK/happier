@@ -1,75 +1,40 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { standardCleanup } from '@/dev/testkit';
 
-const { state, applySettings } = vi.hoisted(() => {
-  const voice = {
-    providers: {
-      local_conversation: {
-        schemaVersion: 1,
-        config: { agent: {
-          transcript: {
-            persistenceMode: 'persistent',
-            epoch: 2,
-          },
-        } },
-      },
-    },
-  };
-  const state: any = {
-    settingsScope: { serverId: 'server-a', accountId: 'account-a' },
-    settings: {
-      voiceSettingsV1: voice,
-      voice,
-    },
-  };
-  const applySettings = vi.fn((patch: any) => {
-      state.settings = { ...state.settings, ...patch };
-  });
-  return { state, applySettings };
-});
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
-vi.mock('@/sync/domains/state/storage', async () => {
-  const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-  return createStorageModuleStub({
-    storage: {
-      getState: () => state,
-    },
-  });
-});
-
-vi.mock('@/sync/runtime/getSyncSingleton', () => ({
-  getSyncSingleton: () => ({ applySettings }),
-}));
+afterEach(() => standardCleanup());
 
 describe('invalidatePersistentVoiceTranscript', () => {
-  beforeEach(() => {
-    vi.resetModules();
-    const voice = {
-      providers: {
-        local_conversation: {
-          schemaVersion: 1,
-          config: { agent: { transcript: { persistenceMode: 'persistent', epoch: 2 } } },
-        },
-      },
-    };
-    state.settings = {
-      voiceSettingsV1: voice,
-      voice,
-    };
-    applySettings.mockReset();
-    applySettings.mockImplementation((patch: any) => {
-      state.settings = { ...state.settings, ...patch };
-    });
-  });
-
-  it('increments the transcript epoch through both canonical and runtime Voice projections', async () => {
+  it('increments both Voice projections and persists the epoch without replacing neighboring preferences', async () => {
+    const { createVoiceSettingsAccountTestHarness } = await import('@/voice/settings/panels/voiceSettingsAccountTestHarness');
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    const { readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+    const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: {
+      assistantLanguage: 'fr', privacy: { shareToolNames: false },
+      providers: { local_conversation: { schemaVersion: 1,
+        config: { agent: { transcript: { persistenceMode: 'persistent', epoch: 2 } } } } },
+    } }));
+    onTestFinished(account.dispose);
     const { invalidatePersistentVoiceTranscript } = await import('./invalidatePersistentVoiceTranscript');
+    const { sync } = await import('@/sync/sync');
 
-    expect(invalidatePersistentVoiceTranscript(state.settingsScope)).toBe(3);
-    expect(applySettings).toHaveBeenCalledWith(expect.any(Object), {
-      expectedSettingsScope: state.settingsScope,
-      source: 'ui',
-    });
-    expect(state.settings.voice.providers.local_conversation.config.agent.transcript.epoch).toBe(3);
-    expect(state.settings.voiceSettingsV1.providers.local_conversation.config.agent.transcript.epoch).toBe(3);
+    expect(invalidatePersistentVoiceTranscript(account.scope)).toBe(3);
+    expect(readLocalConversationVoiceSettings(account.settings.voice).agent.transcript.epoch).toBe(3);
+    expect(readLocalConversationVoiceSettings(account.settings.voiceSettingsV1).agent.transcript.epoch).toBe(3);
+    // The Settings owner debounces its pending flush; observe actual HTTP persistence.
+    await vi.waitFor(() => expect(readLocalConversationVoiceSettings(account.persistedSettings.voice).agent.transcript.epoch).toBe(3));
+    expect(account.persistedSettings.voice).toMatchObject({ assistantLanguage: 'fr', privacy: { shareToolNames: false } });
+    expect(account.writes.length).toBeGreaterThan(0);
+
+    // An obsolete captured Account must not change the currently mounted one.
+    const before = account.settings;
+    const writes = account.writes.length;
+    invalidatePersistentVoiceTranscript({ ...account.scope, accountId: 'other-account' });
+    await (Reflect.get(sync, 'settingsSync') as import('@/utils/sessions/sync').InvalidateSync).awaitQueue();
+    expect(account.settings).toBe(before);
+    expect(account.writes).toHaveLength(writes);
   });
 });

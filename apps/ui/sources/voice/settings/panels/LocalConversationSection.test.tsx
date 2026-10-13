@@ -11,7 +11,8 @@ import {
   type VoiceLocalConversationSettings,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
-import { createDeferred, renderSettingsView, standardCleanup, type SettingsViewHarness } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, pressTestInstanceAsync, renderSettingsView as renderSettingsViewWithProviders,
+  standardCleanup, type SettingsViewHarness } from '@/dev/testkit';
 import { sync } from '@/sync/sync';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { t } from '@/text';
@@ -39,17 +40,13 @@ import { getAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/
 import { createProviderSettingsHarness,
   createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture } from '@/dev/testkit/harness/providerSettingsHarness';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Item } from '@/components/ui/lists/Item';
+import { OverlayPortalHost, OverlayPortalProvider } from '@/components/ui/popover';
 
 vi.mock('socket.io-client', async (importOriginal) =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const providerTransport = createProviderSettingsHarness();
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-  const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
-  return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
-});
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let rowDefinitions: readonly unknown[];
 async function publishMachineCensus() {
@@ -82,6 +79,7 @@ const registryDescribe = vi.hoisted(() => vi.fn<
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock({
+    useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }),
     Platform: {
       get OS() {
         return platformOsMock.value;
@@ -108,11 +106,6 @@ vi.mock('react-native-unistyles', async () => {
     });
 });
 
-vi.mock('@/components/ui/popover', async (importOriginal) => {
-  const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
-  return createInlinePopoverModuleMock(importOriginal);
-});
-
 // Model discovery crosses the daemon RPC boundary; model/preflight owners remain real.
 const capabilitiesInvoke = vi.hoisted(() => vi.fn<typeof import('@/sync/ops/capabilities').machineCapabilitiesInvoke>());
 installSessionActionRpcBoundary(async request => {
@@ -131,13 +124,6 @@ installSessionActionRpcBoundary(async request => {
     accountId: 'voice-account', method, payload: request.params });
 });
 
-vi.mock('@/voice/settings/panels/localStt/LocalVoiceSttGroup', () => ({
-  // The recognizer picker is its own suite; the Hear rows it hosts (hands-free, interrupting) stay real.
-  LocalVoiceSttGroup: (props: { children?: React.ReactNode }) => props.children ?? null,
-}));
-vi.mock('@/voice/settings/panels/localTts/LocalVoiceTtsGroup', () => ({
-  LocalVoiceTtsGroup: () => null,
-}));
 type LocalConversationAgentOverrides = Partial<VoiceLocalConversationSettings['agent']> & {
   machineTargetMode?: 'auto' | 'fixed';
   machineTargetId?: string | null;
@@ -148,6 +134,47 @@ type LocalConversationAgentOverrides = Partial<VoiceLocalConversationSettings['a
 type LocalConversationAdapterOverrides = Partial<Omit<VoiceLocalConversationSettings, 'agent'>> & {
   agent?: LocalConversationAgentOverrides;
 };
+
+const measureInWindow = vi.fn((callback: (x: number, y: number, width: number, height: number) => void) => {
+  callback(100, 120, 280, 48);
+});
+
+function SettingsOverlayProviders({ children }: React.PropsWithChildren) {
+  return <OverlayPortalProvider>{children}<OverlayPortalHost /></OverlayPortalProvider>;
+}
+
+function renderSettingsView(element: React.ReactElement) {
+  return renderSettingsViewWithProviders(element, {
+    wrapper: SettingsOverlayProviders,
+    createNodeMock: node => typeof node.type === 'string' ? { measureInWindow } : null,
+  });
+}
+
+async function openDropdown(screen: SettingsViewHarness, title: string) {
+  const dropdown = findDropdownByItemTriggerTitle(screen, title);
+  if (!dropdown) throw new Error('Expected the real settings dropdown');
+  const triggers = dropdown.findAll(node => typeof node.type === 'string'
+    && typeof node.props.onPress === 'function' && node.props.accessibilityState?.expanded === false);
+  expect(triggers).toHaveLength(1);
+  await pressTestInstanceAsync(triggers[0]!);
+  await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
+  await act(async () => { await vi.waitFor(() => expect(measureInWindow).toHaveBeenCalled()); });
+  expect(dropdown.props.open).toBe(true);
+  return dropdown;
+}
+
+async function selectDropdownOption(screen: SettingsViewHarness, title: string, optionTestID: string) {
+  const dropdown = await openDropdown(screen, title);
+  const option = screen.findAllHostsByTestId(optionTestID)
+    .find(node => String(node.type) === 'Pressable');
+  if (!option) throw new Error('Expected the real portaled settings option');
+  let portalHost = option.parent;
+  while (portalHost && portalHost.type !== OverlayPortalHost) portalHost = portalHost.parent;
+  expect(portalHost).not.toBeNull();
+  await pressTestInstanceAsync(option);
+  await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
+  expect(dropdown.props.open).toBe(false);
+}
 
 function withProvider(voice: VoiceSettings, providerId: VoiceSettings['providerId']): VoiceSettings {
   return { ...voice, providerId };
@@ -208,6 +235,7 @@ function openAdvancedAgent(screen: Pick<SettingsViewHarness, 'findAll'>) {
 }
 
 beforeEach(async () => {
+  measureInWindow.mockClear();
   account = undefined;
   routeParams.value = {};
   rowDefinitions = [];
@@ -333,7 +361,9 @@ describe('LocalConversationSection', () => {
     const picker = findDropdownByItemTriggerTitle(screen, t('settingsVoice.local.mediatorAgentId'));
     const rowTargetKey = 'agent:happier.agent.custom-acp/custom-acp:definition:row-review';
     expect(picker?.props.items.find((item: { id: string }) => item.id === rowTargetKey)).toMatchObject({ title: 'Row review' });
-    act(() => picker?.props.onSelect(rowTargetKey));
+    await selectDropdownOption(screen, t('settingsVoice.local.mediatorAgentId'),
+      'dropdown-option-agent_happier_agent_custom-acp_custom-acp_definition_row-review');
+    await vi.waitFor(() => expect(setVoice).toHaveBeenCalledOnce());
     expect(readLocalConversationVoiceSettings(setVoice.mock.calls[0]![0]).agent).toMatchObject({
       agentId: 'custom-acp', agentTargetKey: rowTargetKey,
     });
@@ -533,7 +563,7 @@ describe('LocalConversationSection', () => {
       t('settingsVoice.local.mediatorAgentId'),
     );
     const findExternalEntry = () => agentPicker?.props.items.find(
-      (item: any) => item.id === 'agent:com.acme.voice/agent',
+      (item: DropdownMenuItem) => item.id === 'agent:com.acme.voice/agent',
     );
     await vi.waitFor(() => expect(findExternalEntry()).toMatchObject({
       id: 'agent:com.acme.voice/agent',
@@ -548,7 +578,7 @@ describe('LocalConversationSection', () => {
       isBuiltIn: false,
     });
 
-    expect(agentPicker?.props.items.map((item: any) => item.id)).toContain('__custom__');
+    expect(agentPicker?.props.items.map((item: DropdownMenuItem) => item.id)).toContain('__custom__');
 
     act(() => {
       agentPicker?.props.onSelect('agent:com.acme.voice/agent');
@@ -787,9 +817,7 @@ describe('LocalConversationSection', () => {
         },
       },
     });
-    act(() => {
-      screen.tree.update(<LocalConversationSection voice={nextVoice} setVoice={setVoice} />);
-    });
+    await screen.update(<LocalConversationSection voice={nextVoice} setVoice={setVoice} />);
     expect(screen.findAll((node) => (
       node.type === DropdownMenu
       && node.props?.itemTrigger?.title === t('settingsVoice.local.mediatorAgentId')
@@ -872,16 +900,16 @@ describe('LocalConversationSection', () => {
   it('does not crash when providerId toggles away from local_conversation', async () => {
     const LocalConversationSection = await loadLocalConversationSection();
     const setVoice = () => {};
-    const initialVoice = createLocalConversationVoice();
+    const initialVoice = createLocalConversationVoice({ conversationMode: 'agent', agent: { agentSource: 'agent', agentId: 'codex' } });
     const nextVoice = withProvider(voiceSettingsDefaults, 'off');
 
     const screen = await renderSettingsView(<LocalConversationSection voice={initialVoice} setVoice={setVoice} />);
 
-    expect(() => {
-      act(() => {
-        screen.tree.update(<LocalConversationSection voice={nextVoice} setVoice={setVoice} />);
-      });
-    }).not.toThrow();
+    await openDropdown(screen, t('settingsVoice.local.mediatorAgentId'));
+    await expect(screen.update(<LocalConversationSection voice={nextVoice} setVoice={setVoice} />)).resolves.toBeUndefined();
+    expect(screen.findAllByType(DropdownMenu)).toHaveLength(0);
+    expect(screen.findAll(node => typeof node.type === 'string'
+      && typeof node.props.testID === 'string' && node.props.testID.startsWith('dropdown-option-'))).toHaveLength(0);
   });
 
   it('renders the local section on web only when local remains the stored provider', async () => {
@@ -893,14 +921,12 @@ describe('LocalConversationSection', () => {
 
     expect(findSegmentedChoiceByTitle(screen, t('settingsVoice.pages.conversations.talkToTitle'))).toBeTruthy();
 
-    act(() => {
-      screen.tree.update(
+    await screen.update(
         <LocalConversationSection
           voice={withProvider(localVoice, 'happier.voice.elevenlabs/realtime-elevenlabs')}
           setVoice={() => {}}
         />,
       );
-    });
 
     expect(findChoiceByTitle(screen, t('settingsVoice.pages.conversations.talkToTitle'))).toBeFalsy();
   });
@@ -961,8 +987,8 @@ describe('LocalConversationSection', () => {
 
     const iconTypesById = Object.fromEntries(
       (modelDropdown.props.items ?? [])
-        .filter((item: any) => ['__refresh_models__', 'm1', '__custom__'].includes(String(item?.id)))
-        .map((item: any) => [String(item.id), item?.icon?.type ?? null]),
+        .filter((item: DropdownMenuItem) => ['__refresh_models__', 'm1', '__custom__'].includes(String(item?.id)))
+        .map((item: DropdownMenuItem) => [String(item.id), React.isValidElement(item.icon) ? item.icon.type : null]),
     );
 
     expect(Object.values(iconTypesById)).not.toContain('Ionicons');

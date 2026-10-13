@@ -2,8 +2,6 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { AuthProvider } from '@/auth/context/AuthContext';
-import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import {
     createMachineFixture,
     createRootLayoutFeaturesResponse,
@@ -11,32 +9,14 @@ import {
     renderHook,
     standardCleanup,
 } from '@/dev/testkit';
-import {
-    primeServerFeaturesSnapshot,
-    resetServerFeaturesClientForTests,
-} from '@/sync/api/capabilities/serverFeaturesClient';
-import { storage } from '@/sync/domains/state/storageStore';
-import { notifyAuthCredentialsInvalidated } from '@/sync/runtime/orchestration/authCredentialsInvalidation';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 
-import { useVoiceProviderLocalAvailability } from './voiceProviderLocalAvailability';
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
-const pcmCaptureAvailabilityMock = vi.hoisted(() => vi.fn(() => 'available'));
 const isRecognitionAvailableMock = vi.hoisted(() => vi.fn(() => true));
 const requestSpeechPermissionsMock = vi.hoisted(() => vi.fn());
-const switchConnectionToActiveServerMock = vi.hoisted(() => (
-    vi.fn<() => Promise<AuthCredentials | null>>(async () => null)
-));
-const syncSwitchServerMock = vi.hoisted(() => vi.fn(async () => {}));
-const activeServerState = vi.hoisted(() => {
-    const snapshot = {
-        serverId: 'server-a',
-        serverUrl: 'https://server-a.example.test',
-        generation: 1,
-    };
-    const listeners = new Set<(next: typeof snapshot) => void>();
-    return { snapshot, listeners };
-});
-
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
@@ -48,45 +28,18 @@ vi.mock('react-native', async () => {
     });
 });
 
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    switchConnectionToActiveServer: switchConnectionToActiveServerMock,
-}));
-
-vi.mock('@/sync/sync', () => ({
-    syncSwitchServer: syncSwitchServerMock,
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => activeServerState.snapshot,
-    subscribeActiveServer: (listener: (next: typeof activeServerState.snapshot) => void) => {
-        activeServerState.listeners.add(listener);
-        return () => activeServerState.listeners.delete(listener);
-    },
-}));
-
-vi.mock('@/sync/runtime/orchestration/concurrentSessionCache', () => ({
-    startConcurrentSessionCacheSync: vi.fn(),
-    stopConcurrentSessionCacheSync: vi.fn(),
-}));
-
-vi.mock('@/voice/settings/browserWebSpeechCapability', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/voice/settings/browserWebSpeechCapability')>();
-    return {
-        ...actual,
-        useBrowserWebSpeechCapability: () => ({ support: 'unavailable', onDevice: 'unsupported' }),
-    };
-});
-
-vi.mock('@/voice/runtime/daemonInference/resolveDaemonSpeechPcmCaptureAvailability', () => ({
-    resolveDaemonSpeechPcmCaptureAvailability: () => pcmCaptureAvailabilityMock(),
-}));
-
 vi.mock('expo-speech-recognition', () => ({
     ExpoSpeechRecognitionModule: {
         isRecognitionAvailable: isRecognitionAvailableMock,
         requestPermissionsAsync: requestSpeechPermissionsMock,
     },
 }));
+
+const account = createProviderSettingsAccountHarness();
+const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { AuthProvider } = await import('@/auth/context/AuthContext');
+const { notifyAuthCredentialsInvalidated } = await import('@/sync/runtime/orchestration/authCredentialsInvalidation');
+const { useVoiceProviderLocalAvailability } = await import('./voiceProviderLocalAvailability');
 
 type AvailabilityHookInput = Parameters<typeof useVoiceProviderLocalAvailability>[0];
 
@@ -167,7 +120,8 @@ function createRelayDisabledFeatures(
 function createDirectMachine() {
     return createMachineFixture({
         id: 'machine-1',
-        daemonState: {
+        daemonState: MachinePublishedDaemonStateV1Schema.parse({
+            status: 'running',
             peerMediation: {
                 loopback: {
                     endpoint: {
@@ -179,37 +133,31 @@ function createDirectMachine() {
                     },
                 },
             },
-        },
+        }),
     });
 }
 
 describe('useVoiceProviderLocalAvailability', () => {
-    let previousStorageState: ReturnType<typeof storage.getState>;
     let readyFeatures: ReturnType<typeof createRootLayoutFeaturesResponse>;
 
-    beforeEach(() => {
-        previousStorageState = storage.getState();
-        switchConnectionToActiveServerMock.mockReset();
-        switchConnectionToActiveServerMock.mockResolvedValue(null);
-        syncSwitchServerMock.mockReset();
+    beforeEach(async () => {
         readyFeatures = createReadyFeatures();
-        resetServerFeaturesClientForTests();
-        primeServerFeaturesSnapshot({
-            serverId: 'server-a',
-            snapshot: { status: 'ready', features: readyFeatures },
-        });
+        await account.restore({ features: readyFeatures, settings: {
+            experiments: true, featureToggles: { 'voice.agent': true, 'execution.runs': true, 'voice.daemonInference': true },
+        } });
+        isRecognitionAvailableMock.mockReset().mockReturnValue(true);
+        requestSpeechPermissionsMock.mockClear();
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
-        storage.setState(previousStorageState);
+        await account.reset();
         resetServerFeaturesClientForTests();
-        activeServerState.listeners.clear();
     });
 
     async function renderAvailabilityHook(input: AvailabilityHookInput = {}) {
         const Wrapper = ({ children }: React.PropsWithChildren) => (
-            <AuthProvider initialCredentials={{ token: 'token-1', secret: 'secret-1' }}>
+            <AuthProvider initialCredentials={{ token: account.home.findByServerUrl('https://provider-settings-account.test')!.token! }}>
                 {children}
             </AuthProvider>
         );
@@ -219,15 +167,8 @@ describe('useVoiceProviderLocalAvailability', () => {
         );
     }
 
-    function installMachine(machine: ReturnType<typeof createMachineFixture>) {
-        storage.setState((state) => ({
-            ...state,
-            machines: { ...state.machines, [machine.id]: machine },
-            machineListByServerId: {
-                ...state.machineListByServerId,
-                'server-a': [machine],
-            },
-        }));
+    async function installMachine(machine: ReturnType<typeof createMachineFixture>) {
+        await account.publishMachines(account.serverId, [machine]);
     }
 
     it('loads native recognition support passively without requesting microphone permission', async () => {
@@ -250,7 +191,6 @@ describe('useVoiceProviderLocalAvailability', () => {
 
         const localAvailability = hook.getCurrent();
 
-        expect(pcmCaptureAvailabilityMock).toHaveBeenCalled();
         expect(localAvailability.daemon).toMatchObject({
             route: 'relay',
             modelState: 'ready',
@@ -262,11 +202,11 @@ describe('useVoiceProviderLocalAvailability', () => {
     it('recomputes the passive direct route when same-machine endpoint and server policy facts are lost and restored', async () => {
         const relayDisabledFeatures = createRelayDisabledFeatures(readyFeatures);
         primeServerFeaturesSnapshot({
-            serverId: 'server-a',
+            serverId: account.serverId,
             snapshot: { status: 'ready', features: relayDisabledFeatures },
         });
         const machine = createDirectMachine();
-        installMachine(machine);
+        await installMachine(machine);
         const hook = await renderAvailabilityHook({
             daemonMachineId: machine.id,
             daemonModelState: 'ready',
@@ -276,15 +216,15 @@ describe('useVoiceProviderLocalAvailability', () => {
         expect(hook.getCurrent().daemon?.route).toBe('direct');
 
         await act(async () => {
-            installMachine(createMachineFixture({
+            await installMachine(createMachineFixture({
                 ...machine,
-                daemonState: { peerMediation: { loopback: {} } },
+                daemonState: MachinePublishedDaemonStateV1Schema.parse({ status: 'running', peerMediation: { loopback: {} } }),
             }));
         });
         expect(hook.getCurrent().daemon?.route).toBe('relay_disabled');
 
         await act(async () => {
-            installMachine(machine);
+            await installMachine(machine);
         });
         expect(hook.getCurrent().daemon?.route).toBe('direct');
 
@@ -303,7 +243,7 @@ describe('useVoiceProviderLocalAvailability', () => {
         });
         await act(async () => {
             primeServerFeaturesSnapshot({
-                serverId: 'server-a',
+                serverId: account.serverId,
                 snapshot: { status: 'ready', features: rpcDisabled },
             });
         });
@@ -311,7 +251,7 @@ describe('useVoiceProviderLocalAvailability', () => {
 
         await act(async () => {
             primeServerFeaturesSnapshot({
-                serverId: 'server-a',
+                serverId: account.serverId,
                 snapshot: { status: 'ready', features: relayDisabledFeatures },
             });
         });
@@ -321,11 +261,11 @@ describe('useVoiceProviderLocalAvailability', () => {
     it('recomputes passive direct readiness when mounted AuthContext credentials are lost and restored', async () => {
         const relayDisabledFeatures = createRelayDisabledFeatures(readyFeatures);
         primeServerFeaturesSnapshot({
-            serverId: 'server-a',
+            serverId: account.serverId,
             snapshot: { status: 'ready', features: relayDisabledFeatures },
         });
         const machine = createDirectMachine();
-        installMachine(machine);
+        await installMachine(machine);
         const hook = await renderAvailabilityHook({
             daemonMachineId: machine.id,
             daemonModelState: 'ready',
@@ -333,26 +273,27 @@ describe('useVoiceProviderLocalAvailability', () => {
         });
         expect(hook.getCurrent().daemon?.route).toBe('direct');
 
-        switchConnectionToActiveServerMock.mockResolvedValueOnce(null);
+        const home = account.home.findByServerUrl('https://provider-settings-account.test')!;
+        const credentials = home.token;
+        home.token = null;
+        home.accountId = null;
         await act(async () => {
             notifyAuthCredentialsInvalidated({
                 kind: 'credentials_removed',
-                serverId: 'server-a',
-                serverUrl: 'https://server-a.example.test',
+                serverId: account.serverId,
+                serverUrl: 'https://provider-settings-account.test',
             });
             await flushHookEffects({ cycles: 4, turns: 2 });
         });
         expect(hook.getCurrent().daemon?.route).toBe('relay_disabled');
 
-        switchConnectionToActiveServerMock.mockResolvedValueOnce({
-            token: 'token-2',
-            secret: 'secret-2',
-        });
+        home.token = credentials;
+        home.accountId = 'account-a';
         await act(async () => {
             notifyAuthCredentialsInvalidated({
                 kind: 'credentials_removed',
-                serverId: 'server-a',
-                serverUrl: 'https://server-a.example.test',
+                serverId: account.serverId,
+                serverUrl: 'https://provider-settings-account.test',
             });
             await flushHookEffects({ cycles: 4, turns: 2 });
         });

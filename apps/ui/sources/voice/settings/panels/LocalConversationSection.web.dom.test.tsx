@@ -4,8 +4,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture, createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { t } from '@/text';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
@@ -23,16 +26,8 @@ import { buildApprovalRequestArtifactHeaderV1, encodePlainArtifactStoredContent,
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const transport = vi.hoisted(() => ({ projection: null as unknown, projectionReads: [] as unknown[] }));
-// Only daemon network delivery is replaced. Action admission, scoped projection,
-// model selectability and the Account Settings writer remain real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
-    const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
-    return { machineRpcWithServerScope: async (request: Readonly<{ method: string; payload: unknown }>) => {
-        if (request.method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) throw new Error('unsupported fixture RPC');
-        transport.projectionReads.push(request.payload);
-        return transport.projection;
-    } };
-});
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
@@ -51,10 +46,6 @@ vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: key => key });
-});
 vi.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 vi.mock('@hugeicons/react-native', () => ({ HugeiconsIcon: () => null }));
 vi.mock('@/utils/web/radixCjs', async () => {
@@ -72,6 +63,14 @@ vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
 vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
 
 const account = createProviderSettingsAccountHarness();
+// Socket RPC is the genuine daemon-delivery boundary. Scoped routing/admission stay real.
+installSessionActionRpcBoundary(async request => {
+    if (!request.method.endsWith(`:${RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION}`)) {
+        throw new Error('unsupported fixture RPC');
+    }
+    transport.projectionReads.push(request.params);
+    return transport.projection;
+});
 let mounted: { root: Root; container: HTMLElement } | null = null;
 let locks: ReturnType<typeof installWebLockManagerMock> | undefined;
 afterEach(async () => {
@@ -233,7 +232,7 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
         await act(async () => mounted?.root.render(<Editor />));
         try {
             const trigger = [...container.querySelectorAll<HTMLElement>('[role="button"],button,[tabindex="0"]')]
-                .find(node => node.textContent?.includes('settingsVoice.local.mediatorAgentId'));
+                .find(node => node.textContent?.includes(t('settingsVoice.local.mediatorAgentId')));
             if (!trigger) throw new Error('missing actual pending Chat Agent dropdown');
             await act(async () => press(trigger));
             await vi.waitFor(() => expect(document.querySelector('[data-testid="dropdown-option-opencode"]')).not.toBeNull());
@@ -245,7 +244,7 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
                 expect(stored).toEqual(original);
                 expect(providerWrites).toBe(0);
                 expect(account.home.requestsFor('/v1/account/saved-secrets/resources/promote')).toEqual([]);
-                expect(document.body.textContent).not.toContain('common.saveError');
+                expect(document.body.textContent).not.toContain(t('common.saveError'));
                 const artifact = artifacts.list()[0]!;
                 const request = StoredApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(artifact.id)!));
                 if (request.v !== 2) throw new Error('Expected the original result-bearing approval');
@@ -299,7 +298,7 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
                     return;
                 }
                 if (outcome === 'personal-approval-canceled') {
-                    await vi.waitFor(() => expect(document.body.textContent).toContain('common.saveError'));
+                    await vi.waitFor(() => expect(document.body.textContent).toContain(t('common.saveError')));
                     expect(stored).toEqual(original);
                     expect(providerWrites).toBe(0);
                     expect(artifacts.list()).toHaveLength(1);
@@ -307,7 +306,7 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
                 }
             }
             await vi.waitFor(() => expect(account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1)
-                .some(request => request.input !== undefined) || document.body.textContent?.includes('common.saveError')).toBe(true), { timeout: 180_000 });
+                .some(request => request.input !== undefined) || document.body.textContent?.includes(t('common.saveError'))).toBe(true), { timeout: 180_000 });
             expect(account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1)
                 .some(request => request.input !== undefined)).toBe(true);
             expect(stored).toEqual(original);
@@ -320,7 +319,7 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
             }
             acknowledge();
             if (outcome === 'provider-conflict' || outcome === 'settings-conflict') {
-                await vi.waitFor(() => expect(document.body.textContent).toContain('common.saveError'), { timeout: 180_000 });
+                await vi.waitFor(() => expect(document.body.textContent).toContain(t('common.saveError')), { timeout: 180_000 });
                 expect(stored.voice).toEqual(original.voice);
                 expect(readLocalConversationVoiceSettings(settingsParse(stored).voice).agent.providerChat)
                     .toEqual({ status: 'migration_required', reason: 'provider_catalog_import_required' });
@@ -380,6 +379,13 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
                 providers: { enabled: true }, voice: { enabled: true }, execution: { runs: { enabled: true } },
             } }),
         });
+        // Scoped RPC verifies the current Machine's Home row before dispatching.
+        const machine = createPlainMachineRowFixture({ id: 'machine-a', accountId: scope.accountId });
+        account.home.answer(scope.serverId, '/v1/machines/machine-a', { body: { machine } });
+        account.home.answer(scope.serverId, '/v1/machines/machine-a/access', { body: {
+            machineId: machine.id, custodian: machine.access!.custodian, access: machine.access,
+            canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+        } });
         let settingsVersion = 1;
         account.home.answer(scope.serverId, 'POST /v2/account/settings', { select: input => {
             const request = AccountSettingsV2UpdateRequestSchema.parse(input);
@@ -408,7 +414,7 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
         mounted = { root, container };
         await act(async () => root.render(<Editor />));
         const trigger = [...container.querySelectorAll<HTMLElement>('[role="button"],button,[tabindex="0"]')]
-            .find(node => node.textContent?.includes('settingsVoice.local.mediatorAgentId'));
+            .find(node => node.textContent?.includes(t('settingsVoice.local.mediatorAgentId')));
         if (!trigger) throw new Error('missing actual imported Chat Agent dropdown trigger');
         await act(async () => press(trigger));
         await vi.waitFor(() => expect(document.querySelector('[data-testid="dropdown-option-opencode"]')).not.toBeNull());

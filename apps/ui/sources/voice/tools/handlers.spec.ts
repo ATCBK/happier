@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import * as React from 'react';
 import { Conversation, TextConversation } from '@elevenlabs/client';
 import { createElevenLabsVoiceProviderRuntime } from '../../../../../packages/plugins/elevenlabs/src/ui/voice/runtime';
 import { createSdkHandleConnection } from '@/voice/runtime/connection/VoiceRealtimeConnection';
@@ -6,11 +7,23 @@ import {
   bindVoiceRuntimeAttemptBinding, createVoiceRuntimeAttemptBindingOwner,
   unbindVoiceRuntimeAttemptBindingIfOwned,
 } from '@/voice/binding/voiceConversationBindingStore';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { socketRpcCodec } from '@happier-dev/sync-client';
+import { DEFAULT_SESSION_CAPABILITIES, SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
+import { PENDING_INPUT_PROTOCOL_VERSION_V4 } from '@happier-dev/protocol/clientCompatibility/primitives';
+import { SessionMessageV1Schema, SessionMessagesPageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
+import { RawRecordSchema } from '@happier-dev/session-core/raw';
+import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { readSessionMessageProvenanceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createToolCallMessageFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import type { Message } from '@happier-dev/session-core/messages';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { PLUGIN_UI_HOST_API_VERSION_V1, PLUGIN_UI_HOST_API_WIRE_VERSION_V1 } from '@happier-dev/protocol/plugins/ui';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
-import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { registerStorageStateReader } from '@/sync/domains/state/storageStateReaderBridge';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storage';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import {
   resetSessionListPaneRetentionForTests,
@@ -22,51 +35,126 @@ import type { AuthContextType } from '@/auth/context/AuthContext';
 import { getCurrentAuth, setCurrentAuth } from '@/auth/context/currentAuth';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
-import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { adoptHomeProfile, getServerProfileById, removeServerProfile } from '@/sync/domains/server/serverProfiles';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { currentPendingEnqueueAck } from '@/sync/engine/pending/pendingQueueV2.testHelpers';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createStandaloneVoicePolicyHarness, prepareStandaloneVoicePolicyHarness } from '@/dev/testkit/harness/standaloneVoicePolicyHarness';
+import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
 
 import { createVoiceToolHandlers, serializeVoiceActionExecuteResult } from './handlers';
 
-const trackPermissionResponse = vi.fn();
-const sendMessage = vi.fn();
-const submitMessage = vi.fn();
-const ensureSessionVisibleForMessageRoute = vi.fn();
-const refreshSessionMessages = vi.fn();
-const getSessionEncryption = vi.fn<(sessionId: string) => unknown>((_sessionId) => ({}));
-const executionRunStart = vi.fn();
-const executionRunList = vi.fn();
-const executionRunGet = vi.fn();
-const executionRunSend = vi.fn();
-const executionRunStop = vi.fn();
-const executionRunAction = vi.fn();
-const machineRpcWithServerScope = vi.fn();
-const setActiveServerAndSwitch = vi.fn(async (_params?: any) => false);
+// The daemon response is authored at the genuine Socket.IO boundary. Session
+// eligibility, scoped Account admission, RPC framing and response parsing run.
+const daemonRpc = vi.fn<(request: Readonly<{ serverUrl: string; sessionId: string; method: string; payload: unknown }>) => Promise<unknown>>();
 const routerNavigate = vi.fn();
 const refreshFromActiveServer = vi.fn(async () => {});
-const applySettingsLocal = vi.fn();
-const sendSessionMessageWithServerScope = vi.fn();
-const sessionRpcWithServerScope = vi.fn();
-const teleportVoiceAgentToSessionRoot = vi.fn();
-const createArtifactWithHeader = vi.fn();
+const pendingEnqueue = vi.fn<(request: Readonly<{ serverUrl: string; sessionId: string; runId: string | null; init: RequestInit }>) => Promise<Response>>();
 const artifactCreateRequests = vi.fn();
-const voiceSessionStop = vi.hoisted(() => vi.fn(async () => {}));
-const runtimeFetchWithServerReachability = vi.hoisted(() => vi.fn());
-const readOrdinarySessionListCoverage = vi.fn<() => {
-  serverId: string | null;
-  coverage: 'complete' | 'incomplete';
-}>(() => ({
-  serverId: 'server-a',
-  coverage: 'complete' as const,
-}));
+let homeA = '';
+let homeB = '';
+let homeUrlA = '';
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
+let accountHttp: NonNullable<ReturnType<typeof account.request.getMockImplementation>>;
+let restoreCredentials: (() => Promise<boolean>) | undefined;
+const sessionDetailReplies = new Map<string, ReturnType<typeof createSessionFixture>>();
+const sessionDetailReads: string[] = [];
+const messagePages = new Map<string, ReturnType<typeof SessionMessagesPageV1Schema.parse>>();
+const messageReads: string[] = [];
+
+function expectVoicePendingInput(sessionId: string, text: string, runId: string | null = null) {
+  expect(pendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: homeUrlA, sessionId, runId }));
+  const request = pendingEnqueue.mock.calls.find(([candidate]) => candidate.sessionId === sessionId)?.[0];
+  if (!request) throw new Error('Voice input did not reach the Pending HTTP boundary');
+  const body: unknown = JSON.parse(String(request.init.body));
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected Pending HTTP body');
+  const envelope = StrictSessionStoredMessageContentEnvelopeSchema.parse(Reflect.get(body, 'content'));
+  if (envelope.t !== 'plain') throw new Error('Plain Account input must use the plain envelope');
+  const record = RawRecordSchema.parse(envelope.v);
+  expect(record).toMatchObject({ role: 'user', content: { text } });
+  expect(readSessionMessageProvenanceV1(record.meta)).toEqual({ v: 1, kind: 'voice' });
+  expect(PendingRequestedActionV1Schema.parse(Reflect.get(body, 'requestedAction'))).toEqual({ v: 1, kind: 'steer_if_active' });
+}
+
+function messagesFixture(messages: readonly Message[]) {
+  return createSessionMessagesFixture({ isLoaded: true,
+    messageIdsOldestFirst: messages.map(message => message.id),
+    messagesById: Object.fromEntries(messages.map(message => [message.id, message])),
+  });
+}
+
+function seedMessages(sessionId: string, messages: readonly Message[]) {
+  storage.setState({ sessionMessages: { ...storage.getState().sessionMessages, [sessionId]: messagesFixture(messages) } });
+}
+
+async function mountCurrentUiContext(wireResult: Readonly<Record<string, boolean>> = { opened: true }) {
+  const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+  const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+  const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+  const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+  const { CurrentUiContextProvider, useOptionalCurrentUiContextReader, usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
+  const { useCurrentUiContextVoiceToolPort } = await import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort');
+  const { AppShellPluginUiProjectionProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+  const { PluginProjectionV2Schema, PluginProjectedActionV2Schema, formatQualifiedPluginActionId,
+    DaemonPluginActionSchemasReadResponseSchema, DaemonPluginStructuredMessageActionExecuteResponseSchema } = await import('@happier-dev/protocol');
+  // These are daemon-authored declarations, consumed by the real normalizer,
+  // origin union and effect dispatcher, not fabricated AppShell decisions.
+  const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {}, agentsById: {},
+      actionsById: { 'acme.triage/refresh-issues': PluginProjectedActionV2Schema.parse({
+        id: 'refresh-issues', pluginId: 'acme.triage', occurrenceId: 'voice-tools-current-ui', title: 'Refresh issues',
+        scopes: ['global'], surfaces: ['voice'], execution: { target: 'daemon' }, dangerLevel: 'safe', available: true,
+      }) }, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, familiesById: {}, diagnostics: [] });
+  const previous = daemonRpc.getMockImplementation();
+  daemonRpc.mockImplementation(async request => {
+    if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
+    if (request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) return DaemonPluginActionSchemasReadResponseSchema.parse({ ok: true,
+      inputSchema: { type: 'object', additionalProperties: true },
+      outputSchema: { type: 'object', additionalProperties: true } });
+    if (request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE) return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({ ok: true, result: wireResult });
+    if (!previous) throw new Error('Voice daemon boundary is unavailable');
+    return previous(request);
+  });
+  const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+  const { resetMachineProjectionReadsForTests } = await import('@/sync/ops/machineContributionRegistryProjection');
+  clearDaemonMergedProjectionCacheForTests();
+  resetMachineProjectionReadsForTests();
+  storage.getState().applyMachines([storage.getState().machines.m1], true);
+  const enrichment = { entity: { kind: 'plugin', label: 'PLUGIN_LABEL_SENTINEL' }, commands: [{
+    title: 'Open issue #124', command: { kind: 'executeAction' as const,
+      action: { pluginId: 'acme.triage', localId: 'refresh-issues' },
+      input: { repository: 'acme/widgets', privateQuery: 'must-remain-local' } },
+  }] };
+  function Publication() {
+    usePublishCurrentUiContext(enrichment);
+    return null;
+  }
+  const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(InjectedAuthProvider,
+    { credentials: account.credentials }, React.createElement(MainAppTabStateProvider, null,
+      React.createElement(AppPaneProvider, null, React.createElement(AppShellPluginUiProjectionProvider, null,
+        React.createElement(CurrentUiContextProvider, null,
+        React.createElement(PluginSurfaceFocusEligibilityProvider, { active: true, currentUiContextActive: true },
+          React.createElement(Publication), children))))));
+  const mounted = await renderHook(() => ({ reader: useOptionalCurrentUiContextReader(), port: useCurrentUiContextVoiceToolPort() }), { wrapper });
+  const { reader, port } = mounted.getCurrent();
+  if (!reader) throw new Error('Canonical Current UI owner did not mount');
+  if (!port) throw new Error('Canonical Current UI Voice port did not mount');
+  await vi.waitFor(() => expect(mounted.getCurrent().port?.listCurrentContributedActionDefinitions?.())
+    .toEqual(expect.arrayContaining([expect.objectContaining({ id: formatQualifiedPluginActionId({ pluginId: 'acme.triage', localId: 'refresh-issues' }) })])));
+  const commandId = reader.readCurrentUiContext()?.commands[0]?.id;
+  return { port: mounted.getCurrent().port!, reader, commandId };
+}
 
 function createBaseState(): any {
   return {
-    addArtifact: vi.fn(),
-    profileScope: { serverId: 'server-a', accountId: 'voice-tools-account' },
-    settingsScope: { serverId: 'server-a', accountId: 'voice-tools-account' },
+    profileScope: { serverId: homeA, accountId: 'account-a' },
+    settingsScope: { serverId: homeA, accountId: 'account-a' },
     sessions: {
-      s1: {
+      s1: createSessionFixture({
         id: 's1',
-        serverId: 'server-a',
+        serverId: homeA,
         thinking: false,
         active: true,
         updatedAt: 200,
@@ -77,11 +165,11 @@ function createBaseState(): any {
             req_b: { id: 'req_b', tool: 'Read', kind: 'permission' },
           },
         },
-        metadata: { path: '/Users/alice/project-alpha', homeDir: '/Users/alice', machineId: 'm1', host: 'a-host', summary: { text: 'S1 summary' } },
-      },
-      s2: {
+        metadata: { path: '/Users/alice/project-alpha', homeDir: '/Users/alice', machineId: 'm1', host: 'a-host', flavor: 'claude', summary: { text: 'S1 summary' } },
+      }),
+      s2: createSessionFixture({
         id: 's2',
-        serverId: 'server-a',
+        serverId: homeA,
         thinking: false,
         active: true,
         updatedAt: 100,
@@ -92,42 +180,42 @@ function createBaseState(): any {
           },
         },
         metadata: { path: '/tmp/s2', machineId: 'm1', host: 'a-host', summary: { text: 'S2 summary' } },
-      },
-      sys_voice: {
+      }),
+      sys_voice: createSessionFixture({
         id: 'sys_voice',
-        serverId: 'server-a',
+        serverId: homeA,
         thinking: false,
         active: false,
         updatedAt: 300,
         presence: 'offline',
         agentState: { requests: {} },
         metadata: { path: '/tmp/sys', machineId: 'm1', host: 'a-host', systemSessionV1: { v: 1, key: 'voice_carrier', hidden: true } },
-      },
-      s_matrix: {
+      }),
+      s_matrix: createSessionFixture({
         id: 's_matrix',
-        serverId: 'server-a',
+        serverId: homeA,
         thinking: false,
         active: false,
         updatedAt: 60,
         presence: 'offline',
         agentState: { requests: {} },
         metadata: { path: '/tmp/matrix', machineId: 'm1', host: 'a-host', name: 'leeroy' },
-      },
+      }),
     },
     sessionListIndexByServerId: {
-      'server-a': [
-        { type: 'session', sessionId: 's1', serverId: 'server-a', serverName: 'Server A' },
-        { type: 'session', sessionId: 's2', serverId: 'server-a', serverName: 'Server A' },
-        { type: 'session', sessionId: 's_visible_only', serverId: 'server-a', serverName: 'Server A' },
-        { type: 'session', sessionId: 's_matrix', serverId: 'server-a', serverName: 'Server A' },
+      [homeA]: [
+        { type: 'session', sessionId: 's1', serverId: homeA, serverName: 'Server A' },
+        { type: 'session', sessionId: 's2', serverId: homeA, serverName: 'Server A' },
+        { type: 'session', sessionId: 's_visible_only', serverId: homeA, serverName: 'Server A' },
+        { type: 'session', sessionId: 's_matrix', serverId: homeA, serverName: 'Server A' },
       ],
-      'server-b': [
-        { type: 'session', sessionId: 's_other', serverId: 'server-b', serverName: 'Server B' },
+      [homeB]: [
+        { type: 'session', sessionId: 's_other', serverId: homeB, serverName: 'Server B' },
       ],
     },
     sessionListRowsByServerId: {
-      'server-a': {
-        s_visible_only: {
+      [homeA]: {
+        s_visible_only: createSessionListRenderableSessionFixture({
           id: 's_visible_only',
           active: true,
           updatedAt: 75,
@@ -140,8 +228,8 @@ function createBaseState(): any {
           thinkingAt: 0,
           presence: 'online',
           metadata: { summaryText: 'Visible only in current list', path: '/tmp/visible-only' },
-        },
-        s_matrix: {
+        }),
+        s_matrix: createSessionListRenderableSessionFixture({
           id: 's_matrix',
           active: false,
           updatedAt: 60,
@@ -154,53 +242,45 @@ function createBaseState(): any {
           thinkingAt: 0,
           presence: 'offline',
           metadata: { summaryText: 'Session QA Voice Matrix', path: '/tmp/matrix' },
-        },
+        }),
       },
-      'server-b': {
-        s_other: {
+      [homeB]: {
+        s_other: createSessionListRenderableSessionFixture({
           id: 's_other',
           active: false,
           updatedAt: 50,
           presence: 'offline',
-          agentState: { requests: {} },
-          metadata: { path: '/tmp/other', host: 'b-host', summary: { text: 'Other summary' } },
-        },
+          metadata: { path: '/tmp/other', host: 'b-host', summaryText: 'Other summary' },
+        }),
       },
     },
     ordinarySessionListMembershipByServerId: {
-      'server-a': ['s_visible_only', 's_matrix'],
-      'server-b': ['s_other'],
+      [homeA]: ['s_visible_only', 's_matrix'],
+      [homeB]: ['s_other'],
     },
     concurrentSessionListCacheByServerId: {
-      'server-b': {
+      [homeB]: {
         serverName: 'Server B',
       },
     },
     machines: {
-      m1: { id: 'm1', active: true, metadata: { host: 'a-host' } },
-      m2: { id: 'm2', active: true, metadata: { host: 'b-host' } },
+      m1: createMachineFixture({ id: 'm1', activeAt: Date.now(),
+        metadata: { ...createMachineFixture().metadata!, host: 'a-host' } }),
+      m2: createMachineFixture({ id: 'm2', activeAt: Date.now(),
+        metadata: { ...createMachineFixture().metadata!, host: 'b-host' } }),
     },
     machineListByServerId: {
-      'server-a': [{
-        id: 'm1', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
-        metadata: { host: 'a-host' }, metadataVersion: 1,
-        daemonState: null, daemonStateVersion: 1,
-      }],
+      [homeA]: [createMachineFixture({ id: 'm1', activeAt: Date.now(),
+        metadata: { ...createMachineFixture().metadata!, host: 'a-host' } })],
     },
     sessionMessages: {
-      s1: {
-        isLoaded: true,
-        messages: [
+      s1: messagesFixture([
           { kind: 'user-text', id: 'm1', localId: null, createdAt: 1, text: 'u1' },
           { kind: 'agent-text', id: 'm2', localId: null, createdAt: 2, text: 'a2' },
-        ],
-      },
-      s2: {
-        isLoaded: true,
-        messages: [
+      ]),
+      s2: messagesFixture([
           { kind: 'agent-text', id: 'm3', localId: null, createdAt: 3, text: 's2 latest' },
-          {
-            kind: 'tool-call',
+          createToolCallMessageFixture({
             id: 'm4',
             localId: null,
             createdAt: 4,
@@ -214,9 +294,8 @@ function createBaseState(): any {
               startedAt: 4,
               completedAt: 5,
             },
-          },
-        ],
-      },
+          }),
+      ]),
     },
     settings: {
       ...settingsDefaults,
@@ -258,7 +337,6 @@ function createBaseState(): any {
 }
 
 let state: any = createBaseState();
-const readMockStorageState = () => ({ ...state, applySettingsLocal });
 
 async function createElevenLabsToolHarness() {
   const { createBundledConversationRuntimeHostLease } = await import('@/voice/registry/bundledConversationRuntimeHost');
@@ -283,7 +361,10 @@ async function createElevenLabsToolHarness() {
     loadConversationSdk: () => import('@elevenlabs/client'),
   });
   const lifetime = new AbortController();
-  const directEffect = vi.fn(async () => { throw new Error('voice_effect_call_custody_unavailable'); });
+  // Observe an accidental provider-direct bypass without substituting the
+  // Action owner: even this forbidden branch delegates to the real handler.
+  const directEffect = vi.fn(createVoiceToolHandlers({ resolveSessionId: () => 's1',
+    currentSessionAddress: { serverId: homeA, sessionId: 's1' } }).sendSessionMessage);
   const connection = await runtime.createConnection({
     session: { config: { textOnly: true, dynamicVariables: { sessionId: 's1' } }, safeMetadata: null },
     attemptId: 1,
@@ -337,7 +418,7 @@ async function createElevenLabsToolHarness() {
   const controlSessionId = 'elevenlabs-custody-control';
   bindVoiceRuntimeAttemptBinding({ owner: bindingOwner, binding: {
     adapterId, controlSessionId, conversationSessionId: 's1',
-    conversationSessionAddress: { serverId: 'server-a', sessionId: 's1' },
+    conversationSessionAddress: { serverId: homeA, sessionId: 's1' },
     lifetime: 'runtime_attempt', transcriptMode: 'synthetic', targetSessionAddress: null, updatedAt: 1,
   } });
   const barrierInput = {
@@ -486,112 +567,31 @@ function retainFixtureSessionListCorpus(): void {
   });
 }
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-    storage: {
-    getState: () => ({ ...state, applySettingsLocal }),
-  },
-});
-});
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-  const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-  return await createTokenStorageModuleMock({
-    importOriginal,
-    tokenStorage: {
-      getCredentialsForServerUrl: vi.fn(async () => ({
-        token: 'e30.eyJzdWIiOiJ2b2ljZS10b29scy1hY2NvdW50In0.signature',
-      })),
-    },
+function installVoiceSocketBoundary() { installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+  socket.connected = true;
+  socket.connect = vi.fn(() => {
+    socket.connected = true;
+    for (const listener of socket.listeners('connect')) listener();
+    return socket;
   });
-});
-
-vi.mock('@/voice/session/voiceSession', () => ({
-  voiceSessionManager: { stop: voiceSessionStop },
-}));
-
-vi.mock('@/sync/runtime/getSyncSingleton', () => ({
-  getSyncSingleton: () => ({ applySettings: applySettingsLocal }),
-}));
-
-vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-  runtimeFetchWithServerReachability: (params: unknown) => runtimeFetchWithServerReachability(params),
-}));
-
-vi.mock('@/sync/ops', () => ({
-  // Permission RPC is executed via server-scoped session RPC in the action executor.
-}));
-
-vi.mock('@/track', () => ({
-  tracking: null,
-  trackPermissionResponse: (...args: any[]) => trackPermissionResponse(...args),
-}));
-
-vi.mock('@/sync/sync', () => ({
-  sync: {
-    sendMessage: (sessionId: string, message: string) => sendMessage(sessionId, message),
-    submitMessage: (...args: any[]) => submitMessage(...args),
-    ensureSessionVisibleForMessageRoute: (sessionId: string, options?: { forceRefresh?: boolean }) =>
-      ensureSessionVisibleForMessageRoute(sessionId, options),
-    refreshSessionMessages: (sessionId: string) => refreshSessionMessages(sessionId),
-    createArtifactWithHeader: (...args: any[]) => createArtifactWithHeader(...args),
-    readOrdinarySessionListCoverage: () => readOrdinarySessionListCoverage(),
-    encryption: {
-      getSessionEncryption: (sessionId: string) => getSessionEncryption(sessionId),
-    },
-  },
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage')>(),
-  sendSessionMessageWithServerScope: (args: any) => sendSessionMessageWithServerScope(args),
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
-  sessionRpcWithServerScope: (args: any) => sessionRpcWithServerScope(args),
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-  machineRpcWithServerScope: (args: any) => machineRpcWithServerScope(args),
-}));
-
-vi.mock('@/voice/agent/teleportVoiceAgentToSessionRoot', () => ({
-  teleportVoiceAgentToSessionRoot: (args: any) => teleportVoiceAgentToSessionRoot(args),
-}));
-
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
-  sessionExecutionRunStart: (sessionId: string, request: any, opts?: any) => executionRunStart(sessionId, request, opts),
-  sessionExecutionRunList: (sessionId: string, request: any, opts?: any) => executionRunList(sessionId, request, opts),
-  sessionExecutionRunGet: (sessionId: string, request: any, opts?: any) => executionRunGet(sessionId, request, opts),
-  sessionExecutionRunSend: (sessionId: string, request: any, opts?: any) => executionRunSend(sessionId, request, opts),
-  sessionExecutionRunStop: (sessionId: string, request: any, opts?: any) => executionRunStop(sessionId, request, opts),
-  sessionExecutionRunAction: (sessionId: string, request: any, opts?: any) => executionRunAction(sessionId, request, opts),
-}));
-
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-  setActiveServerAndSwitch: (params: any) => setActiveServerAndSwitch(params),
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-  getActiveServerSnapshot: () => ({
-    serverId: 'server-a',
-    serverUrl: 'https://server-a.test',
-    generation: 1,
-  }),
-  getActiveServerHomeCarrier: () => null,
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-  const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-  return await createPartialServerProfilesModuleMock(importOriginal, {
-    profiles: [
-      { id: 'server-a', name: 'Server A', serverUrl: 'https://server-a.test', serverIdentityId: 'server-identity-a' },
-      { id: 'server-b', name: 'Server B', serverUrl: 'https://server-b.test', serverIdentityId: 'server-identity-b' },
-    ],
+  socket.emitWithAck = vi.fn(async (event, payload) => {
+    if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
+    if (!serverUrl) throw new Error(`Unexpected Voice daemon event: ${event}`);
+    // Socket.IO's SDK is untyped here; this is the real shared RPC producer's envelope.
+    const request = payload as SocketRpcRequestPayload;
+    const separator = request.method.indexOf(':');
+    const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.params, request.method);
+    const response = await daemonRpc({ serverUrl,
+      sessionId: request.method.slice(0, separator), method: request.method.slice(separator + 1), payload: decoded.params,
+    });
+    return { ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, response, decoded.callId) };
   });
-});
-
+}); }
+installVoiceSocketBoundary();
 const authFixture = {
   isAuthenticated: true,
   credentials: { token: 'e30.eyJzdWIiOiJ2b2ljZS10b29scy1hY2NvdW50In0.signature' },
@@ -611,24 +611,27 @@ vi.mock('expo-router', async () => {
     return expoRouterMock.module;
 });
 
+await prepareStandaloneVoicePolicyHarness();
+await loadSyncSingletonForTests();
+
 describe('voice tool handlers', () => {
   it('routes real ElevenLabs duplicate and concurrent calls through canonical Action custody', async () => {
     const harness = await createElevenLabsToolHarness();
     const first = harness.deliver('provider-a', 'first');
     const duplicate = harness.deliver('provider-a', 'first');
     const sibling = harness.deliver('provider-b', 'second');
-    await vi.waitFor(() => expect(sendSessionMessageWithServerScope).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(pendingEnqueue).toHaveBeenCalledTimes(2));
     await Promise.all([first, duplicate, sibling]);
     expect(harness.directEffect).not.toHaveBeenCalled();
     expect(harness.sent.filter((event) => event.type === 'client_tool_result').map((event) => event.tool_call_id))
       .toEqual(expect.arrayContaining(['provider-a', 'provider-a', 'provider-b']));
     expect(harness.sent.filter((event) => event.type === 'client_tool_result')).toHaveLength(3);
     await harness.deliver('provider-a', 'first');
-    expect(sendSessionMessageWithServerScope).toHaveBeenCalledTimes(2);
+    expect(pendingEnqueue).toHaveBeenCalledTimes(2);
     expect(harness.sent.filter((event) => event.tool_call_id === 'provider-a')).toHaveLength(3);
     expect(harness.failures).toEqual([]);
     await harness.deliver(undefined, 'missing identity');
-    expect(sendSessionMessageWithServerScope).toHaveBeenCalledTimes(2);
+    expect(pendingEnqueue).toHaveBeenCalledTimes(2);
     expect(harness.sent.at(-1)).toMatchObject({ is_error: true });
     expect(harness.connection.state()).toBe('open');
   });
@@ -641,7 +644,7 @@ describe('voice tool handlers', () => {
     const delivery = harness.deliver('provider-approval', 'requires approval');
     await vi.waitFor(() => expect(artifactCreateRequests).toHaveBeenCalledTimes(1));
     await delivery;
-    expect(sendSessionMessageWithServerScope).not.toHaveBeenCalled();
+    expect(pendingEnqueue).not.toHaveBeenCalled();
     expect(harness.directEffect).not.toHaveBeenCalled();
     const result = harness.sent.find((event) => event.tool_call_id === 'provider-approval');
     expect(JSON.parse(String(result?.result))).toMatchObject({
@@ -650,142 +653,164 @@ describe('voice tool handlers', () => {
   });
 
   it('rejects real ElevenLabs conflicting duplicates without assigning the first result to the conflicting callback', async () => {
-    let release!: (value: unknown) => void;
-    sendSessionMessageWithServerScope.mockImplementationOnce(async () =>
-      await new Promise((resolve) => { release = resolve; }));
+    let release!: (value: Response) => void;
+    let requestInit!: RequestInit;
+    pendingEnqueue.mockImplementationOnce(async request => {
+      requestInit = request.init;
+      return await new Promise<Response>((resolve) => { release = resolve; });
+    });
     const harness = await createElevenLabsToolHarness();
     const first = harness.deliver('provider-conflict', 'first');
-    await vi.waitFor(() => expect(sendSessionMessageWithServerScope).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pendingEnqueue).toHaveBeenCalledTimes(1));
     const conflict = harness.deliver('provider-conflict', 'different effect');
     await Promise.all([first, conflict]);
     expect(harness.failures).toEqual([expect.objectContaining({ code: 'response_conflict' })]);
     expect(harness.connection.state()).toBe('closed');
     expect(harness.sent.filter((event) => event.type === 'client_tool_result'))
       .toEqual([expect.objectContaining({ is_error: true }), expect.objectContaining({ is_error: true })]);
-    expect(sendSessionMessageWithServerScope).toHaveBeenCalledTimes(1);
+    expect(pendingEnqueue).toHaveBeenCalledTimes(1);
     expect(harness.directEffect).not.toHaveBeenCalled();
-    release({ ok: true, ack: { ok: true, localId: 'after-conflict', persistence: 'pending', accepted: true } });
+    release(currentPendingEnqueueAck(requestInit));
   });
 
   it('settles real ElevenLabs cancelled callbacks and cannot deliver late results or replay them on a new connection', async () => {
-    let release!: (value: unknown) => void;
-    sendSessionMessageWithServerScope.mockImplementationOnce(async () =>
-      await new Promise((resolve) => { release = resolve; }));
+    let release!: (value: Response) => void;
+    let requestInit!: RequestInit;
+    pendingEnqueue.mockImplementationOnce(async request => {
+      requestInit = request.init;
+      return await new Promise<Response>((resolve) => { release = resolve; });
+    });
     const harness = await createElevenLabsToolHarness();
     const delivery = harness.deliver('provider-cancelled', 'pending message');
-    await vi.waitFor(() => expect(sendSessionMessageWithServerScope).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pendingEnqueue).toHaveBeenCalledTimes(1));
     await harness.close();
     await delivery;
     const resultsAtClose = harness.sent.length;
-    release({ ok: true, ack: { ok: true, localId: 'late', persistence: 'pending', accepted: true } });
+    release(currentPendingEnqueueAck(requestInit));
     await Promise.resolve(); await Promise.resolve();
     expect(harness.sent).toHaveLength(resultsAtClose);
     await harness.deliver('late-start-call', 'must not execute');
-    expect(sendSessionMessageWithServerScope).toHaveBeenCalledTimes(1);
+    expect(pendingEnqueue).toHaveBeenCalledTimes(1);
     const replacement = await createElevenLabsToolHarness();
     expect(replacement.sent).toEqual([]);
     expect(replacement.connection.state()).toBe('open');
   });
-  beforeEach(() => {
+  beforeEach(async () => {
+    installVoiceSocketBoundary();
     previousAuth = getCurrentAuth();
-    setCurrentAuth(authFixture);
-    state = createBaseState();
     resetServerFeaturesClientForTests();
+    account = await createVoiceSettingsAccountTestHarness(settingsParse(createBaseState().settings), { features: createRootLayoutFeaturesResponse({
+      capabilities: { serverIdentity: { serverIdentityId: 'server-identity-a' },
+        session: { ...DEFAULT_SESSION_CAPABILITIES, pendingInput: { protocolVersion: PENDING_INPUT_PROTOCOL_VERSION_V4 } } },
+    }) });
+    homeA = account.scope.serverId;
+    const primary = getServerProfileById(homeA);
+    if (!primary) throw new Error('Voice tool Account Home is missing');
+    homeUrlA = primary.serverUrl;
+    await adoptHomeProfile({ descriptor: { serverUrl: homeUrlA, homeServerIdentityId: 'server-identity-a', displayName: 'Server A' }, source: 'manual' });
+    homeA = getActiveServerSnapshot().serverId;
+    const other = await adoptHomeProfile({ descriptor: { serverUrl: 'https://server-b.test', homeServerIdentityId: 'server-identity-b', displayName: 'Server B' }, source: 'manual' });
+    homeB = other.id;
+    const otherCredentials = await TokenStorage.setCredentialsForServerUrlWithRollback(
+      other.serverUrl, { serverId: other.id }, account.credentials);
+    if (!otherCredentials) throw new Error('Second Voice tool Home credentials could not be stored');
+    restoreCredentials = () => otherCredentials.rollback();
+    setCurrentAuth({ ...authFixture, credentials: account.credentials });
+    state = createBaseState();
+    storage.setState({ ...state, settings: account.settings });
+    state = storage.getState();
     resetSessionListPaneRetentionForTests();
-    registerStorageStateReader(readMockStorageState);
-    trackPermissionResponse.mockReset();
-    sendMessage.mockReset();
-    submitMessage.mockReset();
-    submitMessage.mockResolvedValue(undefined);
-    ensureSessionVisibleForMessageRoute.mockReset();
-    ensureSessionVisibleForMessageRoute.mockResolvedValue({ kind: 'available' });
-    refreshSessionMessages.mockReset();
-    sendSessionMessageWithServerScope.mockReset();
-    sendSessionMessageWithServerScope.mockResolvedValue({
-      ok: true,
-      ack: { ok: true, localId: 'voice-input-1', persistence: 'pending', accepted: true },
-    });
-    sessionRpcWithServerScope.mockReset();
-    executionRunStart.mockReset();
-    executionRunList.mockReset();
-    executionRunGet.mockReset();
-    executionRunSend.mockReset();
-    executionRunStop.mockReset();
-    executionRunAction.mockReset();
-    machineRpcWithServerScope.mockReset();
-    setActiveServerAndSwitch.mockReset();
+    pendingEnqueue.mockReset();
+    pendingEnqueue.mockImplementation(async request => currentPendingEnqueueAck(request.init,
+      request.runId ? { recipient: { kind: 'execution_run', runId: request.runId } } : {}));
+    daemonRpc.mockReset();
+    daemonRpc.mockImplementation(async request => { throw new Error(`Unexpected Voice daemon RPC: ${request.method}`); });
     routerNavigate.mockReset();
     refreshFromActiveServer.mockReset();
-    applySettingsLocal.mockReset();
-    teleportVoiceAgentToSessionRoot.mockReset();
-    createArtifactWithHeader.mockReset();
     artifactCreateRequests.mockReset();
-    createArtifactWithHeader.mockResolvedValue('approval-artifact-1');
-    voiceSessionStop.mockClear();
-    runtimeFetchWithServerReachability.mockReset();
-    readOrdinarySessionListCoverage.mockClear();
-    readOrdinarySessionListCoverage.mockReturnValue({ serverId: 'server-a', coverage: 'complete' });
+    sessionDetailReplies.clear();
+    sessionDetailReads.length = 0;
+    messagePages.clear();
+    messageReads.length = 0;
     useVoiceTargetStore.getState().setPrimaryActionSessionAddress(null);
     useVoiceTargetStore.getState().setVoiceLiveContextSessionAddresses([]);
-    const respond = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const existingHttp = account.request.getMockImplementation();
+    if (!existingHttp) throw new Error('Account HTTP boundary is missing');
+    accountHttp = existingHttp;
+    account.request.mockImplementation(async (input, init) => {
       const pathname = new URL(String(input)).pathname;
-      if (pathname === '/v1/features') {
-        return Response.json(createRootLayoutFeaturesResponse());
+      if (pathname === '/health' || pathname === '/v1/auth/ping') return Response.json({});
+      const pending = /^\/v2\/sessions\/([^/]+)(?:\/execution-runs\/([^/]+))?\/pending$/.exec(pathname);
+      if (pending) {
+        if (init?.method === 'POST') return pendingEnqueue({ serverUrl: new URL(String(input)).origin,
+          sessionId: decodeURIComponent(pending[1]), runId: pending[2] ? decodeURIComponent(pending[2]) : null, init });
+        return Response.json({ pending: [], discarded: [] });
       }
-      if (pathname === '/v1/account/encryption') {
-        return Response.json({ mode: 'plain', updatedAt: 1 });
+      const messages = /^\/v[12]\/sessions\/([^/]+)\/messages$/.exec(pathname);
+      if (messages && (init?.method ?? 'GET') === 'GET') {
+        const id = decodeURIComponent(messages[1]);
+        messageReads.push(id);
+        return Response.json(messagePages.get(id) ?? SessionMessagesPageV1Schema.parse({ messages: [], hasMore: false }));
       }
-      if (pathname === '/v1/account/encryption/currentness') {
-        return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+      const session = /^\/v2\/sessions\/([^/]+)$/.exec(pathname);
+      if (session) {
+        const id = decodeURIComponent(session[1]);
+        sessionDetailReads.push(id);
+        const fixture = sessionDetailReplies.get(id) ?? state.sessions[id] ?? createSessionFixture({ id, serverId: homeA });
+        return Response.json({ session: SessionCurrentProjectionRecordV1Schema.parse({
+          ...fixture, metadataLayoutVersion: 0, metadata: JSON.stringify(fixture.metadata),
+          agentState: fixture.agentState === null ? null : JSON.stringify(fixture.agentState),
+          effectiveAccess: { v: 1, level: fixture.access.level, sources: [{ kind: 'owner' }], capabilities: fixture.access.capabilities },
+          responsibleAccountId: null, responsibleAccount: null, share: null, archivedAt: null,
+          dataEncryptionKey: null, pendingCount: 0, pendingVersion: 0,
+        }) });
       }
-      if (pathname === '/v2/account/settings') {
-        return Response.json({ content: { t: 'plain', v: state.settings }, version: 1 });
-      }
+      const machine = /^\/v1\/machines\/([^/]+)$/.exec(pathname);
+      if (machine) return Response.json({ machine: createPlainMachineRowFixture({
+        id: decodeURIComponent(machine[1]), accountId: 'account-a',
+      }) });
       if (pathname === ACP_CATALOG_ROWS_ROUTE_V1) {
         return Response.json({ status: 'present', revision: 1,
           content: { t: 'plain', v: { v: 1, definitions: [] } } });
       }
       const machineAccess = /^\/v1\/machines\/([^/]+)\/access$/.exec(pathname);
       if (machineAccess) {
-        const custodian = { accountId: 'voice-tools-account', displayName: 'Voice Tools Account' };
+        const custodian = { accountId: 'account-a', displayName: 'Voice Tools Account' };
         return Response.json(MachineAccessGrantsListResponseV1Schema.parse({
           machineId: decodeURIComponent(machineAccess[1]), custodian,
           access: { custodian, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
           canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
         }));
       }
-      if (pathname === '/v1/artifacts' && init?.method === 'POST') {
-        const request = JSON.parse(String(init.body)) as {
-          id: string;
-          header: string;
-          body: string;
-          dataEncryptionKey: string;
-        };
-        artifactCreateRequests(request);
-        return Response.json({
-          ...request,
-          ownerAccountId: 'voice-tools-account', access: 'owner', encryptionMode: 'plain',
-          headerVersion: 1,
-          bodyVersion: 1,
-          seq: 1,
-          createdAt: 1,
-          updatedAt: 1,
-        });
-      }
+      if (pathname === '/v1/artifacts' && init?.method === 'POST') artifactCreateRequests(JSON.parse(String(init.body)));
       if (pathname === '/v2/account/session-follow-voice-inclusions' && init?.method === 'PUT') {
         const request = JSON.parse(String(init.body)) as { sessionIds: string[] };
         return Response.json({ changed: true, sessionIds: request.sessionIds });
       }
-      throw new Error(`Unexpected Voice Action account request: ${pathname}`);
-    };
-    setRuntimeFetch(respond);
-    runtimeFetchWithServerReachability.mockImplementation(async (request: {
-      url: string;
-      init?: RequestInit;
-    }) => await respond(request.url, request.init));
+      return accountHttp(input, init);
+    });
+    setRuntimeFetch(account.request);
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    expect(captureActiveServerAccountScopeLifetime()?.scope, JSON.stringify({ selected: getActiveServerSnapshot(),
+      applied: getAppliedActiveServerSnapshot(), available: isAppliedActiveServerRuntimeAvailable(),
+      profile: storage.getState().profileScope })).toEqual({ serverId: homeA, accountId: 'account-a' });
+    const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    const features = await getServerFeaturesSnapshot({ serverId: homeA, force: true });
+    expect(features, JSON.stringify(features)).toMatchObject({ status: 'ready', features: { capabilities: {
+      session: { pendingInput: { protocolVersion: PENDING_INPUT_PROTOCOL_VERSION_V4 } },
+    } } });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await standardCleanup();
+    const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+    await serverScopedRpcSocketPool.stopAll();
+    await restoreCredentials?.();
+    restoreCredentials = undefined;
+    await account?.dispose();
+    if (getServerProfileById(homeB)) await removeServerProfile(homeB);
+    if (getServerProfileById(homeA)) await removeServerProfile(homeA);
     setCurrentAuth(previousAuth);
     resetRuntimeFetch();
   });
@@ -796,15 +821,8 @@ describe('voice tool handlers', () => {
 
     const result = await tools.sendSessionMessage({ message: 'hi' });
 
-    expect(JSON.parse(result)).toMatchObject({ ok: true });
-    expect(sendSessionMessageWithServerScope).toHaveBeenCalledWith({
-      sessionId: 's1',
-      serverId: 'server-a',
-      message: 'hi',
-      requestedAction: { v: 1, kind: 'steer_if_active' },
-      hostAdmissionOrigin: 'voice',
-    });
-    expect(submitMessage).not.toHaveBeenCalled();
+    expect(JSON.parse(result), result).toMatchObject({ ok: true, status: 'accepted' });
+    expectVoicePendingInput('s1', 'hi');
 
   });
 
@@ -812,7 +830,7 @@ describe('voice tool handlers', () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentSessionAddress: { serverId: 'server-a', sessionId: 's1' },
+      currentSessionAddress: { serverId: homeA, sessionId: 's1' },
     });
 
     const result = await tools.sendSessionMessage({
@@ -820,15 +838,8 @@ describe('voice tool handlers', () => {
       recipient: { kind: 'execution_run', runId: 'run-1' },
     });
 
-    expect(JSON.parse(result)).toMatchObject({ ok: true });
-    expect(sendSessionMessageWithServerScope).toHaveBeenCalledWith({
-      sessionId: 's1',
-      serverId: 'server-a',
-      message: 'Continue this run',
-      recipient: { kind: 'execution_run', runId: 'run-1' },
-      requestedAction: { v: 1, kind: 'steer_if_active' },
-      hostAdmissionOrigin: 'voice',
-    });
+    expect(JSON.parse(result), result).toMatchObject({ ok: true });
+    expectVoicePendingInput('s1', 'Continue this run', 'run-1');
   });
 
   it('does not admit a Voice session message after its invocation was cancelled', async () => {
@@ -840,8 +851,7 @@ describe('voice tool handlers', () => {
     const result = await (tools.sendSessionMessage as any)({ message: 'hi' }, { signal: controller.signal });
 
     expect(JSON.parse(result)).toMatchObject({ ok: false, errorCode: 'tool_cancelled' });
-    expect(sendSessionMessageWithServerScope).not.toHaveBeenCalled();
-    expect(submitMessage).not.toHaveBeenCalled();
+    expect(pendingEnqueue).not.toHaveBeenCalled();
   });
 
   it('routes sendSessionMessage through canonical Voice approval before delivery', async () => {
@@ -856,7 +866,7 @@ describe('voice tool handlers', () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentSessionAddress: { serverId: 'server-a', sessionId: 's1' },
+      currentSessionAddress: { serverId: homeA, sessionId: 's1' },
     });
 
     const result = JSON.parse(await tools.sendSessionMessage(
@@ -870,16 +880,11 @@ describe('voice tool handlers', () => {
       artifactId: expect.any(String),
       actionId: 'session.message.send',
     });
-    expect(sendSessionMessageWithServerScope).not.toHaveBeenCalled();
-    expect(submitMessage).not.toHaveBeenCalled();
+    expect(pendingEnqueue).not.toHaveBeenCalled();
   });
 
   it('reports a target update requirement from canonical Voice admission without retaining an unknown outcome', async () => {
-    sendSessionMessageWithServerScope.mockResolvedValueOnce({
-      ok: false,
-      errorCode: 'session_input_target_update_required',
-      error: 'session_input_target_update_required',
-    });
+    pendingEnqueue.mockResolvedValueOnce(Response.json({ code: 'session_input_target_update_required' }, { status: 409 }));
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
 
@@ -894,48 +899,52 @@ describe('voice tool handlers', () => {
     });
   });
 
-  it('exposes review.start through the catalog voice binding', async () => {
+  it('starts review through the catalog Voice binding, executor and Session RPC', async () => {
+    const { ExecutionRunStartResponseSchema } = await import('@happier-dev/protocol/execution/runs/responseSchemas');
+    daemonRpc.mockImplementation(async request => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+      ? { error: 'RPC_METHOD_NOT_FOUND' }
+      : ExecutionRunStartResponseSchema.parse({ runId: 'run-review', callId: 'call-review', sidechainId: 'call-review' }));
     const { createVoiceToolHandlers } = await import('./handlers');
-    const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
-    expect(tools.startReview).toEqual(expect.any(Function));
+    const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1'),
+      currentSessionAddress: { serverId: homeA, sessionId: 's1' } });
+    const inventory = JSON.parse(await tools.listReviewEngines({ sessionId: 's1' }, { serverId: homeA }));
+    expect(inventory, JSON.stringify(inventory)).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ engineId: 'claude', enabled: true })]) });
+    const result = JSON.parse(await tools.startReview({ engineIds: ['claude'], instructions: 'Review the current worktree.' }));
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, sessionId: 's1', results: [
+      { ok: true, result: { runId: 'run-review' } },
+    ] });
+    expect(daemonRpc.mock.calls.map(([request]) => request)).toContainEqual(expect.objectContaining({
+      serverUrl: homeUrlA, sessionId: 's1', method: SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1,
+      payload: expect.objectContaining({ runId: null, resume: false,
+        start: expect.objectContaining({ intent: 'review', instructions: 'Review the current worktree.' }) }),
+    }));
   });
 
   it('reads the descriptor-only current UI snapshot through the attempt-scoped port', async () => {
-    const snapshot = {
-      navigation: {
-        area: 'plugin' as const,
-        screen: 'page',
-        title: 'PLUGIN_LABEL_SENTINEL',
-      },
-      commands: [{ id: 'opaque-command', title: 'Open issue #124' }],
-    };
+    const current = await mountCurrentUiContext();
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentUiContext: {
-        readCurrentUiContext: () => snapshot,
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-      },
+      currentUiContext: current.port,
     });
 
-    await expect(tools.readCurrentUiContext({})).resolves.toBe(JSON.stringify(snapshot));
+    const snapshot = JSON.parse(await tools.readCurrentUiContext({}));
+    expect(snapshot).toEqual(current.reader.readCurrentUiContext());
+    expect(snapshot).toMatchObject({ entity: { label: 'PLUGIN_LABEL_SENTINEL' }, commands: [
+      { id: expect.any(String), title: 'Open issue #124' },
+    ] });
+    expect(JSON.stringify(snapshot)).not.toContain('must-remain-local');
+    expect(JSON.stringify(snapshot)).not.toContain('acme/widgets');
   });
 
   it('does not expose current UI read or command tools when UI context sharing is off', async () => {
-    state.settings.voice.privacy.currentUiContextMode = 'off';
+    const current = await mountCurrentUiContext();
+    account.replaceVoice({ ...storage.getState().settings.voice,
+      privacy: { ...storage.getState().settings.voice.privacy, currentUiContextMode: 'off' } });
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentUiContext: {
-        readCurrentUiContext: () => ({
-          navigation: { area: 'app', screen: 'home' },
-          commands: [],
-        }),
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeCurrentUiCommand: async () => ({ ok: true as const }),
-      },
+      currentUiContext: current.port,
     });
 
     expect(tools.readCurrentUiContext).toBeUndefined();
@@ -943,16 +952,14 @@ describe('voice tool handlers', () => {
   });
 
   it('withholds current-UI Action specs from generic Voice discovery when sharing is off', async () => {
-    state.settings.voice.privacy.currentUiContextMode = 'off';
+    const current = await mountCurrentUiContext();
+    account.replaceVoice({ ...storage.getState().settings.voice,
+      privacy: { ...storage.getState().settings.voice.privacy, currentUiContextMode: 'off' } });
     const { getActionSpec } = await import('@happier-dev/protocol');
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentUiContext: {
-        readCurrentUiContext: () => null,
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-      },
+      currentUiContext: current.port,
     });
     const searchToolName = getActionSpec('action.spec.search').bindings?.voiceClientToolName;
     if (!searchToolName) throw new Error('Missing action.spec.search Voice binding');
@@ -967,57 +974,43 @@ describe('voice tool handlers', () => {
   });
 
   it('denies captured current-UI handlers when an active Local Voice attempt turns sharing off', async () => {
-    const readCurrentUiContext = vi.fn(() => ({
-      navigation: { area: 'app' as const, screen: 'home' },
-      commands: [],
-    }));
-    const invokeCurrentUiCommand = vi.fn(async () => ({ ok: true as const }));
+    const current = await mountCurrentUiContext();
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentUiContext: {
-        readCurrentUiContext,
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeCurrentUiCommand,
-      },
+      currentUiContext: current.port,
     });
     const read = tools.readCurrentUiContext;
     const invoke = tools.invokeCurrentUiCommand;
     if (!read || !invoke) throw new Error('Expected current-UI handlers while sharing is enabled');
 
-    state.settings.voice.privacy.currentUiContextMode = 'off';
+    account.replaceVoice({ ...storage.getState().settings.voice,
+      privacy: { ...storage.getState().settings.voice.privacy, currentUiContextMode: 'off' } });
 
     await expect(read({})).resolves.toBe(JSON.stringify({
       ok: false,
       errorCode: 'current_ui_context_unavailable',
       errorMessage: 'current_ui_context_unavailable',
     }));
-    await expect(invoke({ commandId: 'opaque-command' })).resolves.toBe(JSON.stringify({
+    await expect(invoke({ commandId: current.commandId })).resolves.toBe(JSON.stringify({
       ok: false,
       errorCode: 'current_ui_command_unavailable',
       errorMessage: 'current_ui_command_unavailable',
     }));
-    expect(readCurrentUiContext).not.toHaveBeenCalled();
-    expect(invokeCurrentUiCommand).not.toHaveBeenCalled();
+    expect(daemonRpc.mock.calls.map(([request]) => request.method)).not.toContain(RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE);
   });
 
   it.each([
     ['invalid string', 'always'],
     ['invalid non-string', true],
   ])('does not expose current UI tools when the persisted mode is an %s', async (_caseName, currentUiContextMode) => {
+    const current = await mountCurrentUiContext();
+    // Deliberately corrupt persisted input: the real owner must fail closed.
+    state = storage.getState();
     state.settings.voice.privacy.currentUiContextMode = currentUiContextMode;
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentUiContext: {
-        readCurrentUiContext: () => ({
-          navigation: { area: 'app', screen: 'home' },
-          commands: [],
-        }),
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeCurrentUiCommand: async () => ({ ok: true as const }),
-      },
+      currentUiContext: current.port,
     });
 
     expect(tools.readCurrentUiContext).toBeUndefined();
@@ -1025,42 +1018,32 @@ describe('voice tool handlers', () => {
   });
 
   it('delegates current UI commands without exposing their private semantic payload', async () => {
-    const invokeCurrentUiCommand = vi.fn(async () => ({
-      ok: true as const,
-      result: { opened: true },
-    }));
+    const current = await mountCurrentUiContext();
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentUiContext: {
-        readCurrentUiContext: () => null,
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeCurrentUiCommand,
-      },
+      currentUiContext: current.port,
     });
 
-    const result = await tools.invokeCurrentUiCommand({ commandId: 'opaque-command' });
+    const result = await tools.invokeCurrentUiCommand({ commandId: current.commandId });
 
-    expect(invokeCurrentUiCommand).toHaveBeenCalledWith({ commandId: 'opaque-command' });
-    expect(JSON.parse(result)).toEqual({ ok: true, result: { opened: true } });
-    expect(result).not.toContain('opaque-command');
+    expect(JSON.parse(result), result).toEqual({ ok: true, result: { opened: true } });
+    expect(daemonRpc.mock.calls.map(([request]) => request)).toContainEqual(expect.objectContaining({
+      serverUrl: homeUrlA, sessionId: 'm1', method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
+      payload: expect.objectContaining({ qualifiedActionId: 'acme.triage/refresh-issues', input: {
+        repository: 'acme/widgets', privateQuery: 'must-remain-local',
+      } }),
+    }));
+    expect(result).not.toContain(current.commandId);
+    expect(result).not.toContain('must-remain-local');
   });
 
   it('delegates contributed Actions by identity through the same current UI port', async () => {
-    const invokeAction = vi.fn(async () => ({
-      ok: true as const,
-      result: { refreshed: true },
-    }));
+    const current = await mountCurrentUiContext({ refreshed: true });
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentUiContext: {
-        readCurrentUiContext: () => null,
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeAction,
-      },
+      currentUiContext: current.port,
     });
 
     const result = await tools.invokeAction({
@@ -1068,33 +1051,28 @@ describe('voice tool handlers', () => {
       input: { repository: 'acme/widgets' },
     });
 
-    expect(invokeAction).toHaveBeenCalledWith({
-      action: { pluginId: 'acme.triage', localId: 'refresh-issues' },
-      input: { repository: 'acme/widgets' },
-    });
-    expect(JSON.parse(result)).toEqual({ ok: true, result: { refreshed: true } });
+    expect(daemonRpc.mock.calls.map(([request]) => request)).toContainEqual(expect.objectContaining({
+      serverUrl: homeUrlA, sessionId: 'm1', method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
+      payload: expect.objectContaining({ qualifiedActionId: 'acme.triage/refresh-issues', input: { repository: 'acme/widgets' } }),
+    }));
+    expect(JSON.parse(result), result).toEqual({ ok: true, result: { refreshed: true } });
     expect(result).not.toContain('acme/widgets');
   });
 
   it('denies the captured contributed Action tool when the user disables action.invoke mid-attempt', async () => {
-    const invokeAction = vi.fn(async () => ({ ok: true as const, result: { refreshed: true } }));
+    const current = await mountCurrentUiContext({ refreshed: true });
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentUiContext: {
-        readCurrentUiContext: () => null,
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeAction,
-      },
+      currentUiContext: current.port,
     });
     const invoke = tools.invokeAction;
     if (!invoke) throw new Error('Expected the contributed Action tool while the Action is enabled');
 
-    state.settings.actionsSettingsV1 = {
+    storage.getState().applySettingsLocal({ actionsSettingsV1: {
       v: 1,
       actions: { 'action.invoke': { enabled: false } },
-    };
+    } });
 
     await expect(invoke({
       action: { pluginId: 'acme.triage', localId: 'refresh-issues' },
@@ -1103,23 +1081,19 @@ describe('voice tool handlers', () => {
       errorCode: 'action_unavailable',
       errorMessage: 'action_unavailable',
     }));
-    expect(invokeAction).not.toHaveBeenCalled();
+    expect(daemonRpc.mock.calls.map(([request]) => request.method)).not.toContain(RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE);
   });
 
   it('does not expose the contributed Action tool when action.invoke is already disabled', async () => {
-    state.settings.actionsSettingsV1 = {
+    const current = await mountCurrentUiContext();
+    storage.getState().applySettingsLocal({ actionsSettingsV1: {
       v: 1,
       actions: { 'action.invoke': { disabledSurfaces: ['voice'] } },
-    };
+    } });
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
-      currentUiContext: {
-        readCurrentUiContext: () => null,
-        resolveCurrentUiCommand: () => null,
-        subscribe: () => () => {},
-        invokeAction: async () => ({ ok: true as const }),
-      },
+      currentUiContext: current.port,
     });
 
     expect(tools.invokeAction).toBeUndefined();
@@ -1131,10 +1105,9 @@ describe('voice tool handlers', () => {
     const listSessions = tools.listSessions;
     if (!listSessions) throw new Error('Expected the session list tool while Voice is enabled');
 
-    state.settings = {
-      ...state.settings,
-      featureToggles: { ...state.settings.featureToggles, voice: false },
-    };
+    account.replaceSettings(settingsParse({ ...storage.getState().settings,
+      featureToggles: { ...storage.getState().settings.featureToggles, voice: false },
+    }));
 
     await expect(listSessions({ limit: 1 })).resolves.toBe(JSON.stringify({
       ok: false,
@@ -1157,49 +1130,54 @@ describe('voice tool handlers', () => {
       runClass: 'bounded',
       ioMode: 'request_response',
     };
-    executionRunStart.mockResolvedValue({ runId: 'run_1', callId: 'call_1', sidechainId: 'call_1' });
+    const { ExecutionRunStartResponseSchema } = await import('@happier-dev/protocol/execution/runs/responseSchemas');
+    daemonRpc.mockResolvedValue(ExecutionRunStartResponseSchema.parse({ runId: 'run_1', callId: 'call_1', sidechainId: 'call_1' }));
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
 
     const result = await tools.startExecutionRun(startArgs);
 
-    expect(executionRunStart).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining(startArgs),
-      { serverId: 'server-a' },
-    );
-    expect(JSON.parse(result)).toMatchObject({ ok: true, runId: 'run_1' });
+    expect(JSON.parse(result), result).toMatchObject({ ok: true, runId: 'run_1' });
+    expect(daemonRpc).toHaveBeenCalledWith({ serverUrl: homeUrlA, sessionId: 's1',
+      method: SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1,
+      payload: { runId: null, resume: false, start: expect.objectContaining(startArgs) },
+    });
   });
 
   it('can apply an execution run action via sessionExecutionRunAction', async () => {
-    executionRunAction.mockResolvedValue({ ok: true, updatedToolResult: { ok: true } });
+    daemonRpc.mockResolvedValue({ ok: true, updatedToolResult: { ok: true } });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
 
     const res = await tools.actionExecutionRun({ runId: 'run_1', actionId: 'review.triage', input: { findings: [] } });
-    expect(executionRunAction).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining({ runId: 'run_1', actionId: 'review.triage' }),
-      { serverId: 'server-a' },
-    );
+    expect(JSON.parse(res), res).toMatchObject({ ok: true });
+    expect(daemonRpc).toHaveBeenCalledWith({ serverUrl: homeUrlA, sessionId: 's1',
+      method: SESSION_RPC_METHODS.EXECUTION_RUN_ACTION,
+      payload: expect.objectContaining({ runId: 'run_1', actionId: 'review.triage' }),
+    });
     expect(JSON.parse(res)).toMatchObject({ ok: true });
   });
 
   it('can list execution runs via sessionExecutionRunList', async () => {
-    executionRunList.mockResolvedValue({ runs: [] });
+    const { ExecutionRunListResponseSchema } = await import('@happier-dev/protocol/execution/runs/responseSchemas');
+    daemonRpc.mockResolvedValue(ExecutionRunListResponseSchema.parse({ runs: [] }));
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
 
     const res = await tools.listExecutionRuns({});
-    expect(executionRunList).toHaveBeenCalledWith('s1', {}, { serverId: 'server-a' });
+    expect(JSON.parse(res), res).toMatchObject({ runs: [] });
+    expect(daemonRpc).toHaveBeenCalledWith({ serverUrl: homeUrlA, sessionId: 's1',
+      method: SESSION_RPC_METHODS.EXECUTION_RUN_LIST, payload: {},
+    });
     expect(JSON.parse(res)).toMatchObject({ runs: [] });
   });
 
   it('can get an execution run via sessionExecutionRunGet', async () => {
-    executionRunGet.mockResolvedValue({
+    const { ExecutionRunGetResponseSchema } = await import('@happier-dev/protocol/execution/runs/responseSchemas');
+    daemonRpc.mockResolvedValue(ExecutionRunGetResponseSchema.parse({
       run: {
         runId: 'run_1',
         callId: 'call_1',
@@ -1215,13 +1193,16 @@ describe('voice tool handlers', () => {
         finishedAtMs: 2,
         availableActionIds: ['voice_agent.welcome'],
       },
-    });
+    }));
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
 
     const res = await tools.getExecutionRun({ runId: 'run_1' });
-    expect(executionRunGet).toHaveBeenCalledWith('s1', { runId: 'run_1', includeStructured: false }, { serverId: 'server-a' });
+    expect(JSON.parse(res), res).toMatchObject({ run: { runId: 'run_1' } });
+    expect(daemonRpc).toHaveBeenCalledWith({ serverUrl: homeUrlA, sessionId: 's1',
+      method: SESSION_RPC_METHODS.EXECUTION_RUN_GET, payload: { runId: 'run_1', includeStructured: false },
+    });
     expect(JSON.parse(res)).toMatchObject({ run: { runId: 'run_1', availableActionIds: ['voice_agent.welcome'] } });
   });
 
@@ -1232,13 +1213,16 @@ describe('voice tool handlers', () => {
   });
 
   it('can stop an execution run via sessionExecutionRunStop', async () => {
-    executionRunStop.mockResolvedValue({ ok: true });
+    daemonRpc.mockResolvedValue({ ok: true });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
 
     const res = await tools.stopExecutionRun({ runId: 'run_1' });
-    expect(executionRunStop).toHaveBeenCalledWith('s1', { runId: 'run_1' }, { serverId: 'server-a' });
+    expect(JSON.parse(res), res).toMatchObject({ ok: true });
+    expect(daemonRpc).toHaveBeenCalledWith({ serverUrl: homeUrlA, sessionId: 's1',
+      method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, payload: { runId: 'run_1' },
+    });
     expect(JSON.parse(res)).toMatchObject({ ok: true });
   });
 
@@ -1251,7 +1235,7 @@ describe('voice tool handlers', () => {
     const spawnInput = {
       creationKey: 'manual:voice-v2-contract',
       executionTarget: {
-        serverId: 'server-a',
+        serverId: homeA,
         machineId: 'm1',
       },
       directory: { kind: 'path', path: '/tmp/s1' },
@@ -1271,7 +1255,7 @@ describe('voice tool handlers', () => {
       disposition: 'created' as const,
       sessionId: 's_new',
       executionTarget: {
-        serverId: 'server-a',
+        serverId: homeA,
         machineId: 'm1',
       },
       organizationPlacement: {
@@ -1282,7 +1266,7 @@ describe('voice tool handlers', () => {
         status: 'notRequested' as const,
       },
     };
-    machineRpcWithServerScope.mockResolvedValue(spawnResult);
+    daemonRpc.mockResolvedValue(spawnResult);
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
@@ -1291,18 +1275,17 @@ describe('voice tool handlers', () => {
     const parsedSpawnInput = getActionSpec('session.spawn_new').inputSchema.safeParse(spawnInput);
     expect(parsedSpawnInput.success, JSON.stringify(parsedSpawnInput)).toBe(true);
     const response = JSON.parse(await tools.spawnSession(spawnInput, {
-      serverId: 'server-a',
+      serverId: homeA,
       callId: 'voice-spawn-call',
       effectId: 'voice-spawn-effect',
     }));
 
     expect(response, JSON.stringify(response)).toMatchObject({ ok: true });
-    expect(machineRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
-      serverId: 'server-a',
-      machineId: 'm1',
+    expect(daemonRpc).toHaveBeenCalledWith(expect.objectContaining({
+      serverUrl: homeUrlA,
+      sessionId: 'm1',
       method: RPC_METHODS.SESSION_SPAWN_NEW,
       payload: spawnInput,
-      signal: undefined,
     }));
     expect(response).toEqual({ ok: true, ...spawnResult });
   });
@@ -1314,7 +1297,7 @@ describe('voice tool handlers', () => {
     const response = JSON.parse(await tools.spawnSession({ tag: 't1' }));
 
     expect(response).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
-    expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
   });
 
   it('lists recent paths without exposing raw paths', async () => {
@@ -1336,23 +1319,25 @@ describe('voice tool handlers', () => {
       { machineId: 'm1', path: '/Users/leeroy/workspaces/apps/leeroy' },
       { machineId: 'm1', path: '/Users/leeroy/workspaces/docs/leeroy' },
     ];
-    state.sessions = {
-      ...state.sessions,
-      s3: {
+    storage.setState({ sessions: {
+      ...storage.getState().sessions,
+      s3: createSessionFixture({
         id: 's3',
+        serverId: homeA,
         active: true,
         presence: 'online',
         updatedAt: 3000,
         metadata: { path: '/Users/leeroy/workspaces/apps/leeroy', machineId: 'm1', host: 'a-host', summary: { text: 'Apps session' } },
-      },
-      s4: {
+      }),
+      s4: createSessionFixture({
         id: 's4',
+        serverId: homeA,
         active: true,
         presence: 'online',
         updatedAt: 4000,
         metadata: { path: '/Users/leeroy/workspaces/docs/leeroy', machineId: 'm1', host: 'a-host', summary: { text: 'Docs session' } },
-      },
-    };
+      }),
+    } });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
@@ -1375,20 +1360,20 @@ describe('voice tool handlers', () => {
       { machineId: 'm1', path: '/Users/leeroy' },
       { machineId: 'm1_alias', path: '/Users/leeroy' },
     ];
-    state.machines = {
-      ...state.machines,
-      m1_alias: { id: 'm1_alias', metadata: { host: 'a-host' } },
-    };
-    state.sessions = {
-      ...state.sessions,
-      s5: {
+    storage.setState({ machines: {
+      ...storage.getState().machines,
+      m1_alias: createMachineFixture({ id: 'm1_alias', metadata: { ...createMachineFixture().metadata!, host: 'a-host' } }),
+    }, sessions: {
+      ...storage.getState().sessions,
+      s5: createSessionFixture({
         id: 's5',
+        serverId: homeA,
         active: true,
         presence: 'online',
         updatedAt: 5000,
         metadata: { path: '/Users/leeroy', machineId: 'm1_alias', host: 'a-host', summary: { text: 'Alias workspace session' } },
-      },
-    };
+      }),
+    } });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
@@ -1416,7 +1401,7 @@ describe('voice tool handlers', () => {
     const servers = JSON.parse(serversRaw);
     expect(servers).toMatchObject({ ok: true });
     expect(Array.isArray(servers.items)).toBe(true);
-    expect(servers.items.map((s: any) => s.serverId)).toContain('server-a');
+    expect(servers.items.map((s: any) => s.serverId)).toContain(homeA);
   });
 
   it('fails closed for inventory tools when shareDeviceInventory is disabled', async () => {
@@ -1439,7 +1424,7 @@ describe('voice tool handlers', () => {
     onTestFinished(() => publishAppliedActiveServerSnapshot(incumbentHome));
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1',
-      currentSessionAddress: { serverId: 'server-a', sessionId: 's1' },
+      currentSessionAddress: { serverId: homeA, sessionId: 's1' },
     });
 
     const backendsRaw = await tools.listAgentBackends({});
@@ -1478,26 +1463,19 @@ describe('voice tool handlers', () => {
   });
 
   it('opens an exact Home-qualified session without re-inferring its Home from cache or focus', async () => {
-    setActiveServerAndSwitch.mockResolvedValue(true);
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => null });
 
-    const res = await tools.openSession({ sessionId: 's_other' }, { serverId: 'server-b' });
+    const res = await tools.openSession({ sessionId: 's_other' }, { serverId: homeB });
     expect(JSON.parse(res)).toMatchObject({ ok: true, sessionId: 's_other' });
-    expect(setActiveServerAndSwitch).toHaveBeenCalledWith({
-      serverId: 'server-b',
-      scope: 'device',
-      refreshAuth: refreshFromActiveServer,
-    });
-    expect(routerNavigate).toHaveBeenCalledWith('/session/s_other?serverId=server-b', expect.any(Object));
-    expect(readOrdinarySessionListCoverage).not.toHaveBeenCalled();
+    expect(getActiveServerSnapshot().serverId).toBe(homeB);
+    expect(routerNavigate).toHaveBeenCalledWith(`/session/s_other?serverId=${homeB}`, expect.any(Object));
   });
 
   it('resolves a unique natural Session title through the complete mounted Sessions corpus', async () => {
-    setActiveServerAndSwitch.mockResolvedValue(true);
     retainVoiceSessionReferenceCorpus({
-      addresses: [{ serverId: 'server-a', sessionId: 's_matrix' }],
+      addresses: [{ serverId: homeA, sessionId: 's_matrix' }],
       complete: true,
     });
 
@@ -1505,12 +1483,11 @@ describe('voice tool handlers', () => {
     const result = JSON.parse(await tools.openSession({ sessionTitle: 'Session QA Voice Matrix' }));
 
     expect(result).toMatchObject({ ok: true, sessionId: 's_matrix' });
-    expect(routerNavigate).toHaveBeenCalledWith('/session/s_matrix?serverId=server-a', expect.any(Object));
+    expect(routerNavigate).toHaveBeenCalledWith(`/session/s_matrix?serverId=${homeA}`, expect.any(Object));
   });
 
   it('keeps an exhausted feature-off ordinary corpus incomplete for strict My Work title resolution', async () => {
-    setActiveServerAndSwitch.mockResolvedValue(true);
-    retainOrdinaryVoiceSessionReferenceCorpus({ selectedServerIds: ['server-a'] });
+    retainOrdinaryVoiceSessionReferenceCorpus({ selectedServerIds: [homeA] });
 
     const tools = createVoiceToolHandlers({ resolveSessionId: () => null });
     const result = JSON.parse(await tools.openSession({ sessionTitle: 'Session QA Voice Matrix' }));
@@ -1520,8 +1497,7 @@ describe('voice tool handlers', () => {
   });
 
   it('keeps feature-off ordinary title resolution incomplete while its list corpus is not exhausted', async () => {
-    retainOrdinaryVoiceSessionReferenceCorpus({ selectedServerIds: ['server-a'] });
-    readOrdinarySessionListCoverage.mockReturnValue({ serverId: 'server-a', coverage: 'incomplete' });
+    retainOrdinaryVoiceSessionReferenceCorpus({ selectedServerIds: [homeA] });
 
     const tools = createVoiceToolHandlers({ resolveSessionId: () => null });
     const result = JSON.parse(await tools.openSession({ sessionTitle: 'Session QA Voice Matrix' }));
@@ -1531,8 +1507,8 @@ describe('voice tool handlers', () => {
   });
 
   it('does not treat an exhausted empty feature-off ordinary corpus as authoritative absence', async () => {
-    state.ordinarySessionListMembershipByServerId['server-a'] = [];
-    retainOrdinaryVoiceSessionReferenceCorpus({ selectedServerIds: ['server-a'] });
+    state.ordinarySessionListMembershipByServerId[homeA] = [];
+    retainOrdinaryVoiceSessionReferenceCorpus({ selectedServerIds: [homeA] });
 
     const tools = createVoiceToolHandlers({ resolveSessionId: () => null });
     const result = JSON.parse(await tools.openSession({ sessionTitle: 'Missing session' }));
@@ -1541,15 +1517,14 @@ describe('voice tool handlers', () => {
   });
 
   it('uses the focused retained Sessions corpus when another data-active pane remains mounted', async () => {
-    setActiveServerAndSwitch.mockResolvedValue(true);
     retainVoiceSessionReferenceCorpus({
-      addresses: [{ serverId: 'server-b', sessionId: 's_other' }],
+      addresses: [{ serverId: homeB, sessionId: 's_other' }],
       complete: true,
       sourceScopeKey: 'background-pane',
       referenceCorpusActive: false,
     });
     retainVoiceSessionReferenceCorpus({
-      addresses: [{ serverId: 'server-a', sessionId: 's_matrix' }],
+      addresses: [{ serverId: homeA, sessionId: 's_matrix' }],
       complete: true,
       sourceScopeKey: 'focused-pane',
       referenceCorpusActive: true,
@@ -1559,19 +1534,19 @@ describe('voice tool handlers', () => {
     const result = JSON.parse(await tools.openSession({ sessionTitle: 'Session QA Voice Matrix' }));
 
     expect(result).toMatchObject({ ok: true, sessionId: 's_matrix' });
-    expect(routerNavigate).toHaveBeenCalledWith('/session/s_matrix?serverId=server-a', expect.any(Object));
+    expect(routerNavigate).toHaveBeenCalledWith(`/session/s_matrix?serverId=${homeA}`, expect.any(Object));
   });
 
   it('fails duplicate natural Session ids and titles as ambiguous through the mounted Sessions corpus', async () => {
-    state.sessionListRowsByServerId['server-b'].s_matrix = {
-      ...state.sessionListRowsByServerId['server-a'].s_matrix,
+    state.sessionListRowsByServerId[homeB].s_matrix = {
+      ...state.sessionListRowsByServerId[homeA].s_matrix,
       metadata: { summaryText: 'Session QA Voice Matrix', path: '/tmp/other' },
     };
-    state.ordinarySessionListMembershipByServerId['server-b'] = ['s_matrix'];
+    state.ordinarySessionListMembershipByServerId[homeB] = ['s_matrix'];
     retainVoiceSessionReferenceCorpus({
       addresses: [
-        { serverId: 'server-a', sessionId: 's_matrix' },
-        { serverId: 'server-b', sessionId: 's_matrix' },
+        { serverId: homeA, sessionId: 's_matrix' },
+        { serverId: homeB, sessionId: 's_matrix' },
       ],
       complete: true,
     });
@@ -1587,7 +1562,7 @@ describe('voice tool handlers', () => {
 
   it('distinguishes absent from incomplete natural Session title resolution', async () => {
     retainVoiceSessionReferenceCorpus({
-      addresses: [{ serverId: 'server-a', sessionId: 's_matrix' }],
+      addresses: [{ serverId: homeA, sessionId: 's_matrix' }],
       complete: true,
     });
     const completeTools = createVoiceToolHandlers({ resolveSessionId: () => null });
@@ -1600,7 +1575,7 @@ describe('voice tool handlers', () => {
       .toMatchObject({ ok: false, errorCode: 'session_lookup_incomplete' });
 
     retainVoiceSessionReferenceCorpus({
-      addresses: [{ serverId: 'server-a', sessionId: 's_matrix' }],
+      addresses: [{ serverId: homeA, sessionId: 's_matrix' }],
       complete: false,
     });
     const incompleteTools = createVoiceToolHandlers({ resolveSessionId: () => null });
@@ -1609,16 +1584,31 @@ describe('voice tool handlers', () => {
     expect(routerNavigate).not.toHaveBeenCalled();
   });
 
-  it('exposes review.start for cross-server sessions through the catalog voice binding', async () => {
+  it('starts review on the exact captured Home while another Home is active', async () => {
+    const { ExecutionRunStartResponseSchema } = await import('@happier-dev/protocol/execution/runs/responseSchemas');
+    sessionDetailReplies.set('s_other', createSessionFixture({ id: 's_other', serverId: homeB, active: true }));
+    daemonRpc.mockImplementation(async request => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+      ? { error: 'RPC_METHOD_NOT_FOUND' }
+      : ExecutionRunStartResponseSchema.parse({ runId: 'run-other-review', callId: 'call-other-review', sidechainId: 'call-other-review' }));
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : null) });
-    expect(tools.startReview).toEqual(expect.any(Function));
+    const result = JSON.parse(await tools.startReview({ sessionId: 's_other', engineIds: ['claude'], instructions: 'Review the other Home.' }, { serverId: homeB }));
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, sessionId: 's_other', results: [
+      { ok: true, result: { runId: 'run-other-review' } },
+    ] });
+    expect(daemonRpc.mock.calls.map(([request]) => request)).toContainEqual(expect.objectContaining({
+      serverUrl: 'https://server-b.test', sessionId: 's_other', method: SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1,
+      payload: expect.objectContaining({ runId: null, resume: false,
+        start: expect.objectContaining({ intent: 'review', instructions: 'Review the other Home.' }) }),
+    }));
+    expect(getActiveServerSnapshot().serverId).toBe(homeA);
   });
 
   it.each([
-    { serverId: undefined, expected: { ok: false, errorCode: 'approval_origin_unavailable' } },
-    { serverId: 'server-a', expected: { ok: true, kind: 'approval_request_created', actionId: 'ui.voice_global.reset' } },
-  ])('keeps global agent memory intact until Voice reset approval (Home: $serverId)', async ({ serverId, expected }) => {
+    { hasHome: false, expected: { ok: false, errorCode: 'approval_origin_unavailable' } },
+    { hasHome: true, expected: { ok: true, kind: 'approval_request_created', actionId: 'ui.voice_global.reset' } },
+  ])('keeps global agent memory intact until Voice reset approval (Home: $hasHome)', async ({ hasHome, expected }) => {
+    const serverId = hasHome ? homeA : undefined;
     const current = state.settings.voice.providers.local_conversation;
     state.settings.voice.providers.local_conversation = {
       ...current,
@@ -1638,8 +1628,6 @@ describe('voice tool handlers', () => {
     }));
 
     expect(result).toMatchObject(expected);
-    expect(voiceSessionStop).not.toHaveBeenCalled();
-    expect(applySettingsLocal).not.toHaveBeenCalled();
     expect(state.settings.voice.providers.local_conversation.config.agent.transcript.epoch).toBe(2);
     if (serverId) {
       expect(result.artifactId).toEqual(expect.any(String));
@@ -1665,41 +1653,66 @@ describe('voice tool handlers', () => {
     const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 
     const result = await createDefaultActionExecutor().execute('ui.voice_global.reset', {}, {
-      surface: 'ui', serverId: 'server-a',
+      surface: 'ui', serverId: homeA,
     });
     expect(result).toMatchObject({ ok: true });
-    expect(applySettingsLocal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        voice: expect.objectContaining({
-          providers: expect.objectContaining({
-            local_conversation: expect.objectContaining({
-              config: expect.objectContaining({
-                agent: expect.objectContaining({
-                  transcript: expect.objectContaining({ epoch: 3 }),
-                }),
-              }),
-            }),
-          }),
-        }),
-      }),
-      expect.objectContaining({
-        source: 'ui',
-        expectedSettingsScope: {
-          serverId: 'server-a',
-          accountId: 'voice-tools-account',
-        },
-      }),
-    );
+    await vi.waitFor(() => expect(account.persistedSettings.voice.providers.local_conversation?.config).toMatchObject({
+      agent: { transcript: { epoch: 3 } },
+    }));
+    expect(storage.getState().settings.voice.providers.local_conversation?.config).toMatchObject({ agent: { transcript: { epoch: 3 } } });
   });
   it('teleports the voice agent to the resolved session root', async () => {
-    teleportVoiceAgentToSessionRoot.mockResolvedValue({ ok: true });
-
-    const { createVoiceToolHandlers } = await import('./handlers');
-    const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
-
-    const res = await tools.teleportVoiceAgentToSessionRoot({});
-    expect(JSON.parse(res)).toMatchObject({ ok: true });
-    expect(teleportVoiceAgentToSessionRoot).toHaveBeenCalledWith({ sessionId: 's1' });
+    const { writeVoiceConversationScopeMetadata } = await import('@/voice/persistence/voiceConversationScopeMetadata');
+    const daemon = await createRetainedVoiceAgentRpcBoundary();
+    daemonRpc.mockImplementation(request => daemon.dispatch(request.method, request.payload));
+    const harness = await createStandaloneVoicePolicyHarness({ mode: 'off', dispatch: daemon.dispatch,
+      initializeSessionId: 'carrier-1',
+      existingSession: { id: 'carrier-1', active: true, metadata: writeVoiceConversationScopeMetadata({
+        path: '/repo', host: 'voice.test', machineId: 'machine-1', flavor: 'claude',
+        systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+        agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+      }, { kind: 'session_root', sessionRootId: 's1' }) },
+      sessions: [createSessionFixture({ id: 's1', active: true, activeAt: Date.now(), metadata: {
+        path: '/repo', host: 'voice.test', machineId: 'machine-1', flavor: 'claude',
+        agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+      } })],
+    });
+    const active = await harness.activateLocalAgent();
+    const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+    try {
+      const machine = createMachineFixture({ id: 'machine-1', activeAt: Date.now(),
+        access: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }).access });
+      storage.setState({ machines: { [machine.id]: machine },
+        machineListByServerId: { [active.binding.conversationSessionAddress.serverId]: [machine] } });
+      const { writeVoiceProviderSettingsConfig, readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+      const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+      const voice = storage.getState().settings.voice;
+      const config = readLocalConversationVoiceSettings(voice);
+      storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: writeVoiceProviderSettingsConfig(voice, 'local_conversation', {
+        ...config, conversationMode: 'agent', agent: { ...config.agent, teleportEnabled: true, stayInVoiceHome: false },
+      }) }, storage.getState().settings));
+      expect(readLocalConversationVoiceSettings(storage.getState().settings.voice).agent)
+        .toMatchObject({ teleportEnabled: true, stayInVoiceHome: false });
+      daemon.requests.length = 0;
+      const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1',
+        currentSessionAddress: { serverId: active.binding.conversationSessionAddress.serverId, sessionId: 's1' } });
+      const result = JSON.parse(await tools.teleportVoiceAgentToSessionRoot({}));
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+      expect(voiceSessionBindingStore.getState().getByConversationSessionId('carrier-1')).toMatchObject({
+        targetSessionAddress: { serverId: active.binding.conversationSessionAddress.serverId, sessionId: 's1' },
+      });
+      expect(daemon.readRetainedRun()).toBeNull();
+      expect(daemon.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP))
+        .toEqual([{ method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, input: { runId: 'local-agent-run' } }]);
+    } finally {
+      await active.dispose();
+      // Teleport persisted a replacement binding outside the original attempt's
+      // ownership. Retire only this fixture's runtime projection before its Home.
+      const bindings = voiceSessionBindingStore.getState();
+      if (bindings.runtimeBindingsByConversationSessionId['carrier-1']?.conversationSessionAddress.serverId
+        === active.binding.conversationSessionAddress.serverId) bindings.unbind('carrier-1');
+      await harness.dispose();
+    }
   });
 
   it('does not answer a covered user-action request', async () => {
@@ -1722,7 +1735,6 @@ describe('voice tool handlers', () => {
         status: 'approved',
       },
     };
-    sessionRpcWithServerScope.mockResolvedValue({ ok: true });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -1736,7 +1748,7 @@ describe('voice tool handlers', () => {
       errorCode: 'no_permission_request',
       sessionId: 's1',
     });
-    expect(sessionRpcWithServerScope).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
   });
 
   it('requires present-user authority for a pending AskUserQuestion despite structured spoken answers', async () => {
@@ -1744,7 +1756,6 @@ describe('voice tool handlers', () => {
       req_question: { id: 'req_question', tool: 'AskUserQuestion', kind: 'user_action' },
       req_permission: { id: 'req_permission', tool: 'Bash', kind: 'permission' },
     };
-    sessionRpcWithServerScope.mockResolvedValue({ ok: true });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -1754,7 +1765,7 @@ describe('voice tool handlers', () => {
     });
 
     expect(JSON.parse(result)).toMatchObject({ ok: false, errorCode: 'present_user_required' });
-    expect(sessionRpcWithServerScope).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
   });
 
   it('does not turn an approval-required setting into present-user authority for a spoken answer', async () => {
@@ -1769,7 +1780,6 @@ describe('voice tool handlers', () => {
     state.sessions.s1.agentState.requests = {
       req_question: { id: 'req_question', tool: 'AskUserQuestion', kind: 'user_action' },
     };
-    sessionRpcWithServerScope.mockResolvedValue({ ok: true });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
@@ -1784,8 +1794,8 @@ describe('voice tool handlers', () => {
       errorCode: 'present_user_required',
       actionId: 'session.user_action.answer',
     });
-    expect(sendSessionMessageWithServerScope).not.toHaveBeenCalled();
-    expect(sessionRpcWithServerScope).not.toHaveBeenCalled();
+    expect(pendingEnqueue).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
     expect(artifactCreateRequests).not.toHaveBeenCalled();
   });
 
@@ -1809,7 +1819,6 @@ describe('voice tool handlers', () => {
         },
       },
     };
-    sessionRpcWithServerScope.mockResolvedValue({ ok: true });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -1819,14 +1828,13 @@ describe('voice tool handlers', () => {
     });
 
     expect(JSON.parse(result)).toMatchObject({ ok: false, errorCode: 'present_user_required', sessionId: 's1', requestId: 'req_question' });
-    expect(sessionRpcWithServerScope).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
   });
 
   it('requires present-user authority for ExitPlanMode even when Voice requests changes', async () => {
     state.sessions.s1.agentState.requests = {
       req_exit_plan: { id: 'req_exit_plan', tool: 'ExitPlanMode', kind: 'user_action' },
     };
-    sessionRpcWithServerScope.mockResolvedValue({ ok: true });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -1837,14 +1845,13 @@ describe('voice tool handlers', () => {
     });
 
     expect(JSON.parse(result), result).toMatchObject({ ok: false, errorCode: 'present_user_required' });
-    expect(sessionRpcWithServerScope).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
   });
 
   it('rejects a spoken user-action answer before entering the scoped RPC', async () => {
     state.sessions.s1.agentState.requests = {
       req_question: { id: 'req_question', tool: 'AskUserQuestion', kind: 'user_action' },
     };
-    sessionRpcWithServerScope.mockResolvedValue({ ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found' });
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -1854,16 +1861,15 @@ describe('voice tool handlers', () => {
     });
 
     expect(JSON.parse(result)).toMatchObject({ ok: false, errorCode: 'present_user_required' });
-    expect(sessionRpcWithServerScope).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
   });
 
   it('retains present-user authority requirements for a transcript-backed user-action request', async () => {
     state.sessions.sys_voice.agentState.requests = {};
     state.sessions.s1.agentState.requests = {};
     state.sessions.s2.agentState.requests = {};
-    state.sessionMessages.s1.messages = [
-      {
-        kind: 'tool-call',
+    seedMessages('s1', [
+      createToolCallMessageFixture({
         id: 'm_pending_question',
         localId: null,
         createdAt: 11,
@@ -1879,9 +1885,8 @@ describe('voice tool handlers', () => {
           completedAt: null,
           permission: { id: 'req_question', status: 'pending', kind: 'user_action' },
         },
-      },
-    ];
-    sessionRpcWithServerScope.mockResolvedValue({ ok: true });
+      }),
+    ]);
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -1891,36 +1896,20 @@ describe('voice tool handlers', () => {
     });
 
     expect(JSON.parse(result)).toMatchObject({ ok: false, errorCode: 'present_user_required', sessionId: 's1', requestId: 'req_question' });
-    expect(sessionRpcWithServerScope).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
   });
 
   it('refreshes the resolved target session messages before failing a user-action response', async () => {
     state.sessions.s1.agentState.requests = {};
-    state.sessionMessages.s1.messages = [];
-    refreshSessionMessages.mockImplementation(async (sessionId: string) => {
-      if (sessionId !== 's1') return;
-      state.sessionMessages.s1.messages = [
-        {
-          kind: 'tool-call',
-          id: 'm_pending_question_after_refresh',
-          localId: null,
-          createdAt: 16,
-          children: [],
-          tool: {
-            id: 'req_question_after_refresh',
-            name: 'AskUserQuestion',
-            description: 'Ask the user a question',
-            state: 'running',
-            input: { questions: [{ question: 'Continue with the write?' }] },
-            createdAt: 16,
-            startedAt: null,
-            completedAt: null,
-            permission: { id: 'req_question_after_refresh', status: 'pending', kind: 'user_action' },
-          },
-        },
-      ];
-    });
-    sessionRpcWithServerScope.mockResolvedValue({ ok: true });
+    seedMessages('s1', []);
+    messagePages.set('s1', SessionMessagesPageV1Schema.parse({ messages: [SessionMessageV1Schema.parse({
+      id: 'm_pending_question_after_refresh', seq: 1, localId: null, createdAt: 16, updatedAt: 16, messageRole: 'agent',
+      content: { t: 'plain', v: RawRecordSchema.parse({ role: 'agent', content: { type: 'acp', agentId: 'codex', data: {
+        type: 'permission-request', permissionId: 'req_question_after_refresh', toolName: 'AskUserQuestion',
+        description: 'Ask the user a question', options: { permissionId: 'req_question_after_refresh', status: 'pending',
+          questions: [{ question: 'Continue with the write?' }] },
+      } } }) },
+    })], hasMore: false }));
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -1929,26 +1918,22 @@ describe('voice tool handlers', () => {
       answers: [{ question: 'Continue with the write?', values: ['Yes'] }],
     });
 
-    expect(refreshSessionMessages).toHaveBeenCalledWith('s1');
+    expect(messageReads).toContain('s1');
     expect(JSON.parse(result)).toMatchObject({ ok: false, errorCode: 'present_user_required', sessionId: 's1', requestId: 'req_question_after_refresh' });
-    expect(sessionRpcWithServerScope).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
   });
 
   it('forces a session refresh before failing a user-action response when the known session state is stale', async () => {
     state.sessions.s1.agentState.requests = {};
-    state.sessionMessages.s1.messages = [];
-    ensureSessionVisibleForMessageRoute.mockImplementation(async (sessionId: string, options?: { forceRefresh?: boolean }) => {
-      if (sessionId !== 's1' || options?.forceRefresh !== true) return;
-      state.sessions.s1.agentState.requests = {
+    seedMessages('s1', []);
+    sessionDetailReplies.set('s1', createSessionFixture({ ...state.sessions.s1, agentState: { requests: {
         req_question_after_force_refresh: {
           id: 'req_question_after_force_refresh',
           tool: 'AskUserQuestion',
           kind: 'user_action',
           arguments: { questions: [{ question: 'Continue with local voice QA?' }] },
         },
-      };
-    });
-    sessionRpcWithServerScope.mockResolvedValue({ ok: true });
+      } } }));
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -1957,9 +1942,9 @@ describe('voice tool handlers', () => {
       answers: [{ question: 'Continue with local voice QA?', values: ['Yes'] }],
     });
 
-    expect(ensureSessionVisibleForMessageRoute).toHaveBeenCalledWith('s1', { forceRefresh: true });
+    expect(sessionDetailReads).toContain('s1');
     expect(JSON.parse(result)).toMatchObject({ ok: false, errorCode: 'present_user_required', sessionId: 's1', requestId: 'req_question_after_force_refresh' });
-    expect(sessionRpcWithServerScope).not.toHaveBeenCalled();
+    expect(daemonRpc).not.toHaveBeenCalled();
   });
 
   it('routes sendSessionMessage to an explicit sessionId through canonical Voice admission', async () => {
@@ -1969,24 +1954,17 @@ describe('voice tool handlers', () => {
     const result = await tools.sendSessionMessage({ sessionId: 's2', message: 'hello' });
 
     expect(JSON.parse(result), result).toMatchObject({ ok: true });
-    expect(sendSessionMessageWithServerScope).toHaveBeenCalledWith({
-      sessionId: 's2',
-      serverId: 'server-a',
-      message: 'hello',
-      requestedAction: { v: 1, kind: 'steer_if_active' },
-      hostAdmissionOrigin: 'voice',
-    });
-    expect(submitMessage).not.toHaveBeenCalled();
+    expectVoicePendingInput('s2', 'hello');
   });
 
   it('can set the primary action session', async () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
-    const result = await tools.setPrimaryActionSession({ serverId: 'server-a', sessionId: 's2' });
+    const result = await tools.setPrimaryActionSession({ serverId: homeA, sessionId: 's2' });
 
     expect(JSON.parse(result), result).toMatchObject({ ok: true });
-    expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: 'server-a', sessionId: 's2' });
+    expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: homeA, sessionId: 's2' });
   });
 
   it('does not expose raw Action failure prose in Voice tool results', () => {
@@ -2019,7 +1997,7 @@ describe('voice tool handlers', () => {
           code: 'session_follow_partial',
           message: 'Include in Voice was updated for only some sessions. Retry to finish the requested set.',
           operation: 'include',
-          address: { serverId: 'server-a', sessionId: 's2' },
+          address: { serverId: homeA, sessionId: 's2' },
           reason: 'unavailable',
         },
       },
@@ -2035,6 +2013,8 @@ describe('voice tool handlers', () => {
 
   it('lists sessions as JSON', async () => {
     retainFixtureSessionListCorpus();
+    const { listSessionsForVoiceTool } = await import('./actionImpl/sessionList');
+    await listSessionsForVoiceTool({ view: 'summary', limit: 1 });
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
@@ -2074,7 +2054,7 @@ describe('voice tool handlers', () => {
 
     const other = parsed.sessions.find((s: any) => s.id === 's_other');
     expect(other).toBeTruthy();
-    expect(other.serverId).toBe('server-b');
+    expect(other.serverId).toBe(homeB);
   });
 
   it('includes sessions that only exist in the current visible session list', async () => {
@@ -2147,32 +2127,32 @@ describe('voice tool handlers', () => {
     state.sessionListViewData = [
       ...Array.from({ length: 30 }, (_, index) => ({
         type: 'session',
-        session: {
+        session: createSessionListRenderableSessionFixture({
           id: `s_recent_${index + 1}`,
           active: true,
           updatedAt: 1000 - index,
           presence: 'online',
           metadata: { summaryText: `Recent session ${index + 1}`, path: `/tmp/recent-${index + 1}` },
-        },
+        }),
       })),
       {
         type: 'session',
-        session: {
+        session: createSessionListRenderableSessionFixture({
           id: 's_matrix',
           active: false,
           updatedAt: 60,
           presence: 'offline',
           metadata: { summaryText: 'Session QA Voice Matrix', path: '/tmp/matrix' },
-        },
+        }),
       },
     ];
 
-    state.sessionListRowsByServerId['server-a'] = Object.fromEntries(
-      state.sessionListViewData.map((entry: { session: { id: string } }) => [entry.session.id, entry.session]),
-    );
+    storage.setState({ sessionListRowsByServerId: { ...storage.getState().sessionListRowsByServerId,
+      [homeA]: Object.fromEntries(state.sessionListViewData.map((entry: { session: { id: string } }) => [entry.session.id, entry.session])),
+    } });
     retainVoiceSessionReferenceCorpus({
       addresses: state.sessionListViewData.map((entry: { session: { id: string } }) => ({
-        serverId: 'server-a', sessionId: entry.session.id,
+        serverId: homeA, sessionId: entry.session.id,
       })),
       complete: true,
     });
@@ -2261,13 +2241,14 @@ describe('voice tool handlers', () => {
 
   it('redacts file paths in message text when shareFilePaths is false', async () => {
     state.settings.voice.privacy.shareFilePaths = false;
-    (state.sessionMessages.s1.messages as any[]).push({
+    const { readStoredSessionMessages } = await import('@happier-dev/session-core/messages');
+    seedMessages('s1', [...readStoredSessionMessages(storage.getState(), 's1'), {
       kind: 'agent-text',
       id: 'm_path',
       localId: null,
       createdAt: 10,
       text: 'See /Users/alice/SecretRepo/README.md for details.',
-    });
+    }]);
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -2280,9 +2261,9 @@ describe('voice tool handlers', () => {
 
   it('does not clamp message text by default', async () => {
     const long = 'x'.repeat(9001);
-    state.sessionMessages.s1.messages = [
+    seedMessages('s1', [
       { kind: 'agent-text', id: 'm_long', localId: null, createdAt: 100, text: long },
-    ];
+    ]);
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -2293,6 +2274,7 @@ describe('voice tool handlers', () => {
   });
 
   it('returns a session activity digest without transcript content', async () => {
+    const { readStoredSessionMessages } = await import('@happier-dev/session-core/messages');
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
@@ -2302,10 +2284,19 @@ describe('voice tool handlers', () => {
     expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
     expect(parsed.sessionId).toBe('s1');
     expect(Array.isArray(parsed.permissionRequestIds)).toBe(true);
-    expect(parsed.permissionRequestIds).toContain('req_a');
-    expect(parsed.messageCounts).toEqual(expect.any(Object));
-    expect(parsed.messageCounts).toEqual({ total: 2, assistant: 1, user: 1 });
+    expect(parsed.permissionRequestIds).toEqual(expect.arrayContaining(['req_a', 'req_b']));
+    const messages = readStoredSessionMessages(storage.getState(), 's1');
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'm1', kind: 'user-text', text: 'u1' }),
+      expect.objectContaining({ id: 'm2', kind: 'agent-text', text: 'a2' }),
+    ]));
+    // The real reducer materializes the two pending permissions as assistant
+    // tool messages; authored user/assistant messages remain in the same window.
+    expect(messages.filter(message => message.kind === 'tool-call')).toHaveLength(2);
+    expect(parsed.messageCounts).toEqual({ total: 4, assistant: 3, user: 1 });
     expect(parsed.recentMessages).toBeUndefined();
+    expect(res).not.toContain('u1');
+    expect(res).not.toContain('a2');
   });
 
   it('requests the marked awareness view through the Voice Action executor for the captured Home', async () => {
@@ -2314,7 +2305,7 @@ describe('voice tool handlers', () => {
 
     const res = await tools.getSessionActivity(
       { sessionId: 's1', view: 'awareness' },
-      { serverId: 'server-a' },
+      { serverId: homeA },
     );
     const parsed = JSON.parse(res) as any;
 
@@ -2326,12 +2317,8 @@ describe('voice tool handlers', () => {
     expect(parsed.messageCounts).toBeUndefined();
     expect(parsed.permissionRequestIds).toBeUndefined();
     expect(parsed.recentMessages).toBeUndefined();
-    expect(ensureSessionVisibleForMessageRoute).toHaveBeenCalledWith('s1', {
-      serverId: 'server-a',
-      forceRefresh: true,
-      includeTurnsProjection: false,
-      hydrateMessages: false,
-    });
+    expect(sessionDetailReads).toContain('s1');
+    expect(messageReads).toEqual([]);
   });
 
   it('respects actionsSettingsV1 disabledSurfaces for voice_tool surface', async () => {
@@ -2354,26 +2341,12 @@ describe('voice tool handlers', () => {
     // Should fail because action is disabled for voice_tool surface
     expect(parsed.ok).toBe(false);
     expect(parsed.errorCode).toBe('action_disabled');
-    expect(sendSessionMessageWithServerScope).not.toHaveBeenCalled();
-    expect(submitMessage).not.toHaveBeenCalled();
+    expect(pendingEnqueue).not.toHaveBeenCalled();
   });
 });
 
 describe('voice tool reset Account authority', () => {
   it('executes a non-hot-path Action through generic Voice discovery and execution with real approval and Account settings', async () => {
-    // Keep untouched incumbent mock families separate from this authoritative case.
-    const internalModules = [
-      '@/sync/domains/state/storage', '@/auth/storage/tokenStorage', '@/voice/session/voiceSession',
-      '@/sync/runtime/getSyncSingleton', '@/sync/sync', '@/sync/ops', '@/sync/ops/sessionExecutionRuns',
-      '@/sync/domains/server/serverRuntime', '@/sync/domains/server/serverProfiles', '@/sync/domains/server/activeServerSwitch',
-      '@/sync/runtime/connectivity/serverReachabilityRuntimeFetch',
-      '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage',
-      '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc',
-      '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', '@/voice/agent/teleportVoiceAgentToSessionRoot',
-    ] as const;
-    const incumbentMocks = await Promise.all(internalModules.map(async (id) => [id, await vi.importMock(id)] as const));
-    for (const id of internalModules) vi.doUnmock(id);
-    vi.resetModules();
     let account: Awaited<ReturnType<typeof import('@/voice/settings/panels/voiceSettingsAccountTestHarness')['createVoiceSettingsAccountTestHarness']>> | undefined;
     const controller = new AbortController();
     let pendingReset: Promise<string> | undefined;
@@ -2446,8 +2419,6 @@ describe('voice tool reset Account authority', () => {
       controller.abort();
       await pendingReset?.catch(() => {});
       await account?.dispose();
-      for (const [id, module] of incumbentMocks) vi.doMock(id, () => module);
-      vi.resetModules();
     }
   });
 });

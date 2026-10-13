@@ -44,7 +44,22 @@ describe('VoiceTranscriptProjector canonical surface subscription', () => {
     expect(corrected[0]).toMatchObject({ text: 'Hello!', final: true, corrected: true, revision: 3, announce: 'polite' });
     expect(listener).toHaveBeenCalledTimes(3);
 
+    projector.projectCanonicalEvent({
+      conversationSessionId: 'conversation-1',
+      event: event({ eventId: 'e4', sequence: 3, revision: 3,
+        type: 'voice.transcript.corrected', provenance: 'replay', text: 'Hello!' }),
+    });
+    expect(projector.canonicalSnapshot('conversation-1')).toBe(corrected);
+    expect(listener).toHaveBeenCalledTimes(3);
+
     unsubscribe();
+    projector.projectCanonicalEvent({
+      conversationSessionId: 'conversation-1',
+      event: event({ eventId: 'e5', sequence: 4, revision: 4,
+        type: 'voice.transcript.corrected', text: 'The next correction' }),
+    });
+    expect(projector.canonicalSnapshot('conversation-1')[0]?.text).toBe('The next correction');
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 
   it('does not re-announce reconnect replay to assistive technology', () => {

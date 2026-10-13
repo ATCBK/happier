@@ -12,7 +12,8 @@ import {
   type DaemonVoiceInferenceSttStreamStartRequest,
 } from '@happier-dev/protocol';
 import type { PeerTcpTunnelFrame } from '@happier-dev/peer-transport/duplexFrames';
-import { describe, expect, it, vi } from 'vitest';
+import { webcrypto } from 'node:crypto';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { encodeBase64 } from '@/encryption/base64';
 
@@ -43,20 +44,6 @@ const sealGate = vi.hoisted(() => {
   };
 });
 
-vi.mock('@/encryption/aes256GcmBytes', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/encryption/aes256GcmBytes')>();
-  return {
-    ...actual,
-    sealAes256GcmBytes: async (input: Parameters<typeof actual.sealAes256GcmBytes>[0]) => {
-      if (sealGate.shouldDelay(new Uint8Array(input.plaintext))) {
-        sealGate.enter();
-        await sealGate.opened;
-      }
-      return await actual.sealAes256GcmBytes(input);
-    },
-  };
-});
-
 const binding = {
   v: 1 as const,
   suite: 'aes-256-gcm' as const,
@@ -73,6 +60,20 @@ const binding = {
 
 describe('DaemonSpeechStreamTunnelTransport carrier ordering', () => {
   it('keeps the encrypted carrier in sequence order when a later chunk seals first', async () => {
+    if (!globalThis.crypto?.subtle) vi.stubGlobal('crypto', webcrypto);
+    const subtle = globalThis.crypto.subtle;
+    const encrypt = subtle.encrypt.bind(subtle);
+    const encryptBoundary = vi.spyOn(subtle, 'encrypt').mockImplementation(async (algorithm, key, data) => {
+      const plaintext = data instanceof ArrayBuffer
+        ? new Uint8Array(data)
+        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      if (sealGate.shouldDelay(plaintext)) {
+        sealGate.enter();
+        await sealGate.opened;
+      }
+      return await encrypt(algorithm, key, data);
+    });
+    onTestFinished(() => { encryptBoundary.mockRestore(); vi.unstubAllGlobals(); });
     const { createDaemonSpeechStreamTunnelTransport } = await import('./DaemonSpeechStreamTunnelTransport');
     const { sealAes256GcmBytes, openAes256GcmBytes } = await import('@/encryption/aes256GcmBytes');
 

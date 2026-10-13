@@ -1,4 +1,37 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
+const nativeAudio = createNativeVoicePcmCaptureHarness();
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ Platform: { OS: 'android' } });
+});
+vi.mock('expo-modules-core', async original => {
+    const actual = await original<typeof import('expo-modules-core')>();
+    return { ...actual, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative'
+        ? nativeAudio.nativeModule : actual.requireOptionalNativeModule(name) };
+});
+vi.mock('expo-file-system', () => ({ File: class {
+    exists = true;
+    async delete() { this.exists = false; }
+} }));
+const activeOwners: Array<ReturnType<typeof createLocalVoiceCaptureOwner>> = [];
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
+const coordinator = getSharedVoiceAudioSessionCoordinator();
+if (!coordinator) throw new Error('Installed native audio coordination unavailable');
+const audioSession = { coordinator };
+const { createExpoAudioRecordingMicSession } = await import('../mic/NativeMicSession');
+const { createLocalVoiceCaptureOwner } = await import('./LocalVoiceCaptureOwner');
+afterAll(async () => {
+    await coordinator.dispose();
+    await nativeAudio.coordinator.dispose();
+});
+beforeEach(() => { vi.clearAllMocks(); });
+afterEach(async () => {
+    for (const owner of activeOwners.splice(0)) await owner.stopSession();
+    expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
+});
 
 import { createVoiceCaptureAdmissionController } from './VoiceCaptureAdmissionController';
 import {
@@ -7,14 +40,17 @@ import {
 } from './VoiceCaptureAdmissionBinding';
 
 function createCaptureOwner() {
-    return {
-        startCapture: vi.fn(async () => {}),
-        stopCapture: vi.fn(async () => ({
-            provider: 'recorded_audio' as const,
-            uri: 'file:///dictation.m4a',
-        })),
-        stopSession: vi.fn(async () => {}),
-    };
+    const requestPermission = vi.fn(async () => ({ granted: true, canAskAgain: true }));
+    const prepareRecorder = vi.fn(async () => {});
+    const owner = createLocalVoiceCaptureOwner({ getSettings: () => ({}),
+        onCaptureStarted() {}, onCaptureError() {},
+    }, { createRecordingMicSession: () => createExpoAudioRecordingMicSession({
+        requestPermission, showPermissionDenied() {},
+        createRecorder: () => ({ uri: 'file:///dictation.m4a', prepareToRecordAsync: prepareRecorder,
+            record() {}, pause() {}, async stop() {} }),
+    }) });
+    activeOwners.push(owner);
+    return Object.assign(owner, { requestPermission, prepareRecorder });
 }
 
 describe('createVoiceCaptureAdmissionBinding', () => {
@@ -38,7 +74,8 @@ describe('createVoiceCaptureAdmissionBinding', () => {
             code: 'voice_capture_busy_conversation',
             activeOwner: 'conversation',
         }));
-        expect(captureOwner.startCapture).not.toHaveBeenCalled();
+        expect(captureOwner.prepareRecorder).not.toHaveBeenCalled();
+        expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
     });
 
     it('retains admission through transcription and releases it on cleanup', async () => {
@@ -82,7 +119,7 @@ describe('createVoiceCaptureAdmissionBinding', () => {
         });
         await binding.startCapture({
             sessionId: 'session-1',
-            provider: 'device',
+            provider: 'recorded_audio',
             handsFree: false,
         });
 
@@ -98,7 +135,7 @@ describe('createVoiceCaptureAdmissionBinding', () => {
     it('releases after permission or acquisition failure and preserves the typed cause', async () => {
         const admission = createVoiceCaptureAdmissionController();
         const captureOwner = createCaptureOwner();
-        captureOwner.startCapture.mockRejectedValueOnce(new Error('mic_permission_denied'));
+        captureOwner.requestPermission.mockResolvedValueOnce({ granted: false, canAskAgain: false });
         const binding = createVoiceCaptureAdmissionBinding({
             admission,
             captureOwner,
@@ -107,7 +144,7 @@ describe('createVoiceCaptureAdmissionBinding', () => {
 
         await expect(binding.startCapture({
             sessionId: 'session-1',
-            provider: 'device',
+            provider: 'recorded_audio',
             handsFree: false,
         })).rejects.toThrow('mic_permission_denied');
         expect(admission.acquire('conversation').status).toBe('acquired');

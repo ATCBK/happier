@@ -11,31 +11,24 @@ import {
   createPluginContributionIdentity,
   createRecipientContractDigestV1,
 } from '@happier-dev/protocol';
-import type { PluginApi } from '@happier-dev/plugin-sdk';
 import {
-  settingsDefaults,
   settingsParse,
   type Settings,
 } from '@/sync/domains/settings/settings';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
-import { upsertAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
+import { saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
 import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
-import {
-  bindVoiceProviderSettingsActions,
-  bindVoiceProviderSettingsOperations,
-} from '@/voice/registry/externalVoiceProviderActivation';
-import {
-  commitExternalVoiceProviderRegistration,
-  removeExternalVoiceProviderRegistration,
-} from '@/voice/registry/externalVoiceProviderRegistrations';
 import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
+import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
 import 'fake-indexeddb/auto';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 
 import { BundledConversationSettingsSection } from './BundledConversationSettingsSection';
+import { ModalProvider } from '@/modal';
+import { setPreferredLanguageFromSettings } from '@/text';
+import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -69,16 +62,6 @@ vi.mock('react-native-unistyles', async () => {
   return createUnistylesMock();
 });
 
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({ translate: (key: string) => key });
-});
-
-vi.mock('@/modal', async () => {
-  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock({ confirmResult: true }).module;
-});
-
 vi.mock('@elevenlabs/client', () => ({
   Conversation: {
     startSession: vi.fn(),
@@ -95,6 +78,7 @@ describe('ElevenLabs settings provisioning composed path', () => {
   beforeEach(() => {
     disposals.push(installWebLockManagerMock().restore);
     fixtureState.settings = null as unknown as Settings;
+    setPreferredLanguageFromSettings('en');
   });
 
   afterEach(async () => {
@@ -121,6 +105,7 @@ describe('ElevenLabs settings provisioning composed path', () => {
 
     const voice = voiceSettingsParse({
       providerId,
+      privacy: { currentUiContextMode: 'on_demand', shareDeviceInventory: true },
       providers: {
         [providerId]: {
           schemaVersion: 2,
@@ -140,16 +125,17 @@ describe('ElevenLabs settings provisioning composed path', () => {
         },
       },
     });
-    fixtureState.settings = upsertAccountVoiceCredential({
+    fixtureState.settings = saveAndUseAccountVoiceCredential({
       settings: settingsParse({
-        ...settingsDefaults,
-        voice,
+        voice, experiments: true, featureToggles: { voice: true },
       }),
       contribution: {
         pluginId: entry.pluginId,
         localId: entry.declaration.id,
       },
       credentialSlotId: recipientContract.credentialSlot.id,
+      currentDeclaration: entry.declaration,
+      expectedSettingsVersion: 1,
       value: 'test-only-elevenlabs-key',
       generateId: () => 'elevenlabs-composed-secret',
       now: 1,
@@ -159,107 +145,31 @@ describe('ElevenLabs settings provisioning composed path', () => {
         createRecipientContractDigestV1(recipientContract),
     }).settings;
     const account = await createVoiceSettingsAccountTestHarness(fixtureState.settings);
+    expect(account.settings.voice.providerId).toBe(providerId);
     disposals.push(account.dispose);
-    const registeredRuntimes: Parameters<PluginApi['voiceProviders']['register']>[1][] = [];
-    entry.activate({
-      voiceProviders: {
-        register(localId, runtime) {
-          expect(localId).toBe(entry.declaration.id);
-          registeredRuntimes.push(runtime);
-        },
-      },
+    await refreshSavedSecretCatalog(account.scope);
+    await vi.waitFor(() => {
+      expect(account.resources).toHaveLength(1);
+      const binding = account.settings.voiceSettingsV1.credentialBindings.find(candidate =>
+        candidate.contribution.pluginId === entry.pluginId && candidate.contribution.localId === entry.declaration.id);
+      expect(binding?.credentialBindings.account?.api_key).toMatch(/^happier:shared-secret:v1:/u);
     });
-    const registeredRuntime = registeredRuntimes[0];
-    if (registeredRuntime?.kind !== 'conversation' || !registeredRuntime.settingsOperations) {
-      throw new Error('ElevenLabs settings operations were not registered');
-    }
-
-    const operationIds: string[] = [];
-    const askQuestions = vi.fn(async () => Object.freeze({
-      requestId: 'elevenlabs-provisioning-questions-1',
-      kind: 'questions' as const,
-      status: 'answered' as const,
-      answers: Object.freeze({
-        'existing-agent-action': Object.freeze({
-          kind: 'singleChoice' as const,
-          answer: Object.freeze({ kind: 'choice' as const, choiceId: 'create-new' }),
-        }),
-      }),
+    await refreshSavedSecretCatalog(account.scope);
+    const provider = createElevenLabsSettingsRuntimeTestHarness();
+    await provider.register();
+    disposals.push(provider.dispose);
+    const vendorFetch = provider.fetch.getMockImplementation()!;
+    provider.fetch.mockImplementation(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.pathname === '/v1/convai/agents' && init?.method === 'GET') {
+        return provider.response({ agents: [{ agent_id: 'agent_existing', name: 'Happier Voice' }], has_more: false, next_cursor: null });
+      }
+      return vendorFetch(input, init);
+    });
+    const httpRequests = () => provider.fetch.mock.calls.map(([input, init]) => ({
+      path: new URL(input instanceof Request ? input.url : String(input)).pathname,
+      method: init?.method,
     }));
-    let nextToolId = 0;
-    const request = vi.fn(async (input: Readonly<{ operationId: string }>) => {
-      operationIds.push(input.operationId);
-      const body = input.operationId === 'agents'
-        ? {
-            agents: [{ agent_id: 'agent_existing', name: 'Happier Voice' }],
-            has_more: false,
-            next_cursor: null,
-          }
-        : input.operationId === 'voices'
-          ? {
-              voices: [{
-                voice_id: 'hpp4J3VqNfWAUOO0d1Us',
-                name: 'Default Happier Voice',
-                category: 'premade',
-              }],
-            }
-        : input.operationId === 'tools'
-          ? { tools: [], has_more: false, next_cursor: null }
-          : input.operationId === 'create-tool'
-            ? { id: `tool_${++nextToolId}` }
-            : input.operationId === 'create-agent'
-              ? { agent_id: 'agent_created_from_rendered_press' }
-              : {};
-      return Object.freeze({
-        status: 200,
-        finalUrl: `https://api.elevenlabs.io/${input.operationId}`,
-        headers: Object.freeze({ 'content-type': 'application/json' }),
-        body: new TextEncoder().encode(JSON.stringify(body)),
-      });
-    });
-    const boundSettingsOperations = bindVoiceProviderSettingsOperations({
-      operations: registeredRuntime.settingsOperations,
-      createCredentials: () => Object.freeze({
-        phase: 'settings' as const,
-        mediated: Object.freeze({ request }),
-        raw: null,
-      }),
-      isCurrent: () => true,
-    });
-    if (!registeredRuntime.settingsActions) throw new Error('ElevenLabs settings actions were not registered');
-    const boundSettingsActions = bindVoiceProviderSettingsActions({
-      actions: registeredRuntime.settingsActions,
-      declaredActions: entry.declaration.settings?.actions ?? [],
-      createCredentials: () => Object.freeze({
-        phase: 'settings' as const,
-        mediated: Object.freeze({ request }),
-        raw: null,
-      }),
-      createInteractions: () => Object.freeze({ askQuestions }),
-      getRealtimeClientToolDefinitions: () => [Object.freeze({
-        name: 'listMachines',
-        description: 'List available machines',
-        parameters: Object.freeze({ type: 'object', additionalProperties: false }),
-        execute: async () => Object.freeze({ ok: true }),
-      })],
-      isCurrent: () => true,
-    });
-    const token = Object.freeze({});
-    commitExternalVoiceProviderRegistration(Object.freeze({
-      token,
-      pluginId: entry.pluginId,
-      localId: entry.declaration.id,
-      providerId,
-      occurrenceId: 'elevenlabs-settings-occurrence',
-      descriptor: null,
-      adapter: null,
-      settingsOperations: boundSettingsOperations,
-      settingsActions: boundSettingsActions,
-    }));
-    disposals.push(async () => {
-      await act(async () => removeExternalVoiceProviderRegistration(token));
-    });
-    disposals.push(async () => await registeredRuntime?.dispose?.());
 
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -270,7 +180,7 @@ describe('ElevenLabs settings provisioning composed path', () => {
     });
     await act(async () => {
       root.render(
-        <BundledConversationSettingsSection voice={voice} />,
+        <ModalProvider><BundledConversationSettingsSection voice={voice} /></ModalProvider>,
       );
     });
     const createRow = host.querySelector<HTMLButtonElement>(
@@ -285,32 +195,41 @@ describe('ElevenLabs settings provisioning composed path', () => {
 
     await act(async () => {
       createRow?.click();
+    });
+    const findButton = (testID: string) => document.querySelector<HTMLElement>(`[data-testid="${testID}"]`);
+    await vi.waitFor(() => expect(findButton('app-shell-confirmation-confirm')).toBeInstanceOf(HTMLElement));
+    await act(async () => findButton('app-shell-confirmation-confirm')?.click());
+    await vi.waitFor(() => {
+      expect(httpRequests()[0]).toEqual({ path: '/v1/convai/agents', method: 'GET' });
+      expect(findButton('app-shell-question-existing-agent-action-choice-create-new')?.getAttribute('role')).toBe('radio');
+      expect(findButton('app-shell-question-existing-agent-action-choice-update-existing-0')?.getAttribute('role')).toBe('radio');
+    });
+    await act(async () => findButton('app-shell-question-existing-agent-action-choice-create-new')?.click());
+    await act(async () => findButton('app-shell-question-submit')?.click());
+    await act(async () => {
       await vi.waitFor(() => {
-        expect(operationIds[0]).toBe('agents');
-        expect(askQuestions).toHaveBeenCalledWith(expect.objectContaining({
-          kind: 'questions',
-          questions: [expect.objectContaining({
-            id: 'existing-agent-action',
-            type: 'singleChoice',
-            choices: expect.arrayContaining([
-              expect.objectContaining({ id: 'create-new' }),
-              expect.objectContaining({ id: 'update-existing-0' }),
-            ]),
-          })],
-        }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
-        expect(operationIds).toContain('create-tool');
-        expect(operationIds.at(-1)).toBe('create-agent');
+        expect(httpRequests()[0]).toEqual({ path: '/v1/convai/agents', method: 'GET' });
+        expect(httpRequests()).toContainEqual({ path: '/v1/convai/tools', method: 'POST' });
+        expect(httpRequests()).toContainEqual({ path: '/v1/convai/agents/create', method: 'POST' });
+        expect(httpRequests().at(-1)).toEqual({ path: '/v1/convai/agents/agent_created', method: 'GET' });
         expect(account.settings.voice.providers[providerId]?.config).toEqual(
-          expect.objectContaining({ agentId: 'agent_created_from_rendered_press' }),
+          expect.objectContaining({ agentId: 'agent_created' }),
         );
       });
     });
     expect(account.writes).toHaveLength(1);
+    expect(account.persistedSettings.voice.providerId).toBe(providerId);
+    expect(account.persistedSettings.voice.providers[providerId]?.config).toMatchObject({ agentId: 'agent_created' });
     await act(async () => root.render(
-      <BundledConversationSettingsSection voice={account.settings.voice} />,
+      <ModalProvider><BundledConversationSettingsSection voice={account.settings.voice} /></ModalProvider>,
     ));
     expect(host.querySelector('[data-testid="voice-settings-action-create-agent"]')).toBeNull();
-    expect(host.querySelector<HTMLButtonElement>('[data-testid="voice-settings-action-update-agent"]')?.disabled).toBe(false);
+    await vi.waitFor(() => {
+      const update = host.querySelector<HTMLElement>('[data-testid="voice-settings-action-update-agent"]');
+      expect(update).toBeInstanceOf(HTMLElement);
+      expect(update?.matches('button, [role="button"]')).toBe(true);
+      expect(update?.matches(':disabled, [aria-disabled="true"]')).toBe(false);
+    });
 
   });
 

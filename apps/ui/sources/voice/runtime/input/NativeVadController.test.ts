@@ -1,388 +1,176 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 
-const sherpaNativeMock = vi.hoisted(() => ({
-    nativeModule: null as null | object,
+const nativeBoundary = vi.hoisted(() => ({
+    module: null as object | null,
 }));
-const resolveNativeSileroVadBridgeMock = vi.hoisted(() => vi.fn());
+const nativeAudio = createNativeVoicePcmCaptureHarness();
+// One installed audio module per app lifetime; the actual package registry owns
+// coordinator/capture identity. Sherpa availability is an external SDK lookup.
+vi.mock('expo-modules-core', async original => {
+    const actual = await original<typeof import('expo-modules-core')>();
+    return { ...actual, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative'
+        ? nativeAudio.nativeModule : name === 'HappierSherpaNative' ? nativeBoundary.module : actual.requireOptionalNativeModule(name) };
+});
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { getSharedVoicePcmCapture, getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
+const capture = getSharedVoicePcmCapture();
+if (!capture) throw new Error('Installed native capture unavailable');
+const { createNativeVadController } = await import('./NativeVadController');
+afterAll(async () => {
+    await getSharedVoiceAudioSessionCoordinator()?.dispose();
+    await nativeAudio.coordinator.dispose();
+});
 
-vi.mock('@happier-dev/sherpa-native', () => ({
-    getOptionalHappierSherpaNativeModule: () => sherpaNativeMock.nativeModule,
-}));
-vi.mock('./NativeSileroVadBridge', () => ({
-    resolveNativeSileroVadBridge: resolveNativeSileroVadBridgeMock,
-}));
-
-import {
-    createNativeVadController,
-    type NativeVadBridge,
-    type NativeVadSession,
-} from './NativeVadController';
-
-function createDeferred<T>() {
-    let resolve!: (value: T | PromiseLike<T>) => void;
-    let reject!: (reason?: unknown) => void;
-    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-        resolve = resolvePromise;
-        reject = rejectPromise;
-    });
-    return { promise, reject, resolve };
+function installNativeBoundary() {
+    const harness = { ...nativeAudio, capture };
+    const createVadDetector = vi.fn(async (_request: Readonly<{
+        detectorId: string; minSpeechMs: number; redemptionMs: number; sampleRate: number;
+    }>) => {});
+    const pushVadAudioFrame = vi.fn(async () => ({ speechStarted: false, speechEnded: false }));
+    const cancelVadDetector = vi.fn(async (_request: Readonly<{ detectorId: string }>) => {});
+    nativeBoundary.module = { createVadDetector, pushVadAudioFrame, cancelVadDetector };
+    return { ...harness, createVadDetector, pushVadAudioFrame, cancelVadDetector,
+        frame: async (edge: Readonly<{ speechStarted: boolean; speechEnded: boolean }>) => {
+            pushVadAudioFrame.mockResolvedValueOnce(edge);
+            harness.emit();
+            await harness.capture.waitForDrain();
+        },
+    };
 }
+beforeEach(() => { vi.clearAllMocks(); nativeBoundary.module = null; });
 
-function captureSynchronousError(callback: () => void): unknown | null {
-    try {
-        callback();
-        return null;
-    } catch (error) {
-        return error;
-    }
-}
-
-describe('createNativeVadController', () => {
-    beforeEach(() => {
-        sherpaNativeMock.nativeModule = null;
-        resolveNativeSileroVadBridgeMock.mockReset();
-        resolveNativeSileroVadBridgeMock.mockResolvedValue(null);
-    });
-
-    it('carries the latest partial transcript on the native_vad signal when a provider is supplied', async () => {
-        const onEndpointSignal = vi.fn();
-        const stop = vi.fn();
-        let onSpeechEnd: (() => void) | null = null;
+describe('native VAD controller through real bridge and capture', () => {
+    it('carries the current partial transcript and measured duration at the native endpoint', async () => {
+        const native = installNativeBoundary();
+        let clock = 7_000;
         let partial = 'open the';
-        const bridge: NativeVadBridge = {
-            startSession: vi.fn(async (args) => {
-                onSpeechEnd = args.onSpeechEnd;
-                return { stop };
-            }),
-        };
-        const controller = createNativeVadController({
-            bridge,
-            now: () => 7_000,
-            onEndpointSignal,
-            getLatestPartialTranscript: () => partial,
-        });
-
-        await controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'session-native' });
+        const onEndpointSignal = vi.fn();
+        const controller = createNativeVadController({ now: () => clock, onEndpointSignal,
+            getLatestPartialTranscript: () => partial, turnPolicy: { confirmMs: 10 } });
+        expect(await controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'session-native' })).toBe(true);
+        await native.frame({ speechStarted: true, speechEnded: false });
         partial = 'open the most recent notes';
-        (onSpeechEnd as null | (() => void))?.();
-
-        expect(onEndpointSignal).toHaveBeenCalledWith({
-            detectedAt: 7_000,
-            sessionId: 'session-native',
-            source: 'native_vad',
-            transcript: 'open the most recent notes',
-            // VAD-only edge (no observed speech-start) → duration is unknown.
-            durationMs: null,
-            endpoint: { reason: 'acoustic_endpoint', confidence: null },
-        });
+        clock = 7_040;
+        await native.frame({ speechStarted: false, speechEnded: true });
+        expect(onEndpointSignal).toHaveBeenCalledWith({ detectedAt: 7_040, sessionId: 'session-native',
+            source: 'native_vad', transcript: partial, durationMs: 40,
+            endpoint: { reason: 'acoustic_endpoint', confidence: null } });
+        await controller.stopSession();
+        expect(native.capture.getSnapshot().subscriberCount).toBe(0);
     });
-
-    it('applies the two-stage confirmMs false-start debounce when the bridge surfaces speech-start edges', async () => {
+    it('suppresses false starts while sustained native speech admits one endpoint', async () => {
+        const native = installNativeBoundary();
+        let clock = 0;
         const onEndpointSignal = vi.fn();
         const onSpeechCandidateStart = vi.fn();
         const onSpeechCandidateFalseAlarm = vi.fn();
-        const stop = vi.fn();
-        let clock = 0;
-        let onSpeechStart: (() => void) | null = null;
-        let onSpeechEnd: (() => void) | null = null;
-        const bridge: NativeVadBridge = {
-            startSession: vi.fn(async (args) => {
-                onSpeechStart = args.onSpeechStart ?? null;
-                onSpeechEnd = args.onSpeechEnd;
-                return { stop };
-            }),
-        };
-        const controller = createNativeVadController({
-            bridge,
-            now: () => clock,
-            onEndpointSignal,
-            onSpeechCandidateStart,
-            onSpeechCandidateFalseAlarm,
-            turnPolicy: { confirmMs: 800, silenceMs: 700 },
-        });
-
+        const controller = createNativeVadController({ now: () => clock, onEndpointSignal,
+            onSpeechCandidateStart, onSpeechCandidateFalseAlarm, turnPolicy: { confirmMs: 800, silenceMs: 700 } });
         await controller.startSession({ minSpeechMs: 0, redemptionMs: 0, sessionId: 'session-native' });
-
-        // Sub-confirmMs segment → suppressed.
-        clock = 0;
-        (onSpeechStart as null | (() => void))?.();
+        await native.frame({ speechStarted: true, speechEnded: false });
         clock = 300;
-        (onSpeechEnd as null | (() => void))?.();
+        await native.frame({ speechStarted: false, speechEnded: true });
         expect(onEndpointSignal).not.toHaveBeenCalled();
-        expect(onSpeechCandidateStart).toHaveBeenCalledWith({
-            sessionId: 'session-native', source: 'native_vad',
-        });
-        expect(onSpeechCandidateFalseAlarm).toHaveBeenCalledWith({
-            sessionId: 'session-native', source: 'native_vad',
-        });
-
-        // Sustained segment → emits, carrying the measured speech-start → endpoint
-        // span (1000 → 2000) so the downstream barge-in duration gate sees it.
+        expect(onSpeechCandidateFalseAlarm).toHaveBeenCalledWith({ sessionId: 'session-native', source: 'native_vad' });
         clock = 1_000;
-        (onSpeechStart as null | (() => void))?.();
+        await native.frame({ speechStarted: true, speechEnded: false });
         clock = 2_000;
-        (onSpeechEnd as null | (() => void))?.();
-        expect(onEndpointSignal).toHaveBeenCalledTimes(1);
-        expect(onEndpointSignal).toHaveBeenCalledWith(expect.objectContaining({
-            source: 'native_vad',
-            durationMs: 1_000,
-        }));
+        await native.frame({ speechStarted: false, speechEnded: true });
+        expect(onEndpointSignal.mock.calls.map(([signal]) => signal.durationMs)).toEqual([1_000]);
         expect(onSpeechCandidateStart).toHaveBeenCalledTimes(2);
-        expect(onSpeechCandidateFalseAlarm).toHaveBeenCalledTimes(1);
+        await controller.stopSession();
     });
-
-    it('returns false without a native bridge so provider endpoint fallbacks remain active', async () => {
-        const onEndpointSignal = vi.fn();
-        const controller = createNativeVadController({
-            onEndpointSignal,
-        });
-
-        await expect(controller.startSession({
-            minSpeechMs: 120,
-            redemptionMs: 450,
-            sessionId: 'session-native',
-        })).resolves.toBe(false);
-
-        expect(controller.isActiveSession('session-native')).toBe(false);
-        expect(onEndpointSignal).not.toHaveBeenCalled();
-    });
-
-    it('lets a matching immediate stop invalidate startup before the native bridge begins', async () => {
-        const nativeStop = vi.fn(async () => {});
-        const bridge: NativeVadBridge = {
-            startSession: vi.fn(async () => ({ stop: nativeStop })),
-        };
-        const controller = createNativeVadController({
-            bridge,
-            onEndpointSignal: vi.fn(),
-        });
-
-        const starting = controller.startSession({
-            minSpeechMs: 120,
-            redemptionMs: 450,
-            sessionId: 'session-native',
-        });
-        await expect(controller.stopSession('session-native')).resolves.toBeUndefined();
-
-        await expect(starting).resolves.toBe(false);
-        expect(bridge.startSession).not.toHaveBeenCalled();
-        expect(nativeStop).not.toHaveBeenCalled();
-        expect(controller.isActiveSession('session-native')).toBe(false);
-    });
-
-    it('isolates throwing observers from bridge callbacks and exactly-once native teardown', async () => {
-        const nativeStop = vi.fn(async () => {});
-        let clock = 0;
-        let onSpeechStart: (() => void) | null = null;
-        let onSpeechEnd: (() => void) | null = null;
-        const bridge: NativeVadBridge = {
-            startSession: vi.fn(async (args) => {
-                onSpeechStart = args.onSpeechStart ?? null;
-                onSpeechEnd = args.onSpeechEnd;
-                return { stop: nativeStop };
-            }),
-        };
-        const controller = createNativeVadController({
-            bridge,
-            now: () => clock,
-            onEndpointSignal: () => {
-                throw new Error('broken_endpoint_observer');
-            },
-            onSpeechCandidateStart: () => {
-                throw new Error('broken_candidate_start_observer');
-            },
-            onSpeechCandidateFalseAlarm: () => {
-                throw new Error('broken_candidate_false_alarm_observer');
-            },
-            turnPolicy: { confirmMs: 800, silenceMs: 700 },
-        });
-
-        await expect(controller.startSession({
-            minSpeechMs: 0,
-            redemptionMs: 0,
-            sessionId: 'session-native',
-        })).resolves.toBe(true);
-
-        const callbackErrors: unknown[] = [];
-        clock = 0;
-        callbackErrors.push(captureSynchronousError(() => (onSpeechStart as null | (() => void))?.()));
-        clock = 300;
-        callbackErrors.push(captureSynchronousError(() => (onSpeechEnd as null | (() => void))?.()));
-        callbackErrors.push(captureSynchronousError(() => (onSpeechEnd as null | (() => void))?.()));
-        const stopError = await controller.stopSession('session-native').then(
-            () => null,
-            (error: unknown) => error,
-        );
-
-        expect(callbackErrors).toEqual([null, null, null]);
-        expect(stopError).toBeNull();
-        expect(nativeStop).toHaveBeenCalledTimes(1);
-        expect(controller.isActiveSession('session-native')).toBe(false);
-    });
-
-    it('emits runtime-owned native_vad endpoint signals from the active bridge session', async () => {
-        const onEndpointSignal = vi.fn();
-        const stop = vi.fn();
-        let onSpeechEnd: (() => void) | null = null;
-        const bridge: NativeVadBridge = {
-            startSession: vi.fn(async (args) => {
-                onSpeechEnd = args.onSpeechEnd;
-                return { stop };
-            }),
-        };
-        const controller = createNativeVadController({
-            bridge,
-            now: () => 1_234,
-            onEndpointSignal,
-        });
-
-        await expect(controller.startSession({
-            minSpeechMs: 10.2,
-            redemptionMs: 30.6,
-            sessionId: ' session-native ',
-        })).resolves.toBe(true);
-
-        expect(bridge.startSession).toHaveBeenCalledWith(expect.objectContaining({
-            minSpeechMs: 10,
-            redemptionMs: 31,
-            sessionId: 'session-native',
-        }));
-
-        const activeOnSpeechEnd = onSpeechEnd as null | (() => void);
-        activeOnSpeechEnd?.();
-
-        expect(onEndpointSignal).toHaveBeenCalledWith({
-            detectedAt: 1_234,
-            sessionId: 'session-native',
-            source: 'native_vad',
-            transcript: '',
-            // VAD-only edge (no observed speech-start) → duration is unknown.
-            durationMs: null,
-            endpoint: { reason: 'acoustic_endpoint', confidence: null },
-        });
-
-        await controller.stopSession('session-native');
-        onEndpointSignal.mockClear();
-        activeOnSpeechEnd?.();
-
-        expect(stop).toHaveBeenCalledTimes(1);
-        expect(onEndpointSignal).not.toHaveBeenCalled();
-    });
-
-    it('settles a matching stop while native startup is pending and disposes the late session', async () => {
-        const pendingSession = createDeferred<NativeVadSession>();
-        const lateStop = vi.fn(async () => {});
-        const bridge: NativeVadBridge = {
-            startSession: vi.fn(() => pendingSession.promise),
-        };
-        const onEndpointSignal = vi.fn();
-        const controller = createNativeVadController({
-            bridge,
-            onEndpointSignal,
-        });
-        const starting = controller.startSession({
-            minSpeechMs: 10,
-            redemptionMs: 30,
-            sessionId: 'session-native',
-        });
-        await vi.waitFor(() => expect(bridge.startSession).toHaveBeenCalledTimes(1));
-
-        await expect(controller.stopSession('session-native')).resolves.toBeUndefined();
-        pendingSession.resolve({ stop: lateStop });
-        await expect(starting).resolves.toBe(false);
-
-        expect(lateStop).toHaveBeenCalledTimes(1);
-        expect(controller.isActiveSession('session-native')).toBe(false);
-        expect(onEndpointSignal).not.toHaveBeenCalled();
-    });
-
-    it('does not cancel a pending native start for a different session', async () => {
-        const pendingSession = createDeferred<NativeVadSession>();
-        const stop = vi.fn(async () => {});
-        const bridge: NativeVadBridge = {
-            startSession: vi.fn(() => pendingSession.promise),
-        };
-        const controller = createNativeVadController({ bridge, onEndpointSignal: vi.fn() });
-        const starting = controller.startSession({
-            minSpeechMs: 10,
-            redemptionMs: 30,
-            sessionId: 'session-native',
-        });
-        await vi.waitFor(() => expect(bridge.startSession).toHaveBeenCalledTimes(1));
-
-        await controller.stopSession('another-session');
-        pendingSession.resolve({ stop });
-
-        await expect(starting).resolves.toBe(true);
-        expect(controller.isActiveSession('session-native')).toBe(true);
-        expect(stop).not.toHaveBeenCalled();
-    });
-
-    it('invalidates an older pending start when a replacement begins', async () => {
-        let resolveFirstStart!: (session: Readonly<{ stop(): Promise<void> }>) => void;
-        const lateStop = vi.fn(async () => {});
-        const activeStop = vi.fn(async () => {});
-        const bridge: NativeVadBridge = {
-            startSession: vi.fn()
-                .mockImplementationOnce(async () => await new Promise((resolve) => {
-                    resolveFirstStart = resolve;
-                }))
-                .mockResolvedValueOnce({ stop: activeStop }),
-        };
-        const controller = createNativeVadController({ bridge, onEndpointSignal: vi.fn() });
-        const firstStart = controller.startSession({
-            minSpeechMs: 10,
-            redemptionMs: 30,
-            sessionId: 'first-session',
-        });
-        await vi.waitFor(() => expect(bridge.startSession).toHaveBeenCalledTimes(1));
-
-        await expect(controller.startSession({
-            minSpeechMs: 10,
-            redemptionMs: 30,
-            sessionId: 'replacement-session',
-        })).resolves.toBe(true);
-        resolveFirstStart({ stop: lateStop });
-
-        await expect(firstStart).resolves.toBe(false);
-        expect(lateStop).toHaveBeenCalledTimes(1);
-        expect(controller.isActiveSession('replacement-session')).toBe(true);
-        expect(activeStop).not.toHaveBeenCalled();
-    });
-
-    it('keeps the replacement active when an older bridge resolution arrives late', async () => {
-        const firstBridgeResolution = createDeferred<NativeVadBridge | null>();
-        const staleNativeStop = vi.fn(async () => {});
-        const replacementNativeStop = vi.fn(async () => {});
-        const staleBridge: NativeVadBridge = {
-            startSession: vi.fn(async () => ({ stop: staleNativeStop })),
-        };
-        const replacementBridge: NativeVadBridge = {
-            startSession: vi.fn(async () => ({ stop: replacementNativeStop })),
-        };
-        resolveNativeSileroVadBridgeMock
-            .mockReturnValueOnce(firstBridgeResolution.promise)
-            .mockResolvedValueOnce(replacementBridge);
+    it('keeps provider fallbacks available without the installed native capability', async () => {
         const controller = createNativeVadController({ onEndpointSignal: vi.fn() });
-
-        const firstStart = controller.startSession({
-            minSpeechMs: 10,
-            redemptionMs: 30,
-            sessionId: 'first-session',
-        });
-        await vi.waitFor(() => expect(resolveNativeSileroVadBridgeMock).toHaveBeenCalledTimes(1));
-
-        await expect(controller.startSession({
-            minSpeechMs: 10,
-            redemptionMs: 30,
-            sessionId: 'replacement-session',
-        })).resolves.toBe(true);
-        firstBridgeResolution.resolve(staleBridge);
-
-        await expect(firstStart).resolves.toBe(false);
-        expect(staleBridge.startSession).not.toHaveBeenCalled();
-        expect(replacementBridge.startSession).toHaveBeenCalledTimes(1);
-        expect(replacementNativeStop).not.toHaveBeenCalled();
+        expect(await controller.startSession({ minSpeechMs: 120, redemptionMs: 450, sessionId: 'session-native' })).toBe(false);
+        expect(controller.isActiveSession('session-native')).toBe(false);
+    });
+    it('invalidates an immediate matching stop before native work begins', async () => {
+        const native = installNativeBoundary();
+        const controller = createNativeVadController({ onEndpointSignal: vi.fn() });
+        const starting = controller.startSession({ minSpeechMs: 120, redemptionMs: 450, sessionId: 'session-native' });
+        await controller.stopSession('session-native');
+        expect(await starting).toBe(false);
+        expect(native.createVadDetector).not.toHaveBeenCalled();
+        expect(native.capture.getSnapshot().subscriberCount).toBe(0);
+    });
+    it('isolates throwing observers and retires the native detector exactly once', async () => {
+        const native = installNativeBoundary();
+        let clock = 0;
+        const fail = () => { throw new Error('broken_observer'); };
+        const controller = createNativeVadController({ now: () => clock, onEndpointSignal: fail,
+            onSpeechCandidateStart: fail, onSpeechCandidateFalseAlarm: fail, turnPolicy: { confirmMs: 800 } });
+        await controller.startSession({ minSpeechMs: 0, redemptionMs: 0, sessionId: 'session-native' });
+        await native.frame({ speechStarted: true, speechEnded: false });
+        clock = 300;
+        await native.frame({ speechStarted: false, speechEnded: true });
+        clock = 1_000;
+        await native.frame({ speechStarted: true, speechEnded: false });
+        clock = 2_000;
+        await native.frame({ speechStarted: false, speechEnded: true });
+        await expect(controller.stopSession()).resolves.toBeUndefined();
+        await controller.stopSession();
+        expect(native.cancelVadDetector).toHaveBeenCalledTimes(1);
+        expect(native.capture.getSnapshot().subscriberCount).toBe(0);
+        expect(controller.isActiveSession('session-native')).toBe(false);
+    });
+    it('normalizes native timing inputs and suppresses endpoints after stop', async () => {
+        const native = installNativeBoundary();
+        const onEndpointSignal = vi.fn();
+        const controller = createNativeVadController({ onEndpointSignal });
+        expect(await controller.startSession({ minSpeechMs: 10.2, redemptionMs: 30.6, sessionId: ' session-native ' })).toBe(true);
+        expect(native.createVadDetector).toHaveBeenCalledWith({ detectorId: expect.stringContaining('session-native'),
+            minSpeechMs: 10, redemptionMs: 31, sampleRate: 16_000 });
+        await controller.stopSession('session-native');
+        native.emit();
+        await native.capture.waitForDrain();
+        expect(onEndpointSignal).not.toHaveBeenCalled();
+        expect(native.capture.getSnapshot().subscriberCount).toBe(0);
+    });
+    it('settles matching stop during native startup and disposes the late capture', async () => {
+        const native = installNativeBoundary();
+        const gate = createDeferred<void>();
+        native.createVadDetector.mockImplementationOnce(() => gate.promise);
+        const controller = createNativeVadController({ onEndpointSignal: vi.fn() });
+        const starting = controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'session-native' });
+        await vi.waitFor(() => expect(native.createVadDetector).toHaveBeenCalledTimes(1));
+        await expect(controller.stopSession('session-native')).resolves.toBeUndefined();
+        gate.resolve(undefined);
+        expect(await starting).toBe(false);
+        expect(native.cancelVadDetector).toHaveBeenCalledTimes(1);
+        expect(native.capture.getSnapshot().subscriberCount).toBe(0);
+    });
+    it('preserves a pending native start when another session stops', async () => {
+        const native = installNativeBoundary();
+        const gate = createDeferred<void>();
+        native.createVadDetector.mockImplementationOnce(() => gate.promise);
+        const controller = createNativeVadController({ onEndpointSignal: vi.fn() });
+        const starting = controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'session-native' });
+        await vi.waitFor(() => expect(native.createVadDetector).toHaveBeenCalledTimes(1));
+        await controller.stopSession('another-session');
+        gate.resolve(undefined);
+        expect(await starting).toBe(true);
+        expect(controller.isActiveSession('session-native')).toBe(true);
+        expect(native.capture.getSnapshot().subscriberCount).toBe(1);
+        await controller.stopSession();
+    });
+    it('keeps the replacement healthy when an older detector completes startup late', async () => {
+        const native = installNativeBoundary();
+        const gate = createDeferred<void>();
+        native.createVadDetector.mockImplementationOnce(() => gate.promise);
+        const controller = createNativeVadController({ onEndpointSignal: vi.fn() });
+        const first = controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'first-session' });
+        await vi.waitFor(() => expect(native.createVadDetector).toHaveBeenCalledTimes(1));
+        expect(await controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'replacement-session' })).toBe(true);
+        gate.resolve(undefined);
+        expect(await first).toBe(false);
         expect(controller.isActiveSession('replacement-session')).toBe(true);
+        expect(native.capture.getSnapshot().subscriberCount).toBe(1);
+        await controller.stopSession();
+        expect(native.cancelVadDetector).toHaveBeenCalledTimes(2);
+        expect(native.capture.getSnapshot().subscriberCount).toBe(0);
     });
 });

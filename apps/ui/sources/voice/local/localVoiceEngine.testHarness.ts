@@ -1,94 +1,108 @@
-import { afterEach, beforeEach, vi } from 'vitest';
-import type { AuthContextType } from '@/auth/context/AuthContext';
+import { afterAll, afterEach, beforeEach, vi } from 'vitest';
+import type { Socket } from 'socket.io-client';
+import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
+import { projectClaudeJsonlLineToDirectMessages } from '../../../../../packages/plugins/claude/src/agent/transcripts/projection';
+import { SessionMessagesPageV1Schema, type SessionMessageV1 } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
-import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
-import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/rpc';
+import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
+import { ExecutionRunActionRequestSchema, ExecutionRunActionResponseSchema } from '@happier-dev/protocol/execution/runs/index';
+import { ExecutionRunTurnStreamStartResponseSchema, ExecutionRunTurnStreamReadResponseSchema,
+    ExecutionRunTurnStreamCancelResponseSchema, ExecutionRunUserTranscriptCommitResponseSchema,
+    ExecutionRunTurnStreamStartRequestSchema, ExecutionRunTurnStreamStartV2RequestSchema,
+    ExecutionRunTurnStreamReadRequestSchema, ExecutionRunTurnStreamCancelRequestSchema,
+    ExecutionRunUserTranscriptCommitRequestSchema } from '@happier-dev/protocol/execution/runs/streaming';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
-import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
-import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } from '@/voice/persistence/voiceConversationSystemSessionLookup';
-import type {
-    getMachineContributionRegistryProjectionRevision as getMachineContributionRegistryProjectionRevisionFn,
-    machineContributionRegistryProjectionDescribe as machineContributionRegistryProjectionDescribeFn,
-    machinePluginSettingsGet as machinePluginSettingsGetFn,
-    machinePluginSettingsSet as machinePluginSettingsSetFn,
-} from '@/sync/ops/machineContributionRegistryProjection';
-import { VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS } from '@/voice/adapters/local/settings';
 import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
-import {
-    createLiveStorageStoreMock,
-    createStableStorageReader,
-    createStorageModuleStub,
-} from '@/dev/testkit/mocks/storage';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
+import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
+import { VoiceLocalDirectSchema } from '@happier-dev/protocol/voice/settings/localDirect';
+import { VoiceLocalConversationSchema } from '@happier-dev/protocol/voice/settings/localConversation';
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import type { HappierAudioStreamNativeEventMap } from '../../../../../packages/audio-stream-native/src/HappierAudioStreamNative.types';
+import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
+import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import type { Message } from '@happier-dev/session-core/messages';
+import type { StorageState } from '@/sync/store/types';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createHash } from 'node:crypto';
+import { decryptEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
+import { DaemonVoiceSpeechTranscribeRequestSchema, DaemonVoiceSpeechTranscribeResponseSchema,
+    DaemonVoiceSpeechTranscribeUploadInitRequestSchema, DaemonVoiceSpeechTranscribeUploadInitResponseSchema,
+    DaemonVoiceSpeechTranscribeUploadChunkRequestSchema, DaemonVoiceSpeechTranscribeUploadChunkResponseSchema,
+    DaemonVoiceSpeechTranscribeUploadFinalizeRequestSchema, DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema,
+    DaemonVoiceSpeechTranscribeUploadAbortRequestSchema, DaemonVoiceSpeechTranscribeUploadAbortResponseSchema,
+    type DaemonVoiceSpeechTranscribeRequest } from '@happier-dev/protocol/daemon/voiceSpeech';
 
-installDisconnectedServerSocketBoundary();
-
-const platformOsState = vi.hoisted(() => ({ value: 'ios' as 'ios' | 'web' }));
-
-// Permission alerts are an external UI boundary; keep the real voice owners
-// without loading an unrelated application modal/composer tree.
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+const localVoiceSockets = new Set<Socket>();
+const localVoiceRemoteMessages = new Map<string, SessionMessageV1[]>();
+installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+    localVoiceSockets.add(socket);
+    vi.mocked(socket.connect).mockImplementation(() => {
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, raw: unknown) => {
+        if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
+        if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)) {
+            throw new Error('Expected framed Voice RPC');
+        }
+        if (serverUrl !== 'https://local-voice-actions.example.test') throw new Error('Unexpected Voice Home transport');
+        const token = typeof socket.auth === 'object' && 'token' in socket.auth ? socket.auth.token : undefined;
+        if (!speechAccount || token !== speechAccount.credentials.token) throw new Error('Expected admitted Voice Account transport');
+        const separator = raw.method.indexOf(':');
+        const targetId = raw.method.slice(0, separator);
+        const method = raw.method.slice(separator + 1);
+        const result = resolveSocketRpcSessionAuthorization(method)
+            ? await sessionRpcWithServerScope({ sessionId: targetId, serverId: localVoiceHomeId, method, payload: raw.params })
+            : await machineRpcWithServerScope({ machineId: targetId, serverId: localVoiceHomeId, method, payload: raw.params });
+        return { ok: true, result };
+    });
 });
+vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
+vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
 
-type MachineContributionRegistryProjectionDescribeFn = typeof machineContributionRegistryProjectionDescribeFn;
-type GetMachineContributionRegistryProjectionRevisionFn = typeof getMachineContributionRegistryProjectionRevisionFn;
-type MachinePluginSettingsGetFn = typeof machinePluginSettingsGetFn;
-type MachinePluginSettingsSetFn = typeof machinePluginSettingsSetFn;
+type LocalVoiceAccountTransport = Readonly<{ home: { id: string; serverUrl: string }; credentials: AuthCredentials; dispose(): Promise<void> }>;
+let speechAccount: LocalVoiceAccountTransport | null = null;
+export const localVoiceSpeechOutputBoundary = createVoiceSpeechOutputBoundary({ getAccount: () => {
+    if (!speechAccount) throw new Error('Expected restored Voice Account');
+    return speechAccount;
+} });
+const initialSpeechBoundary = localVoiceSpeechOutputBoundary.reset();
 
-export const sendMessage = vi.fn();
-export const submitMessage = vi.fn();
-export const enqueuePendingMessage = vi.fn(async (
-    _sessionId: string,
-    _text: string,
-    _media: unknown,
-    _replyTo: unknown,
-    options?: Readonly<{ localId?: string }>,
-) => ({
-    localId: options?.localId ?? 'voice-test-pending-message',
-    accepted: true,
-    externalHandoffClaimed: true,
-}));
-export const blockPendingDelivery = vi.fn(async () => {});
-export const markPendingDeliveryHandled = vi.fn(async () => {});
-export const daemonVoiceAgentStart = vi.fn();
-export const daemonVoiceAgentSendTurn = vi.fn();
-export const daemonVoiceAgentWelcome = vi.fn();
-export const daemonVoiceAgentStartTurnStream = vi.fn();
-export const daemonVoiceAgentReadTurnStream = vi.fn();
-export const daemonVoiceAgentCancelTurnStream = vi.fn();
-export const daemonVoiceAgentCommit = vi.fn();
-export const daemonVoiceAgentStop = vi.fn();
-export const sessionExecutionRunStart = vi.fn();
-export const sessionExecutionRunAction = vi.fn();
-export const sessionExecutionRunList = vi.fn();
-export const sessionExecutionRunGet = vi.fn();
-export const sessionExecutionRunSend = vi.fn();
-export const sessionExecutionRunStop = vi.fn();
-export const sendSessionMessageWithServerScope = vi.fn();
-export const sessionRpcWithServerScope = vi.fn();
+export const sessionRpcWithServerScope = vi.fn<(request: Readonly<{ sessionId: string; serverId: string; method: string; payload: unknown }>) => Promise<unknown>>();
 export const machineRpcWithServerScope = vi.fn();
+export let localVoiceAgentRpc: Awaited<ReturnType<typeof createRetainedVoiceAgentRpcBoundary>>;
+export const localVoiceSpeechTranscription = vi.fn<(request: DaemonVoiceSpeechTranscribeRequest) => Promise<string>>();
+export let localVoiceUploadedAudio = new Uint8Array();
 export const createdAudioPlayers: any[] = [];
-export const fileDelete = vi.fn(async () => {});
-export const expoSpeechSpeak = vi.fn();
-export const expoSpeechStop = vi.fn();
-export const patchSessionMetadataWithRetry = vi.fn(async (_sessionId: string, _patch: (metadata: any) => any) => {});
-export const onSessionVisible = vi.fn((_sessionId: string) => {});
-export const refreshSessions = vi.fn(async () => {});
-export const applySettings = vi.fn();
+export const fileDelete = vi.fn<() => void>(() => {});
+export const expoSpeechSpeak = localVoiceSpeechOutputBoundary.expoSpeechSpeak;
+export const expoSpeechStop = localVoiceSpeechOutputBoundary.expoSpeechStop;
 export const speechRecStart = vi.fn();
 export const speechRecStop = vi.fn();
 export const speechRecAbort = vi.fn();
 export const speechRecRequestPermissionsAsync = vi.fn(async () => ({ granted: true }));
+export const nativeMicRequestPermissionsAsync = vi.fn(async () => ({ granted: true, canAskAgain: true }));
+export const webMicGetUserMedia = vi.fn<() => Promise<Pick<MediaStream, 'getTracks'>>>(async () => ({ getTracks: () => [] }));
 export const audioStreamStart = vi.fn<(...args: any[]) => Promise<{ streamId: string }>>().mockResolvedValue({ streamId: 'audio-stream-1' });
 export const audioStreamStop = vi.fn(async () => {});
 export const audioSessionRelease = vi.fn(async () => {});
@@ -100,58 +114,26 @@ export const sherpaStreamingPushFrame = vi.fn<(...args: any[]) => Promise<{ text
 export const sherpaStreamingFinish = vi
   .fn<(...args: any[]) => Promise<{ status: 'finalized'; text: string } | { status: 'cancelled' } | { status: 'missing' }>>()
   .mockResolvedValue({ status: 'finalized', text: '' });
-export const sherpaStreamingCancel = vi.fn(async () => {});
-export const ensureModelPackInstalled = vi.fn(async () => ({
-    packDirUri: 'file:///docs/happier/voice/modelPacks/dummy-pack',
-    manifest: {
-        packId: 'dummy-pack',
-        kind: 'stt_sherpa',
-        model: 'zipformer',
-        version: '1.0.0',
-        files: [{ path: 'tokens.txt', url: 'https://example.com/tokens.txt', sha256: 'a'.repeat(64), sizeBytes: 1 }],
-    },
-}));
-export const resolveModelPackManifestUrl = vi.fn(() => 'https://example.com/manifest.json');
-export const setActiveServerAndSwitch = vi.fn(async (_params?: any) => false);
-export const refreshFromActiveServer = vi.fn(async () => {});
+export const sherpaStreamingCancel = localVoiceSpeechOutputBoundary.nativeCancel;
+export const LOCAL_VOICE_STT_PACK_ID = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
+export let localVoiceModelPackFilesystem = initialSpeechBoundary.filesystem;
 export const routerNavigate = vi.fn();
-export const isRuntimeFeatureEnabled = vi.fn<(args: any) => Promise<boolean>>(async (_args) => true);
-export const resolveRuntimeFeatureDecision = vi.fn(async (args: any) => ({
-    featureId: args?.featureId,
-    state: 'enabled',
-    blockedBy: null,
-    blockerCode: 'none',
-    diagnostics: [],
-    evaluatedAt: Date.now(),
-    scope: {
-        scopeKind: 'runtime',
-        ...(args?.serverId ? { serverId: String(args.serverId) } : {}),
-    },
-}));
-export const machineContributionRegistryProjectionDescribe = vi.fn<MachineContributionRegistryProjectionDescribeFn>(
-    async (_machineId: string, _opts?: Readonly<{ serverId?: string | null; timeoutMs?: number | null }>) => ({
-        supported: false,
-        reason: 'not-supported',
-    }),
-);
-export const getMachineContributionRegistryProjectionRevision = vi.fn<GetMachineContributionRegistryProjectionRevisionFn>(
-    () => 0,
-);
-export const machinePluginSettingsGet = vi.fn<MachinePluginSettingsGetFn>(
-    async () => ({ supported: false, reason: 'not-supported' }),
-);
-export const machinePluginSettingsSet = vi.fn<MachinePluginSettingsSetFn>(
-    async () => ({ supported: false, reason: 'not-supported' }),
-);
+export const localVoiceRouteState: { pathname: string; segments: string[]; params: Record<string, string | string[] | undefined> } = {
+    pathname: '/', segments: [], params: {},
+};
 
 let nextRecorderPrepareError: Error | null = null;
 let recorderUri: string | null = 'file:///tmp/rec.m4a';
 let speechRecRecognitionAvailable = true;
-let sherpaNativeModuleAvailable = true;
 
 const EXPO_SPEECH_STATE_KEY = Symbol.for('happier.vitest.expoSpeechStub.state');
 const EXPO_SPEECH_REC_STATE_KEY = Symbol.for('happier.vitest.expoSpeechRecognitionStub.state');
-const AUDIO_STREAM_STATE_KEY = Symbol.for('happier.vitest.audioStreamStub.state');
+let nativeCapture = initialSpeechBoundary.audioSession;
+const nativeAudioStreamStart = nativeCapture.nativeModule.start.getMockImplementation();
+Object.assign(localVoiceSpeechOutputBoundary.native, {
+    createStreamingRecognizer: sherpaStreamingCreate, pushAudioFrame: sherpaStreamingPushFrame,
+    finishStreaming: sherpaStreamingFinish,
+});
 
 function setExpoSpeechStubState(next: { speakImpl: ((text: string, options?: any) => void) | null; stopImpl: (() => void) | null }) {
     (globalThis as any)[EXPO_SPEECH_STATE_KEY] = next;
@@ -177,7 +159,7 @@ export function setSpeechRecRecognitionAvailable(next: boolean) {
 }
 
 export function setSherpaNativeModuleAvailable(next: boolean) {
-    sherpaNativeModuleAvailable = next;
+    localVoiceSpeechOutputBoundary.setNativeAvailable(next);
 }
 
 export function emitSpeechRecEvent(eventName: string, event: any = {}) {
@@ -187,119 +169,30 @@ export function emitSpeechRecEvent(eventName: string, event: any = {}) {
     for (const cb of set) cb(event);
 }
 
-export function emitAudioStreamEvent(eventName: string, event: any = {}) {
-    const state = (globalThis as any)[AUDIO_STREAM_STATE_KEY];
-    const set: Set<(event: any) => void> | undefined = state?.listeners?.get?.(eventName);
-    if (!set) return;
-    for (const cb of set) cb(event);
+export function emitAudioStreamEvent<Name extends keyof HappierAudioStreamNativeEventMap>(eventName: Name, event: HappierAudioStreamNativeEventMap[Name]) {
+    nativeCapture.emitEvent(eventName, event);
 }
 
+const baseVoice = voiceSettingsParse({ providerId: 'local_conversation', welcome: { enabled: false } });
 export const BASE_SETTINGS = {
+    experiments: true,
     lastUsedAgent: 'codex',
-    recentMachinePaths: [
-        {
-            machineId: 'machine-1',
-            path: '/Users/test/.happier',
-        },
-    ],
+    recentMachinePaths: [{ machineId: 'machine-1', path: '/Users/test/.happier' }],
     voice: {
-        providerId: 'local_conversation',
-        assistantLanguage: null,
-        welcome: { enabled: false, mode: 'immediate', templateId: null },
-        executionMachine: { mode: 'auto', machineId: null },
-        privacy: {
-            shareSessionSummary: true,
-            shareRecentMessages: true,
-            recentMessagesCount: 3,
-            shareToolNames: true,
-            sharePermissionRequests: true,
-            shareDeviceInventory: true,
-            shareFilePaths: false,
-            shareToolArgs: false,
-        },
+        ...baseVoice,
         providers: {
-            'happier.voice.elevenlabs/realtime-elevenlabs': { schemaVersion: 2, config: {
-                billingMode: 'happier',
-                byo: { agentId: null },
-            } },
-	            local_direct: { schemaVersion: 1, config: {
-                stt: {
-                    provider: 'happier.voice.openai-compat/stt',
-                    localNeural: {
-                        assetId: 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17',
-                        language: null,
-                        execution: 'auto',
-                    },
-                },
-                tts: {
-                    autoSpeakReplies: false,
-                    bargeInEnabled: true,
-                    provider: 'happier.voice.openai-compat/tts',
-                    localNeural: {
-                        model: 'kokoro',
-                        assetId: null,
-                        voiceId: null,
-                        speed: null,
-                        execution: 'auto',
-                    },
-                },
-                networkTimeoutMs: 15_000,
-	                handsFree: {
-	                    enabled: false,
-	                    endpointing: {
-	                        silenceMs: VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.silenceMs,
-	                        minSpeechMs: VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.minSpeechMs,
-	                    },
-	                },
-	            } },
-            local_conversation: { schemaVersion: 1, config: {
+            ...baseVoice.providers,
+            local_direct: { schemaVersion: 1, config: VoiceLocalDirectSchema.parse({
+                stt: { provider: 'happier.voice.openai-compat/stt' },
+                tts: { provider: 'happier.voice.openai-compat/tts', autoSpeakReplies: false },
+            }) },
+            local_conversation: { schemaVersion: 1, config: VoiceLocalConversationSchema.parse({
                 conversationMode: 'direct_session',
-                stt: {
-                    provider: 'happier.voice.openai-compat/stt',
-                    localNeural: {
-                        assetId: 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17',
-                        language: null,
-                        execution: 'auto',
-                    },
-                },
-                tts: {
-                    autoSpeakReplies: false,
-                    bargeInEnabled: true,
-                    provider: 'happier.voice.openai-compat/tts',
-                    localNeural: {
-                        model: 'kokoro',
-                        assetId: null,
-                        voiceId: null,
-                        speed: null,
-                        execution: 'auto',
-                    },
-                },
-                networkTimeoutMs: 15_000,
-	                handsFree: {
-	                    enabled: false,
-	                    endpointing: {
-	                        silenceMs: VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.silenceMs,
-	                        minSpeechMs: VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.minSpeechMs,
-	                    },
-	                },
-	                agent: {
-                    agentSource: 'session',
-                    agentId: 'claude',
-                    permissionIntent: 'read-only',
-                    idleTtlSeconds: 300,
-                    chatModelSource: 'custom',
-                    chatModelId: 'default',
-                    commitModelSource: 'chat',
-                    commitModelId: 'default',
-                    providerChat: null,
-                    verbosity: 'short',
-                },
-                streaming: {
-                    enabled: false,
-                    ttsEnabled: false,
-                    ttsChunkChars: 200,
-                },
-            } },
+                stt: { provider: 'happier.voice.openai-compat/stt' },
+                tts: { provider: 'happier.voice.openai-compat/tts', autoSpeakReplies: false },
+                agent: { agentSource: 'session', agentId: 'claude', idleTtlSeconds: 300 },
+                streaming: { enabled: false, ttsEnabled: false },
+            }) },
             'happier.voice.openai-compat/stt': { schemaVersion: 2, config: {
                 baseUrl: 'http://localhost:8000',
                 insecureLocalOriginConsent: 'http://localhost:8000',
@@ -320,24 +213,21 @@ export const BASE_SETTINGS = {
 } as const;
 
 export function setPlatformOs(next: 'ios' | 'web') {
-    platformOsState.value = next;
+    localVoiceSpeechOutputBoundary.platform.value = next;
 }
 
 export function setNextRecorderPrepareError(next: Error | null) {
     nextRecorderPrepareError = next;
+    if (next) localVoiceSpeechOutputBoundary.fileRecording.start.mockRejectedValueOnce(next);
 }
 
 export function setRecorderUri(next: string | null) {
     recorderUri = next;
+    localVoiceSpeechOutputBoundary.setRecorderUri(next);
 }
-
-// The named Account's HTTP settings fixture follows its intended local writes,
-// so a later real Sync refresh cannot replace the case with an empty document.
-let localVoiceAccountSettings: object | null = null;
 
 export async function getStorage() {
     const { storage } = await import('@/sync/domains/state/storage');
-    if ('__setState' in storage) return storage as any;
     // Legacy engine fixtures are completed by the package testkit, then written
     // to the real store. The facade does not replace any production reader.
     return Object.assign({}, storage, {
@@ -355,12 +245,20 @@ export async function getStorage() {
                     : { voice: settings.voice };
                 const normalizedSettings = { ...settings, ...normalizeVoiceSettingsLocalDelta(voiceDelta, current) };
                 normalized.settings = normalizedSettings;
-                if (localVoiceAccountSettings !== null) localVoiceAccountSettings = normalizedSettings;
+                // The HTTP owner stores a serialized envelope, not this client
+                // object. Publish authored fixture settings through its public
+                // replacement port at the actual projection's known version.
+                activeAccountHomes?.replaceAccountSettings('voice', {
+                    settings: normalizedSettings,
+                    version: typeof patch.settingsVersion === 'number' ? patch.settingsVersion : storage.getState().settingsVersion ?? 1,
+                });
             }
             if (patch.sessions && typeof patch.sessions === 'object') {
                 normalized.sessions = Object.fromEntries(Object.entries(patch.sessions).map(([id, raw]) => {
                     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [id, raw];
-                    const session = createSessionFixture(raw);
+                    // The stock Home row below publishes an empty durable
+                    // queue; sparse client fixtures must retain that same fact.
+                    const session = createSessionFixture({ pendingVersion: 0, pendingCount: 0, ...raw });
                     const metadata = { host: 'test', machineId: 'machine-1', path: `/Users/test/.happier/worktree/${id}`,
                         agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
                         ...(session.metadataLayoutVersion === 1 ? session.ownerMetadataView : session.metadata),
@@ -370,33 +268,88 @@ export async function getStorage() {
                     })];
                 }));
             }
-            const completed = createLiveStorageStoreMock(() => ({ ...storage.getState(), ...normalized })).getState();
-            storage.setState(completed);
+            if (patch.machines && typeof patch.machines === 'object') {
+                normalized.machines = Object.fromEntries(Object.entries(patch.machines).map(([id, raw]) => [id,
+                    createMachineFixture(raw && typeof raw === 'object' ? { ...raw, id } : { id })]));
+            }
+            if (patch.sessionMessages && typeof patch.sessionMessages === 'object') {
+                normalized.sessionMessages = Object.fromEntries(Object.entries(patch.sessionMessages).map(([sessionId, raw]) => {
+                    if (!raw || typeof raw !== 'object' || !('messages' in raw) || !Array.isArray(raw.messages)) return [sessionId, raw];
+                    // Legacy test inputs seed known transcript records; canonical fixtures complete their collection, not store actions.
+                    const messages = raw.messages as Message[];
+                    const messagesById = Object.fromEntries(messages.map(message => [message.id, message]));
+                    return [sessionId, createSessionMessagesFixture({ messagesById, messagesMap: messagesById,
+                        messageIdsOldestFirst: messages.map(message => message.id), isLoaded: true })];
+                }));
+            }
+            // This facade accepts legacy sparse test seeds; every domain record above comes from its canonical fixture.
+            storage.setState(normalized as Partial<StorageState>);
+            if (normalized.machines) storage.getState().applyMachines(Object.values(storage.getState().machines), true, { sourceServerId: localVoiceHomeId });
+            if (normalized.sessions) storage.getState().applySessions(Object.values(storage.getState().sessions));
         },
         __notify: () => storage.setState({}),
     });
 }
 
-async function createVoiceConversationSessionFixture(args: any) {
-    const machineId = typeof args?.machineId === 'string' ? args.machineId : 'machine-1';
-    const directory = typeof args?.directory === 'string' ? args.directory : '/Users/test/.happier/voice-agent';
-    const agentTarget = args?.agentTarget ?? args?.backendTarget;
-    const spawnedAgentId = agentTarget?.kind === 'builtInAgent'
-        && typeof agentTarget.agentId === 'string'
-        ? agentTarget.agentId
-        : 'claude';
+/** Read actual admission inputs before/after a test attempt; this changes no policy or presence. */
+export async function readLocalVoiceMachinePrerequisites() {
+    const [{ storage }, { getAppliedActiveServerSnapshot },
+        { resolveVoiceExecutionMachineSelectionFromState }, { resolveVisibleMachinesForActiveServerFromState },
+        { readMachineRequestReachabilityObservation },
+        { peekServerReachabilityState, isServerReachabilityNetworkAllowed }] = await Promise.all([
+        import('@/sync/domains/state/storage'),
+        import('@/sync/runtime/orchestration/appliedActiveServerRuntime'),
+        import('@/voice/settings/executionMachine'),
+        import('@/sync/store/domains/machines/resolveMachinesForActiveServerFromState'),
+        import('@/sync/domains/machines/reachability/machineReachability'),
+        import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool'),
+    ]);
+    const state = storage.getState();
+    const appliedHomeId = getAppliedActiveServerSnapshot().serverId;
+    const reachability = speechAccount
+        ? peekServerReachabilityState(speechAccount.home.serverUrl, speechAccount.credentials.token) : null;
+    return {
+        observedAtMs: Date.now(), appliedHomeId, profileScope: state.profileScope, settingsScope: state.settingsScope,
+        selection: resolveVoiceExecutionMachineSelectionFromState(state),
+        inventoryStatus: state.machineListStatusByServerId[appliedHomeId],
+        serverReachability: {
+            networkAllowed: isServerReachabilityNetworkAllowed(),
+            phase: reachability?.phase ?? null, reason: reachability?.reason ?? null,
+            lastErrorMessage: reachability?.lastErrorMessage ?? null,
+        },
+        socketObservations: [...localVoiceSockets].map(socket => ({
+            connected: socket.connected,
+            authMatchesCurrentAccount: speechAccount !== null
+                && typeof socket.auth === 'object' && socket.auth !== null
+                && socket.auth.token === speechAccount.credentials.token,
+            updateListenerCount: socket.listeners('update').length,
+            onAnyListenerCount: socket.listenersAny().length,
+        })),
+        machines: resolveVisibleMachinesForActiveServerFromState(state, { serverId: appliedHomeId }).map(machine => ({
+            id: machine.id, active: machine.active, activeAt: machine.activeAt, revokedAt: machine.revokedAt,
+            availability: machine.availability,
+            requestObservation: readMachineRequestReachabilityObservation(state.profileScope, machine.id),
+        })),
+    };
+}
+
+async function createVoiceConversationSessionFixture(raw: unknown) {
+    const args = SessionSpawnNewInputV2Schema.parse(raw);
+    const { machineId, serverId } = args.executionTarget;
+    if (args.directory.kind !== 'path') throw new Error('Expected Voice conversation path');
+    const directory = args.directory.path;
+    const spawnedAgentId = args.agentTarget.kind === 'builtInAgent' ? args.agentTarget.agentId : 'claude';
     const sessionId = 'voice-home-session';
     const storage = await getStorage();
-    const current: any = storage.getState();
-    if (typeof (storage as any).__setState === 'function') {
+    const current = storage.getState();
         const existing = current.sessions?.[sessionId];
-        (storage as any).__setState({
+        storage.__setState({
             ...current,
             sessions: {
                 ...(current.sessions ?? {}),
                 [sessionId]: existing ?? {
                     id: sessionId,
-                    serverId: typeof args?.serverId === 'string' ? args.serverId : 'server-a',
+                    serverId,
                     active: true,
                     updatedAt: Date.now(),
                     metadata: {
@@ -412,18 +365,17 @@ async function createVoiceConversationSessionFixture(args: any) {
                 },
             },
         });
-    }
-    return {
+    return SessionSpawnNewResultV1Schema.parse({
         type: 'success' as const,
         disposition: 'created' as const,
         sessionId,
         executionTarget: {
-            serverId: typeof args?.serverId === 'string' ? args.serverId : 'server-a',
+            serverId,
             machineId,
         },
         organizationPlacement: { folderId: null, tagIds: [] },
         initialInput: { status: 'notRequested' as const },
-    };
+    });
 }
 
 export async function flushMicrotasks(turns: number = 1) {
@@ -469,6 +421,7 @@ export async function loadLocalVoiceEngineWithCompatState(): Promise<
 
 /** Prime the real graph outside individual assertion budgets. */
 export async function warmLocalVoiceEngineHarnessGraph() {
+    await installLocalVoiceAccountHarness();
     const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
     const restore = await installRealActionExecutorModuleLoader();
     await loadLocalVoiceEngineWithCompatState();
@@ -477,52 +430,143 @@ export async function warmLocalVoiceEngineHarnessGraph() {
 
 export let localVoiceHomeId = '';
 export const localVoicePendingEnqueue = vi.fn<(request: Readonly<{ sessionId: string; body: Record<string, unknown> }>) => Promise<Response>>();
+/** Publish a server message through the actual Socket SDK listeners and HTTP page, never a rendered store row. */
+export async function publishLocalVoiceAssistantMessage(input: Readonly<{ sessionId: string; id: string; text: string }>) {
+    if (!speechAccount) throw new Error('Expected admitted Voice Account transcript transport');
+    const remoteKey = JSON.stringify([speechAccount.credentials.token, input.sessionId]);
+    const messages = localVoiceRemoteMessages.get(remoteKey) ?? [];
+    const seq = (messages.at(-1)?.seq ?? 0) + 1;
+    const createdAt = Date.now();
+    const [projected] = projectClaudeJsonlLineToDirectMessages({
+        fileRelPath: 'session.jsonl', lineStartOffsetBytes: seq,
+        lineValue: { type: 'assistant', uuid: input.id, timestamp: createdAt,
+            message: { role: 'assistant', content: [{ type: 'text', text: input.text }] } },
+    });
+    if (!projected || projected.messageRole !== 'agent') throw new Error('Expected published Claude assistant transcript');
+    const update = UpdateContainerSchema.parse({
+        id: `update-${input.id}`, seq, createdAt,
+        body: { t: 'new-message', sid: input.sessionId, message: {
+            id: input.id, seq, localId: null, messageRole: 'agent', createdAt, updatedAt: createdAt,
+            content: { t: 'plain', v: projected.raw },
+        } },
+    });
+    if (update.body.t !== 'new-message') throw new Error('Expected incoming Voice transcript message');
+    localVoiceRemoteMessages.set(remoteKey, [...messages, update.body.message]);
+    let delivered = false;
+    for (const socket of localVoiceSockets) {
+        const auth = socket.auth;
+        if (!socket.connected || !speechAccount || typeof auth !== 'object' || auth.token !== speechAccount.credentials.token) continue;
+        // Socket.IO delivers incoming events to catch-all listeners before
+        // direct listeners; the real Account dispatcher subscribes via onAny.
+        for (const listener of socket.listenersAny().slice()) {
+            delivered = true;
+            await listener.call(socket, 'update', update);
+        }
+        for (const listener of socket.listeners('update').slice()) {
+            delivered = true;
+            await listener.call(socket, update);
+        }
+    }
+    if (!delivered) throw new Error('Expected connected Voice Account Socket update consumer');
+}
+/** Observe the genuine metadata HTTP reply without exposing request content or replacing its codec. */
+export const localVoiceMetadataHttpObserver = vi.fn<(observation: Readonly<{
+    method: string; path: string; status?: number; error?: unknown;
+}>) => void>();
+export function acknowledgeLocalVoicePendingEnqueue({ body }: Parameters<typeof localVoicePendingEnqueue>[0]) {
+    return Response.json({ requestedAction: body.requestedAction,
+        pending: { localId: body.localId, deliveryStatus: {
+            status: body.deliveryMode === 'external_handoff' ? 'external_handoff' : 'queued',
+        } } });
+}
 
 /** Load real Account/store owners before any native Agent consumes them. */
-export async function installLocalVoiceAccountHarness() {
-    vi.doUnmock('@/sync/sync');
-    vi.doUnmock('@/sync/runtime/getSyncSingleton');
-    vi.doUnmock('@/sync/domains/state/storage');
-    vi.doUnmock('@/sync/domains/server/serverRuntime');
-    vi.resetModules();
+let accountHarness: Promise<Awaited<ReturnType<typeof createLocalVoiceAccountHarness>>> | undefined;
+let activeAccountHomes: Awaited<ReturnType<typeof import('@/dev/testkit/harness/actionHomesHttpHarness')['serveAccountHomes']>> | null = null;
+type LocalVoiceHttpResponder = Parameters<typeof import('@/dev/testkit/harness/actionHomesHttpHarness')['serveAccountHomes']>[0]['route'];
+let localVoiceHttpResponder: LocalVoiceHttpResponder | null = null;
+export function setLocalVoiceHttpResponder(responder: LocalVoiceHttpResponder | null) {
+    localVoiceHttpResponder = responder;
+}
+export function readLocalVoiceHttpRequests(): readonly ServedHomeRequest[] {
+    return activeAccountHomes?.requests ?? [];
+}
+let activeSessionMetadataHttp: ReturnType<typeof createSessionMetadataHttpBoundary> | null = null;
+/** A case replacing persisted HTTP seed data must explicitly retire the boundary's prior record. */
+export function replaceLocalVoiceSessionHttpSeed(sessionId: string) {
+    if (!activeSessionMetadataHttp) throw new Error('Expected active Voice metadata HTTP boundary');
+    activeSessionMetadataHttp.replaceSession(sessionId);
+}
+export async function switchLocalVoiceAccount(accountId: string) {
+    if (!activeAccountHomes || !speechAccount) throw new Error('Expected active Voice Home');
+    await activeAccountHomes.switchAccount('voice', accountId);
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl(speechAccount.home.serverUrl);
+    if (!credentials) throw new Error('Expected switched Voice Account credentials');
+    speechAccount = { ...speechAccount, credentials };
+    await activeAccountHomes.restoreActiveConnection();
+}
+export function installLocalVoiceAccountHarness() {
+    accountHarness ??= createLocalVoiceAccountHarness();
+    return accountHarness;
+}
+async function createLocalVoiceAccountHarness() {
     const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
     await loadSyncSingletonForTests();
-    const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-    localVoiceHomeId = (await upsertAndActivateServer({ serverUrl: 'https://local-voice-actions.example.test' })).id;
-    let connection: Awaited<ReturnType<typeof import('@/dev/testkit/harness/serverAccountConnectionHarness')['restoreServerAccountForTest']>> | null = null;
-    const records = new Map<string, ReturnType<typeof SessionCurrentProjectionRecordV1Schema.parse>>();
-    const wireRecord = (session: ReturnType<typeof createSessionFixture>) => SessionCurrentProjectionRecordV1Schema.parse({
-        id: session.id, seq: session.seq ?? 1, createdAt: session.createdAt ?? 1,
-        updatedAt: session.updatedAt, active: session.active, activeAt: Date.now(), archivedAt: null,
-        encryptionMode: 'plain', metadataLayoutVersion: 0,
-        metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion ?? 1,
-        effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionFixture().access!.capabilities },
-        responsibleAccountId: null, responsibleAccount: null, share: null,
-        agentState: session.agentState ? JSON.stringify(session.agentState) : null,
-        agentStateVersion: session.agentStateVersion ?? 0, pendingCount: 0, pendingVersion: 0, dataEncryptionKey: null,
-    });
+    const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
+    localVoiceHomeId = (await upsertServerProfileOnly({ serverUrl: 'https://local-voice-actions.example.test' })).id;
+    let connection: LocalVoiceAccountTransport | null = null;
+    const { storage } = await import('@/sync/domains/state/storage');
+    let metadataHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
     return {
         async setup() {
             await connection?.dispose();
-            records.clear();
-            localVoiceAccountSettings = normalizeVoiceSettingsLocalDelta(BASE_SETTINGS);
-            const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+            metadataHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+            const authoringMemoryHttp = createAuthoringMemoryHttpBoundary();
+            activeSessionMetadataHttp = metadataHttp;
+            const accountSettings = normalizeVoiceSettingsLocalDelta(BASE_SETTINGS);
+            const { serveAccountHomes } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+            const { profileDefaults } = await import('@/sync/domains/profiles/profile');
             const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
-            connection = await restoreServerAccountForTest({
-                serverUrl: 'https://local-voice-actions.example.test',
-                credentialScope: 'restored-home',
-                request: async (input, init) => {
-                    const path = new URL(String(input)).pathname;
-                    if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+            const homes = await serveAccountHomes({
+                homes: [{ key: 'voice', serverUrl: 'https://local-voice-actions.example.test', accountId: 'account-a',
+                    currentAccount: true, settings: accountSettings }],
+                route: async request => {
+                    if (localVoiceHttpResponder) {
+                        const overridden = await localVoiceHttpResponder(request);
+                        if (overridden !== undefined) return overridden;
+                    }
+                    const { path } = request;
+                    const input = request.url;
+                    const init = { method: request.method, headers: request.headers, signal: request.signal,
+                        ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) };
+                    if (path === '/v1/account/profile') return request.accountId
+                        ? Response.json({ ...profileDefaults, id: request.accountId })
+                        : Response.json({}, { status: 401 });
+                    const authoringMemoryResponse = await authoringMemoryHttp.handle(input, init);
+                    if (authoringMemoryResponse) return authoringMemoryResponse;
+                    if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(ProjectAccountRowListResponseV1Schema.parse({
+                        status: 'listed', rows: [], coverage: 'complete',
+                    }));
                     if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-                    if (path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {}, capabilities: { session: { pendingInput: { protocolVersion: 1 } } } }));
-                    if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: localVoiceAccountSettings }, version: 1 });
+                    if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(FeaturesResponseSchema.parse({
+                        features: { voice: { enabled: true }, execution: { runs: { enabled: true } },
+                            machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } } },
+                        capabilities: { machines: { liveStream: { serverRouted: { caps: MachineLiveStreamRelayCapsV1Schema.parse({}), disabledReason: null } } },
+                            session: { pendingInput: { protocolVersion: 1 } } },
+                    }));
                     if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1,
                         content: { t: 'plain', v: { v: 1, definitions: [] } } });
-                    if (path === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
-                        snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0,
-                            pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
-                    }));
+                    try {
+                        const metadataResponse = metadataHttp.handle(input, init);
+                        if (metadataResponse) {
+                            localVoiceMetadataHttpObserver({ method: request.method, path, status: metadataResponse.status });
+                            return metadataResponse;
+                        }
+                    } catch (error) {
+                        localVoiceMetadataHttpObserver({ method: request.method, path, error });
+                        throw error;
+                    }
                     const storage = await getStorage();
                     const state = storage.getState();
                     const machineAccess = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
@@ -534,30 +578,17 @@ export async function installLocalVoiceAccountHarness() {
                             canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
                         }));
                     }
-                    if (path === '/v1/machines') return Response.json((Object.values(state.machines) as Array<Parameters<typeof createMachineFixture>[0]>).map((value) => {
+                    const machineRows = Object.values(state.machines).map(value => {
                         const machine = createMachineFixture(value);
-                        return { ...machine, metadata: machine.metadata ? encodePlainMachineStoredContent(machine.metadata) : null, daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER };
-                    }));
-                    for (const session of Object.values(state.sessions) as Array<ReturnType<typeof createSessionFixture>>) {
-                        if (!records.has(session.id)) records.set(session.id, wireRecord(session));
-                    }
-                    if (path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v1/sessions') return Response.json({ sessions: [...records.values()], hasNext: false, nextCursor: null });
-                    const detail = /^\/v2\/sessions\/([^/]+)$/.exec(path);
-                    if (detail) {
-                        const current = records.get(decodeURIComponent(detail[1]));
-                        if (!current) return Response.json({}, { status: 404 });
-                        if (init?.method === 'PATCH') {
-                            const patch = SessionMetadataTuplePatchV1Schema.parse(JSON.parse(String(init.body)));
-                            if (patch.mode !== 'owner_migration' && patch.mode !== 'owner') throw new Error('Expected owner metadata mutation');
-                            const target = patch.mode === 'owner_migration' ? patch.target : patch;
-                            const committed = SessionCurrentProjectionRecordV1Schema.parse({ ...current, metadataLayoutVersion: 1,
-                                metadata: target.sharedMetadata.ciphertext, metadataVersion: current.metadataVersion + 1,
-                                ownerMetadata: target.ownerMetadata, agentState: target.agentState.ciphertext,
-                                agentStateVersion: (current.agentStateVersion ?? 0) + 1 });
-                            records.set(current.id, committed);
-                            return Response.json({ success: true, metadataLayoutVersion: 1, sharedMetadata: { version: committed.metadataVersion }, agentState: { version: committed.agentStateVersion } });
-                        }
-                        return Response.json({ session: current });
+                        return { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }), ...machine,
+                            metadata: machine.metadata ? encodePlainMachineStoredContent(machine.metadata) : null,
+                            daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER };
+                    });
+                    if (path === '/v1/machines') return Response.json(machineRows);
+                    const machineDetail = /^\/v1\/machines\/([^/]+)$/.exec(path);
+                    if (machineDetail) {
+                        const machine = machineRows.find(row => row.id === decodeURIComponent(machineDetail[1]));
+                        return machine ? Response.json({ machine }) : Response.json({}, { status: 404 });
                     }
                     const pending = /^\/v2\/sessions\/([^/]+)\/pending$/.exec(path);
                     if (pending && init?.method === 'POST') return localVoicePendingEnqueue({ sessionId: decodeURIComponent(pending[1]), body: JSON.parse(String(init.body)) });
@@ -565,24 +596,40 @@ export async function installLocalVoiceAccountHarness() {
                     // Durable streamed turns settle their claimed input before
                     // reading daemon output; acknowledge that actual HTTP write.
                     if (/^\/v2\/sessions\/[^/]+\/pending\/[^/]+\/delivery\/handled$/.test(path) && init?.method === 'POST') return Response.json({});
-                    if (/^\/v1\/sessions\/[^/]+\/messages$/.test(path)) return Response.json({ messages: [], hasMore: false });
-                    return new Response('{}', { status: 404 });
+                    const messagesPage = /^\/v1\/sessions\/([^/]+)\/messages$/.exec(path);
+                    if (messagesPage) return Response.json(SessionMessagesPageV1Schema.parse({
+                        messages: localVoiceRemoteMessages.get(JSON.stringify([
+                            request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '',
+                            decodeURIComponent(messagesPage[1]),
+                        ])) ?? [], hasMore: false,
+                    }));
+                    return undefined;
                 },
             });
+            const disconnect = await homes.restoreActiveConnection();
+            activeAccountHomes = homes;
+            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+            const credentials = await TokenStorage.getCredentialsForServerUrl(homes.homes.voice!.serverUrl);
+            if (!credentials) throw new Error('Expected served Voice Account credentials');
+            connection = { home: homes.homes.voice!, credentials, dispose: async () => {
+                await disconnect(); await homes.dispose();
+            } };
+            speechAccount = connection;
             localVoiceHomeId = connection.home.id;
             // Login readiness can return before its background bootstrap
             // settles. Join the public refresh owner before a case seeds
             // newer raw fixture settings; otherwise that older read wins.
             const { sync } = await import('@/sync/sync');
             await sync.resumeSync('manual');
-            const storage = await getStorage();
-            const state = storage.getState();
-            storage.__setState({
-                settings: { ...state.settings, ...BASE_SETTINGS },
+            const voiceStorage = await getStorage();
+            const state = voiceStorage.getState();
+            voiceStorage.__setState({
+                settings: { ...state.settings, ...BASE_SETTINGS,
+                    featureToggles: { ...state.settings.featureToggles, voice: true, 'voice.agent': true, 'voice.daemonInference': true, 'execution.runs': true } },
                 machineListByServerId: { [localVoiceHomeId]: Object.values(state.machines) },
             });
         },
-        async dispose() { await connection?.dispose(); connection = null; localVoiceAccountSettings = null; },
+        async dispose() { await connection?.dispose(); connection = null; speechAccount = null; activeAccountHomes = null; activeSessionMetadataHttp = null; },
     };
 }
 
@@ -599,207 +646,26 @@ export async function installLocalVoiceActionHomeForTests() {
     };
 }
 
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        sendMessage,
-        submitMessage,
-        enqueuePendingMessage,
-        blockPendingDelivery,
-        markPendingDeliveryHandled,
-        ensureSessionVisibleForMessageRoute: vi.fn(async () => {}),
-        refreshSessionMessages: vi.fn(async () => {}),
-        refreshSessions: (...args: any[]) => (refreshSessions as any)(...args),
-        applySettings: (...args: any[]) => (applySettings as any)(...args),
-        patchSessionMetadataWithRetry: async (sessionId: string, patch: (metadata: any) => any) => {
-            (patchSessionMetadataWithRetry as any)(sessionId, patch);
-            const { storage } = await import('@/sync/domains/state/storage');
-            const state: any = storage.getState();
-            const session: any = state.sessions?.[sessionId] ?? null;
-            const writesOwnerView = session?.metadataLayoutVersion === 1;
-            const nextMeta = patch(
-                writesOwnerView ? session?.ownerMetadataView ?? {} : session?.metadata ?? {},
-            );
-            if (typeof (storage as any).__setState === 'function') {
-                (storage as any).__setState({
-                    ...state,
-                    sessions: {
-                        ...state.sessions,
-                        [sessionId]: session
-                            ? {
-                                ...session,
-                                ...(writesOwnerView
-                                    ? { ownerMetadataView: nextMeta }
-                                    : { metadata: nextMeta }),
-                            }
-                            : { id: sessionId, metadata: nextMeta },
-                    },
-                });
-            }
-        },
-        onSessionVisible,
-        encryption: {
-            getSessionEncryption: vi.fn(() => ({})),
-        },
-    },
-}));
-
-// The lazy sync accessor is a bundler-only `require`, so it never sees the `@/sync/sync`
-// mock above and would load a second, unaliased copy of the real sync module under Node.
-// Route it to the same mocked surface so both accessors return one object.
-vi.mock('@/sync/runtime/getSyncSingleton', async () => {
-    const { sync } = await import('@/sync/sync');
-    return { getSyncSingleton: () => sync };
-});
-
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
-    sessionExecutionRunStart: (sessionId: string, request: any) => sessionExecutionRunStart(sessionId, request),
-    sessionExecutionRunAction: (sessionId: string, request: any) => sessionExecutionRunAction(sessionId, request),
-    sessionExecutionRunList: (sessionId: string, request: any) => sessionExecutionRunList(sessionId, request),
-    sessionExecutionRunGet: (sessionId: string, request: any) => sessionExecutionRunGet(sessionId, request),
-    sessionExecutionRunSend: (sessionId: string, request: any) => sessionExecutionRunSend(sessionId, request),
-    sessionExecutionRunStop: (sessionId: string, request: any) => sessionExecutionRunStop(sessionId, request),
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
-    sessionRpcWithServerScope: (args: any) => sessionRpcWithServerScope(args),
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage', () => ({
-    sendSessionMessageWithServerScope: (args: any) => sendSessionMessageWithServerScope(args),
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (request: any) => machineRpcWithServerScope(request),
-}));
-
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-    setActiveServerAndSwitch: (params: any) => setActiveServerAndSwitch(params),
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({ serverId: 'server-a' }),
-    subscribeActiveServer: () => () => {},
-}));
-
-vi.mock('@/sync/ops/machines', () => ({
-    completePendingMachineSpawnAttemptCustodyForSession: async () => null,
-}));
-
-vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
-    getMachineContributionRegistryProjectionRevision: (
-        scope: Parameters<GetMachineContributionRegistryProjectionRevisionFn>[0],
-    ) => getMachineContributionRegistryProjectionRevision(scope),
-    machineContributionRegistryProjectionDescribe: (
-        machineId: Parameters<MachineContributionRegistryProjectionDescribeFn>[0],
-        opts?: Parameters<MachineContributionRegistryProjectionDescribeFn>[1],
-    ) => machineContributionRegistryProjectionDescribe(machineId, opts),
-    machinePluginSettingsGet: (...args: Parameters<MachinePluginSettingsGetFn>) =>
-        machinePluginSettingsGet(...args),
-    machinePluginSettingsSet: (...args: Parameters<MachinePluginSettingsSetFn>) =>
-        machinePluginSettingsSet(...args),
-    // This harness does not exercise plugin-secret custody, but the current
-    // Settings runtime imports the three boundary functions at module load.
-    // Keep the untouched external boundary fail-closed.
-    machinePluginSecretStatus: async () => ({ supported: false as const, reason: 'not-supported' as const }),
-    machinePluginSecretSet: async () => ({ supported: false as const, reason: 'not-supported' as const }),
-    machinePluginSecretDelete: async () => ({ supported: false as const, reason: 'not-supported' as const }),
-}));
-
-const authFixture = {
-    isAuthenticated: true,
-    credentials: { token: 'account-token' },
-    credentialAuthorityKind: 'account',
-    login: async () => ({ kind: 'completed' as const }),
-    loginWithCredentials: async () => ({ kind: 'completed' as const }),
-    logout: async () => ({ kind: 'completed' as const }),
-    refreshFromActiveServer,
-} satisfies AuthContextType;
-
-vi.mock('@/sync/domains/features/featureDecisionInputs', () => ({
-    isRuntimeFeatureEnabled: (args: any) => isRuntimeFeatureEnabled(args),
-    resolveRuntimeFeatureDecision: (args: any) => resolveRuntimeFeatureDecision(args),
-}));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     const expoRouterMock = createExpoRouterMock({
+        pathname: () => localVoiceRouteState.pathname,
+        segments: () => localVoiceRouteState.segments,
+        params: () => localVoiceRouteState.params,
         router: { navigate: (...args: any[]) => routerNavigate(...args) },
     });
     return expoRouterMock.module;
 });
 
-vi.mock('@/voice/agent/daemonVoiceAgentClient', () => ({
-    DaemonVoiceAgentClient: class {
-        async start(args: any) {
-            return (daemonVoiceAgentStart as any)(args);
-        }
-        async sendTurn(args: any) {
-            return (daemonVoiceAgentSendTurn as any)(args);
-        }
-        async welcome(args: any) {
-            return (daemonVoiceAgentWelcome as any)(args);
-        }
-        async startTurnStream(args: any) {
-            return (daemonVoiceAgentStartTurnStream as any)(args);
-        }
-        async readTurnStream(args: any) {
-            return (daemonVoiceAgentReadTurnStream as any)(args);
-        }
-        async cancelTurnStream(args: any) {
-            return (daemonVoiceAgentCancelTurnStream as any)(args);
-        }
-        async commit(args: any) {
-            return (daemonVoiceAgentCommit as any)(args);
-        }
-        async stop(args: any) {
-            return (daemonVoiceAgentStop as any)(args);
-        }
-    },
-}));
 
-vi.mock('@/utils/platform/microphonePermissions', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/utils/platform/microphonePermissions')>(),
-    requestMicrophonePermission: vi.fn(async () => ({ granted: true, canAskAgain: true })),
-    showMicrophonePermissionDeniedAlert: vi.fn(),
-}));
-
-vi.mock('@/voice/modelPacks/installer.native', () => ({
-    ensureModelPackInstalled: (params: any, overrides?: any) => (ensureModelPackInstalled as any)(params, overrides),
-}));
-
-vi.mock('@/voice/modelPacks/manifests', () => ({
-    resolveModelPackManifestUrl: (params: any) => (resolveModelPackManifestUrl as any)(params),
-}));
-
-// The production binary speech tunnel is a network boundary. Local-engine unit
-// suites exercise the deterministic JSON-RPC compatibility path beneath it.
-vi.mock('@/voice/runtime/daemonInference/DaemonSpeechStreamProductionTunnelTransport', () => ({
-    createProductionDaemonSpeechStreamingSttTransport: vi.fn(async () => null),
-}));
-
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock(
-        {
-                    View: 'View',
-                    Text: 'Text',
-                    Dimensions: {
-                        get: () => ({ width: 800, height: 600, scale: 2, fontScale: 1 }),
-                    },
-                    Platform: {
-                        get OS() {
-                                    return platformOsState.value;
-                                },
-                        select: (spec: any) => (spec && (spec.ios ?? spec.default)) ?? undefined,
-                    },
-                }
-    );
-});
 
 vi.mock('expo-audio', () => ({
     RecordingPresets: { HIGH_QUALITY: { extension: '.m4a' } },
     AudioModule: {
         setAudioModeAsync: vi.fn(async () => {}),
+        requestRecordingPermissionsAsync: () => nativeMicRequestPermissionsAsync(),
+        getRecordingPermissionsAsync: () => nativeMicRequestPermissionsAsync(),
         AudioRecorder: class {
             get uri(): string | null {
                 return recorderUri;
@@ -833,245 +699,102 @@ vi.mock('expo-audio', () => ({
     },
 }));
 
-vi.mock('expo-file-system', () => ({
-    Paths: { cache: 'file:///tmp/' },
-    File: class {
-        uri: string;
-        size = 3;
-        constructor(...uris: any[]) {
-            const [base, name] = uris;
-            this.uri = `${String(base)}${String(name ?? '')}`;
-        }
-        open() {
-            let offset = 0;
-            return {
-                size: this.size,
-                get offset() { return offset; },
-                set offset(next: number) { offset = next; },
-                readBytes: (length: number) => new Uint8Array([1, 2, 3]).slice(offset, offset + length),
-                close: () => {},
-            };
-        }
-        write(_content: any) { }
-        delete = fileDelete;
-    },
-    deleteAsync: () => {
-        throw new Error('deprecated_deleteAsync_called');
-    },
-}));
-
-vi.mock(
-    '@happier-dev/audio-stream-native',
-    () => {
-        const listeners = new Map<string, Set<(event: any) => void>>();
-        (globalThis as any)[AUDIO_STREAM_STATE_KEY] = { listeners };
-
-        const addListener = (eventName: string, cb: (event: any) => void) => {
-            const set = listeners.get(eventName) ?? new Set();
-            set.add(cb);
-            listeners.set(eventName, set);
-            return { remove: () => set.delete(cb) };
-        };
-
-        return {
-            createVoiceFileRecording: () => ({
-                start: async () => {
-                    if (nextRecorderPrepareError) {
-                        const error = nextRecorderPrepareError;
-                        nextRecorderPrepareError = null;
-                        throw error;
-                    }
-                },
-                setMuted: async () => {},
-                stop: async () => recorderUri,
-            }),
-            getSharedVoicePcmCapture: () => ({
-                acquire: async (request: any) => {
-                    const subscription = addListener('audioFrame', (event: any) => {
-                        if (request.shouldDeliver?.() === false) return;
-                        void Promise.resolve(request.onFrame(event)).catch((error) => request.onError?.(error));
-                    });
-                    await (audioStreamStart as any)({
-                        sampleRate: request.format.sampleRate,
-                        channels: request.format.channels,
-                        frameMs: request.format.frameMs,
-                    });
-                    let released = false;
-                    const releaseCapture = async () => {
-                        if (released) return;
-                        released = true;
-                        subscription.remove();
-                        await (audioStreamStop as any)();
-                    };
-                    return {
-                        id: `test-pcm-capture:${String(request.ownerId)}`,
-                        release: releaseCapture,
-                        finish: releaseCapture,
-                        waitForDrain: async () => {},
-                    };
-                },
-            }),
-            getSharedVoiceAudioSessionCoordinator: () => ({
-                acquire: async () => ({
-                    id: 'test-audio-session-lease',
-                    capabilities: { aecAvailable: false, aecActive: false, route: 'test' },
-                    release: () => audioSessionRelease(),
-                }),
-                subscribe: () => ({ remove: () => {} }),
-                getSnapshot: () => ({ generation: 0, leaseCount: 0, configuration: null, capabilities: null }),
-                dispose: async () => {},
-            }),
-        };
-    },
-);
-
-vi.mock('@happier-dev/sherpa-native', () => ({
-    getOptionalHappierSherpaNativeModule: () => sherpaNativeModuleAvailable
-        ? {
-            createStreamingRecognizer: (...args: any[]) => (sherpaStreamingCreate as any)(...args),
-            pushAudioFrame: (...args: any[]) => (sherpaStreamingPushFrame as any)(...args),
-            finishStreaming: (...args: any[]) => (sherpaStreamingFinish as any)(...args),
-            cancel: (...args: any[]) => (sherpaStreamingCancel as any)(...args),
-        }
-        : null,
-}));
-
-vi.mock('@/sync/domains/state/storage', () => {
-    const subscribers = new Set<() => void>();
-    const state: any = {
-        settings: {
-            ...BASE_SETTINGS,
-        },
-        sessions: {},
-        sessionMessages: {},
-    };
-
-    const liveStorage = createLiveStorageStoreMock(() => state);
-    const readLiveStorageState = liveStorage.getState;
-    const storage = Object.assign(liveStorage, {
-        // Canonical testkits write through setState. Keep it on the same live
-        // fixture carrier as the compatibility writers used by these suites.
-        setState: (patch: Parameters<typeof liveStorage.setState>[0]) => {
-            Object.assign(state, typeof patch === 'function' ? patch(readLiveStorageState()) : patch);
-            subscribers.forEach((fn) => fn());
-        },
-        getState: () => readLiveStorageState(),
-        subscribe: (fn: () => void) => {
-            subscribers.add(fn);
-            return () => subscribers.delete(fn);
-        },
-        __setState: (patch: any) => {
-            const normalizedPatch = { ...patch };
-            if (patch?.sessions && typeof patch.sessions === 'object') {
-                const normalizedSessions: Record<string, any> = {};
-                for (const [id, session] of Object.entries(patch.sessions)) {
-                    if (!session || typeof session !== 'object') {
-                        normalizedSessions[id] = session;
-                        continue;
-                    }
-                    const metadata = (session as any).metadata && typeof (session as any).metadata === 'object'
-                        ? (session as any).metadata
-                        : {};
-                    const ownerMetadataView =
-                        (session as any).ownerMetadataView && typeof (session as any).ownerMetadataView === 'object'
-                            ? (session as any).ownerMetadataView
-                            : {};
-                    const executionMetadata = {
-                        host: 'test',
-                        machineId: 'machine-1',
-                        path: `/Users/test/.happier/worktree/${String(id)}`,
-                        agentRuntimeCapabilitiesV1: {
-                            localControl: { supported: true },
-                        },
-                        ...((session as any).metadataLayoutVersion === 1 ? ownerMetadataView : metadata),
-                    };
-                    normalizedSessions[id] = {
-                        ...session,
-                        // Voice runtime paths often need these for session-root target resolution.
-                        ...((session as any).metadataLayoutVersion === 1
-                            ? { metadata, ownerMetadataView: executionMetadata }
-                            : { metadata: executionMetadata }),
-                    };
-                }
-                normalizedPatch.sessions = normalizedSessions;
-            }
-            Object.assign(state, normalizedPatch);
-        },
-        __notify: () => subscribers.forEach((fn) => fn()),
-    });
-
-    return createStorageModuleStub({
-        storage,
-        useSetting: createStableStorageReader((key: string) => state.settings?.[key] ?? null),
-        useProfile: createStableStorageReader(() => state.profile ?? null),
-        useActiveServerAccountScope: createStableStorageReader(() => state.profileScope ?? null),
-    });
-});
-
 export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
     resetModulesBetweenTests?: boolean;
 }>) {
     const originalFetch = globalThis.fetch;
-    const originalConsoleError = console.error;
     const originalCreateObjectURL = (globalThis as any)?.URL?.createObjectURL;
     const originalRevokeObjectURL = (globalThis as any)?.URL?.revokeObjectURL;
     const originalAudioCtor = (globalThis as any)?.Audio;
-    let authBridge: typeof import('@/auth/context/currentAuth');
-    let previousAuth: AuthContextType | null;
+    const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    const originalNavigator = globalThis.navigator;
+    const originalMediaDevicesDescriptor = originalNavigator
+        ? Object.getOwnPropertyDescriptor(originalNavigator, 'mediaDevices') : undefined;
 
     beforeEach(async () => {
-        if (options?.resetModulesBetweenTests === true) {
-            vi.resetModules();
-        }
-        // Load after reset so the fixture and consumer use the same real bridge.
-        authBridge = await import('@/auth/context/currentAuth');
-        previousAuth = authBridge.getCurrentAuth();
-        authBridge.setCurrentAuth(authFixture);
+        localVoiceHttpResponder = null;
+        localVoiceRemoteMessages.clear();
+        localVoiceMetadataHttpObserver.mockReset();
+        localVoiceRouteState.pathname = '/';
+        localVoiceRouteState.segments = [];
+        localVoiceRouteState.params = {};
         vi.doUnmock('@/voice/runtime/input/LocalVoiceCaptureOwner');
         vi.doUnmock('@/voice/input/DeviceSttController');
         vi.doUnmock('@/voice/input/SherpaStreamingSttController');
         vi.doUnmock('@/voice/runtime/mic/NativeMicSession');
-        console.error = (() => {}) as any;
-        sendMessage.mockReset();
-        submitMessage.mockReset();
-        submitMessage.mockResolvedValue(undefined);
-        enqueuePendingMessage.mockClear();
-        blockPendingDelivery.mockReset();
-        blockPendingDelivery.mockResolvedValue(undefined);
-        markPendingDeliveryHandled.mockReset();
-        markPendingDeliveryHandled.mockResolvedValue(undefined);
-        daemonVoiceAgentStart.mockReset();
-        daemonVoiceAgentSendTurn.mockReset();
-        daemonVoiceAgentStartTurnStream.mockReset();
-        daemonVoiceAgentReadTurnStream.mockReset();
-        daemonVoiceAgentCancelTurnStream.mockReset();
-        daemonVoiceAgentCommit.mockReset();
-        daemonVoiceAgentStop.mockReset();
-        sessionExecutionRunList.mockReset();
-        sessionExecutionRunList.mockResolvedValue({ runs: [] });
-        sessionExecutionRunGet.mockReset();
-        sessionExecutionRunGet.mockResolvedValue({ error: 'not-found' });
-        sendSessionMessageWithServerScope.mockReset();
         localVoicePendingEnqueue.mockReset();
-        localVoicePendingEnqueue.mockImplementation(async ({ body }) => Response.json({
-            requestedAction: body.requestedAction,
-            pending: { localId: body.localId, deliveryStatus: {
-                status: body.deliveryMode === 'external_handoff' ? 'external_handoff' : 'queued',
-            } },
-        }));
+        localVoicePendingEnqueue.mockImplementation(async request => acknowledgeLocalVoicePendingEnqueue(request));
         sessionRpcWithServerScope.mockReset();
+        localVoiceAgentRpc = await createRetainedVoiceAgentRpcBoundary({ handleOtherRpc: async (method, raw) => {
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START || method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2) {
+                (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2
+                    ? ExecutionRunTurnStreamStartV2RequestSchema : ExecutionRunTurnStreamStartRequestSchema).parse(raw);
+                return ExecutionRunTurnStreamStartResponseSchema.parse({ streamId: 'stream-1' });
+            }
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
+                ExecutionRunTurnStreamReadRequestSchema.parse(raw);
+                return ExecutionRunTurnStreamReadResponseSchema.parse({
+                streamId: 'stream-1', events: [{ t: 'delta', textDelta: 'Daemon ' }, { t: 'done', assistantText: 'Daemon reply' }], nextCursor: 2, done: true,
+                });
+            }
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) {
+                ExecutionRunTurnStreamCancelRequestSchema.parse(raw);
+                return ExecutionRunTurnStreamCancelResponseSchema.parse({ ok: true });
+            }
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_USER_TRANSCRIPT_COMMIT_V1) {
+                ExecutionRunUserTranscriptCommitRequestSchema.parse(raw);
+                return ExecutionRunUserTranscriptCommitResponseSchema.parse({ ok: true });
+            }
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ACTION) {
+                const input = ExecutionRunActionRequestSchema.parse(raw);
+                return ExecutionRunActionResponseSchema.parse({ ok: true, result: input.actionId === 'voice_agent.welcome'
+                    ? { assistantText: 'Welcome!' } : { commitText: 'Daemon commit' } });
+            }
+            throw new Error(`Unexpected Voice Session RPC: ${method}`);
+        } });
+        sessionRpcWithServerScope.mockImplementation(request => localVoiceAgentRpc.dispatch(request.method, request.payload));
         machineRpcWithServerScope.mockReset();
-        platformOsState.value = 'ios';
+        localVoiceSpeechOutputBoundary.platform.value = 'ios';
         createdAudioPlayers.length = 0;
         nextRecorderPrepareError = null;
         recorderUri = 'file:///tmp/rec.m4a';
         fileDelete.mockReset();
-        expoSpeechSpeak.mockReset();
-        expoSpeechStop.mockReset();
+        fileDelete.mockImplementation(() => {});
+        const speechBoundary = localVoiceSpeechOutputBoundary.reset();
+        localVoiceSpeechOutputBoundary.setRecorderUri(recorderUri);
+        localVoiceModelPackFilesystem = speechBoundary.filesystem;
+        // Observe the canonical external filesystem class rather than install
+        // a second Expo module factory whose import order can hide deletions.
+        const filePrototype = localVoiceModelPackFilesystem.fs.File.prototype as {
+            uri: string; delete(): void;
+        };
+        const deleteFile = filePrototype.delete;
+        vi.spyOn(filePrototype, 'delete').mockImplementation(function () {
+            if (this.uri !== recorderUri && this.uri !== 'file:///tmp/rec.m4a') return deleteFile.call(this);
+            fileDelete();
+            return deleteFile.call(this);
+        });
+        nativeCapture = speechBoundary.audioSession;
+        const packManifest = parseModelPackManifest({
+            packId: LOCAL_VOICE_STT_PACK_ID, kind: 'stt_sherpa', model: 'zipformer', version: '1.0.0',
+            files: [{ path: 'tokens.txt', url: 'https://models.example.test/tokens.txt', sha256: 'a'.repeat(64), sizeBytes: 1 }],
+        });
+        localVoiceModelPackFilesystem.files.set(`${localVoiceModelPackFilesystem.root}/${LOCAL_VOICE_STT_PACK_ID}/pack.json`,
+            new TextEncoder().encode(JSON.stringify(packManifest)));
+        localVoiceModelPackFilesystem.files.set('file:///tmp/rec.m4a', new Uint8Array([1, 2, 3]));
         speechRecStart.mockReset();
         speechRecStop.mockReset();
         speechRecAbort.mockReset();
         speechRecRequestPermissionsAsync.mockReset();
+        nativeMicRequestPermissionsAsync.mockReset();
+        nativeMicRequestPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true });
+        webMicGetUserMedia.mockReset();
+        webMicGetUserMedia.mockResolvedValue({ getTracks: () => [] });
+        // Browser media acquisition is an OS/SDK boundary; the permission owner stays real.
+        if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
+        Object.defineProperty(globalThis.navigator, 'mediaDevices', {
+            configurable: true, value: { getUserMedia: webMicGetUserMedia },
+        });
         audioStreamStart.mockReset();
         audioStreamStop.mockReset();
         audioSessionRelease.mockReset();
@@ -1079,30 +802,23 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
         sherpaStreamingPushFrame.mockReset();
         sherpaStreamingFinish.mockReset();
         sherpaStreamingCancel.mockReset();
-        ensureModelPackInstalled.mockReset();
-        resolveModelPackManifestUrl.mockReset();
         audioStreamStart.mockResolvedValue({ streamId: 'audio-stream-1' });
         audioStreamStop.mockResolvedValue(undefined);
         audioSessionRelease.mockResolvedValue(undefined);
+        nativeCapture.nativeModule.start.mockImplementation(async params => {
+            const started = await audioStreamStart(params);
+            // Retain the canonical OS start callback's capability event. The
+            // real coordinator admits AEC only after this native confirmation.
+            await nativeAudioStreamStart?.(params);
+            return started;
+        });
+        nativeCapture.nativeModule.stop.mockImplementation(() => audioStreamStop());
+        nativeCapture.nativeModule.restoreAudioSession.mockImplementation(() => audioSessionRelease());
         sherpaStreamingPushFrame.mockResolvedValue({ text: '', isEndpoint: false });
         sherpaStreamingFinish.mockResolvedValue({ status: 'finalized', text: '' });
         sherpaStreamingCreate.mockResolvedValue(undefined);
         sherpaStreamingCancel.mockResolvedValue(undefined);
-        ensureModelPackInstalled.mockResolvedValue({
-            packDirUri: 'file:///docs/happier/voice/modelPacks/dummy-pack',
-            manifest: {
-                packId: 'dummy-pack',
-                kind: 'stt_sherpa',
-                model: 'zipformer',
-                version: '1.0.0',
-                files: [{ path: 'tokens.txt', url: 'https://example.com/tokens.txt', sha256: 'a'.repeat(64), sizeBytes: 1 }],
-            },
-        });
-        resolveModelPackManifestUrl.mockReturnValue('https://example.com/manifest.json');
-        isRuntimeFeatureEnabled.mockReset();
-        isRuntimeFeatureEnabled.mockResolvedValue(true);
         speechRecRecognitionAvailable = true;
-        sherpaNativeModuleAvailable = true;
         setExpoSpeechStubState({
             speakImpl: (...args: any[]) => (expoSpeechSpeak as any)(...args),
             stopImpl: (...args: any[]) => (expoSpeechStop as any)(...args),
@@ -1115,54 +831,61 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
             abortImpl: (...args: any[]) => (speechRecAbort as any)(...args),
             requestPermissionsImpl: (...args: any[]) => (speechRecRequestPermissionsAsync as any)(...args),
         });
-        globalThis.fetch = vi.fn() as any;
+        localVoiceSpeechTranscription.mockReset();
+        localVoiceSpeechTranscription.mockResolvedValue('');
+        localVoiceUploadedAudio = new Uint8Array();
+        let uploadRecipient: ReturnType<typeof createTransferRecipientKeyPair> | undefined;
+        let uploadedSize = 0;
         machineRpcWithServerScope.mockImplementation(async (request: any) => {
             switch (request?.method) {
                 case RPC_METHODS.SESSION_SPAWN_NEW:
-                    return await createVoiceConversationSessionFixture({
-                        ...request?.payload,
-                        serverId: request?.serverId,
-                        machineId: request?.machineId,
-                    });
+                    return await createVoiceConversationSessionFixture(request.payload);
                 case RPC_METHODS.SPAWN_HAPPY_SESSION:
                 case RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE:
                     return { type: 'success', sessionId: request.payload.sessionId };
                 case RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE_UPLOAD_INIT: {
-                    const recipient = createTransferRecipientKeyPair();
-                    return {
+                    const input = DaemonVoiceSpeechTranscribeUploadInitRequestSchema.parse(request.payload);
+                    uploadedSize = input.sizeBytes;
+                    uploadRecipient = createTransferRecipientKeyPair();
+                    localVoiceUploadedAudio = new Uint8Array();
+                    return DaemonVoiceSpeechTranscribeUploadInitResponseSchema.parse({
                         success: true,
                         uploadId: 'local-engine-test-upload',
                         chunkSizeBytes: 64 * 1024,
-                        recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
-                    };
+                        recipientPublicKeyBase64: uploadRecipient.recipientPublicKeyBase64,
+                    });
                 }
-                case RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE_UPLOAD_CHUNK:
-                    return { success: true };
-                case RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE_UPLOAD_FINALIZE:
-                    return {
+                case RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE_UPLOAD_CHUNK: {
+                    const input = DaemonVoiceSpeechTranscribeUploadChunkRequestSchema.parse(request.payload);
+                    if (!uploadRecipient) throw new Error('Expected initialized upload');
+                    const bytes = await decryptEncryptedTransferChunkEnvelope({ transferId: input.uploadId,
+                        sequence: input.index, payloadBase64: input.payloadBase64,
+                        encryptedDataKeyEnvelopeBase64: input.encryptedDataKeyEnvelopeBase64,
+                        recipientSecretKeySeed: uploadRecipient.recipientSecretKeySeed });
+                    localVoiceUploadedAudio = new Uint8Array([...localVoiceUploadedAudio, ...bytes]);
+                    return DaemonVoiceSpeechTranscribeUploadChunkResponseSchema.parse({ success: true });
+                }
+                case RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE_UPLOAD_FINALIZE: {
+                    DaemonVoiceSpeechTranscribeUploadFinalizeRequestSchema.parse(request.payload);
+                    if (localVoiceUploadedAudio.byteLength !== uploadedSize) throw new Error('Recorded upload byte count mismatch');
+                    return DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema.parse({
                         success: true,
                         uploadId: 'local-engine-test-upload',
-                        sizeBytes: 3,
-                        sha256: 'a'.repeat(64),
-                    };
-                case RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE: {
-                    // These legacy engine-behavior suites use fetch queues only as
-                    // deterministic third-party response fixtures. Production UI
-                    // still crosses the machine-scoped daemon RPC boundary above.
-                    const response = await (globalThis.fetch as any)('http://localhost:8000/v1/audio/transcriptions', {
-                        method: 'POST',
-                        body: request?.payload ?? null,
-                        signal: request?.signal,
+                        sizeBytes: localVoiceUploadedAudio.byteLength,
+                        sha256: createHash('sha256').update(localVoiceUploadedAudio).digest('hex'),
                     });
-                    const body = await response.json();
-                    return {
-                        ok: true,
-                        requestId: String(request?.payload?.requestId ?? ''),
-                        text: String(body?.text ?? ''),
-                    };
+                }
+                case RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE_UPLOAD_ABORT:
+                    DaemonVoiceSpeechTranscribeUploadAbortRequestSchema.parse(request.payload);
+                    return DaemonVoiceSpeechTranscribeUploadAbortResponseSchema.parse({ success: true });
+                case RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE: {
+                    const input = DaemonVoiceSpeechTranscribeRequestSchema.parse(request.payload);
+                    return DaemonVoiceSpeechTranscribeResponseSchema.parse({
+                        ok: true, requestId: input.requestId, text: await localVoiceSpeechTranscription(input),
+                    });
                 }
                 default:
-                    throw new Error(`unexpected local voice engine machine RPC: ${String(request?.method)}`);
+                    return localVoiceSpeechOutputBoundary.machineRpc(request);
             }
         });
         // Node's URL implementation does not always provide these (browser-only) APIs.
@@ -1197,57 +920,36 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
                 }
             }
         };
-        daemonVoiceAgentSendTurn.mockResolvedValue({ assistantText: 'Daemon reply' });
-        daemonVoiceAgentStartTurnStream.mockResolvedValue({ streamId: 'stream-1' });
-        daemonVoiceAgentReadTurnStream.mockResolvedValue({
-            streamId: 'stream-1',
-            events: [
-                { t: 'delta', textDelta: 'Daemon ' },
-                { t: 'done', assistantText: 'Daemon reply' },
-            ],
-            nextCursor: 2,
-            done: true,
-        });
-        daemonVoiceAgentCancelTurnStream.mockResolvedValue({ ok: true });
-        daemonVoiceAgentCommit.mockResolvedValue({ commitText: 'Daemon commit' });
-        daemonVoiceAgentStop.mockResolvedValue({ ok: true });
-        sessionExecutionRunStop.mockReset();
-        sessionExecutionRunStop.mockResolvedValue({ ok: true });
-        machineContributionRegistryProjectionDescribe.mockReset();
-        machineContributionRegistryProjectionDescribe.mockResolvedValue({ supported: false, reason: 'not-supported' });
-        getMachineContributionRegistryProjectionRevision.mockReset();
-        getMachineContributionRegistryProjectionRevision.mockReturnValue(0);
-        machinePluginSettingsGet.mockReset();
-        machinePluginSettingsGet.mockResolvedValue({ supported: false, reason: 'not-supported' });
-        machinePluginSettingsSet.mockReset();
-        machinePluginSettingsSet.mockResolvedValue({ supported: false, reason: 'not-supported' });
+        await (await installLocalVoiceAccountHarness()).setup();
         const storage = await getStorage();
-        const machine = {
+        const machine = createMachineFixture({
             id: 'machine-1',
             active: true,
             createdAt: Date.now(),
             activeAt: Date.now(),
             metadata: {
+                ...createMachineFixture().metadata,
                 host: 'test',
                 happyHomeDir: '/Users/test/.happier',
             },
-        };
+        });
         storage.__setState({
-            settings: { ...BASE_SETTINGS },
-            sessions: {},
+            settings: { ...storage.getState().settings, ...BASE_SETTINGS },
+            sessions: { s1: createSessionFixture({ id: 's1', serverId: localVoiceHomeId, active: true, activeAt: Date.now(),
+                pendingVersion: 0, pendingCount: 0,
+                metadata: { flavor: 'claude', host: 'test', machineId: 'machine-1', path: '/project' } }) },
             sessionMessages: {},
             machines: {
                 'machine-1': machine,
             },
             machineListByServerId: {
-                'server-a': [machine],
+                [localVoiceHomeId]: [machine],
             },
         });
 
     });
 
     afterEach(async () => {
-        authBridge.setCurrentAuth(previousAuth);
         const [engine, { voiceConversationRuntimeMachine }, { voiceSessionBindingStore },
             { resetVoiceSessionRuntimeStateForTests }, { registerVoiceAdapters }, { useVoiceTargetStore },
             { __resetVoiceTurnInterruptions }] = await Promise.all([
@@ -1260,6 +962,7 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
             import('@/voice/transcript/voiceTurnInterruption'),
         ]);
         await engine.stopLocalVoiceSession();
+        localVoiceSpeechOutputBoundary.disposeNativeSdkBridge();
         await resetVoiceSessionRuntimeStateForTests();
         voiceConversationRuntimeMachine.reset();
         for (const binding of voiceSessionBindingStore.getState().list()) {
@@ -1274,7 +977,13 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
         useVoiceTargetStore.getState().setLastFocusedSessionAddress(null);
         __resetVoiceTurnInterruptions();
         globalThis.fetch = originalFetch;
-        console.error = originalConsoleError;
+        if (originalNavigator) {
+            if (originalMediaDevicesDescriptor) Object.defineProperty(originalNavigator, 'mediaDevices', originalMediaDevicesDescriptor);
+            else Reflect.deleteProperty(originalNavigator, 'mediaDevices');
+        }
+        if (originalNavigatorDescriptor) Object.defineProperty(globalThis, 'navigator', originalNavigatorDescriptor);
+        else Reflect.deleteProperty(globalThis, 'navigator');
+        await (await installLocalVoiceAccountHarness()).dispose();
         const urlAny = (globalThis as any).URL as any;
         if (typeof originalCreateObjectURL === 'function') {
             urlAny.createObjectURL = originalCreateObjectURL;
@@ -1293,5 +1002,11 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
         } else {
             Reflect.deleteProperty(audioAny, 'Audio');
         }
+    });
+    afterAll(async () => {
+        // The real SDK registry owns one coordinator per JavaScript runtime.
+        // Individual cases end sessions and release leases; only suite teardown disposes it.
+        await localVoiceSpeechOutputBoundary.disposeAudioSession();
+        localVoiceSpeechOutputBoundary.disposeNativeSdkBridge();
     });
 }

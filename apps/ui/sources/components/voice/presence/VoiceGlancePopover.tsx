@@ -12,6 +12,14 @@ import { VoiceGlance } from './VoiceGlance';
 
 /** The lab popover's width; it narrows to the window on a phone. */
 const VOICE_GLANCE_POPOVER_WIDTH = 340;
+/** The gutter kept clear of the window's edges; the popover's box carries it, so its cap includes both sides. */
+const GLANCE_EDGE = 12;
+/**
+ * Mute and End close the glance's body, so a real request card (about 430 tall with its diff) must
+ * not push them under the popover's default 400 cap. Same cap as the app's large popover; longer
+ * content scrolls inside it.
+ */
+const VOICE_GLANCE_POPOVER_MAX_HEIGHT = 560;
 
 const SURFACE_PROPS = Object.freeze({ variant: 'sidebar' as const });
 
@@ -65,9 +73,10 @@ export function VoiceGlanceOverlay(props: VoiceGlanceOverlayProps & Readonly<{ m
             boundaryRef={null}
             placement={props.placement}
             gap={8}
-            edgePadding={{ horizontal: 12, vertical: 12 }}
+            edgePadding={{ horizontal: GLANCE_EDGE, vertical: GLANCE_EDGE }}
             portal={{ web: { target: 'body' }, native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
-            maxWidthCap={VOICE_GLANCE_POPOVER_WIDTH}
+            maxWidthCap={VOICE_GLANCE_POPOVER_WIDTH + 2 * GLANCE_EDGE}
+            maxHeightCap={VOICE_GLANCE_POPOVER_MAX_HEIGHT}
             backdrop={false}
             onRequestClose={props.onRequestClose}
         >

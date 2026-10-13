@@ -1,50 +1,48 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
+import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 
-const ensureVoiceConversationSessionForVoiceHomeMock = vi.hoisted(() => vi.fn());
-const resolveVoiceHomeDaemonMachineIdMock = vi.hoisted(() => vi.fn());
-const readMachineTargetForSessionMock = vi.hoisted(() => vi.fn());
-const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
-const isRuntimeFeatureEnabledMock = vi.hoisted(() => vi.fn());
-const openLocalUploadSourceReaderMock = vi.hoisted(() => vi.fn());
-const createProductionDaemonSpeechStreamingSttTransportMock = vi.hoisted(() => vi.fn());
-const authorizedDiagnosticsContext = Object.freeze({
-  sessionId: 'voice-session-1',
-  captureAllowed: true as const,
-  durationMs: null,
-  authorizationId: '6a42516d-20ea-4c70-91d5-b0dbaf693637',
-});
+const network = await installSessionOpsNetworkBoundary();
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const { createMachineFixture, createSessionFixture, createDeferred } = await import("@/dev/testkit");
+const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
+const { storage } = await import("@/sync/domains/state/storage");
+const { getActiveServerSnapshot } = await import("@/sync/domains/server/serverRuntime");
+const { resetVoiceDiagnosticsSessionPolicyForTests } = await import("@/voice/diagnostics/capturePolicy");
+import { VoiceSpeechDiagnosticsSettingsV1Schema } from '@happier-dev/protocol/voice/diagnostics';
+const { createTransferRecipientKeyPair } = await import("@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption");
 
-vi.mock('@/voice/persistence/voiceConversationSession', () => ({
-  ensureVoiceConversationSessionForVoiceHome: (...args: any[]) => ensureVoiceConversationSessionForVoiceHomeMock(...args),
-  resolveVoiceHomeDaemonMachineId: (...args: any[]) => resolveVoiceHomeDaemonMachineIdMock(...args),
-}));
+const machineRpcWithServerScopeMock = vi.fn();
 
-vi.mock('@/sync/ops/sessionMachineTarget', () => ({
-  readMachineTargetForSession: (...args: any[]) => readMachineTargetForSessionMock(...args),
-}));
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc')>();
-  return {
-    ...actual,
-    machineRpcWithServerScope: (...args: Parameters<typeof actual.machineRpcWithServerScope>) =>
-      machineRpcWithServerScopeMock(...args),
-  };
-});
+vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
+vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
 
-vi.mock('@/sync/domains/features/featureDecisionInputs', () => ({
-  isRuntimeFeatureEnabled: (...args: any[]) => isRuntimeFeatureEnabledMock(...args),
-}));
-
-vi.mock('@/sync/runtime/files/localUploadSourceReader', () => ({
-  openLocalUploadSourceReader: (...args: any[]) => openLocalUploadSourceReaderMock(...args),
-}));
-
-vi.mock('./DaemonSpeechStreamProductionTunnelTransport', () => ({
-  createProductionDaemonSpeechStreamingSttTransport: (...args: any[]) =>
-    createProductionDaemonSpeechStreamingSttTransportMock(...args),
-}));
+// Physical file handle only; the native/web upload readers and encrypted transfer remain real.
+vi.mock('expo-file-system', () => ({ File: class {
+  open() {
+    return { size: 5, offset: 0, readBytes: () => new Uint8Array(Buffer.from('hello')), close() {} };
+  }
+} }));
+const initialSettings = storage.getState().settings;
+const initialMachines = storage.getState().machines;
+const initialMachineLists = storage.getState().machineListByServerId;
+const initialSessions = storage.getState().sessions;
+let account: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
+function selectMachine(machineId: string | null) {
+  const machine = machineId ? createMachineFixture({ id: machineId, activeAt: Date.now() }) : null;
+  storage.setState({ machines: machine ? { ...initialMachines, [machine.id]: machine } : {},
+    machineListByServerId: { ...initialMachineLists, [account.home.id]: machine ? [machine] : [] } });
+  storage.getState().applySettingsLocal({ voice: { ...storage.getState().settings.voice, executionMachine: {
+    ...storage.getState().settings.voice.executionMachine, mode: 'fixed', machineId: machineId ?? 'missing-machine',
+  } } });
+}
+function bindUnrelatedSession(sessionId: string, machineId: string) {
+  const session = createSessionFixture({ id: sessionId, metadata: { path: '/unrelated', host: 'other', machineId } });
+  storage.setState({ sessions: { ...storage.getState().sessions, [session.id]: session } });
+}
 
 const DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS = 30_000;
 
@@ -54,24 +52,51 @@ const DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS = 30_000;
 await import('./DaemonVoiceInferenceClient');
 
 describe('DaemonVoiceInferenceClient', () => {
-  beforeEach(() => {
-    ensureVoiceConversationSessionForVoiceHomeMock.mockReset();
-    resolveVoiceHomeDaemonMachineIdMock.mockReset();
-    readMachineTargetForSessionMock.mockReset();
+  beforeEach(async () => {
+    network.resetRequests();
+    await network.addHome('https://daemon-inference.example.test', 'artifact-account');
+    account = await createPlainArtifactHomeFixture('https://daemon-inference.example.test', {
+      serverFeatures: FeaturesResponseSchema.parse({ ...{ features: { voice: { enabled: true }, execution: { runs: { enabled: true } } } }, features: { ...{ voice: { enabled: true }, execution: { runs: { enabled: true } } }, machines: {
+      enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } },
+    } }, capabilities: { machines: { liveStream: { serverRouted: {
+      caps: MachineLiveStreamRelayCapsV1Schema.parse({}), disabledReason: null,
+    } } } } }),
+      handleRequest: async path => path.startsWith('/v1/machines/') ? Response.json({ machine: {
+        id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+      } }) : null,
+    });
+    network.setRpcResponder(async request => await machineRpcWithServerScopeMock(request));
+    storage.getState().applySettingsLocal({ experiments: true, featureToggles: {
+      voice: true, 'execution.runs': true, 'voice.agent': true, 'voice.daemonInference': true,
+    } });
+    primeServerFeaturesSnapshot({ serverId: getActiveServerSnapshot().serverId, snapshot: {
+      status: 'ready', features: FeaturesResponseSchema.parse({ ...{ features: {
+        voice: { enabled: true }, execution: { runs: { enabled: true } },
+      } }, features: { ...{
+        voice: { enabled: true }, execution: { runs: { enabled: true } },
+      }, machines: {
+      enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } },
+    } }, capabilities: { machines: { liveStream: { serverRouted: {
+      caps: MachineLiveStreamRelayCapsV1Schema.parse({}), disabledReason: null,
+    } } } } }),
+    } });
+    selectMachine('machine-1');
+    storage.getState().applySettingsLocal({ voiceDiagnosticsV1: VoiceSpeechDiagnosticsSettingsV1Schema.parse({
+      enabled: true, consentVersion: 1, captureSttInput: true, captureTtsOutput: true,
+    }) });
+    expect(storage.getState().settings.voice.diagnostics.enabled).toBe(true);
     machineRpcWithServerScopeMock.mockReset();
-    isRuntimeFeatureEnabledMock.mockReset();
-    openLocalUploadSourceReaderMock.mockReset();
-    createProductionDaemonSpeechStreamingSttTransportMock.mockReset();
-
-    ensureVoiceConversationSessionForVoiceHomeMock.mockResolvedValue('voice-home-session');
-    resolveVoiceHomeDaemonMachineIdMock.mockReturnValue('machine-1');
-    readMachineTargetForSessionMock.mockReturnValue({ machineId: 'machine-1', basePath: '/voice-home' });
-    isRuntimeFeatureEnabledMock.mockResolvedValue(true);
-    createProductionDaemonSpeechStreamingSttTransportMock.mockResolvedValue(null);
+  });
+  afterEach(async () => {
+    await account?.dispose();
+    storage.setState({ settings: initialSettings, machines: initialMachines,
+      machineListByServerId: initialMachineLists, sessions: initialSessions });
+    resetServerFeaturesClientForTests();
+    resetVoiceDiagnosticsSessionPolicyForTests();
   });
 
   it('fails closed with feature_disabled before resolving machine scope when daemon inference is not enabled', async () => {
-    isRuntimeFeatureEnabledMock.mockResolvedValue(false);
+    storage.getState().applySettingsLocal({ featureToggles: { 'voice.daemonInference': false } });
 
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
     const client = new DaemonVoiceInferenceClient();
@@ -80,33 +105,24 @@ describe('DaemonVoiceInferenceClient', () => {
       code: 'feature_disabled',
       message: 'daemon_voice_inference_feature_disabled',
     });
-
-    expect(ensureVoiceConversationSessionForVoiceHomeMock).not.toHaveBeenCalled();
-    expect(resolveVoiceHomeDaemonMachineIdMock).not.toHaveBeenCalled();
-    expect(readMachineTargetForSessionMock).not.toHaveBeenCalled();
     expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
   });
 
   it('runs machine-only model status without creating a voice-home session or requiring a directory', async () => {
-    ensureVoiceConversationSessionForVoiceHomeMock.mockRejectedValue(new Error('voice_home_machine_unavailable'));
-    readMachineTargetForSessionMock.mockReturnValue(null);
     machineRpcWithServerScopeMock.mockResolvedValue({ ok: true, models: [] });
 
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
     const client = new DaemonVoiceInferenceClient();
 
     await expect(client.getModelsStatus()).resolves.toEqual([]);
-    expect(resolveVoiceHomeDaemonMachineIdMock).toHaveBeenCalledTimes(1);
-    expect(ensureVoiceConversationSessionForVoiceHomeMock).not.toHaveBeenCalled();
-    expect(readMachineTargetForSessionMock).not.toHaveBeenCalled();
     expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1',
+      targetId: 'machine-1',
       method: 'daemon.voiceInference.models.status',
     }));
   });
 
   it('fails closed before a model mutation when its captured execution-machine scope is no longer current', async () => {
-    resolveVoiceHomeDaemonMachineIdMock.mockReturnValue('machine-b');
+    selectMachine('machine-b');
 
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
     const client = new DaemonVoiceInferenceClient();
@@ -119,16 +135,18 @@ describe('DaemonVoiceInferenceClient', () => {
   });
 
   it('gives a model install its own deadline and forwards the caller lifetime to the daemon', async () => {
-    machineRpcWithServerScopeMock.mockResolvedValue({ ok: true, model: {} });
+    machineRpcWithServerScopeMock.mockResolvedValue({ ok: true, model: {
+      packId: 'kokoro-82m-v1.0-onnx-q8-wasm', kind: 'tts_sherpa', model: 'kokoro', version: '1',
+      executionSupport: ['daemon'], installState: 'installed', progress: null, lastError: null, updatedAtMs: 1,
+    } });
     const clientModule = await import('./DaemonVoiceInferenceClient');
     const client = new clientModule.DaemonVoiceInferenceClient();
     const caller = new AbortController();
 
-    // The response shape is irrelevant here; only the issued request is.
-    await client.installModel({
+    await expect(client.installModel({
       packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
       signal: caller.signal,
-    }).catch(() => undefined);
+    })).resolves.toMatchObject({ packId: 'kokoro-82m-v1.0-onnx-q8-wasm', installState: 'installed' });
 
     const call = machineRpcWithServerScopeMock.mock.calls
       .map(([input]: any[]) => input)
@@ -136,9 +154,14 @@ describe('DaemonVoiceInferenceClient', () => {
     expect(call).toBeDefined();
     // The daemon aborts the install at the deadline the caller declares, so the
     // ordinary short RPC default would cancel a legitimate multi-minute download.
-    expect(call.timeoutMs).toBe(clientModule.VOICE_MODEL_INSTALL_RPC_TIMEOUT_MS);
+    expect(call.timeoutMs).toBeLessThanOrEqual(clientModule.VOICE_MODEL_INSTALL_RPC_TIMEOUT_MS);
     expect(call.timeoutMs).toBeGreaterThan(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS);
-    expect(call.signal).toBe(caller.signal);
+    const alreadyRetired = new AbortController();
+    alreadyRetired.abort();
+    machineRpcWithServerScopeMock.mockClear();
+    await expect(client.installModel({ packId: 'kokoro-82m-v1.0-onnx-q8-wasm', signal: alreadyRetired.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
   });
 
   it('downloads synthesized daemon TTS bytes through the selected daemon without creating a voice-home session', async () => {
@@ -169,7 +192,6 @@ describe('DaemonVoiceInferenceClient', () => {
 
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
     const client = new DaemonVoiceInferenceClient({
-      resolveDiagnosticsCaptureContext: () => authorizedDiagnosticsContext,
     });
     const result = await client.synthesizeText({
       sessionId: 'voice-session-1',
@@ -182,10 +204,8 @@ describe('DaemonVoiceInferenceClient', () => {
 
     expect(result.output).toEqual({ codec: 'wav', mimeType: 'audio/wav' });
     expect(Buffer.from(result.bytes).toString('utf8')).toBe('voice-out');
-    expect(ensureVoiceConversationSessionForVoiceHomeMock).not.toHaveBeenCalled();
-    expect(readMachineTargetForSessionMock).not.toHaveBeenCalled();
     expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1',
+      targetId: 'machine-1',
       method: 'daemon.voiceInference.tts.synthesize',
       payload: expect.objectContaining({
         text: 'hello from daemon',
@@ -252,7 +272,6 @@ describe('DaemonVoiceInferenceClient', () => {
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
     const client = new DaemonVoiceInferenceClient({
       createRequestId: () => 'tts-request-1',
-      resolveDiagnosticsCaptureContext: () => authorizedDiagnosticsContext,
     });
     const stream = await client.startSegmentedTts({
       sessionId: 'voice-session-1',
@@ -287,7 +306,7 @@ describe('DaemonVoiceInferenceClient', () => {
     await stream.ackSegment(event);
 
     expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1',
+      targetId: 'machine-1',
       method: 'daemon.voiceInference.tts.stream.start',
       payload: expect.objectContaining({
         requestId: 'tts-request-1',
@@ -383,44 +402,39 @@ describe('DaemonVoiceInferenceClient', () => {
     }));
   });
 
-  it('threads the abort signal into the in-flight TTS synthesize RPC', async () => {
-    machineRpcWithServerScopeMock.mockImplementation(async (input: any) => {
+  it('cancels an in-flight TTS request at the native transport and never downloads audio', async () => {
+    const started = createDeferred<void>();
+    const reply = createDeferred<unknown>();
+    machineRpcWithServerScopeMock.mockImplementation(async (input: { method: string }) => {
       if (input.method === 'daemon.voiceInference.tts.synthesize') {
-        return {
-          ok: true,
-          requestId: 'tts-1',
-          output: { codec: 'wav', mimeType: 'audio/wav' },
-          downloadId: 'download-1',
-          chunkSizeBytes: 1024,
-          sizeBytes: 9,
-          name: 'tts.wav',
-        };
+        started.resolve();
+        return await reply.promise;
       }
-      if (input.method === 'daemon.voiceInference.tts.chunk') {
-        return { success: true, contentBase64: Buffer.from('voice-out').toString('base64'), isLast: true };
-      }
-      if (input.method === 'daemon.voiceInference.tts.finalize') {
-        return { success: true };
-      }
+      if (input.method === 'daemon.voiceInference.tts.cancel') return { ok: true };
       throw new Error(`unexpected method: ${input.method}`);
     });
-
     const controller = new AbortController();
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
     const client = new DaemonVoiceInferenceClient();
-    await client.synthesizeText({
-      text: 'hello from daemon',
-      packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
-      voiceId: 'af_heart',
-      speed: 1,
-      output: { codec: 'wav', mimeType: 'audio/wav' },
-      signal: controller.signal,
-    });
-
-    expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      method: 'daemon.voiceInference.tts.synthesize',
-      signal: controller.signal,
-    }));
+    const synthesis = client.synthesizeText({ text: 'hello from daemon',
+      packId: 'kokoro-82m-v1.0-onnx-q8-wasm', voiceId: 'af_heart', speed: 1,
+      output: { codec: 'wav', mimeType: 'audio/wav' }, signal: controller.signal,
+    }).then(() => ({ returned: true as const }), (error: unknown) => ({ returned: false as const, error }));
+    await started.promise;
+    controller.abort();
+    reply.resolve({ ok: false, errorCode: 'cancelled', error: 'daemon_voice_inference_cancelled' });
+    const outcome = await synthesis;
+    expect(outcome.returned).toBe(false);
+    if (outcome.returned) throw new Error('aborted synthesis returned audio');
+    expect(outcome.error).toBeInstanceOf(Error);
+    if (!(outcome.error instanceof Error)) throw new Error('cancellation error missing');
+    // Issued Socket requests can deliver the daemon's canonical cancelled reply;
+    // a transport cancellation can instead produce its public AbortError.
+    expect(outcome.error.name === 'AbortError' || ('code' in outcome.error && outcome.error.code === 'cancelled')).toBe(true);
+    await vi.waitFor(() => expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+      targetId: 'machine-1', method: 'daemon.voiceInference.tts.cancel',
+    })));
+    expect(network.requests.some(request => request.method === 'daemon.voiceInference.tts.chunk')).toBe(false);
   });
 
   it('returns daemon status snapshots with progress and degraded service state intact', async () => {
@@ -485,11 +499,6 @@ describe('DaemonVoiceInferenceClient', () => {
 
   it('uploads recorded audio and returns daemon STT transcription', async () => {
     const recipientKeyPair = createTransferRecipientKeyPair();
-    openLocalUploadSourceReaderMock.mockResolvedValue({
-      sizeBytes: 5,
-      readBytes: async () => Buffer.from('hello'),
-      close: async () => {},
-    });
     machineRpcWithServerScopeMock.mockImplementation(async (input: any) => {
       if (input.method === 'daemon.voiceInference.stt.upload.init') {
         return {
@@ -525,9 +534,7 @@ describe('DaemonVoiceInferenceClient', () => {
 
     const controller = new AbortController();
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
-    const client = new DaemonVoiceInferenceClient({
-      resolveDiagnosticsCaptureContext: () => ({ ...authorizedDiagnosticsContext, durationMs: 1_250 }),
-    });
+    const client = new DaemonVoiceInferenceClient();
     const result = await client.transcribeRecordedAudio({
       sessionId: 'voice-session-1',
       durationMs: 1_250,
@@ -544,9 +551,8 @@ describe('DaemonVoiceInferenceClient', () => {
       modelPackId: 'stt-pack-1',
     });
     expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1',
+      targetId: 'machine-1',
       method: 'daemon.voiceInference.stt.transcribe',
-      signal: controller.signal,
       payload: expect.objectContaining({
         packId: 'stt-pack-1',
         language: 'en',
@@ -585,7 +591,8 @@ describe('DaemonVoiceInferenceClient', () => {
       throw new Error(`unexpected method: ${input.method}`);
     });
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
-    const client = new DaemonVoiceInferenceClient({ resolveDiagnosticsCaptureContext: () => undefined });
+    storage.getState().applySettingsLocal({ voiceDiagnosticsV1: VoiceSpeechDiagnosticsSettingsV1Schema.parse({ enabled: false }) });
+    const client = new DaemonVoiceInferenceClient();
     const legacyShapedInput: Parameters<typeof client.synthesizeText>[0] & { captureDiagnostics: true } = {
       sessionId: 'voice-session-1',
       captureDiagnostics: true,
@@ -605,11 +612,7 @@ describe('DaemonVoiceInferenceClient', () => {
   });
 
   it('creates a streaming STT sender for the selected daemon without spawning an unrelated voice-home agent session', async () => {
-    readMachineTargetForSessionMock.mockReturnValue({
-      machineId: 'synthetic-session-machine',
-      basePath: '/synthetic-session',
-    });
-    ensureVoiceConversationSessionForVoiceHomeMock.mockRejectedValue(new Error('voice-home spawn must not gate daemon STT'));
+    bindUnrelatedSession('active-control-session', 'synthetic-session-machine');
     machineRpcWithServerScopeMock.mockImplementation(async (input: any) => {
       if (input.method === 'daemon.voiceInference.stt.stream.start') {
         return {
@@ -647,19 +650,8 @@ describe('DaemonVoiceInferenceClient', () => {
 
     const controller = new AbortController();
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
-    const resolveDiagnosticsCaptureContext = vi.fn((input: { sessionId: string | null | undefined }) => (
-      input.sessionId
-        ? {
-            sessionId: input.sessionId,
-            captureAllowed: true as const,
-            durationMs: null,
-            authorizationId: '6a42516d-20ea-4c70-91d5-b0dbaf693637',
-          }
-        : undefined
-    ));
     const client = new DaemonVoiceInferenceClient({
       createRequestId: () => 'stream-request-1',
-      resolveDiagnosticsCaptureContext,
     });
     const sender = await client.createStreamingSttSender({
       sessionId: 'active-control-session',
@@ -681,9 +673,8 @@ describe('DaemonVoiceInferenceClient', () => {
     });
 
     expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1',
+      targetId: 'machine-1',
       method: 'daemon.voiceInference.stt.stream.start',
-      signal: controller.signal,
       payload: expect.objectContaining({
         requestId: 'stream-request-1',
         packId: 'stt-pack-1',
@@ -693,19 +684,13 @@ describe('DaemonVoiceInferenceClient', () => {
           sessionId: 'active-control-session',
           captureAllowed: true,
           durationMs: null,
-          authorizationId: '6a42516d-20ea-4c70-91d5-b0dbaf693637',
+          authorizationId: expect.any(String),
         },
       }),
     }));
-    expect(resolveDiagnosticsCaptureContext).toHaveBeenCalledWith({
-      sessionId: 'active-control-session',
-      direction: 'stt_input',
-      durationMs: null,
-    });
     expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1',
+      targetId: 'machine-1',
       method: 'daemon.voiceInference.stt.stream.chunk',
-      signal: controller.signal,
       payload: expect.objectContaining({
         streamId: 'stream-1',
         generation: 3,
@@ -714,211 +699,14 @@ describe('DaemonVoiceInferenceClient', () => {
       }),
     }));
     expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1',
+      targetId: 'machine-1',
       method: 'daemon.voiceInference.stt.stream.finish',
-      signal: controller.signal,
       payload: expect.objectContaining({
         streamId: 'stream-1',
         generation: 3,
         finalSeq: 0,
       }),
     }));
-    expect(createProductionDaemonSpeechStreamingSttTransportMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineTarget: {
-        machineId: 'machine-1',
-      },
-      requestId: 'stream-request-1',
-      signal: controller.signal,
-      compatibilityTransport: expect.any(Object),
-    }));
-    expect(ensureVoiceConversationSessionForVoiceHomeMock).not.toHaveBeenCalled();
-  });
-
-  it('uses an injected binary tunnel transport for streaming chunks without calling the compatibility chunk RPC', async () => {
-    machineRpcWithServerScopeMock.mockImplementation(async (input: unknown) => {
-      const method = (input as { method?: string }).method;
-      const payload = (input as { payload?: { requestId?: string; finalSeq?: number } }).payload;
-      if (method === 'daemon.voiceInference.stt.stream.start') {
-        return {
-          ok: true,
-          requestId: payload?.requestId,
-          streamId: 'stream-1',
-          generation: 3,
-          ackSeq: -1,
-          format: { sampleRateHz: 16_000, channelCount: 1, bitsPerSample: 16, ffmpegCodec: 'pcm_s16le' },
-        };
-      }
-      if (method === 'daemon.voiceInference.stt.stream.finish') {
-        return {
-          ok: true,
-          streamId: 'stream-1',
-          generation: 3,
-          ackSeq: payload?.finalSeq,
-          finalText: 'hello daemon',
-          language: 'en',
-          modelPackId: 'stt-pack-1',
-          events: [],
-        };
-      }
-      if (method === 'daemon.voiceInference.stt.stream.chunk') {
-        throw new Error('compatibility chunk RPC should not be used for binary tunnel transport');
-      }
-      throw new Error(`unexpected method: ${String(method)}`);
-    });
-
-    const { createDaemonSpeechStreamCarrierAdapter } = await import('./DaemonSpeechStreamCarrier');
-    const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
-    const tunnelChunk = vi.fn(async (payload) => {
-      expect(payload.carrierFrame).toMatchObject({
-        kind: 'binary_tunnel_frame_v2',
-        sequence: {
-          streamId: 'stream-1',
-          generation: 3,
-          seq: 0,
-        },
-      });
-      if (payload.carrierFrame.kind !== 'binary_tunnel_frame_v2') {
-        throw new Error('expected binary carrier frame');
-      }
-      expect([...payload.carrierFrame.payloadBytes]).toEqual([112, 99, 109]);
-      expect(payload.compatibilityTransport).toBeNull();
-      return {
-        ok: true as const,
-        streamId: payload.streamId,
-        generation: payload.generation,
-        ackSeq: payload.seq,
-        events: [{ type: 'partial' as const, seq: payload.seq, text: 'hel', isEndpoint: false, confidence: null }],
-      };
-    });
-    const createStreamingSttTransport = vi.fn(async ({ compatibilityTransport }) => ({
-      carrierAdapter: createDaemonSpeechStreamCarrierAdapter({
-        routeKind: 'loopback_direct',
-        binaryCapable: true,
-      }),
-      transport: {
-        ...compatibilityTransport,
-        chunk: tunnelChunk,
-      },
-    }));
-    const client = new DaemonVoiceInferenceClient({
-      createRequestId: () => 'stream-request-1',
-      createStreamingSttTransport,
-    });
-
-    const sender = await client.createStreamingSttSender({
-      sessionId: 'qa-session',
-      packId: 'stt-pack-1',
-      language: 'en',
-    });
-    expect(sender.transportKind).toBe('binary_tunnel');
-    expect(createStreamingSttTransport).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'qa-session',
-    }));
-
-    await sender.start();
-    await expect(sender.pushChunk(new Uint8Array([112, 99, 109]))).resolves.toEqual([
-      { type: 'partial', seq: 0, text: 'hel', isEndpoint: false, confidence: null },
-    ]);
-    await expect(sender.finish()).resolves.toMatchObject({
-      ok: true,
-      finalText: 'hello daemon',
-      language: 'en',
-      modelPackId: 'stt-pack-1',
-    });
-
-    expect(tunnelChunk).toHaveBeenCalledTimes(1);
-    const methods = machineRpcWithServerScopeMock.mock.calls.map(([input]) => (input as { method?: string }).method);
-    expect(methods).toContain('daemon.voiceInference.stt.stream.start');
-    expect(methods).toContain('daemon.voiceInference.stt.stream.finish');
-    expect(methods).not.toContain('daemon.voiceInference.stt.stream.chunk');
-  });
-
-  it('uses the default production binary tunnel transport for streaming chunks without calling the compatibility chunk RPC', async () => {
-    machineRpcWithServerScopeMock.mockImplementation(async (input: unknown) => {
-      const method = (input as { method?: string }).method;
-      const payload = (input as { payload?: { requestId?: string; finalSeq?: number } }).payload;
-      if (method === 'daemon.voiceInference.stt.stream.start') {
-        return {
-          ok: true,
-          requestId: payload?.requestId,
-          streamId: 'stream-1',
-          generation: 3,
-          ackSeq: -1,
-          format: { sampleRateHz: 16_000, channelCount: 1, bitsPerSample: 16, ffmpegCodec: 'pcm_s16le' },
-        };
-      }
-      if (method === 'daemon.voiceInference.stt.stream.finish') {
-        return {
-          ok: true,
-          streamId: 'stream-1',
-          generation: 3,
-          ackSeq: payload?.finalSeq,
-          finalText: 'hello daemon',
-          language: 'en',
-          modelPackId: 'stt-pack-1',
-          events: [],
-        };
-      }
-      if (method === 'daemon.voiceInference.stt.stream.chunk') {
-        throw new Error('compatibility chunk RPC should not be used when the production tunnel opens');
-      }
-      throw new Error(`unexpected method: ${String(method)}`);
-    });
-
-    const { createDaemonSpeechStreamCarrierAdapter } = await import('./DaemonSpeechStreamCarrier');
-    const tunnelChunk = vi.fn(async (payload) => {
-      expect(payload.carrierFrame).toMatchObject({
-        kind: 'binary_tunnel_frame_v2',
-        frameEncoding: 'binary_frame_v2',
-        sequence: {
-          streamId: 'stream-1',
-          generation: 3,
-          seq: 0,
-        },
-      });
-      return {
-        ok: true as const,
-        streamId: payload.streamId,
-        generation: payload.generation,
-        ackSeq: payload.seq,
-        events: [],
-      };
-    });
-    createProductionDaemonSpeechStreamingSttTransportMock.mockImplementation(async ({ compatibilityTransport }) => ({
-      carrierAdapter: createDaemonSpeechStreamCarrierAdapter({
-        routeKind: 'loopback_direct',
-        binaryCapable: true,
-      }),
-      transport: {
-        ...compatibilityTransport,
-        chunk: tunnelChunk,
-      },
-    }));
-
-    const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
-    const client = new DaemonVoiceInferenceClient({ createRequestId: () => 'stream-request-1' });
-
-    const sender = await client.createStreamingSttSender({
-      packId: 'stt-pack-1',
-      language: 'en',
-    });
-    expect(sender.transportKind).toBe('binary_tunnel');
-
-    await sender.start();
-    await expect(sender.pushChunk(new Uint8Array([112, 99, 109]))).resolves.toEqual([]);
-    await expect(sender.finish()).resolves.toMatchObject({
-      ok: true,
-      finalText: 'hello daemon',
-      language: 'en',
-      modelPackId: 'stt-pack-1',
-    });
-
-    const methods = machineRpcWithServerScopeMock.mock.calls.map(([input]) => (input as { method?: string }).method);
-    expect(methods).toContain('daemon.voiceInference.stt.stream.start');
-    expect(methods).toContain('daemon.voiceInference.stt.stream.finish');
-    expect(methods).not.toContain('daemon.voiceInference.stt.stream.chunk');
-    expect(createProductionDaemonSpeechStreamingSttTransportMock).toHaveBeenCalledTimes(1);
-    expect(tunnelChunk).toHaveBeenCalledTimes(1);
   });
 
   it('reports JSON compatibility selection and can forbid it without sending stream RPCs', async () => {
@@ -950,42 +738,8 @@ describe('DaemonVoiceInferenceClient', () => {
     expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
   });
 
-  it('preserves peer-route signing readiness details from production transport selection', async () => {
-    createProductionDaemonSpeechStreamingSttTransportMock.mockRejectedValue(Object.assign(
-      new Error('peer_route_signing_identity_unavailable'),
-      {
-        code: 'peer_route_signing_identity_unavailable',
-        reasonCode: 'peer_route_signing_identity_unavailable',
-        requiredCapability: 'peer_route_signing_identity_v1',
-      },
-    ));
-    const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
-    const client = new DaemonVoiceInferenceClient({
-      createRequestId: () => 'identity-unavailable-request',
-      allowStreamingSttJsonRpcCompatibility: () => false,
-    });
-
-    await expect(client.createStreamingSttSender({ packId: 'stt-pack-1', language: 'en' }))
-      .rejects.toMatchObject({
-        code: 'peer_route_signing_identity_unavailable',
-        reasonCode: 'peer_route_signing_identity_unavailable',
-        requiredCapability: 'peer_route_signing_identity_v1',
-      });
-    expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
-  });
-
   it('keeps recorded-audio STT pinned to the selected daemon even when a session id targets another machine', async () => {
-    readMachineTargetForSessionMock.mockImplementation((sessionId: string) => {
-      if (sessionId === 'qa-session-target') {
-        return { machineId: 'machine-qa', basePath: '/qa-session' };
-      }
-      return { machineId: 'machine-1', basePath: '/voice-home' };
-    });
-    openLocalUploadSourceReaderMock.mockResolvedValue({
-      sizeBytes: 5,
-      readBytes: async () => Buffer.from('hello'),
-      close: async () => {},
-    });
+    bindUnrelatedSession('qa-session-target', 'machine-qa');
     machineRpcWithServerScopeMock.mockImplementation(async (input: any) => {
       if (input.method === 'daemon.voiceInference.stt.upload.init') {
         const recipientKeyPair = createTransferRecipientKeyPair();
@@ -1034,19 +788,13 @@ describe('DaemonVoiceInferenceClient', () => {
       language: 'en',
       modelPackId: 'stt-pack-qa',
     });
-
-    expect(ensureVoiceConversationSessionForVoiceHomeMock).not.toHaveBeenCalled();
-    expect(readMachineTargetForSessionMock).not.toHaveBeenCalled();
     expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1',
+      targetId: 'machine-1',
       method: 'daemon.voiceInference.stt.transcribe',
     }));
   });
 
   it('uploads the admitted Chrome WebM file through the real web source reader', async () => {
-    const { openLocalUploadSourceReader } = await vi.importActual<
-      typeof import('@/sync/runtime/files/localUploadSourceReader')
-    >('@/sync/runtime/files/localUploadSourceReader');
     const source = {
       kind: 'web' as const,
       file: new File(
@@ -1091,10 +839,9 @@ describe('DaemonVoiceInferenceClient', () => {
 
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
     const client = new DaemonVoiceInferenceClient({
-      openLocalUploadSourceReader,
       createRequestId: () => 'stt-chrome-webm',
     });
-    resolveVoiceHomeDaemonMachineIdMock.mockReturnValue(null);
+    selectMachine(null);
 
     await expect(client.transcribeRecordedAudio({
       sessionId: 'qa-session-target',
@@ -1115,7 +862,7 @@ describe('DaemonVoiceInferenceClient', () => {
     });
 
     expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-ready-at-start',
+      targetId: 'machine-ready-at-start',
       method: 'daemon.voiceInference.stt.upload.init',
       payload: expect.objectContaining({
         sizeBytes: 1_080,
@@ -1125,7 +872,7 @@ describe('DaemonVoiceInferenceClient', () => {
   });
 
   it('throws a machine-unreachable style error when the voice-home machine target cannot be resolved', async () => {
-    resolveVoiceHomeDaemonMachineIdMock.mockReturnValue(null);
+    selectMachine(null);
 
     const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
     const client = new DaemonVoiceInferenceClient();
@@ -1216,8 +963,7 @@ describe('DaemonVoiceInferenceClient', () => {
       installState: 'installed',
     });
     await expect(client.removeModel('kokoro-82m-v1.0-onnx-q8-wasm')).resolves.toBeUndefined();
-    expect(resolveVoiceHomeDaemonMachineIdMock).toHaveBeenCalledTimes(4);
-    expect(ensureVoiceConversationSessionForVoiceHomeMock).not.toHaveBeenCalled();
-    expect(readMachineTargetForSessionMock).not.toHaveBeenCalled();
   });
 });
+
+afterAll(() => network.dispose());

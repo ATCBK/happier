@@ -1,24 +1,69 @@
 import React from 'react';
+// Genuine browser persistence SDK; Sync/outbox admission and codecs stay real.
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol';
 import { renderScreen as renderRuntimeScreen } from '@/dev/testkit';
-import { createStableStorageReader } from '@/dev/testkit/mocks/storage';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
-import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { SavedSecretResourceMaterialsResponseV1Schema, type SavedSecretResourceMaterialV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
-import { applyConnectedAccountCatalogSnapshot, resetConnectedAccountCatalogSnapshotsForTests } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
+import { resetConnectedAccountCatalogSnapshotsForTests } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
-import { profileDefaults, tryParseProfile } from '@/sync/domains/profiles/profile';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
-import type { VoiceAdapterController, VoiceAdapterEngineKind, VoiceSessionSnapshot } from './types';
-import type { VoiceSessionLifecycleController } from './voiceSessionLifecycleController';
-import type { CurrentUiContextVoiceToolPort } from '@/components/appShell/currentUiContext/currentUiContextVoiceToolPort';
+import { createSessionFixture } from '@/dev/testkit';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
+import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
+import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
+import type { PartialOptions as ElevenLabsStartOptions } from '@elevenlabs/client';
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { VoiceLocalDirectSchema } from '@happier-dev/protocol/voice/settings/localDirect';
+import { VoiceLocalConversationSchema } from '@happier-dev/protocol/voice/settings/localConversation';
+import { SessionLookupByTagsRequestV2Schema, SessionLookupByTagsResponseV2Schema } from '@happier-dev/protocol/sessions/control/contract';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
+import type { VoiceAttemptControlProjection } from '@/components/voice/attempt/useVoiceAttemptControl';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createAccountSettingsHttpBoundary } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 
-const platformOsMock = vi.hoisted(() => ({ value: 'ios' as 'ios' | 'web' }));
+const nativeSpeech = createVoiceSpeechOutputBoundary({ getAccount: () => {
+  if (!accountConnection) throw new Error('Mounted native Voice Account unavailable');
+  return accountConnection;
+} });
+const platformOsMock = nativeSpeech.platform;
+let nativeAudio = nativeSpeech.reset().audioSession;
+const recognizer = vi.hoisted(() => ({
+  listeners: new Map<string, Set<() => void>>(),
+  start: vi.fn(), stop: vi.fn(), abort: vi.fn(),
+}));
+vi.mock('expo-speech-recognition', () => ({ ExpoSpeechRecognitionModule: {
+  isRecognitionAvailable: () => true,
+  requestPermissionsAsync: async () => ({ granted: true, canAskAgain: true }),
+  addListener: (name: string, listener: () => void) => {
+    const listeners = recognizer.listeners.get(name) ?? new Set<() => void>();
+    recognizer.listeners.set(name, listeners);
+    listeners.add(listener);
+    return { remove: () => listeners.delete(listener) };
+  },
+  start: (...args: unknown[]) => recognizer.start(...args),
+  stop: () => recognizer.stop(), abort: () => recognizer.abort(),
+} }));
+const sdk = vi.hoisted(() => ({ startSession: vi.fn(), endSession: vi.fn() }));
+vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: sdk.startSession } }));
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: sdk.startSession } }));
+vi.mock('expo-audio', () => ({ AudioModule: {
+  setAudioModeAsync: vi.fn(async () => undefined),
+  requestRecordingPermissionsAsync: async () => ({ granted: true, canAskAgain: true }),
+} }));
+vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/settings/voice', segments: ['(app)', 'settings', 'voice'] }).module);
+// The incumbent Vitest platform resolver selects complete actual .web modules
+// for the explicit browser invocation. Do not use an async mock import here:
+// LiveMic's UI dependency graph re-enters that same mock factory during load.
 const currentUiContextToolSetMode = vi.hoisted(() => ({
   value: 'on_demand' as 'off' | 'on_demand' | 'automatic',
 }));
@@ -35,154 +80,80 @@ const sessionAddress = (sessionId: string) => ({ serverId: 'server-1', sessionId
 
 installDisconnectedServerSocketBoundary();
 
-type RuntimeFixtureModules = {
-  '@/voice/adapters/registerBuiltinVoiceAdapters': () => Pick<typeof import('@/voice/adapters/registerBuiltinVoiceAdapters'), 'createBuiltinVoiceAdapterAssembly'>;
-  './voiceSessionLifecycleController': () => Pick<typeof import('./voiceSessionLifecycleController'), 'createVoiceSessionLifecycleController'>;
-  '@/components/appShell/currentUiContext/currentUiContextVoiceToolPort': () => Pick<typeof import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort'), 'useCurrentUiContextVoiceToolPort'>;
-};
-const runtimeModuleFixtures: Partial<RuntimeFixtureModules> = {};
-function setRuntimeModuleFixture<K extends keyof RuntimeFixtureModules>(path: K, factory: RuntimeFixtureModules[K]) {
-  runtimeModuleFixtures[path] = factory;
-}
-
-// Keep one real Sync graph: restored credential/socket spies retain their original
-// targets, so resetting modules for every mounted case retains whole Sync graphs.
-vi.mock('@/voice/adapters/registerBuiltinVoiceAdapters', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/voice/adapters/registerBuiltinVoiceAdapters')>();
-  return { ...actual, createBuiltinVoiceAdapterAssembly: (...args: Parameters<typeof actual.createBuiltinVoiceAdapterAssembly>) => (
-    runtimeModuleFixtures['@/voice/adapters/registerBuiltinVoiceAdapters']?.().createBuiltinVoiceAdapterAssembly(...args)
-      ?? actual.createBuiltinVoiceAdapterAssembly(...args)
-  ) };
-});
-vi.mock('./voiceSessionLifecycleController', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./voiceSessionLifecycleController')>();
-  return { ...actual, createVoiceSessionLifecycleController: (...args: Parameters<typeof actual.createVoiceSessionLifecycleController>) => (
-    runtimeModuleFixtures['./voiceSessionLifecycleController']?.().createVoiceSessionLifecycleController(...args)
-      ?? actual.createVoiceSessionLifecycleController(...args)
-  ) };
-});
-vi.mock('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort')>();
-  return { ...actual, useCurrentUiContextVoiceToolPort: (...args: Parameters<typeof actual.useCurrentUiContextVoiceToolPort>) => (
-    runtimeModuleFixtures['@/components/appShell/currentUiContext/currentUiContextVoiceToolPort']?.().useCurrentUiContextVoiceToolPort(...args)
-      ?? actual.useCurrentUiContextVoiceToolPort(...args)
-  ) };
-});
-
-vi.mock('react-native', async () => {
-  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-  return createReactNativeWebMock({
-    Platform: {
-      get OS() {
-        return platformOsMock.value;
-      },
-      select: <T,>(options: { web?: T; default?: T; native?: T; ios?: T; android?: T }) =>
-        options?.[platformOsMock.value] ?? options?.default ?? options?.native ?? options?.ios ?? options?.android,
-    },
-  });
-});
-
-const defaultUseSetting = (key: string) => {
-  if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: 'local_direct' };
-  return null;
-};
-
-const useSetting = vi.fn<(key: string) => unknown>(defaultUseSetting);
-type TestProfileAuthority = Readonly<{
-  connectedServicesV2: ReadonlyArray<Readonly<{
-    serviceId: string;
-    profiles: ReadonlyArray<Readonly<{
-      profileId: string;
-      status: string;
-      kind: string;
-    }>>;
-    groups: ReadonlyArray<Readonly<{
-      groupId: string;
-      activeProfileId: string | null;
-      generation?: number;
-      memberProfileIds?: ReadonlyArray<string>;
-    }>>;
-  }>>;
-  connectedServiceCredentialRevisionsV1: ReadonlyArray<Readonly<{
-    serviceId: string;
-    profileId: string;
-    credentialRevision: string;
-  }>>;
-  connectedAccountsV4?: ReadonlyArray<Readonly<Record<string, unknown>>>;
-  connectedAccountGroupsV4?: ReadonlyArray<Readonly<Record<string, unknown>>>;
-}> | null;
-
-const useProfile = vi.fn<() => TestProfileAuthority>(() => null);
-const useActiveServerAccountScope = vi.fn<
-  () => Readonly<{ serverId: string; accountId: string }> | null
->(() => null);
-
-// These readers describe fixture data only. All mounted storage hooks and Sync
-// operations use the real store; unchanged fixture snapshots retain identity.
-function readFixtureVoiceSettings(key: 'voice' | 'voiceSettingsV1') {
-  const voice = voiceSettingsParse(useSetting(key));
-  return { ...voice, privacy: { ...voice.privacy, currentUiContextMode: currentUiContextToolSetMode.value } };
-}
-const readFixtureSettings = createStableStorageReader(() => settingsParse({
-  ...settingsDefaults,
-  voice: readFixtureVoiceSettings('voice'),
-  voiceSettingsV1: readFixtureVoiceSettings('voiceSettingsV1'),
-  secrets: useSetting('secrets') ?? settingsDefaults.secrets,
-}));
-const readFixtureProfile = createStableStorageReader(() => {
-  const profile = tryParseProfile({ ...profileDefaults, ...useProfile() });
-  if (!profile) throw new Error('Invalid mounted Voice Account profile fixture');
-  return profile;
-});
-let writeFixtureSnapshot: (() => void) | null = null;
-
-async function renderScreen(element: React.ReactElement) {
-  const { storage } = await import('@/sync/domains/state/storage');
-  writeFixtureSnapshot = () => {
-    const scope = useActiveServerAccountScope();
-    if (scope) applyConnectedAccountCatalogSnapshot(scope, 'purposes', {
-      status: 'ready', revision: 1,
-      record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse(useSetting('connectedPurposes') ?? { v: 1, bindings: [] }) },
-    }, true);
-    storage.setState({
-      settings: readFixtureSettings(),
-      profile: readFixtureProfile(),
-      profileScope: scope,
-      settingsScope: scope,
-    });
-  };
-  writeFixtureSnapshot();
-  const screen = await renderRuntimeScreen(element);
-  const update = screen.tree.update.bind(screen.tree);
-  screen.tree.update = (next) => {
-    writeFixtureSnapshot?.();
-    update(next);
-  };
-  return screen;
-}
 
 let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+const retiredAccountConnections: Array<Awaited<ReturnType<typeof restoreServerAccountForTest>>> = [];
+const generatedRuntimeScreens: Array<Awaited<ReturnType<typeof renderRuntimeScreen>>> = [];
+const openAiRuntimeEnvironments: Array<Awaited<ReturnType<typeof import('@/dev/testkit/harness/openAiVoiceRuntime')['createOpenAiVoiceRuntimeEnvironment']>>> = [];
+const browserBoundaries: Array<ReturnType<typeof installVoiceWebRtcBrowserBoundary>> = [];
+const actionLoaderDisposals: Array<() => void> = [];
 let resourceMaterials: readonly SavedSecretResourceMaterialV1[] = [];
 const serverUrlsById = new Map<string, string>();
+const retiredAccountHttpRequests: Array<Readonly<{ path: string; authenticatedAsRetiredAccount: boolean }>> = [];
+const replacementSettingsRequests: Array<Readonly<{ method: string; expectedVersion: unknown; contentType: unknown; responseValid: boolean }>> = [];
 
 type AccountScope = Readonly<{ serverId: string; accountId: string }>;
-function applyAccountScope(scope: AccountScope): Promise<AccountScope>;
-function applyAccountScope(scope: null): Promise<null>;
-function applyAccountScope(scope: AccountScope | null): Promise<AccountScope | null>;
-async function applyAccountScope(scope: AccountScope | null) {
-  await accountConnection?.dispose();
+type RetiringSessionHttp = Readonly<{ address: Readonly<{ serverId: string; sessionId: string }>; boundary: ReturnType<typeof createSessionMetadataHttpBoundary> }>;
+function applyAccountScope(scope: AccountScope, retiringSession?: RetiringSessionHttp): Promise<AccountScope>;
+function applyAccountScope(scope: null, retiringSession?: RetiringSessionHttp): Promise<null>;
+function applyAccountScope(scope: AccountScope | null, retiringSession?: RetiringSessionHttp): Promise<AccountScope | null>;
+async function applyAccountScope(scope: AccountScope | null, retiringSession?: RetiringSessionHttp) {
+  const previousConnection = accountConnection;
   accountConnection = null;
-  const { storage } = await import('@/sync/domains/state/storage');
   if (!scope) {
-    storage.setState({ profileScope: null });
+    await previousConnection?.dispose();
     return null;
   }
+  // Warm replacement goes through the real serialized Account switch. Keep
+  // old device writes/HTTP cleanup alive until the mounted media owner retires.
+  if (previousConnection) retiredAccountConnections.push(previousConnection);
   const serverUrl = serverUrlsById.get(scope.serverId) ?? `https://${scope.serverId}.voice-runtime.example.test`;
+  const settingsHttp = createAccountSettingsHttpBoundary({ serverUrl, initialAccounts: [{ accountId: scope.accountId,
+    snapshot: AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {} }, version: 1 }),
+  }] });
   accountConnection = await restoreServerAccountForTest({ serverUrl, accountId: scope.accountId,
-    request: async (url) => {
-      const path = new URL(String(url)).pathname;
+    ...(previousConnection ? { activation: 'switch' as const } : {}),
+    ...(previousConnection ? { additionalRequestOrigins: [previousConnection.home.serverUrl] } : {}),
+    request: async (url, init) => {
+      const requested = new URL(String(url));
+      const path = requested.pathname;
+      if (previousConnection && requested.origin === new URL(previousConnection.home.serverUrl).origin
+        && requested.origin !== new URL(serverUrl).origin) {
+        retiredAccountHttpRequests.push({ path, authenticatedAsRetiredAccount:
+          new Headers(init?.headers).get('Authorization') === `Bearer ${previousConnection.credentials.token}` });
+        expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${previousConnection.credentials.token}`);
+        if (retiringSession && path === `/v2/sessions/${encodeURIComponent(retiringSession.address.sessionId)}`
+          && (init?.method ?? 'GET') === 'GET') {
+          // The bound daemon Stop's real scoped crypto admission rereads this
+          // exact old-Account Session before issuing RPC. Preserve only that
+          // original authenticated record, not an arbitrary retired Home read.
+          expect(retiringSession.address.serverId).toBe(previousConnection.home.id);
+          const response = retiringSession.boundary.handle(url, init);
+          if (!response) throw new Error('Retiring bound Session HTTP record unavailable');
+          expect(response.status).toBe(200);
+          return response;
+        }
+        // Only the exact admitted old Account's hosted lease may finish here;
+        // this is not an old-Home settings/session/credential read allowance.
+        expect(['/v1/voice/session/complete', '/v1/voice/session/release']).toContain(path);
+        expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${previousConnection.credentials.token}`);
+        return Response.json({ ok: true });
+      }
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-      if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+      if (path === '/v2/account/settings') {
+        const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+        const record = body && typeof body === 'object' ? body : null;
+        const response = settingsHttp.handle(url, init);
+        if (!response) throw new Error('Account Settings HTTP boundary unavailable');
+        const { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateResponseSchema } = await import('@happier-dev/protocol/account/settings/accountSettingsApiV2');
+        replacementSettingsRequests.push({ method: init?.method ?? 'GET',
+          expectedVersion: record && 'expectedVersion' in record ? record.expectedVersion : undefined,
+          contentType: record && 'content' in record && record.content && typeof record.content === 'object' && 't' in record.content ? record.content.t : undefined,
+          responseValid: (init?.method === 'POST' ? AccountSettingsV2UpdateResponseSchema : AccountSettingsV2GetResponseSchema).safeParse(await response.clone().json()).success,
+        });
+        return response;
+      }
+      if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: scope.accountId });
       if (path === '/v1/account/saved-secrets/resources/materials') return Response.json({ resources: resourceMaterials });
       return Response.json({}, { status: 404 });
     },
@@ -190,7 +161,6 @@ async function applyAccountScope(scope: AccountScope | null) {
   serverUrlsById.set(accountConnection.home.id, serverUrl);
   const appliedScope = { serverId: accountConnection.home.id, accountId: scope.accountId };
   await refreshSavedSecretCatalog(appliedScope);
-  storage.setState({ profileScope: appliedScope });
   return appliedScope;
 }
 
@@ -198,12 +168,12 @@ async function setCurrentUiContextToolSetMode(mode: typeof currentUiContextToolS
   currentUiContextToolSetMode.value = mode;
   const { storage } = await import('@/sync/domains/state/storage');
   const settings = storage.getState().settings;
-  storage.setState({ settings: { ...settings, voice: { ...settings.voice,
+  const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...settings.voice,
     privacy: { ...settings.voice.privacy, currentUiContextMode: mode },
-  } } });
+  } }, settings));
 }
 
-type Snapshot = VoiceSessionSnapshot;
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -229,223 +199,406 @@ function LayoutCommitBoundary({
   return <>{children}</>;
 }
 
-/**
- * This suite reuses one real Sync module graph and resets canonical store/lifecycle
- * state between cases. Vitest retains spies and their original implementation closures
- * for the file's lifetime, so module-scope factories keep those closures from retaining
- * whole test bodies. Mutable adapter hooks and subscribers are released after each case.
- * `voiceSessionRuntimeSpecSpyOwnership.architecture.test.ts` fails if a `vi.fn(` is
- * reintroduced into a test body.
- */
-function createAsyncNoopSpy() {
-  return vi.fn(async () => {});
-}
-
-function createNoopSpy() {
-  return vi.fn(() => {});
-}
-
-function createStubAdapterControls(engineKind: VoiceAdapterEngineKind = 'local') {
-  return {
-    engineKind,
-    start: createAsyncNoopSpy(),
-    stop: createAsyncNoopSpy(),
-    toggle: createAsyncNoopSpy(),
-    interrupt: createAsyncNoopSpy(),
-    commitInput: createAsyncNoopSpy(),
-    setMuted: createAsyncNoopSpy(),
-    sendContextUpdate: createNoopSpy(),
-  };
-}
-
-function createRearmSpy() {
-  return vi.fn<VoiceSessionLifecycleController['rearmAfterCredentialAuthorityChange']>();
-}
-
-function createStubLifecycleController(
-  rearmAfterCredentialAuthorityChange: VoiceSessionLifecycleController['rearmAfterCredentialAuthorityChange'],
-) {
-  return {
-    observeSyncedConversationMessages: createNoopSpy(),
-    bargeIn: createAsyncNoopSpy(),
-    dispose: createAsyncNoopSpy(),
-    getConfiguredProviderId: vi.fn(() => null),
-    getAttemptTargetSessionAddress: () => null,
-    getSnapshot: vi.fn((): Snapshot => ({
-      adapterId: null,
-      sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-      status: 'connected',
-      mode: 'listening',
-      canStop: true,
-    })),
-    interrupt: createAsyncNoopSpy(),
-    commitInput: createAsyncNoopSpy(),
-    beginHoldToTalk: createVoiceSessionManager({}).beginHoldToTalk,
-    finishHoldToTalk: async () => false,
-    rearmAfterCredentialAuthorityChange,
-    sendContextUpdate: createNoopSpy(),
-    setConfiguredProviderId: createNoopSpy(),
-    setCurrentUiContextToolSetEnabled: createNoopSpy(),
-    setMuted: createAsyncNoopSpy(),
-    suspendInput: vi.fn(async () => null),
-    retry: createAsyncNoopSpy(),
-    dismissFailedAttempt: createAsyncNoopSpy(),
-    stop: createAsyncNoopSpy(),
-    subscribe: vi.fn(() => createNoopSpy()),
-    toggle: createAsyncNoopSpy(),
-  } satisfies VoiceSessionLifecycleController;
-}
-
-type RuntimeAdapterState = {
-  current: Snapshot;
-  hooks: Readonly<{ start?: () => Promise<void>; stop?: () => Promise<void> }> | null;
-  listeners: Set<() => void>;
-};
-
-/**
- * Adapter state lives here rather than in the closures of the spies below. A spy keeps its
- * original implementation forever (`state.getOriginal()` in `@vitest/spy` survives
- * `mockReset()`), so a spy that closed over a caller-supplied `start`/`stop` hook — written
- * in an `it()` body — would retain that test's closure and hooks in the reused module
- * graph, and a subscriber set would retain mounted components. Both are released in
- * `afterEach` via `releaseRuntimeAdapterStates()`.
- */
-const runtimeAdapterStates = new Set<RuntimeAdapterState>();
-
-function releaseRuntimeAdapterStates() {
-  for (const state of runtimeAdapterStates) {
-    state.hooks = null;
-    state.listeners.clear();
-  }
-  runtimeAdapterStates.clear();
-}
-
-function createRuntimeAdapter(
-  id: string,
-  initial: Snapshot,
-  options?: Readonly<{
-    engineKind?: VoiceAdapterEngineKind;
-    start?: () => Promise<void>;
-    stop?: () => Promise<void>;
-  }>,
-) {
-  const state: RuntimeAdapterState = {
-    current: initial,
-    hooks: { start: options?.start, stop: options?.stop },
-    listeners: new Set<() => void>(),
-  };
-  runtimeAdapterStates.add(state);
-
-  const notify = () => {
-    for (const listener of state.listeners) {
-      listener();
-    }
-  };
-
-  return {
-    controller: {
-      id,
-      engineKind: options?.engineKind ?? 'local',
-      start: vi.fn(async ({ sessionId }: { sessionId: string }) => {
-        await state.hooks?.start?.();
-        state.current = {
-          adapterId: id,
-          sessionId,
-          status: 'connecting',
-          mode: 'idle',
-          canStop: true,
-        };
-        notify();
-      }),
-      stop: vi.fn(async () => {
-        const stoppedSnapshot = state.current;
-        await state.hooks?.stop?.();
-        // The real conversation controller publishes disconnected after a
-        // successful Stop. Retaining a live snapshot invents another attempt
-        // for the next Account lifetime to retire.
-        if (state.current === stoppedSnapshot) {
-          state.current = {
-            ...stoppedSnapshot,
-            status: 'disconnected',
-            mode: 'idle',
-            canStop: false,
-          };
-          notify();
-        }
-      }),
-      toggle: createAsyncNoopSpy(),
-      interrupt: createAsyncNoopSpy(),
-      setMuted: createAsyncNoopSpy(),
-      sendContextUpdate: createNoopSpy(),
-      getSnapshot: () => state.current,
-      subscribe: (listener: () => void) => {
-        state.listeners.add(listener);
-        return () => {
-          state.listeners.delete(listener);
-        };
-      },
-    } satisfies VoiceAdapterController,
-    setSnapshot(next: Snapshot) {
-      state.current = next;
-      notify();
-    },
-    getSnapshot() {
-      return state.current;
-    },
-  };
-}
-
 // Load the shared graph once, outside per-case hooks; cold module transformation
 // is not part of the mounted runtime's lifecycle operation budget.
 await loadSyncSingletonForTests();
-const { createVoiceSessionManager } = await import('./voiceSessionManager');
+
+async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolean; startGate?: Promise<void>; selectedProviderId?: string; local?: boolean; localPlatform?: 'ios' | 'web'; codex?: boolean }> = {}) {
+  platformOsMock.value = input.local ? input.localPlatform ?? 'ios' : 'web';
+  if (input.local && platformOsMock.value !== 'web') {
+    // The actual web live producer's no-browser capability branch delegates
+    // to NativeMic; recognizer/coordinator assertions prove that real path.
+    expect(globalThis.navigator?.mediaDevices?.getUserMedia).toBeUndefined();
+  }
+  const { storage } = await import('@/sync/domains/state/storage');
+  const { AccountProfileSchema, PluginProjectionV2Schema } = await import('@happier-dev/protocol');
+  const { RPC_METHODS, SESSION_RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+  const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
+  const agentProtocol = await import('@happier-dev/protocol/voice/realtime/agentSession');
+  const { SessionSpawnNewInputV2Schema } = await import('@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2');
+  const { SessionSpawnNewResultV1Schema } = await import('@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1');
+  const machineId = 'mounted-codex-machine';
+  let profile = AccountProfileSchema.parse({ id: 'account-a', ...(input.codex ? {
+    connectedServicesV2: [{ serviceId: 'openai-codex', profiles: ['work', 'primary', 'backup'].map(profileId => ({ profileId, status: 'connected', kind: 'oauth' })),
+      groups: [{ groupId: 'voice-pool', activeProfileId: 'primary', generation: 1, memberProfileIds: ['primary', 'backup'] }],
+    }],
+    connectedServiceCredentialRevisionsV1: ['work', 'primary', 'backup'].map(profileId => ({ serviceId: 'openai-codex', profileId, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' })),
+  } : {}) });
+  const agentRequests: Array<Readonly<{ method: string; targetId: string; params: unknown; timeoutMs: number | null }>> = [];
+  const watches = new Map<string, ReturnType<typeof createDeferred<ReturnType<typeof agentProtocol.AgentSessionRealtimeWatchResultV1Schema.parse>>>>();
+  const daemonSessions: Record<string, ReturnType<typeof createSessionFixture>> = {};
+  const { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } = await import('@/voice/persistence/voiceTranscriptHistorySession');
+  const history = createSessionFixture({ id: 'mounted-runtime-history', encryptionMode: 'plain', active: false,
+    metadata: { path: '/voice', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() },
+  });
+  const nativeSession = createSessionFixture({ id: 'mounted-native-session', encryptionMode: 'plain', active: true, activeAt: Date.now(),
+    ...(input.codex ? { metadata: { machineId, path: '/voice', host: 'test', flavor: 'codex' } } : {}),
+  });
+  const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [history.id]: history, [nativeSession.id]: nativeSession, ...daemonSessions }));
+  const { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1 } = await import('@happier-dev/protocol');
+  const historyOwner = createSessionOwnerMetadataV1({ metadata: history.metadata });
+  if (!historyOwner.ok) throw new Error('Voice history fixture metadata owner unavailable');
+  // Persist an actual current owner tuple at the Home HTTP boundary before
+  // Sync reads it. A legacy layout-0 seed cannot answer current create/load.
+  sessionHttp.createSessionFromPost(history.id, { method: 'POST', body: JSON.stringify({
+    tag: VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG, metadataLayoutVersion: 1,
+    sharedMetadata: { ciphertext: JSON.stringify(projectSessionSharedMetadataV1({ metadata: history.metadata, agentState: null })) },
+    ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(historyOwner.ownerMetadata),
+    agentState: null, dataEncryptionKey: null, encryptionMode: 'plain',
+  }) });
+  const httpRequests: Array<Readonly<{ path: string; method: string; settingsPost?: Readonly<{ expectedVersion: unknown; contentType: unknown; responseValid: boolean; status: number }> }>> = [];
+  const serverUrl = 'https://voice-mounted-runtime.example.test';
+  const settingsHttp = createAccountSettingsHttpBoundary({ serverUrl, initialAccounts: [{ accountId: 'account-a',
+    snapshot: AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {} }, version: 1 }),
+  }] });
+  const configureSocket: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['configureSocket']> = (socket, capturedServerUrl) => {
+    if (!capturedServerUrl) throw new Error('Captured daemon Home unavailable');
+    expect(new URL(capturedServerUrl).origin).toBe(new URL(serverUrl).origin);
+    let timeoutMs: number | null = null;
+    socket.connect = vi.fn<typeof socket.connect>(() => {
+      if (socket.connected) return socket;
+      socket.connected = true;
+      for (const listener of socket.listeners('connect')) listener();
+      return socket;
+    });
+    socket.timeout = vi.fn<typeof socket.timeout>(value => { timeoutMs = value; return socket; });
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, raw: unknown) => {
+      if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+      // Socket.IO's payload is untyped; the framed DTO is narrowed here and each
+      // provider/spawn payload is parsed by its actual strict Protocol schema.
+      if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)) throw new Error('Expected framed daemon RPC');
+      const separator = raw.method.indexOf(':');
+      if (separator <= 0) throw new Error('Expected qualified daemon target');
+      const targetId = raw.method.slice(0, separator);
+      const method = raw.method.slice(separator + 1);
+      const requestTimeoutMs = timeoutMs;
+      timeoutMs = null;
+      const { parseToken } = await import('@/utils/auth/parseToken');
+      const token = typeof socket.auth === 'object' && 'token' in socket.auth ? socket.auth.token : null;
+      expect(typeof token).toBe('string');
+      if (typeof token !== 'string') throw new Error('Captured daemon Account credential unavailable');
+      expect(parseToken(token)).toBe('account-a');
+      if (method === SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_INSPECT) {
+        agentProtocol.AgentSessionRealtimeInspectRequestV1Schema.parse(raw.params);
+        return { ok: true, result: agentProtocol.AgentSessionRealtimeInspectResultV1Schema.parse({ ok: true, status: 'available', transport: 'webrtc' }) };
+      }
+      if (method === SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_START) {
+        const request = agentProtocol.AgentSessionRealtimeStartRequestV1Schema.parse(raw.params);
+        agentRequests.push({ method, targetId, params: request, timeoutMs: requestTimeoutMs });
+        return { ok: true, result: agentProtocol.AgentSessionRealtimeStartResultV1Schema.parse({ ok: true, status: 'started', transport: { kind: 'webrtc', answerSdp: 'v=0\r\na=mounted-codex-answer\r\n' } }) };
+      }
+      if (method === SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_WATCH) {
+        const request = agentProtocol.AgentSessionRealtimeWatchRequestV1Schema.parse(raw.params);
+        expect(requestTimeoutMs).toBeNull();
+        agentRequests.push({ method, targetId, params: request, timeoutMs: requestTimeoutMs });
+        const watch = createDeferred<ReturnType<typeof agentProtocol.AgentSessionRealtimeWatchResultV1Schema.parse>>();
+        watches.set(request.applicationAttemptId, watch);
+        return { ok: true, result: await watch.promise };
+      }
+      if (method === SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_STOP) {
+        const request = agentProtocol.AgentSessionRealtimeStopRequestV1Schema.parse(raw.params);
+        agentRequests.push({ method, targetId, params: request, timeoutMs: requestTimeoutMs });
+        watches.get(request.applicationAttemptId)?.resolve(agentProtocol.AgentSessionRealtimeWatchResultV1Schema.parse({ ok: true, status: 'terminal', event: { kind: 'terminal', reason: 'stopped' } }));
+        return { ok: true, result: agentProtocol.AgentSessionRealtimeStopResultV1Schema.parse({ ok: true, status: 'stopped' }) };
+      }
+      if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { ok: true, result: { protocolVersion: 1, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: { codex: {
+        id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' }, isBuiltIn: true,
+        capabilities: { sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true, startupInstructions: { versions: [1] } } },
+      } }, familiesById: {} }) } };
+      if (method === RPC_METHODS.SESSION_SPAWN_NEW) {
+        const request = SessionSpawnNewInputV2Schema.parse(raw.params);
+        if (!('path' in request.directory)) throw new Error('Expected actual Global absolute directory');
+        const sessionId = `mounted-codex-global-${Object.keys(daemonSessions).length + 1}`;
+        daemonSessions[sessionId] = createSessionFixture({ id: sessionId, serverId: request.executionTarget.serverId, active: true, encryptionMode: 'plain',
+          metadata: { machineId: targetId, path: request.directory.path, host: 'test', flavor: 'codex', connectedServices: request.connectedServices },
+          permissionMode: request.permissionMode,
+        });
+        sessionHttp.replaceSession(sessionId);
+        expect(storage.getState().sessions[sessionId]).toBeUndefined();
+        return { ok: true, result: SessionSpawnNewResultV1Schema.parse({ type: 'success', disposition: 'created', sessionId,
+          executionTarget: request.executionTarget, organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' },
+        }) };
+      }
+      throw new Error(`Unexpected daemon RPC: ${method}`);
+    });
+  };
+  accountConnection = await restoreServerAccountForTest({
+    serverUrl, accountId: 'account-a', credentialScope: 'restored-home',
+    activation: 'switch',
+    ...(input.codex ? { configureSocket } : {}),
+    request: async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      const preparation = settingsHttp.handle(url, init) ?? answerVoiceRealtimePreparationHttpRequest(url, {});
+      let settingsPost: typeof httpRequests[number]['settingsPost'];
+      if (path === '/v2/account/settings' && init?.method === 'POST' && preparation) {
+        const body: unknown = typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
+        const record = body && typeof body === 'object' ? body : null;
+        const { AccountSettingsV2UpdateResponseSchema } = await import('@happier-dev/protocol/account/settings/accountSettingsApiV2');
+        settingsPost = { expectedVersion: record && 'expectedVersion' in record ? record.expectedVersion : undefined,
+          contentType: record && 'content' in record && record.content && typeof record.content === 'object' && 't' in record.content ? record.content.t : undefined,
+          responseValid: AccountSettingsV2UpdateResponseSchema.safeParse(await preparation.clone().json()).success,
+          status: preparation.status,
+        };
+      }
+      httpRequests.push({ path, method: init?.method ?? 'GET', ...(settingsPost ? { settingsPost } : {}) });
+      if (preparation) return preparation;
+      if (path === '/v1/account/profile') return Response.json(profile);
+      if (input.codex && path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' })]);
+      if (input.codex && path === `/v1/machines/${machineId}`) return Response.json({ machine: createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }) });
+      if (input.codex && path === `/v1/machines/${machineId}/access`) {
+        const row = createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' });
+        return Response.json({ machineId, custodian: row.access!.custodian, access: row.access, canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [] });
+      }
+      if (path === '/health') return Response.json({ status: 'ok' });
+      if (path === '/v1/voice/token') return Response.json({ allowed: true, token: 'mounted-token', leaseId: 'mounted-lease', bindingNonce: 'mounted-nonce', expiresAtMs: Date.now() + 60_000 });
+      if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
+      if (path === '/v2/sessions/lookup-by-tags') {
+        const request = SessionLookupByTagsRequestV2Schema.parse(JSON.parse(String(init?.body)));
+        expect(request.tags).toEqual([VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG]);
+        const response = sessionHttp.handle(`https://voice-mounted-runtime.example.test/v2/sessions/${history.id}`);
+        if (!response) throw new Error('Persisted Voice history detail unavailable');
+        return Response.json(SessionLookupByTagsResponseV2Schema.parse({ sessions: [(await response.json()).session] }));
+      }
+      if (path === '/v1/sessions' && init?.method === 'POST') return sessionHttp.createSessionFromPost(history.id, init);
+      const sessionResponse = sessionHttp.handle(url, init);
+      if (sessionResponse) return sessionResponse;
+      return Response.json({}, { status: 404 });
+    },
+  });
+  const account = accountConnection;
+  if (input.codex) {
+    const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+    actionLoaderDisposals.push(await installRealActionExecutorModuleLoader());
+  }
+  const { sync } = await import('@/sync/sync');
+  await sync.resumeSync('manual');
+  await vi.waitFor(() => {
+    expect(storage.getState().profileScope).toEqual({ serverId: account.home.id, accountId: 'account-a' });
+    expect(storage.getState().isDataReady).toBe(true);
+  });
+  const localProviderId = input.selectedProviderId === 'local_conversation' ? 'local_conversation' : 'local_direct';
+  const voice = input.local
+    ? writeVoiceProviderSettingsConfig(voiceSettingsParse({ providerId: localProviderId }), localProviderId,
+      localProviderId === 'local_conversation'
+        ? VoiceLocalConversationSchema.parse({ tts: { autoSpeakReplies: false } })
+        : VoiceLocalDirectSchema.parse({ tts: { autoSpeakReplies: false } }))
+    : input.codex
+      ? writeVoiceProviderSettingsConfig(voiceSettingsParse({ providerId: CODEX_PROVIDER_ID, executionMachine: { mode: 'fixed', machineId } }), CODEX_PROVIDER_ID,
+        { globalConnectedServices: { v: 1, bindingsByServiceId: { [CODEX_CONNECTED_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'work' } } } })
+      : writeVoiceProviderSettingsConfig(voiceSettingsParse({ providerId: ELEVENLABS_PROVIDER_ID }), ELEVENLABS_PROVIDER_ID, ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS);
+  const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+  storage.getState().applySettingsLocal({
+    ...normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: input.selectedProviderId ?? (input.local ? 'local_direct' : ELEVENLABS_PROVIDER_ID) } }, storage.getState().settings),
+    ...(input.currentUi ? { featureToggles: { ...storage.getState().settings.featureToggles, voice: true } } : {}),
+  });
+  sdk.endSession.mockReset().mockResolvedValue(undefined);
+  const conversation = {
+    getId: () => 'mounted-provider-conversation', endSession: sdk.endSession,
+    setMicMuted() {}, setVolume() {}, sendUserMessage() {}, sendContextualUpdate() {},
+  };
+  sdk.startSession.mockReset().mockImplementation(async () => {
+    await input.startGate;
+    return conversation;
+  });
+  const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+  let runtime: React.ReactElement = React.createElement(VoiceSessionRuntime);
+  if (input.currentUi) {
+    const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+    const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+    const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+    const { CurrentUiContextProvider } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
+    const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+    runtime = <InjectedAuthProvider credentials={account.credentials}>
+      <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider>
+        <PluginSurfaceFocusEligibilityProvider active currentUiContextActive>
+          {runtime}
+        </PluginSurfaceFocusEligibilityProvider>
+      </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
+    </InjectedAuthProvider>;
+  }
+  const screen = await renderRuntimeScreen(runtime);
+  generatedRuntimeScreens.push(screen);
+  const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+  const lifecycle = getVoiceSessionLifecycleController();
+  if (!lifecycle) throw new Error('Mounted Voice lifecycle unavailable');
+  expect(lifecycle.getConfiguredProviderId()).toBe(input.codex ? CODEX_PROVIDER_ID : input.local ? localProviderId : ELEVENLABS_PROVIDER_ID);
+  return { screen, lifecycle, runtime, httpRequests, agentRequests, sessionHttp,
+    get profile() { return profile; },
+    async publishProfile(next: ReturnType<typeof AccountProfileSchema.parse>) {
+      profile = AccountProfileSchema.parse(next);
+      await sync.refreshProfile();
+      await screen.update(runtime);
+    },
+  };
+}
+
+async function mountGeneratedElevenLabsRuntime(input: Readonly<{ currentUi?: boolean; selectedProviderId?: string }> = {}) {
+  const mounted = await prepareGeneratedVoiceRuntime(input);
+  const { lifecycle } = mounted;
+  await act(async () => { await lifecycle.toggle(null); });
+  expect(lifecycle.getSnapshot(), JSON.stringify({ snapshot: lifecycle.getSnapshot(), sdkStarts: sdk.startSession.mock.calls.length, requests: mounted.httpRequests })).toMatchObject({ adapterId: ELEVENLABS_PROVIDER_ID, status: 'connected' });
+  await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledOnce());
+  const options: ElevenLabsStartOptions = sdk.startSession.mock.calls[0][0];
+  return { ...mounted, options };
+}
+
+async function mountGeneratedLocalRuntime(selectedProviderId: 'local_direct' | 'local_conversation' = 'local_direct', localPlatform: 'ios' | 'web' = 'ios') {
+  const mounted = await prepareGeneratedVoiceRuntime({ local: true, selectedProviderId, localPlatform });
+  if (!accountConnection) throw new Error('Native Voice Account unavailable');
+  const target = { serverId: accountConnection.home.id, sessionId: 'mounted-native-session' };
+  await act(async () => { await mounted.lifecycle.toggle(target); });
+  await vi.waitFor(() => expect(recognizer.start, JSON.stringify(mounted.lifecycle.getSnapshot())).toHaveBeenCalledOnce());
+  expect(mounted.lifecycle.getSnapshot()).toMatchObject({ adapterId: selectedProviderId,
+    sessionId: target.sessionId, status: 'connected', canStop: true,
+  });
+  if (localPlatform !== 'web') expect(nativeSpeech.getAudioSessionCoordinator().getSnapshot().leaseCount).toBeGreaterThan(0);
+  return { ...mounted, target };
+}
+
+// Physical DOM media elements are owned by the browser SDK. The connection,
+// remote-output lifecycle and capture owners beneath them remain real.
+function createMountedBrowserDocument() {
+  return Object.assign(new EventTarget(), {
+    visibilityState: 'visible' as const,
+    createElement(tag: string) {
+      expect(tag).toBe('audio');
+      return Object.assign(new EventTarget(), {
+        autoplay: false, srcObject: null as MediaStream | null, volume: 1,
+        play: vi.fn(async () => {}), pause: vi.fn(), remove: vi.fn(),
+      });
+    },
+  });
+}
+
+async function mountGeneratedCodexRuntime(input: Readonly<{ global?: boolean; group?: boolean }> = {}) {
+  const browser = installVoiceWebRtcBrowserBoundary();
+  browserBoundaries.push(browser);
+  vi.stubGlobal('window', new EventTarget());
+  vi.stubGlobal('document', createMountedBrowserDocument());
+  const mounted = await prepareGeneratedVoiceRuntime({ codex: true, selectedProviderId: CODEX_PROVIDER_ID });
+  const { storage } = await import('@/sync/domains/state/storage');
+  const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+  if (input.group) {
+    const voice = writeVoiceProviderSettingsConfig(storage.getState().settings.voice, CODEX_PROVIDER_ID, {
+      globalConnectedServices: { v: 1, bindingsByServiceId: { [CODEX_CONNECTED_SERVICE_KEY]: { source: 'connected', selection: 'group', groupId: 'voice-pool' } } },
+    });
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice }, storage.getState().settings));
+    await mounted.screen.update(mounted.runtime);
+  }
+  if (!accountConnection) throw new Error('Codex mounted Account unavailable');
+  const target = { serverId: accountConnection.home.id, sessionId: 'mounted-native-session' };
+  if (!input.global) {
+    const { sync } = await import('@/sync/sync');
+    await sync.ensureSessionVisibleForMessageRoute(target.sessionId, { serverId: target.serverId });
+    expect(storage.getState().sessions[target.sessionId]).toMatchObject({ serverId: target.serverId, active: true });
+  }
+  let start: Promise<void> | undefined;
+  try {
+    await act(async () => { start = mounted.lifecycle.toggle(input.global ? null : target); void start.catch(() => {}); });
+    await vi.waitFor(() => expect(browser.peers, JSON.stringify(mounted.lifecycle.getSnapshot())).toHaveLength(1));
+    await vi.waitFor(() => expect(browser.peer.setRemoteDescription, JSON.stringify(mounted.lifecycle.getSnapshot())).toHaveBeenCalledOnce());
+    browser.peer.channel.open();
+    await act(async () => { await start; });
+    expect(mounted.lifecycle.getSnapshot()).toMatchObject({ adapterId: CODEX_PROVIDER_ID, status: 'connected', canStop: true });
+    expect(browser.peer.addTrack).toHaveBeenCalledWith(browser.micTrack, browser.micStream);
+    return { ...mounted, browser, target };
+  } catch (error) {
+    await mounted.lifecycle.dispose();
+    await start?.catch(() => {});
+    throw error;
+  }
+}
+
+async function prepareMountedOpenAiRuntime(input: Readonly<{ credentialSource?: 'savedSecret' | 'connectedAccount' }> = {}) {
+  platformOsMock.value = 'web';
+  const { createOpenAiVoiceRuntimeEnvironment } = await import('@/dev/testkit/harness/openAiVoiceRuntime');
+  const environment = await createOpenAiVoiceRuntimeEnvironment(input);
+  openAiRuntimeEnvironments.push(environment);
+  const { sync } = await import('@/sync/sync');
+  const { storage } = await import('@/sync/domains/state/storage');
+  await sync.resumeSync();
+  await vi.waitFor(() => {
+    expect(storage.getState().profileScope).toEqual({ serverId: environment.accountConnection.home.id, accountId: 'openai-composed-account' });
+    expect(storage.getState().isDataReady).toBe(true);
+  });
+  const audioContext = new TestVoiceAudioContext();
+  // The browser SDK fixture exposes only the Web Audio leaves capture consumes.
+  const browser = installVoiceWebRtcBrowserBoundary({ createAudioContext: () => audioContext as unknown as AudioContext });
+  browserBoundaries.push(browser);
+  const AudioContextBoundary = class { constructor() { return audioContext; } };
+  vi.stubGlobal('AudioContext', AudioContextBoundary);
+  vi.stubGlobal('window', Object.assign(new EventTarget(), { AudioContext: AudioContextBoundary }));
+  vi.stubGlobal('document', createMountedBrowserDocument());
+  const source = await import('@/voice/runtime/mic/createRealtimeMicSession');
+  const browserSource = await import('@/voice/runtime/mic/createRealtimeMicSession.web');
+  const liveSource = await import('@/voice/runtime/mic/createLiveMicSession');
+  const browserLiveSource = await import('@/voice/runtime/mic/createLiveMicSession.web');
+  // Deciding environment identity, not a fake host.createMicSession override.
+  expect(source.createRealtimeMicSession).toBe(browserSource.createRealtimeMicSession);
+  expect(liveSource.createLiveMicSession).toBe(browserLiveSource.createLiveMicSession);
+  const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+  const runtime = React.createElement(VoiceSessionRuntime);
+  const screen = await renderRuntimeScreen(runtime);
+  generatedRuntimeScreens.push(screen);
+  const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+  const lifecycle = getVoiceSessionLifecycleController();
+  if (!lifecycle) throw new Error('Mounted OpenAI lifecycle unavailable');
+  expect(lifecycle.getConfiguredProviderId()).toBe(OPENAI_PROVIDER_ID);
+  return { environment, browser, screen, lifecycle, runtime };
+}
 
 describe('VoiceSessionRuntime', () => {
   beforeEach(async () => {
     resetConnectedAccountCatalogSnapshotsForTests();
+    installDisconnectedServerSocketBoundary();
     resourceMaterials = [];
+    nativeAudio = nativeSpeech.reset().audioSession;
+    recognizer.listeners.clear();
+    recognizer.start.mockReset().mockImplementation(() => {
+      for (const listener of recognizer.listeners.get('audiostart') ?? []) listener();
+    });
+    recognizer.stop.mockReset().mockImplementation(() => {
+      for (const listener of recognizer.listeners.get('end') ?? []) listener();
+    });
+    recognizer.abort.mockReset().mockImplementation(() => {
+      for (const listener of recognizer.listeners.get('end') ?? []) listener();
+    });
     platformOsMock.value = 'ios';
     currentUiContextToolSetMode.value = 'on_demand';
-    for (const path of Object.keys(runtimeModuleFixtures) as Array<keyof RuntimeFixtureModules>) {
-      delete runtimeModuleFixtures[path];
-    }
     serverUrlsById.clear();
-    writeFixtureSnapshot = null;
-    useSetting.mockReset();
-    useSetting.mockImplementation(defaultUseSetting);
-    useProfile.mockReset();
-    useProfile.mockReturnValue(null);
-    useActiveServerAccountScope.mockReset();
-    useActiveServerAccountScope.mockReturnValue(null);
+    retiredAccountHttpRequests.length = 0;
+    replacementSettingsRequests.length = 0;
 
     const { storage } = await import('@/sync/domains/state/storage');
     const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
     registerStorageStateReader(() => storage.getState());
-    storage.setState({ settings: settingsDefaults, profileScope: null });
 
     const { resetVoiceSessionRuntimeStateForTests } = await import('./voiceSessionStore');
     await resetVoiceSessionRuntimeStateForTests();
   });
 
   afterEach(async () => {
+    // Media shutdown can still complete a hosted HTTP lease. Keep the external
+    // Account transport installed until the real mounted owner has retired.
+    const mountedScreens = generatedRuntimeScreens.splice(0);
+    for (const screen of mountedScreens.reverse()) {
+      await screen.unmount();
+    }
+    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    // React cleanup's disposal is asynchronous. A second dispose() can return
+    // early; the public null publication proves assembly/media teardown joined.
+    if (mountedScreens.length) await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
+    for (const environment of openAiRuntimeEnvironments.splice(0).reverse()) await environment.dispose();
+    for (const browser of browserBoundaries.splice(0).reverse()) browser.restore();
+    for (const dispose of actionLoaderDisposals.splice(0).reverse()) dispose();
     const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
     retireActiveServerAccountScopeLifetime();
     await accountConnection?.dispose();
     accountConnection = null;
-    writeFixtureSnapshot = null;
+    for (const connection of retiredAccountConnections.splice(0).reverse()) await connection.dispose();
     const { resetVoiceSessionRuntimeStateForTests } = await import('./voiceSessionStore');
     await resetVoiceSessionRuntimeStateForTests();
-    useSetting.mockReset();
-    useSetting.mockImplementation(defaultUseSetting);
-    useProfile.mockReset();
-    useProfile.mockReturnValue(null);
-    useActiveServerAccountScope.mockReset();
-    useActiveServerAccountScope.mockReturnValue(null);
     currentUiContextToolSetMode.value = 'on_demand';
-    for (const path of Object.keys(runtimeModuleFixtures) as Array<keyof RuntimeFixtureModules>) {
-      delete runtimeModuleFixtures[path];
-    }
-    releaseRuntimeAdapterStates();
     // Every spy ever created stays in `@vitest/spy`'s module-level registry, and each one
     // holds its recorded `mock.contexts`/`calls`/`results`. Those records reach the adapter
     // objects a test body built (`{ ...controller, resolveSurfaceCapabilities: () => ... }`),
@@ -453,19 +606,83 @@ describe('VoiceSessionRuntime', () => {
     // module namespace. Clearing the records at the end of the test releases them;
     // it runs after every assertion, so no guard depends on it.
     vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  afterAll(async () => {
+    await nativeSpeech.disposeAudioSession();
+    nativeSpeech.disposeNativeSdkBridge();
+  });
+
+  it.each(['live', 'ended'] as const)('keeps direct-session pending requests reachable through the %s glance without a hidden binding', async (phase) => {
+    const mounted = await mountGeneratedLocalRuntime('local_conversation');
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+    const { getVoiceSessionEndedAttempt } = await import('./voiceSessionStore');
+    const { VoiceGlance } = await import('@/components/voice/presence/VoiceGlance');
+    const { useVoiceSurfaceModel } = await import('@/components/voice/surface/useVoiceSurfaceModel');
+    const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+    const { Text } = await import('@/components/ui/text/Text');
+    const { createSessionMessagesFixture } = await import('@/dev/testkit');
+    const now = Date.now();
+    const request = { tool: 'Bash', kind: 'permission' as const, arguments: { command: 'git status' }, createdAt: now };
+    const session = createSessionFixture({ id: mounted.target.sessionId, serverId: mounted.target.serverId,
+      active: true, presence: 'online', activeAt: now, createdAt: now, updatedAt: now,
+      pendingPermissionRequestCount: 1, pendingRequestObservedAt: now,
+      agentState: { requests: { 'direct-request': request } },
+    });
+    await act(async () => {
+      storage.getState().applySessions([session]);
+      storage.setState({ sessionMessages: { ...storage.getState().sessionMessages,
+        [session.id]: createSessionMessagesFixture({ isLoaded: true }) } });
+    });
+    expect(voiceSessionBindingStore.getState().getByControlSessionId(session.id)).toBeNull();
+
+    let currentControl: VoiceAttemptControlProjection | null = null;
+    function Glance() {
+      const model = useVoiceSurfaceModel({ variant: 'sidebar', sessionAddress: mounted.target });
+      currentControl = model?.attemptControl ?? null;
+      return model ? <VoiceGlance model={model} presentation="companion" /> : null;
+    }
+    function HostedGlance() {
+      const [destination, setDestination] = React.useState('/settings/voice');
+      const navigation = React.useMemo(() => ({ push: (href: unknown) => setDestination(String(href)),
+        replace: (href: unknown) => setDestination(String(href)), back: () => setDestination('/settings/voice') }), []);
+      return <DestinationInstanceHost tabId="direct-voice" ref={{ kind: 'voice', params: {} }}
+        pathname={destination} focused visible navigation={navigation}>
+        {destination === '/settings/voice' ? <Glance /> : <Text testID="direct-review-destination">{destination}</Text>}
+      </DestinationInstanceHost>;
+    }
+    const glance = await renderRuntimeScreen(<HostedGlance />);
+    generatedRuntimeScreens.push(glance);
+    if (phase === 'live') {
+      expect(currentControl).toMatchObject({ statusCell: 'needs_you', pendingRequestSessionAddress: mounted.target });
+      expect(glance.findByTestId('permission-prompt-card')).not.toBeNull();
+      expect(glance.getTextContent()).toContain(request.arguments.command);
+    } else {
+      await glance.pressByTestIdAsync('voice-glance-end');
+      await vi.waitFor(() => expect(mounted.lifecycle.getSnapshot().status).toBe('disconnected'));
+      expect(getVoiceSessionEndedAttempt()).toMatchObject({ targetSessionAddress: mounted.target,
+        accountScope: { serverId: mounted.target.serverId, accountId: 'account-a' }, conversationSessionAddress: null });
+      await glance.pressByTestIdAsync('voice-glance-ended-pending.review');
+      expect(glance.findByTestId('direct-review-destination')?.props.children)
+        .toBe(`/session/${session.id}?serverId=${encodeURIComponent(mounted.target.serverId)}`);
+    }
+    // Rendering and End leave human approval custody untouched.
+    expect(storage.getState().sessions[session.id]?.agentState?.requests?.['direct-request']).toEqual(request);
   });
 
   it('does not renormalize materialized Voice settings for connectivity or Profile presentation updates', async () => {
     platformOsMock.value = 'web';
-    useSetting.mockImplementation((key) => key === 'voice' || key === 'voiceSettingsV1'
-      ? { providerId: 'off' }
-      : null);
     const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
     const { storage } = await import('@/sync/domains/state/storage');
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { providerId: 'off' } }, storage.getState().settings));
     let commits = 0;
-    await renderScreen(React.createElement(React.Profiler, {
+    const screen = await renderRuntimeScreen(React.createElement(React.Profiler, {
       id: 'voice-runtime', onRender: () => { commits += 1; },
     }, React.createElement(VoiceSessionRuntime)));
+    generatedRuntimeScreens.push(screen);
 
     const voice = storage.getState().settings.voice;
     const providers = voice.providers;
@@ -509,7 +726,7 @@ describe('VoiceSessionRuntime', () => {
         get() { dictationReads += 1; return dictation; },
       });
       await act(async () => {
-        storage.setState({ profile: { ...profileDefaults, ...storage.getState().profile, firstName: 'Updated' } });
+        storage.getState().applyProfile({ ...storage.getState().profile, firstName: 'Updated' });
       });
 
       expect(commits).toBeGreaterThan(commitsBeforeProfile);
@@ -521,850 +738,382 @@ describe('VoiceSessionRuntime', () => {
   });
 
   it('publishes the active adapter snapshot into the voice session store', async () => {
-    const snap: Snapshot = {
-      adapterId: 'local_direct',
-      sessionId: 's1',
-      status: 'connected',
-      mode: 'idle',
-      canStop: true,
-    };
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({ adapters: [
-        {
-          id: 'local_direct',
-          ...createStubAdapterControls(),
-          getSnapshot: () => snap,
-          subscribe: (listener: () => void) => {
-            // no-op; test only asserts initial publish
-            void listener;
-            return () => {};
-          },
-        },
-      ], dispose: createAsyncNoopSpy() }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-    setVoiceSessionSnapshot({
-      adapterId: null,
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
+    const { lifecycle } = await mountGeneratedElevenLabsRuntime();
+    const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
+    expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
+    expect(getVoiceSessionSnapshot()).toMatchObject({
+      adapterId: ELEVENLABS_PROVIDER_ID, sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+      status: 'connected', mode: 'idle', canStop: true,
     });
-
-    await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    expect(getVoiceSessionSnapshot()).toEqual(snap);
   });
 
   it('configures exact-session Codex Voice without requiring its global account binding', async () => {
     platformOsMock.value = 'web';
-    useSetting.mockImplementation((key: string) => key === 'voice' || key === 'voiceSettingsV1'
-      ? {
-          providerId: CODEX_PROVIDER_ID,
-          providers: {
-            [CODEX_PROVIDER_ID]: {
-              schemaVersion: 2,
-              config: { globalConnectedServices: null },
-            },
-          },
-        }
-      : null);
-
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    const voice = writeVoiceProviderSettingsConfig(storage.getState().settings.voice, CODEX_PROVIDER_ID, { globalConnectedServices: null });
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: CODEX_PROVIDER_ID } }, storage.getState().settings));
     const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
     const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
-
-    await renderScreen(React.createElement(VoiceSessionRuntime));
+    const screen = await renderRuntimeScreen(React.createElement(VoiceSessionRuntime));
+    generatedRuntimeScreens.push(screen);
 
     expect(getVoiceSessionLifecycleController()?.getConfiguredProviderId()).toBe(CODEX_PROVIDER_ID);
   });
 
   it('sends only current-UI tool availability changes to the lifecycle owner', async () => {
-    const rearmAfterCredentialAuthorityChange = createRearmSpy();
-    const lifecycleController = createStubLifecycleController(rearmAfterCredentialAuthorityChange);
-    setRuntimeModuleFixture('./voiceSessionLifecycleController', () => ({
-      createVoiceSessionLifecycleController: () => lifecycleController,
-    }));
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    expect(lifecycleController.setCurrentUiContextToolSetEnabled).toHaveBeenCalledTimes(1);
-    expect(lifecycleController.setCurrentUiContextToolSetEnabled).toHaveBeenLastCalledWith(true);
+    const { screen, lifecycle, runtime } = await mountGeneratedElevenLabsRuntime({ currentUi: true });
+    expect(lifecycle.getSnapshot().status).toBe('connected');
+    expect(sdk.startSession).toHaveBeenCalledOnce();
 
     await act(async () => {
       await setCurrentUiContextToolSetMode('automatic');
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
+      await screen.update(runtime);
     });
-    expect(lifecycleController.setCurrentUiContextToolSetEnabled).toHaveBeenCalledTimes(1);
+    expect(lifecycle.getSnapshot().status).toBe('connected');
+    expect(sdk.startSession).toHaveBeenCalledOnce();
+    expect(sdk.endSession).not.toHaveBeenCalled();
 
     await act(async () => {
       await setCurrentUiContextToolSetMode('off');
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
+      await screen.update(runtime);
     });
-    expect(lifecycleController.setCurrentUiContextToolSetEnabled).toHaveBeenCalledTimes(2);
-    expect(lifecycleController.setCurrentUiContextToolSetEnabled).toHaveBeenLastCalledWith(false);
+    await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledTimes(2));
+    expect(sdk.endSession).toHaveBeenCalledOnce();
+    expect(lifecycle.getSnapshot().status).toBe('connected');
 
     await act(async () => {
       await setCurrentUiContextToolSetMode('on_demand');
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
+      await screen.update(runtime);
     });
-    expect(lifecycleController.setCurrentUiContextToolSetEnabled).toHaveBeenCalledTimes(3);
-    expect(lifecycleController.setCurrentUiContextToolSetEnabled).toHaveBeenLastCalledWith(true);
+    await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledTimes(3));
+    expect(sdk.endSession).toHaveBeenCalledTimes(2);
+    expect(lifecycle.getSnapshot().status).toBe('connected');
   });
 
   it('updates the store when an adapter subscription fires', async () => {
-    let current: Snapshot = {
-      adapterId: 'local_direct',
-      sessionId: 's1',
-      status: 'connected',
-      mode: 'idle',
-      canStop: true,
-    };
-
-    let subscribed: (() => void) | null = null;
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({ adapters: [
-        {
-          id: 'local_direct',
-          ...createStubAdapterControls(),
-          getSnapshot: () => current,
-          subscribe: (listener: () => void) => {
-            subscribed = listener;
-            return () => {
-              subscribed = null;
-            };
-          },
-        },
-      ], dispose: createAsyncNoopSpy() }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    const { options, lifecycle } = await mountGeneratedElevenLabsRuntime();
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-    await renderScreen(React.createElement(VoiceSessionRuntime));
-
     expect(getVoiceSessionSnapshot().mode).toBe('idle');
-
-    current = { ...current, mode: 'speaking' };
+    if (!options.onModeChange) throw new Error('Real generated provider did not subscribe to SDK mode events');
     await act(async () => {
-      subscribed?.();
+      options.onModeChange?.({ mode: 'speaking' });
     });
-
-    expect(getVoiceSessionSnapshot().mode).toBe('speaking');
+    await vi.waitFor(() => expect(getVoiceSessionSnapshot().mode).toBe('speaking'));
+    expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
   });
 
   it('rearms a failed provider-auth preparation after credential authority changes and waits for explicit start', async () => {
-    const accountScope = await applyAccountScope({ serverId: 'server-a', accountId: 'account-a' });
-    useActiveServerAccountScope.mockReturnValue(accountScope);
-    let voiceSetting = {
-      providerId: OPENAI_PROVIDER_ID,
-      providers: {
-        [OPENAI_PROVIDER_ID]: {
-          schemaVersion: 1,
-          config: {
-            model: { kind: 'pinned', id: 'gpt-realtime-2.1' },
-            voice: 'marin',
-            instructions: '',
-            turnDetection: 'server_vad',
-            inputTranscriptionModel: '',
-          },
-        },
-      },
-    };
-    const canonicalVoiceSetting = {
-      ...voiceSetting,
-      credentialBindings: [{
-        contribution: {
-          pluginId: 'happier.voice.openai',
-          localId: 'realtime-openai',
-        },
-        credentialSlotId: 'api_key',
-        credentialSource: { kind: 'connectedAccount' },
-        credentialBindings: {},
+    const { environment, browser, screen, lifecycle, runtime } = await prepareMountedOpenAiRuntime({ credentialSource: 'connectedAccount' });
+    const { AccountProfileSchema } = await import('@happier-dev/protocol/account/profile');
+    const { sync } = await import('@/sync/sync');
+    const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
+    await environment.selectConnectedAccount('work');
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    environment.accountProfile = AccountProfileSchema.parse({
+      ...environment.accountProfile,
+      connectedServicesV2: [{ serviceId: 'openai-codex',
+        profiles: [{ profileId: 'work', status: 'needs_reauth', kind: 'token' }], groups: [],
       }],
-    };
-    let profile: Exclude<TestProfileAuthority, null> = {
-      connectedServicesV2: [{
-        serviceId: 'openai',
-        profiles: [{ profileId: 'work', status: 'needs_reauth', kind: 'token' }],
-        groups: [],
+      connectedAccountsV4: [{
+        ref: { service, accountId: 'work' }, status: 'needs_reauth', authenticationModeId: 'api-key',
+        configurationReady: true, configurationRevision: null, revisionSemantics: 'revisioned',
+        credentialRevision: 'csr_initial0000000000000000', scopes: [],
       }],
       connectedServiceCredentialRevisionsV1: [],
-      connectedAccountsV4: [{
-        ref: {
-          service: { pluginId: 'happier.voice.openai', localId: 'openai' },
-          accountId: 'work',
-        },
-        status: 'needs_reauth',
-        authenticationModeId: 'api-key',
-        configurationReady: true,
-        configurationRevision: null,
-        revisionSemantics: 'revisioned',
-        credentialRevision: 'csr_initial0000000000000000',
-        scopes: [],
-      }],
-      connectedAccountGroupsV4: [],
+    });
+    await act(async () => { await sync.refreshProfile(); await screen.update(runtime); });
+    let mintRequests = 0;
+    environment.mintTransport = async () => {
+      mintRequests += 1;
+      return Object.freeze({
+        status: 401, finalUrl: 'https://api.openai.com/v1/realtime/client_secrets',
+        headers: Object.freeze({}), body: new TextEncoder().encode('{}'),
+      });
     };
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice') return voiceSetting;
-      if (key === 'voiceSettingsV1') return canonicalVoiceSetting;
-      if (key === 'secrets') return [];
-      if (key === 'connectedPurposes') return {
-        v: 1,
-        bindings: [{
-          purpose: {
-            consumer: {
-              pluginId: 'happier.voice.openai',
-              localId: 'realtime-openai',
-            },
-            purpose: 'voice.client-auth',
-          },
-          target: {
-            kind: 'account',
-            account: {
-              service: { pluginId: 'happier.voice.openai', localId: 'openai' },
-              accountId: 'work',
-            },
-          },
-        }],
-      };
-      return null;
-    });
-    useProfile.mockImplementation(() => profile);
-    const selected = createRuntimeAdapter(OPENAI_PROVIDER_ID, {
-      adapterId: OPENAI_PROVIDER_ID,
-      sessionId: 'voice-session',
-      status: 'error',
-      mode: 'idle',
-      canStop: false,
-      errorCode: 'provider_auth_invalid',
-      errorMessage: 'credential_unavailable',
-      errorRecoveryAction: 'review_credentials',
-      errorPresentation: 'error',
-    });
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [selected.controller],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
-    const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
+    await act(async () => { await lifecycle.toggle(null); });
     expect(getVoiceSessionSnapshot()).toMatchObject({
-      status: 'error',
-      errorCode: 'provider_auth_invalid',
-      errorRecoveryAction: 'review_credentials',
+      status: 'error', errorCode: 'provider_auth_invalid', errorRecoveryAction: 'review_credentials',
     });
-
-    profile = {
-      connectedServicesV2: [{
-        serviceId: 'openai',
-        profiles: [{ profileId: 'work', status: 'connected', kind: 'token' }],
-        groups: [],
+    expect(browser.peers).toEqual([]);
+    expect(browser.micTracks).toEqual([]);
+    const requestsBeforeRepair = mintRequests;
+    environment.accountProfile = AccountProfileSchema.parse({
+      ...environment.accountProfile,
+      connectedServicesV2: [{ serviceId: 'openai-codex',
+        profiles: [{ profileId: 'work', status: 'connected', kind: 'token' }], groups: [],
+      }],
+      connectedAccountsV4: [{
+        ref: { service, accountId: 'work' }, status: 'connected', authenticationModeId: 'api-key',
+        configurationReady: true, configurationRevision: null, revisionSemantics: 'revisioned',
+        credentialRevision: 'csr_replacement00000000000', scopes: [],
       }],
       connectedServiceCredentialRevisionsV1: [{
-        serviceId: 'openai',
-        profileId: 'work',
-        credentialRevision: 'csr_replacement00000000000',
+        serviceId: 'openai-codex', profileId: 'work', credentialRevision: 'csr_replacement00000000000',
       }],
-      connectedAccountsV4: [{
-        ref: {
-          service: { pluginId: 'happier.voice.openai', localId: 'openai' },
-          accountId: 'work',
-        },
-        status: 'connected',
-        authenticationModeId: 'api-key',
-        configurationReady: true,
-        configurationRevision: null,
-        revisionSemantics: 'revisioned',
-        credentialRevision: 'csr_replacement00000000000',
-        scopes: [],
-      }],
-      connectedAccountGroupsV4: [],
-    };
-    voiceSetting = {
-      ...voiceSetting,
-      providers: {
-        ...voiceSetting.providers,
-        [OPENAI_PROVIDER_ID]: {
-          ...voiceSetting.providers[OPENAI_PROVIDER_ID],
-          config: {
-            ...voiceSetting.providers[OPENAI_PROVIDER_ID].config,
-          },
-        },
-      },
-    };
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
     });
-
+    await act(async () => { await sync.refreshProfile(); await screen.update(runtime); });
     expect(getVoiceSessionSnapshot()).toEqual({
-      adapterId: null,
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
+      adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false,
     });
-    expect(selected.controller.start).not.toHaveBeenCalled();
-    expect(selected.controller.stop).not.toHaveBeenCalled();
-
-    await act(async () => {
-      await getVoiceSessionLifecycleController()?.toggle(sessionAddress('voice-session-retry'));
-    });
-    expect(selected.controller.start).toHaveBeenCalledWith({
-      sessionId: 'voice-session-retry',
-      requestedTargetSessionAddress: sessionAddress('voice-session-retry'),
-    });
+    expect(mintRequests).toBe(requestsBeforeRepair);
+    expect(browser.peers).toEqual([]);
+    expect(browser.micTracks).toEqual([]);
+    environment.mintTransport = async () => {
+      mintRequests += 1;
+      return Object.freeze({
+        status: 200, finalUrl: 'https://api.openai.com/v1/realtime/client_secrets',
+        headers: Object.freeze({}),
+        body: new TextEncoder().encode(JSON.stringify(environment.createClientAuthProviderResponse(
+          'ek_source_composed', Math.floor(Date.now() / 1_000) + 60,
+        ))),
+      });
+    };
+    let retry: Promise<void> | undefined;
+    try {
+      await act(async () => { retry = lifecycle.toggle(null); void retry.catch(() => {}); });
+      await vi.waitFor(() => expect(browser.peers).toHaveLength(1));
+      await vi.waitFor(() => expect(browser.peer.setRemoteDescription, JSON.stringify(lifecycle.getSnapshot())).toHaveBeenCalledOnce());
+      browser.peer.channel.open();
+      await act(async () => { await retry; });
+      expect(mintRequests).toBe(requestsBeforeRepair + 1);
+      expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
+      expect(getVoiceSessionSnapshot(), JSON.stringify(lifecycle.getSnapshot())).toMatchObject({
+        adapterId: OPENAI_PROVIDER_ID, status: 'connected', canStop: true,
+      });
+      expect(browser.peer.addTrack).toHaveBeenCalledWith(browser.micTrack, browser.micStream);
+    } finally {
+      await lifecycle.dispose();
+      await retry;
+    }
   });
 
   it('retires each Account scope transition once at the Account lifetime boundary', async () => {
-    const accountA = { serverId: 'voice-server', accountId: 'voice-account-a' };
-    const accountB = { serverId: 'voice-server', accountId: 'voice-account-b' };
-    let accountScope: Readonly<{ serverId: string; accountId: string }> | null = null;
-    useActiveServerAccountScope.mockImplementation(() => accountScope);
-
-    const rearmAfterCredentialAuthorityChange = createRearmSpy();
-    const lifecycleController = createStubLifecycleController(rearmAfterCredentialAuthorityChange);
-    setRuntimeModuleFixture('./voiceSessionLifecycleController', () => ({
-      createVoiceSessionLifecycleController: () => lifecycleController,
-    }));
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
     const { storage } = await import('@/sync/domains/state/storage');
-    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
-    registerStorageStateReader(() => storage.getState());
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    const transitionTo = async (nextAccountScope: Readonly<{ serverId: string; accountId: string }> | null) => {
-      accountScope = await applyAccountScope(nextAccountScope);
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { providerId: 'off' } }, storage.getState().settings));
+    expect(captureActiveServerAccountScopeLifetime()).toBeNull();
+    const runtime = React.createElement(VoiceSessionRuntime);
+    const screen = await renderRuntimeScreen(runtime);
+    generatedRuntimeScreens.push(screen);
+    const lifecycle = getVoiceSessionLifecycleController();
+    if (!lifecycle) throw new Error('Actual idle Runtime lifecycle unavailable');
+    await act(async () => {
+      await applyAccountScope({ serverId: 'voice-server', accountId: 'voice-account-a' });
+      await screen.update(runtime);
+    });
+    const accountA = captureActiveServerAccountScopeLifetime();
+    if (!accountA) throw new Error('Actual Account A lifetime unavailable');
+    let retiredA = 0;
+    const subscriptionA = accountA.onRetire(() => { retiredA += 1; });
+    let subscriptionB: ReturnType<typeof accountA.onRetire> | undefined;
+    try {
       await act(async () => {
-        screen.tree.update(React.createElement(VoiceSessionRuntime));
+        await applyAccountScope({ serverId: 'voice-server', accountId: 'voice-account-b' });
+        await screen.update(runtime);
       });
-    };
-
-    await transitionTo(accountA);
-    expect(rearmAfterCredentialAuthorityChange.mock.calls).toEqual([
-      [{ exactSessionAccountScopeChanged: true }],
-    ]);
-
-    await transitionTo(accountB);
-    expect(rearmAfterCredentialAuthorityChange.mock.calls).toEqual([
-      [{ exactSessionAccountScopeChanged: true }],
-      [{ exactSessionAccountScopeChanged: true }],
-    ]);
-
-    await transitionTo(null);
-    expect(rearmAfterCredentialAuthorityChange.mock.calls).toEqual([
-      [{ exactSessionAccountScopeChanged: true }],
-      [{ exactSessionAccountScopeChanged: true }],
-      [{ exactSessionAccountScopeChanged: true }],
-    ]);
+      const accountB = captureActiveServerAccountScopeLifetime();
+      if (!accountB) throw new Error('Actual Account B lifetime unavailable');
+      expect(accountA.isCurrent()).toBe(false);
+      expect(retiredA).toBe(1);
+      expect(accountB.isCurrent()).toBe(true);
+      expect(accountB.scope.accountId).toBe('voice-account-b');
+      let retiredB = 0;
+      subscriptionB = accountB.onRetire(() => { retiredB += 1; });
+      await act(async () => { await applyAccountScope(null); await screen.update(runtime); });
+      expect(captureActiveServerAccountScopeLifetime()).toBeNull();
+      expect(accountB.isCurrent()).toBe(false);
+      expect(retiredA).toBe(1);
+      expect(retiredB).toBe(1);
+      await screen.update(runtime);
+      expect(retiredA).toBe(1);
+      expect(retiredB).toBe(1);
+      expect(getVoiceSessionLifecycleController()).toBe(lifecycle);
+      expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+    } finally {
+      subscriptionA.dispose();
+      subscriptionB?.dispose();
+    }
   });
 
   it('classifies ordinary OpenAI credential changes as next-start-only while every Account scope change fences the live attempt', async () => {
-    platformOsMock.value = 'web';
-    let selectedProviderId = 'happier.voice.openai/realtime-openai';
-    let accountScope = { serverId: 'server-a', accountId: 'account-a' };
-    accountScope = await applyAccountScope(accountScope);
-    let credentialBindings: ReadonlyArray<unknown> = [];
-    let providerEnvelope: Readonly<Record<string, unknown>> = {
-      schemaVersion: 1,
-      config: {
-        model: { kind: 'pinned', id: 'gpt-realtime-2.1' },
-        voice: 'marin',
-        instructions: '',
-        turnDetection: 'server_vad',
-        inputTranscriptionModel: '',
-      },
-    };
-    let secrets: ReadonlyArray<unknown> = [];
-    let profile: Exclude<TestProfileAuthority, null> = {
-      connectedServicesV2: [],
-      connectedServiceCredentialRevisionsV1: [],
-    };
-    const readVoiceSetting = () => ({
-      providerId: selectedProviderId,
-      providers: { [selectedProviderId]: providerEnvelope },
-    });
-    const readCanonicalVoiceSetting = () => ({
-      providerId: selectedProviderId,
-      credentialBindings,
-      providers: { [selectedProviderId]: providerEnvelope },
-    });
-    useActiveServerAccountScope.mockImplementation(() => accountScope);
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice') return readVoiceSetting();
-      if (key === 'voiceSettingsV1') return readCanonicalVoiceSetting();
-      if (key === 'secrets') return secrets;
-      if (key === 'connectedPurposes') return { v: 1, bindings: [] };
-      return null;
-    });
-    useProfile.mockImplementation(() => profile);
-
-    const rearmAfterCredentialAuthorityChange = createRearmSpy();
-    const disconnectedSnapshot: Snapshot = {
-      adapterId: null,
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
-    };
-    const ordinaryOpenAiAdapter = {
-      ...createRuntimeAdapter(
-        'happier.voice.openai/realtime-openai',
-        disconnectedSnapshot,
-        { engineKind: 'realtime' },
-      ).controller,
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: false,
-        bargeInEnabled: false,
-      }),
-    };
-    const exactSessionCodexAdapter = {
-      ...createRuntimeAdapter(
-        'happier.agent.codex/realtime-codex',
-        disconnectedSnapshot,
-        { engineKind: 'realtime' },
-      ).controller,
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: true,
-        bargeInEnabled: false,
-        agentRuntime: {
-          pluginId: 'happier.codex',
-          localId: 'codex',
-        },
-      }),
-    };
-    const lifecycleController = createStubLifecycleController(rearmAfterCredentialAuthorityChange);
-    setRuntimeModuleFixture('./voiceSessionLifecycleController', () => ({
-      createVoiceSessionLifecycleController: () => lifecycleController,
-    }));
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [ordinaryOpenAiAdapter, exactSessionCodexAdapter],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    const mounted = await prepareMountedOpenAiRuntime();
+    const { environment, browser, lifecycle } = mounted;
     const { storage } = await import('@/sync/domains/state/storage');
-    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
-    registerStorageStateReader(() => storage.getState());
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-    // Cold catalog/registry admission has no live attempt to classify. Start
-    // this transition test from the mounted, admitted Account baseline.
-    rearmAfterCredentialAuthorityChange.mockClear();
+    const { applyAccountSettingsSavedSecretMutation } = await import('@happier-dev/protocol/account/settings/savedSecretMutationOwner');
+    const { OpenAiRealtimeSettingsV1Schema } = await import('../../../../../packages/plugins/openai/src/protocol/voice/settings');
+    const start = lifecycle.toggle(null);
+    void start.catch(() => undefined);
+    await vi.waitFor(() => expect(browser.peers, JSON.stringify(lifecycle.getSnapshot())).toHaveLength(1));
+    await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalledOnce());
+    browser.peer.channel.open();
+    await act(async () => { await start; });
+    expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, status: 'connected' });
 
-    accountScope = { serverId: 'server-b', accountId: 'account-b' };
-    accountScope = await applyAccountScope(accountScope);
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
+    const selectedSecret = storage.getState().settings.secrets.find(secret => secret.id === 'realtime-openai-composed-secret');
+    if (!selectedSecret) throw new Error('Canonical selected SavedSecret unavailable');
+    const rotated = applyAccountSettingsSavedSecretMutation(storage.getState().settings, {
+      kind: 'rotateGlobal', secretId: selectedSecret.id, expectedUpdatedAt: selectedSecret.updatedAt,
+      encryptedValue: { _isSecretValue: true, value: 'selected-secret-next-start' }, updatedAt: selectedSecret.updatedAt + 1,
     });
-
-    const selectedCredentialBinding = {
-      contribution: {
-        pluginId: 'happier.voice.openai',
-        localId: 'realtime-openai',
-      },
-      credentialSlotId: 'api_key',
-      credentialSource: { kind: 'savedSecret' },
-      credentialBindings: { account: { api_key: 'happier:shared-secret:v1:secret-b' } },
-    };
-    credentialBindings = [selectedCredentialBinding];
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
+    await environment.publishAccountSettings(settingsParse(rotated.settings));
+    const voice = writeVoiceProviderSettingsConfig(storage.getState().settings.voice, OPENAI_PROVIDER_ID, {
+      ...OpenAiRealtimeSettingsV1Schema.parse(storage.getState().settings.voice.providers[OPENAI_PROVIDER_ID]?.config), voice: 'cedar',
     });
+    await environment.configureVoice(voice);
+    // Equal canonical HTTP hydration must not accidentally retire a live
+    // ordinary attempt either; the selected secret/config apply next Start.
+    await environment.publishAccountSettings(settingsParse(storage.getState().settings));
+    await mounted.screen.update(mounted.runtime);
+    expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, status: 'connected' });
+    expect(browser.peer.close).not.toHaveBeenCalled();
+    expect(browser.micTrack.stop).not.toHaveBeenCalled();
 
-    providerEnvelope = {
-      ...providerEnvelope,
-      config: {
-        ...(providerEnvelope.config as Readonly<Record<string, unknown>>),
-        voice: 'cedar',
-      },
-    };
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
+    // Account logout is a real scope transition, unlike ordinary credential
+    // currentness. The separate Account transition keeper covers A/B, Home
+    // replacement and null admission without a call-only lifecycle classifier.
+    await environment.accountConnection.dispose();
+    await vi.waitFor(() => expect(browser.peer.close).toHaveBeenCalledOnce());
+    expect(browser.micTrack.stop).toHaveBeenCalledOnce();
+    await mounted.screen.unmount();
+    generatedRuntimeScreens.splice(generatedRuntimeScreens.indexOf(mounted.screen), 1);
+    await environment.dispose();
+    openAiRuntimeEnvironments.splice(openAiRuntimeEnvironments.indexOf(environment), 1);
+    browser.restore();
+    browserBoundaries.splice(browserBoundaries.indexOf(browser), 1);
+
+    const agent = await mountGeneratedCodexRuntime({ global: true });
+    const agentStarts = () => agent.agentRequests.filter(request => request.method.endsWith('.start'));
+    const agentStops = () => agent.agentRequests.filter(request => request.method.endsWith('.stop'));
+    expect(agentStarts()).toHaveLength(1);
+    const agentVoice = writeVoiceProviderSettingsConfig(storage.getState().settings.voice, CODEX_PROVIDER_ID, {
+      globalConnectedServices: { v: 1, bindingsByServiceId: {
+        [CODEX_CONNECTED_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'backup' },
+      } },
     });
-
-    credentialBindings = [
-      selectedCredentialBinding,
-      {
-        contribution: { pluginId: 'acme.voice', localId: 'other' },
-        credentialSlotId: 'api_key',
-        credentialSource: { kind: 'savedSecret' },
-        credentialBindings: { account: { api_key: 'unrelated-secret' } },
-      },
-    ];
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-    });
-    expect(rearmAfterCredentialAuthorityChange).toHaveBeenCalledTimes(3);
-
-    credentialBindings = JSON.parse(JSON.stringify(credentialBindings));
-    providerEnvelope = JSON.parse(JSON.stringify(providerEnvelope));
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-    });
-    expect(rearmAfterCredentialAuthorityChange).toHaveBeenCalledTimes(3);
-
-    resourceMaterials = SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [{
-      resourceId: 'secret-b', encryptionMode: 'plain', recipientEnvelope: null,
-      storedContent: { t: 'plain', v: { v: 1, name: 'OpenAI', kind: 'apiKey', value: 'selected-secret' } },
-      entry: { ref: 'happier:shared-secret:v1:secret-b', source: 'shared_resource', relationship: 'owner',
-        ownerAccountId: accountScope.accountId, name: 'OpenAI', kind: 'apiKey', revision: 2,
-        materialStatus: 'ready', capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
-    }] }).resources;
-    profile = {
-      connectedServicesV2: [{
-        serviceId: 'openai',
-        profiles: [{ profileId: 'work', status: 'connected', kind: 'token' }],
-        groups: [],
-      }],
-      connectedServiceCredentialRevisionsV1: [{
-        serviceId: 'openai',
-        profileId: 'work',
-        credentialRevision: 'csr_replacement00000000000',
-      }],
-    };
-    await act(async () => {
-      await refreshSavedSecretCatalog(accountScope);
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-    });
-
-    expect(rearmAfterCredentialAuthorityChange.mock.calls).toEqual([
-      // Account scope is not credential currentness: an ordinary provider's
-      // running attempt belongs to the Account it started under, so the switch
-      // fences it exactly like an Agent-runtime attempt.
-      [{ exactSessionAccountScopeChanged: true }],
-      [{ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: false }],
-      [{ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: false }],
-      [{ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: false }],
-    ]);
-
-    selectedProviderId = 'happier.agent.codex/realtime-codex';
-    credentialBindings = [];
-    providerEnvelope = {
-      schemaVersion: 2,
-      config: {
-        globalConnectedServices: {
-          v: 1,
-          bindingsByServiceId: {
-            [CODEX_CONNECTED_SERVICE_KEY]: {
-              source: 'connected',
-              selection: 'profile',
-              profileId: 'codex-account-a',
-            },
-          },
-        },
-      },
-    };
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-    });
-    rearmAfterCredentialAuthorityChange.mockClear();
-
-    accountScope = { serverId: 'server-b', accountId: 'codex-account-b' };
-    accountScope = await applyAccountScope(accountScope);
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-    });
-    providerEnvelope = {
-      ...providerEnvelope,
-      config: {
-        ...(providerEnvelope.config as Readonly<Record<string, unknown>>),
-        globalConnectedServices: {
-          v: 1,
-          bindingsByServiceId: {
-            [CODEX_CONNECTED_SERVICE_KEY]: {
-              source: 'connected',
-              selection: 'profile',
-              profileId: 'codex-account-b',
-            },
-          },
-        },
-      },
-    };
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-    });
-
-    expect(rearmAfterCredentialAuthorityChange.mock.calls).toEqual([
-      [{ exactSessionAccountScopeChanged: true }],
-      [{ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: true }],
-    ]);
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: agentVoice }, storage.getState().settings));
+    await agent.screen.update(agent.runtime);
+    await vi.waitFor(() => expect(agentStops()).toHaveLength(1));
+    expect(agent.browser.peer.close).toHaveBeenCalledOnce();
+    expect(agent.browser.micTrack.stop).toHaveBeenCalledOnce();
+    expect(agentStarts()).toHaveLength(1);
+    await agent.screen.update(agent.runtime);
+    expect(agentStops()).toHaveLength(1);
   });
 
   it('does not terminate a pending ordinary OpenAI Start for unrelated secret, profile, or revision refreshes', async () => {
-    const voiceSetting = {
-      providerId: OPENAI_PROVIDER_ID,
-      providers: {
-        [OPENAI_PROVIDER_ID]: {
-          schemaVersion: 1,
-          config: {
-            model: { kind: 'pinned', id: 'gpt-realtime-2.1' },
-            voice: 'marin',
-            instructions: '',
-            turnDetection: 'server_vad',
-            inputTranscriptionModel: '',
-          },
-        },
-      },
-    };
-    const canonicalVoiceSetting = {
-      ...voiceSetting,
-      credentialBindings: [{
-        contribution: {
-          pluginId: 'happier.voice.openai',
-          localId: 'realtime-openai',
-        },
-        credentialSlotId: 'api_key',
-        credentialSource: { kind: 'savedSecret' },
-        credentialBindings: { account: { api_key: 'openai-secret' } },
-      }],
-    };
-    let secrets: ReadonlyArray<unknown> = [{
-      id: 'openai-secret',
-      name: 'OpenAI',
-      kind: 'apiKey',
-      encryptedValue: { _isSecretValue: true, value: 'selected-secret' },
-      createdAt: 1,
-      updatedAt: 1,
-    }];
-    let profile: Exclude<TestProfileAuthority, null> = {
-      connectedServicesV2: [],
-      connectedServiceCredentialRevisionsV1: [],
-    };
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice') return voiceSetting;
-      if (key === 'voiceSettingsV1') return canonicalVoiceSetting;
-      if (key === 'secrets') return secrets;
-      if (key === 'connectedPurposes') return { v: 1, bindings: [] };
-      return null;
+    const mounted = await prepareMountedOpenAiRuntime();
+    const { environment, browser, lifecycle } = mounted;
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { applyAccountSettingsSavedSecretMutation } = await import('@happier-dev/protocol/account/settings/savedSecretMutationOwner');
+    const { SavedSecretSchema } = await import('@happier-dev/protocol/profiles/backendProfileSchema');
+    const { AccountProfileSchema } = await import('@happier-dev/protocol/account/profile');
+    const { createAccountVoiceCredentialAuthorityLease } = await import('@/voice/credentials/accountVoiceOperationService');
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime || !environment.entry.declaration.credentials) throw new Error('Actual selected credential authority unavailable');
+    const selectedAuthority = createAccountVoiceCredentialAuthorityLease({
+      contribution: { pluginId: environment.entry.pluginId, localId: environment.entry.declaration.id },
+      providerId: environment.entry.providerId,
+      credentialSlotId: environment.entry.declaration.credentials.slot.id,
+      purpose: { consumer: { pluginId: environment.entry.pluginId, localId: environment.entry.declaration.id }, purpose: environment.entry.declaration.credentials.slot.purpose },
+      isCurrent: lifetime.isCurrent,
     });
-    useProfile.mockImplementation(() => profile);
-
-    const startDeferred = createDeferred<void>();
-    const pending = createRuntimeAdapter(
-      OPENAI_PROVIDER_ID,
-      {
-        adapterId: null,
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-      },
-      {
-        engineKind: 'realtime',
-        start: async () => {
-          await startDeferred.promise;
-        },
-      },
-    );
-    const adapter = {
-      ...pending.controller,
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: false,
-        bargeInEnabled: false,
-      }),
-    };
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [adapter],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-    const controller = getVoiceSessionLifecycleController();
-    if (!controller) throw new Error('voice lifecycle controller unavailable');
-    const start = controller.toggle(sessionAddress('voice-session'));
-    await vi.waitFor(() => expect(pending.controller.start).toHaveBeenCalledOnce());
-
-    secrets = [
-      ...secrets,
-      {
-        id: 'unrelated-secret',
-        name: 'Unrelated',
-        kind: 'token',
-        encryptedValue: { _isSecretValue: true, value: 'unrelated-secret' },
-        createdAt: 2,
-        updatedAt: 2,
-      },
-    ];
-    profile = {
-      connectedServicesV2: [{
-        serviceId: 'anthropic',
-        profiles: [{ profileId: 'unrelated-profile', status: 'connected', kind: 'token' }],
-        groups: [],
-      }],
-      connectedServiceCredentialRevisionsV1: [{
-        serviceId: 'anthropic',
-        profileId: 'unrelated-profile',
-        credentialRevision: 'csr_revision200000000000000',
-      }],
-    };
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-      await Promise.resolve();
+    expect(selectedAuthority.isCurrent()).toBe(true);
+    const mintGate = createDeferred<void>();
+    const providerResponse = environment.providerFetch.getMockImplementation();
+    if (!providerResponse) throw new Error('OpenAI HTTP boundary unavailable');
+    environment.providerFetch.mockImplementationOnce(async (...args) => {
+      // Hold the real provider HTTP response, not the adapter or lifecycle.
+      await mintGate.promise;
+      return providerResponse(...args);
     });
+    const start = lifecycle.toggle(null);
+    // The held SDK operation may reject if an assertion fails and cleanup wins.
+    void start.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(environment.providerFetch, JSON.stringify(lifecycle.getSnapshot())).toHaveBeenCalledOnce());
+      expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, status: 'connecting' });
+      const added = applyAccountSettingsSavedSecretMutation(storage.getState().settings, {
+        kind: 'add',
+        secret: SavedSecretSchema.parse({ id: 'unrelated-secret', name: 'Unrelated', kind: 'token',
+          encryptedValue: { _isSecretValue: true, value: 'unrelated-secret' },
+        }),
+      });
+      await environment.publishAccountSettings(settingsParse(added.settings));
+      expect(lifetime.isCurrent(), 'actual Account lifetime after unrelated SavedSecret publication').toBe(true);
+      expect(selectedAuthority.isCurrent(), 'selected authority after unrelated SavedSecret publication').toBe(true);
+      environment.accountProfile = AccountProfileSchema.parse({
+        ...environment.accountProfile,
+        connectedServicesV2: [{ serviceId: 'anthropic',
+          profiles: [{ profileId: 'unrelated-profile', status: 'connected', kind: 'token' }], groups: [],
+        }],
+        connectedServiceCredentialRevisionsV1: [{ serviceId: 'anthropic', profileId: 'unrelated-profile',
+          credentialRevision: 'csr_revision200000000000000',
+        }],
+      });
+      const { sync } = await import('@/sync/sync');
+      await sync.refreshProfile();
+      expect(selectedAuthority.isCurrent(), 'selected authority after unrelated Profile HTTP refresh').toBe(true);
+      await mounted.screen.update(mounted.runtime);
+      expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, status: 'connecting' });
+      expect(browser.peers).toEqual([]);
+      expect(browser.micTracks).toEqual([]);
 
-    expect(pending.controller.stop).not.toHaveBeenCalled();
-
-    startDeferred.resolve();
-    await act(async () => {
-      await start;
-    });
-    expect(pending.getSnapshot()).toMatchObject({
-      adapterId: OPENAI_PROVIDER_ID,
-      sessionId: 'voice-session',
-      status: 'connecting',
-    });
+      mintGate.resolve();
+      await vi.waitFor(() => expect(browser.peers, JSON.stringify(lifecycle.getSnapshot())).toHaveLength(1));
+      await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalledOnce());
+      browser.peer.channel.open();
+      await act(async () => { await start; });
+      expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID,
+        status: 'connected', canStop: true,
+      });
+      expect(browser.peer.addTrack).toHaveBeenCalledWith(browser.micTrack, browser.micStream);
+      expect(browser.peer.close).not.toHaveBeenCalled();
+      expect(browser.micTrack.stop).not.toHaveBeenCalled();
+      expect(environment.providerFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      mintGate.resolve();
+      // If a pre-connect assertion fails, cancel through the real owner rather
+      // than opening an SDK channel before its listener has been installed.
+      await lifecycle.dispose();
+      await start.catch(() => undefined);
+    }
   });
 
   it('fences an established global Agent attachment exactly once when its selected group changes active profile', async () => {
-    const voiceSetting = {
-      providerId: CODEX_PROVIDER_ID,
-      providers: {
-        [CODEX_PROVIDER_ID]: {
-          schemaVersion: 2,
-          config: {
-            globalConnectedServices: {
-              v: 1,
-              bindingsByServiceId: {
-                [CODEX_CONNECTED_SERVICE_KEY]: {
-                  source: 'connected',
-                  selection: 'group',
-                  groupId: 'voice-pool',
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-    let profile: Exclude<TestProfileAuthority, null> = {
-      connectedServicesV2: [{
-        serviceId: 'openai-codex',
-        profiles: [
-          { profileId: 'primary', status: 'connected', kind: 'oauth' },
-          { profileId: 'backup', status: 'connected', kind: 'oauth' },
-        ],
-        groups: [{
-          groupId: 'voice-pool',
-          activeProfileId: 'primary',
-          generation: 1,
-          memberProfileIds: ['primary', 'backup'],
-        }],
-      }],
-      connectedServiceCredentialRevisionsV1: [],
-    };
-    useSetting.mockImplementation((key: string) => (
-      key === 'voice' || key === 'voiceSettingsV1' ? voiceSetting : null
-    ));
-    useProfile.mockImplementation(() => profile);
-    const active = createRuntimeAdapter(
-      CODEX_PROVIDER_ID,
-      {
-        adapterId: CODEX_PROVIDER_ID,
-        sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-        status: 'connected',
-        mode: 'listening',
-        canStop: true,
-      },
-      { engineKind: 'realtime' },
-    );
-    const adapter = {
-      ...active.controller,
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: false,
-        bargeInEnabled: false,
-        agentRuntime: {
-          pluginId: 'happier.codex',
-          localId: 'codex',
-        },
-      }),
-    };
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [adapter],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-    expect(active.controller.stop).not.toHaveBeenCalled();
-
-    profile = {
-      ...profile,
-      connectedServicesV2: [{
-        ...profile.connectedServicesV2[0]!,
-        groups: [{
-          groupId: 'voice-pool',
-          activeProfileId: 'backup',
-          generation: 2,
-          memberProfileIds: ['primary', 'backup'],
-        }],
-      }],
-    };
+    const mounted = await mountGeneratedCodexRuntime({ global: true, group: true });
+    const stops = () => mounted.agentRequests.filter(request => request.method.endsWith('.stop'));
+    const starts = () => mounted.agentRequests.filter(request => request.method.endsWith('.start'));
+    const admittedSessionId = starts()[0]?.targetId;
+    expect(admittedSessionId).toMatch(/^mounted-codex-global-/);
+    expect(stops()).toEqual([]);
     await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-      await Promise.resolve();
+      await mounted.publishProfile({
+        ...mounted.profile,
+        connectedServicesV2: mounted.profile.connectedServicesV2.map(service => ({
+          ...service, groups: service.groups?.map(group => ({ ...group, activeProfileId: 'backup', generation: 2 })),
+        })),
+      });
     });
-
-    expect(active.controller.stop).toHaveBeenCalledOnce();
-    expect(active.controller.stop).toHaveBeenCalledWith({
-      sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-    });
-
-    profile = {
-      ...profile,
-      connectedServicesV2: [
-        profile.connectedServicesV2[0]!,
-        {
-          serviceId: 'openai',
-          profiles: [{ profileId: 'unrelated', status: 'connected', kind: 'token' }],
-          groups: [],
-        },
-      ],
-    };
+    await vi.waitFor(() => expect(stops()).toHaveLength(1));
+    expect(stops()[0]?.targetId).toBe(admittedSessionId);
+    await vi.waitFor(() => expect(mounted.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false }));
+    expect(starts()).toHaveLength(1);
     await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-      await Promise.resolve();
+      await mounted.publishProfile({
+        ...mounted.profile,
+        connectedServicesV2: [...mounted.profile.connectedServicesV2, {
+          serviceId: 'openai', profiles: [{ profileId: 'unrelated', status: 'connected', kind: 'token' }], groups: [],
+        }],
+      });
     });
-    expect(active.controller.stop).toHaveBeenCalledOnce();
+    expect(stops()).toHaveLength(1);
+    expect(starts()).toHaveLength(1);
   });
 
   it.each([
@@ -1373,1183 +1122,431 @@ describe('VoiceSessionRuntime', () => {
   ] as const)(
     'fences an established global Agent attachment exactly once when its selected profile %s',
     async (_caseName, nextProfiles) => {
-      const voiceSetting = {
-        providerId: CODEX_PROVIDER_ID,
-        providers: {
-          [CODEX_PROVIDER_ID]: {
-            schemaVersion: 2,
-            config: {
-              globalConnectedServices: {
-                v: 1,
-                bindingsByServiceId: {
-                  [CODEX_CONNECTED_SERVICE_KEY]: {
-                    source: 'connected',
-                    selection: 'profile',
-                    profileId: 'work',
-                  },
-                },
-              },
-            },
-          },
-        },
-      };
-      let profile: Exclude<TestProfileAuthority, null> = {
-        connectedServicesV2: [{
-          serviceId: 'openai-codex',
-          profiles: [{ profileId: 'work', status: 'connected', kind: 'oauth' }],
-          groups: [],
-        }],
-        connectedServiceCredentialRevisionsV1: [],
-      };
-      useSetting.mockImplementation((key: string) => (
-        key === 'voice' || key === 'voiceSettingsV1' ? voiceSetting : null
-      ));
-      useProfile.mockImplementation(() => profile);
-      const active = createRuntimeAdapter(
-        CODEX_PROVIDER_ID,
-        {
-          adapterId: CODEX_PROVIDER_ID,
-          sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-          status: 'connected',
-          mode: 'listening',
-          canStop: true,
-        },
-        { engineKind: 'realtime' },
-      );
-      const adapter = {
-        ...active.controller,
-        resolveSurfaceCapabilities: () => ({
-          allowsGlobalStart: true,
-          controlSessionScope: 'global' as const,
-          requiresVoiceAgentFeature: false,
-          bargeInEnabled: false,
-          agentRuntime: {
-            pluginId: 'happier.codex',
-            localId: 'codex',
-          },
-        }),
-      };
-      setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-        createBuiltinVoiceAdapterAssembly: () => ({
-          adapters: [adapter],
-          dispose: createAsyncNoopSpy(),
-        }),
-      }));
-
-      const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-      const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-      expect(active.controller.stop).not.toHaveBeenCalled();
-
-      profile = {
-        ...profile,
-        connectedServicesV2: [{
-          ...profile.connectedServicesV2[0]!,
-          profiles: [...nextProfiles],
-        }],
-      };
+      const mounted = await mountGeneratedCodexRuntime({ global: true });
+      const starts = () => mounted.agentRequests.filter(request => request.method.endsWith('.start'));
+      const stops = () => mounted.agentRequests.filter(request => request.method.endsWith('.stop'));
+      const admittedSessionId = starts()[0]?.targetId;
+      expect(stops()).toEqual([]);
       await act(async () => {
-        screen.tree.update(React.createElement(VoiceSessionRuntime));
-        await Promise.resolve();
+        await mounted.publishProfile({
+          ...mounted.profile,
+          connectedServicesV2: mounted.profile.connectedServicesV2.map(service => ({ ...service,
+            profiles: [...service.profiles.filter(profile => profile.profileId !== 'work'), ...nextProfiles],
+          })),
+        });
       });
-
-      expect(active.controller.stop).toHaveBeenCalledOnce();
-      expect(active.controller.stop).toHaveBeenCalledWith({
-        sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-      });
+      await vi.waitFor(() => expect(stops()).toHaveLength(1));
+      expect(stops()[0]?.targetId).toBe(admittedSessionId);
+      await vi.waitFor(() => expect(mounted.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false }));
+      expect(starts()).toHaveLength(1);
+      await act(async () => { await mounted.publishProfile(mounted.profile); });
+      expect(stops()).toHaveLength(1);
+      expect(starts()).toHaveLength(1);
     },
   );
 
   it('does not fence an established global Agent attachment for an unrelated Connected Services update', async () => {
-    const voiceSetting = {
-      providerId: CODEX_PROVIDER_ID,
-      providers: {
-        [CODEX_PROVIDER_ID]: {
-          schemaVersion: 2,
-          config: {
-            globalConnectedServices: {
-              v: 1,
-              bindingsByServiceId: {
-                [CODEX_CONNECTED_SERVICE_KEY]: {
-                  source: 'connected',
-                  selection: 'profile',
-                  profileId: 'work',
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-    let profile: Exclude<TestProfileAuthority, null> = {
-      connectedServicesV2: [
-        {
-          serviceId: 'openai-codex',
-          profiles: [{ profileId: 'work', status: 'connected', kind: 'oauth' }],
-          groups: [],
-        },
-        {
-          serviceId: 'openai',
-          profiles: [{ profileId: 'unrelated', status: 'connected', kind: 'token' }],
-          groups: [],
-        },
-      ],
-      connectedServiceCredentialRevisionsV1: [],
-    };
-    useSetting.mockImplementation((key: string) => (
-      key === 'voice' || key === 'voiceSettingsV1' ? voiceSetting : null
-    ));
-    useProfile.mockImplementation(() => profile);
-    const active = createRuntimeAdapter(
-      CODEX_PROVIDER_ID,
-      {
-        adapterId: CODEX_PROVIDER_ID,
-        sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-        status: 'connected',
-        mode: 'listening',
-        canStop: true,
-      },
-      { engineKind: 'realtime' },
-    );
-    const adapter = {
-      ...active.controller,
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: false,
-        bargeInEnabled: false,
-        agentRuntime: {
-          pluginId: 'happier.codex',
-          localId: 'codex',
-        },
-      }),
-    };
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [adapter],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    profile = {
-      ...profile,
-      connectedServicesV2: [
-        profile.connectedServicesV2[0]!,
-        {
-          serviceId: 'openai',
-          profiles: [{ profileId: 'unrelated', status: 'needs_reauth', kind: 'token' }],
-          groups: [],
-        },
-      ],
-      connectedServiceCredentialRevisionsV1: [{
-        serviceId: 'openai',
-        profileId: 'unrelated',
-        credentialRevision: 'csr_unrelated0000000000000',
-      }],
-    };
+    const mounted = await mountGeneratedCodexRuntime({ global: true });
+    const active = mounted.lifecycle.getSnapshot();
     await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-      await Promise.resolve();
+      await mounted.publishProfile({
+        ...mounted.profile,
+        connectedServicesV2: [...mounted.profile.connectedServicesV2, {
+          serviceId: 'openai', profiles: [{ profileId: 'unrelated', status: 'connected', kind: 'token' }], groups: [],
+        }],
+        connectedServiceCredentialRevisionsV1: [...mounted.profile.connectedServiceCredentialRevisionsV1, {
+          serviceId: 'openai', profileId: 'unrelated', credentialRevision: 'csr_revision200000000000000',
+        }],
+      });
     });
-
-    expect(active.controller.stop).not.toHaveBeenCalled();
+    expect(mounted.lifecycle.getSnapshot()).toEqual(active);
+    expect(mounted.agentRequests.filter(request => request.method.endsWith('.stop'))).toEqual([]);
+    expect(mounted.agentRequests.filter(request => request.method.endsWith('.start'))).toHaveLength(1);
+    expect(mounted.browser.peer.close).not.toHaveBeenCalled();
+    expect(mounted.browser.micTrack.stop).not.toHaveBeenCalled();
   });
 
   it('fences an established direct Agent attachment only when its server-account scope changes', async () => {
-    const voiceSetting = {
-      providerId: CODEX_PROVIDER_ID,
-      providers: {
-        [CODEX_PROVIDER_ID]: {
-          schemaVersion: 2,
-          config: {
-            globalConnectedServices: {
-              v: 1,
-              bindingsByServiceId: {
-                [CODEX_CONNECTED_SERVICE_KEY]: {
-                  source: 'connected',
-                  selection: 'group',
-                  groupId: 'voice-pool',
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-    let accountScope = { serverId: 'server-a', accountId: 'account-a' };
-    accountScope = await applyAccountScope(accountScope);
-    let profile: Exclude<TestProfileAuthority, null> = {
-      connectedServicesV2: [{
-        serviceId: 'openai-codex',
-        profiles: [
-          { profileId: 'primary', status: 'connected', kind: 'oauth' },
-          { profileId: 'backup', status: 'connected', kind: 'oauth' },
-        ],
-        groups: [{
-          groupId: 'voice-pool',
-          activeProfileId: 'primary',
-          generation: 1,
-          memberProfileIds: ['primary', 'backup'],
-        }],
-      }],
-      connectedServiceCredentialRevisionsV1: [],
-    };
-    useSetting.mockImplementation((key: string) => (
-      key === 'voice' || key === 'voiceSettingsV1' ? voiceSetting : null
-    ));
-    useProfile.mockImplementation(() => profile);
-    useActiveServerAccountScope.mockImplementation(() => accountScope);
-    const active = createRuntimeAdapter(
-      CODEX_PROVIDER_ID,
-      {
-        adapterId: CODEX_PROVIDER_ID,
-        sessionId: 'direct-agent-session',
-        status: 'connected',
-        mode: 'listening',
-        canStop: true,
-      },
-      { engineKind: 'realtime' },
-    );
-    const adapter = {
-      ...active.controller,
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: false,
-        bargeInEnabled: false,
-        agentRuntime: {
-          pluginId: 'happier.codex',
-          localId: 'codex',
-        },
-      }),
-    };
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [adapter],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
-    const { storage } = await import('@/sync/domains/state/storage');
-    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
-    registerStorageStateReader(() => storage.getState());
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-    expect(getVoiceSessionLifecycleController()?.getSnapshot()).toMatchObject({
-      sessionId: 'direct-agent-session',
-      status: 'connected',
-      canStop: true,
-    });
-
-    // Route-only rerenders preserve an established direct Agent attachment.
+    const mounted = await mountGeneratedCodexRuntime();
+    const { screen, lifecycle, runtime, target, agentRequests } = mounted;
+    const stops = () => agentRequests.filter(request => request.method.endsWith('.stop'));
+    const starts = () => agentRequests.filter(request => request.method.endsWith('.start'));
+    await screen.update(runtime);
+    expect(stops()).toEqual([]);
     await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-      await Promise.resolve();
+      await mounted.publishProfile({
+        ...mounted.profile,
+        connectedServicesV2: mounted.profile.connectedServicesV2.map(service => ({
+          ...service, groups: service.groups?.map(group => ({ ...group, activeProfileId: 'backup', generation: 2 })),
+        })),
+      });
     });
-    expect(active.controller.stop).not.toHaveBeenCalled();
-
-    // Global binding/profile changes apply to the next global attachment, not this direct session.
-    profile = {
-      ...profile,
-      connectedServicesV2: [{
-        ...profile.connectedServicesV2[0]!,
-        groups: [{
-          groupId: 'voice-pool',
-          activeProfileId: 'backup',
-          generation: 2,
-          memberProfileIds: ['primary', 'backup'],
-        }],
-      }],
-    };
+    expect(stops()).toEqual([]);
+    expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: CODEX_PROVIDER_ID, sessionId: target.sessionId, status: 'connected' });
     await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-      await Promise.resolve();
+      await applyAccountScope({ serverId: 'server-b', accountId: 'account-b' }, { address: target, boundary: mounted.sessionHttp });
+      await screen.update(runtime);
     });
-    expect(active.controller.stop).not.toHaveBeenCalled();
-
-    accountScope = { serverId: 'server-b', accountId: 'account-b' };
-    accountScope = await applyAccountScope(accountScope);
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-      await Promise.resolve();
-    });
-
-    expect(active.controller.stop).toHaveBeenCalledOnce();
-    expect(active.controller.stop).toHaveBeenCalledWith({
-      sessionId: 'direct-agent-session',
-    });
-    expect(getVoiceSessionLifecycleController()?.getSnapshot()).toMatchObject({
-      status: 'disconnected',
-      canStop: false,
-    });
-    expect(active.controller.start).not.toHaveBeenCalled();
-
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-      await Promise.resolve();
-    });
-    expect(active.controller.stop).toHaveBeenCalledOnce();
-    expect(getVoiceSessionLifecycleController()?.getSnapshot()).toMatchObject({
-      status: 'disconnected',
-      canStop: false,
-    });
-    expect(active.controller.start).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(mounted.browser.peer.close).toHaveBeenCalledOnce());
+    expect(mounted.browser.micTrack.stop).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(stops(), JSON.stringify(retiredAccountHttpRequests)).toHaveLength(1));
+    expect(stops()[0]?.targetId).toBe(target.sessionId);
+    await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false }));
+    expect(starts()).toHaveLength(1);
+    await screen.update(runtime);
+    expect(stops()).toHaveLength(1);
+    expect(starts()).toHaveLength(1);
   });
 
-  it('fences an established and a pending ordinary provider attempt when the server-account scope changes', async () => {
-    const voiceSetting = {
-      providerId: OPENAI_PROVIDER_ID,
-      providers: {
-        [OPENAI_PROVIDER_ID]: {
-          schemaVersion: 1,
-          config: {
-            model: { kind: 'pinned', id: 'gpt-realtime-2.1' },
-            voice: 'marin',
-            instructions: '',
-            turnDetection: 'server_vad',
-            inputTranscriptionModel: '',
-          },
-        },
-      },
-    };
-    let accountScope = { serverId: 'server-a', accountId: 'account-a' };
-    accountScope = await applyAccountScope(accountScope);
-    useSetting.mockImplementation((key: string) => (
-      key === 'voice' || key === 'voiceSettingsV1' ? voiceSetting : null
-    ));
-    useProfile.mockImplementation(() => ({
-      connectedServicesV2: [],
-      connectedServiceCredentialRevisionsV1: [],
-    }));
-    useActiveServerAccountScope.mockImplementation(() => accountScope);
-
-    const active = createRuntimeAdapter(
-      OPENAI_PROVIDER_ID,
-      {
-        adapterId: OPENAI_PROVIDER_ID,
-        sessionId: 'voice-session-account-a',
-        status: 'connected',
-        mode: 'listening',
-        canStop: true,
-      },
-      { engineKind: 'realtime' },
-    );
-    const adapter = {
-      ...active.controller,
-      // An ordinary provider: no Agent runtime, so its credential currentness
-      // is next-start-only. Its Account scope is not.
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: false,
-        bargeInEnabled: false,
-      }),
-    };
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [adapter],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { storage } = await import('@/sync/domains/state/storage');
-    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
-    registerStorageStateReader(() => storage.getState());
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
+  it('fences an established ordinary provider attempt when the server-account scope changes', async () => {
+    const { screen, lifecycle, runtime } = await mountGeneratedElevenLabsRuntime();
 
     await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
+      await screen.update(runtime);
       await Promise.resolve();
     });
-    expect(active.controller.stop).not.toHaveBeenCalled();
+    expect(lifecycle.getSnapshot().status).toBe('connected');
+    expect(sdk.endSession).not.toHaveBeenCalled();
 
-    accountScope = { serverId: 'server-b', accountId: 'account-b' };
-    accountScope = await applyAccountScope(accountScope);
+    const replacement = applyAccountScope({ serverId: 'server-b', accountId: 'account-b' });
+    // Account admission is the real asynchronous operation, not React's
+    // renderer flush. Join it before updating the mounted React boundary.
+    await replacement;
     await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
+      await screen.update(runtime);
       await Promise.resolve();
     });
 
-    expect(active.controller.stop).toHaveBeenCalledOnce();
-    expect(active.controller.stop).toHaveBeenCalledWith({
-      sessionId: 'voice-session-account-a',
-    });
-    expect(active.controller.start).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+    expect(sdk.startSession).toHaveBeenCalledOnce();
   });
 
   it('synchronously retires an ordinary realtime attempt before a retained current-UI handler can reach either Account port', async () => {
-    const accountA = await applyAccountScope({ serverId: 'voice-server', accountId: 'voice-account-a' });
-    const accountB = { serverId: 'voice-server', accountId: 'voice-account-b' };
-    let accountScope = accountA;
-    useActiveServerAccountScope.mockImplementation(() => accountScope);
-    useSetting.mockImplementation((key: string) => (
-      key === 'voice' || key === 'voiceSettingsV1'
-        ? {
-            providerId: OPENAI_PROVIDER_ID,
-            providers: {
-              [OPENAI_PROVIDER_ID]: {
-                schemaVersion: 1,
-                config: {
-                  model: { kind: 'pinned', id: 'gpt-realtime-2.1' },
-                  voice: 'marin',
-                  instructions: '',
-                  turnDetection: 'server_vad',
-                  inputTranscriptionModel: '',
-                },
-              },
-            },
-          }
-        : null
-    ));
-
-    const accountARead = createNoopSpy();
-    const accountAEffect = createNoopSpy();
-    const accountBRead = createNoopSpy();
-    const accountBEffect = createNoopSpy();
-    const accountAPort = {
-      readCurrentUiContext: () => {
-        accountARead();
-        return null;
-      },
-      resolveCurrentUiCommand: (_commandId: string) => null,
-      subscribe: (_listener: () => void) => () => {},
-      invokeCurrentUiCommand: async (_input: Readonly<{ commandId: string; signal?: AbortSignal }>) => {
-        accountAEffect();
-        return { ok: true as const };
-      },
-    };
-    const accountBPort = {
-      readCurrentUiContext: () => {
-        accountBRead();
-        return null;
-      },
-      resolveCurrentUiCommand: (_commandId: string) => null,
-      subscribe: (_listener: () => void) => () => {},
-      invokeCurrentUiCommand: async (_input: Readonly<{ commandId: string; signal?: AbortSignal }>) => {
-        accountBEffect();
-        return { ok: true as const };
-      },
-    };
-    let currentAccountPort = accountAPort;
-    const currentUiContext = {
-      readCurrentUiContext: () => currentAccountPort.readCurrentUiContext(),
-      resolveCurrentUiCommand: (commandId: string) => currentAccountPort.resolveCurrentUiCommand(commandId),
-      subscribe: (listener: () => void) => currentAccountPort.subscribe(listener),
-      invokeCurrentUiCommand: (input: Readonly<{ commandId: string; signal?: AbortSignal }>) => (
-        currentAccountPort.invokeCurrentUiCommand(input)
-      ),
-    };
-    setRuntimeModuleFixture('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort', () => ({
-      useCurrentUiContextVoiceToolPort: () => currentUiContext,
-    }));
-
-    let attemptLive = false;
-    let assemblyPort: CurrentUiContextVoiceToolPort | null = null;
-    const retainedAttemptHandlerRef: { current: (() => void) | null } = { current: null };
-    const runtime = createRuntimeAdapter(
-      OPENAI_PROVIDER_ID,
-      {
-        adapterId: null,
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-      },
-      {
-        engineKind: 'realtime',
-        start: async () => {
-          attemptLive = true;
-          retainedAttemptHandlerRef.current = () => {
-            if (!attemptLive || !assemblyPort) return;
-            assemblyPort.readCurrentUiContext();
-            if (!assemblyPort.invokeCurrentUiCommand) throw new Error('Mounted Voice fixture command port unavailable');
-            void assemblyPort.invokeCurrentUiCommand({ commandId: 'retired-account-command' });
-          };
-        },
-        stop: async () => {
-          // A provider stop is the real system boundary: it synchronously revokes
-          // the attempt's retained handler before its asynchronous close settles.
-          attemptLive = false;
-        },
-      },
-    );
-    const adapter = {
-      ...runtime.controller,
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: false,
-        bargeInEnabled: false,
-      }),
-    };
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: (input) => {
-        assemblyPort = input?.currentUiContext ?? null;
-        return {
-          adapters: [adapter],
-          dispose: createAsyncNoopSpy(),
-        };
-      },
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
-    const { storage } = await import('@/sync/domains/state/storage');
-    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
-    // Loading the runtime pulls in the real storage store, which registers its
-    // own reader. Re-register this test's live mock after that graph has loaded
-    // so the real Account lifetime sees the same scope as the React hook.
-    registerStorageStateReader(() => storage.getState());
-    const {
-      getActiveServerAccountScope,
-      retireActiveServerAccountScopeLifetime,
-    } = await import('@/sync/domains/scope/activeServerAccountScope');
-    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
-    const { readRegisteredStorageState } = await import('@/sync/domains/state/storageStateReaderBridge');
-    expect(getActiveServerSnapshot().serverId).toBe(accountA.serverId);
-    expect(readRegisteredStorageState()?.profileScope).toEqual(accountA);
-    expect(getActiveServerAccountScope()).toEqual(accountA);
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-    const controller = getVoiceSessionLifecycleController();
-    if (!controller) throw new Error('voice lifecycle controller unavailable');
-
-    expect(assemblyPort).toBe(currentUiContext);
-    await controller.toggle(sessionAddress('voice-session-account-a'));
-    expect(runtime.controller.start).toHaveBeenCalledOnce();
-    expect(retainedAttemptHandlerRef.current).not.toBeNull();
-    expect(attemptLive).toBe(true);
-
-    // Sync owns the Account retirement. Do not re-render or yield a microtask:
-    // the old attempt's retained handler must already be inert before Account B
-    // can publish through the same stable AppShell port.
-    retireActiveServerAccountScopeLifetime();
-    currentAccountPort = accountBPort;
-    retainedAttemptHandlerRef.current?.();
-
-    expect(runtime.controller.stop).toHaveBeenCalledWith({ sessionId: 'voice-session-account-a' });
-    expect(attemptLive).toBe(false);
-    expect(accountARead).not.toHaveBeenCalled();
-    expect(accountAEffect).not.toHaveBeenCalled();
-    expect(accountBRead).not.toHaveBeenCalled();
-    expect(accountBEffect).not.toHaveBeenCalled();
-
-    // The sibling Account commit remains unable to revive Account A's retained
-    // handler after layout/passive effects have had a chance to run.
-    accountScope = await applyAccountScope(accountB);
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
+    const { options, screen, runtime } = await mountGeneratedElevenLabsRuntime({ currentUi: true });
+    const { getActionSpec } = await import('@happier-dev/protocol');
+    const { VOICE_ACTION_EXECUTE_TOOL_NAME, VoiceActionExecuteInputSchema } = await import('@/voice/tools/voiceActionExecution');
+    const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime || !accountConnection) throw new Error('Actual mounted Account lifetime unavailable');
+    const accountA = { serverId: accountConnection.home.id, accountId: 'account-a' };
+    const tools = ['ui.current_context.read', 'ui.current_context.command.invoke'] as const;
+    const retained = tools.map(actionId => {
+      const spec = getActionSpec(actionId);
+      // Ordinary provider discovery ships reads directly and effects through
+      // the canonical action_execute transport, not an invented SDK command.
+      const name = actionId === 'ui.current_context.read' ? spec.bindings?.voiceClientToolName : VOICE_ACTION_EXECUTE_TOOL_NAME;
+      const handler = name ? options.clientTools?.[name] : null;
+      if (!name || !handler || !options.onIncomingEvent) throw new Error(`Generated current-UI SDK tool unavailable: ${actionId}/${name}; ${Object.keys(options.clientTools ?? {}).join(',')}`);
+      const input = spec.inputSchema.parse(actionId === 'ui.current_context.read' ? {} : { commandId: 'retired-account-command' });
+      const parameters = actionId === 'ui.current_context.read' ? input : VoiceActionExecuteInputSchema.parse({ actionId, input });
+      // This is the vendor wire custody producer, not a copied AppShell port.
+      options.onIncomingEvent({ type: 'client_tool_call', client_tool_call: {
+        tool_call_id: actionId, tool_name: name, parameters,
+      } });
+      return () => handler(parameters);
     });
-    retainedAttemptHandlerRef.current?.();
-
-    expect(accountARead).not.toHaveBeenCalled();
-    expect(accountAEffect).not.toHaveBeenCalled();
-    expect(accountBRead).not.toHaveBeenCalled();
-    expect(accountBEffect).not.toHaveBeenCalled();
+    const close = createDeferred<void>();
+    sdk.endSession.mockImplementation(() => close.promise);
+    try {
+      // No re-render/microtask: the real Account retirement synchronously
+      // invalidates every retained read/effect SDK callback before media closes.
+      retireActiveServerAccountScopeLifetime();
+      const deliveries = retained.map(deliver => deliver());
+      expect(lifetime.isCurrent()).toBe(false);
+      expect(sdk.endSession).toHaveBeenCalledOnce();
+      for (const delivery of deliveries) await expect(delivery).rejects.toThrow('tool_cancelled');
+      let switched = false;
+      const replacement = applyAccountScope({ ...accountA, accountId: 'account-b' }).then(() => { switched = true; });
+      await Promise.resolve();
+      expect(switched).toBe(false);
+      for (const deliver of retained) await expect(deliver()).rejects.toThrow('tool_cancelled');
+      close.resolve(undefined);
+      await replacement;
+      await screen.update(runtime);
+      for (const deliver of retained) await expect(deliver()).rejects.toThrow('tool_cancelled');
+      expect(sdk.startSession).toHaveBeenCalledOnce();
+    } finally {
+      close.resolve(undefined);
+    }
   });
 
-  it('synchronously retires a no-Account realtime attempt during the Account B layout commit before its retained current-UI handler can reach B', async () => {
-    const accountB = { serverId: 'voice-server', accountId: 'voice-account-b' };
-    let accountScope: Readonly<{ serverId: string; accountId: string }> | null = null;
-    useActiveServerAccountScope.mockImplementation(() => accountScope);
-    useSetting.mockImplementation((key: string) => (
-      key === 'voice' || key === 'voiceSettingsV1'
-        ? {
-            providerId: OPENAI_PROVIDER_ID,
-            providers: {
-              [OPENAI_PROVIDER_ID]: {
-                schemaVersion: 1,
-                config: {
-                  model: { kind: 'pinned', id: 'gpt-realtime-2.1' },
-                  voice: 'marin',
-                  instructions: '',
-                  turnDetection: 'server_vad',
-                  inputTranscriptionModel: '',
-                },
-              },
-            },
-          }
-        : null
-    ));
-
-    const accountBRead = createNoopSpy();
-    const accountBEffect = createNoopSpy();
-    const noAccountPort = {
-      readCurrentUiContext: () => null,
-      resolveCurrentUiCommand: (_commandId: string) => null,
-      subscribe: (_listener: () => void) => () => {},
-      invokeCurrentUiCommand: async (_input: Readonly<{ commandId: string; signal?: AbortSignal }>) => ({ ok: true as const }),
-    };
-    const accountBPort = {
-      readCurrentUiContext: () => {
-        accountBRead();
-        return null;
-      },
-      resolveCurrentUiCommand: (_commandId: string) => null,
-      subscribe: (_listener: () => void) => () => {},
-      invokeCurrentUiCommand: async (_input: Readonly<{ commandId: string; signal?: AbortSignal }>) => {
-        accountBEffect();
-        return { ok: true as const };
-      },
-    };
-    let currentAccountPort = noAccountPort;
-    const currentUiContext = {
-      readCurrentUiContext: () => currentAccountPort.readCurrentUiContext(),
-      resolveCurrentUiCommand: (commandId: string) => currentAccountPort.resolveCurrentUiCommand(commandId),
-      subscribe: (listener: () => void) => currentAccountPort.subscribe(listener),
-      invokeCurrentUiCommand: (input: Readonly<{ commandId: string; signal?: AbortSignal }>) => (
-        currentAccountPort.invokeCurrentUiCommand(input)
-      ),
-    };
-    setRuntimeModuleFixture('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort', () => ({
-      useCurrentUiContextVoiceToolPort: () => currentUiContext,
-    }));
-
-    let attemptLive = false;
-    let assemblyPort: CurrentUiContextVoiceToolPort | null = null;
-    const retainedAttemptHandlerRef: { current: (() => void) | null } = { current: null };
-    const runtime = createRuntimeAdapter(
-      OPENAI_PROVIDER_ID,
-      {
-        adapterId: null,
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-      },
-      {
-        engineKind: 'realtime',
-        start: async () => {
-          attemptLive = true;
-          retainedAttemptHandlerRef.current = () => {
-            if (!attemptLive || !assemblyPort) return;
-            assemblyPort.readCurrentUiContext();
-            if (!assemblyPort.invokeCurrentUiCommand) throw new Error('Mounted Voice fixture command port unavailable');
-            void assemblyPort.invokeCurrentUiCommand({ commandId: 'no-account-command' });
-          };
-        },
-        stop: async () => {
-          // The real provider boundary synchronously revokes its retained
-          // handler while the asynchronous transport close settles.
-          attemptLive = false;
-        },
-      },
-    );
-    const adapter = {
-      ...runtime.controller,
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: false,
-        bargeInEnabled: false,
-      }),
-    };
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: (input) => {
-        assemblyPort = input?.currentUiContext ?? null;
-        return {
-          adapters: [adapter],
-          dispose: createAsyncNoopSpy(),
-        };
-      },
-    }));
-
+  it('fails closed for a no-Account realtime Start before Account B layout admission without publishing an old SDK handler', async () => {
+    platformOsMock.value = 'web';
+    const browser = installVoiceWebRtcBrowserBoundary();
+    browserBoundaries.push(browser);
+    vi.stubGlobal('window', new EventTarget());
+    vi.stubGlobal('document', createMountedBrowserDocument());
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    const { OPENAI_REALTIME_DEFAULT_SETTINGS } = await import('../../../../../packages/plugins/openai/src/protocol/voice/settings');
+    expect(getActiveServerAccountScope()).toBeNull();
+    const voice = writeVoiceProviderSettingsConfig(voiceSettingsParse({ providerId: OPENAI_PROVIDER_ID }), OPENAI_PROVIDER_ID, OPENAI_REALTIME_DEFAULT_SETTINGS);
+    storage.getState().applySettingsLocal({
+      ...normalizeVoiceSettingsLocalDelta({ voice }, storage.getState().settings),
+      featureToggles: { ...storage.getState().settings.featureToggles, voice: true },
+    });
+    sdk.startSession.mockReset();
+    sdk.endSession.mockReset();
     const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
     const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
-    const { storage } = await import('@/sync/domains/state/storage');
-    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
-    registerStorageStateReader(() => storage.getState());
-    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+    const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+    const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+    const { CurrentUiContextProvider } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
+    const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+    const layoutScopes: Array<ReturnType<typeof getActiveServerAccountScope>> = [];
+    const renderRuntime = (credentials: React.ComponentProps<typeof InjectedAuthProvider>['credentials']) =>
+      <InjectedAuthProvider credentials={credentials}>
+        <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider>
+          <PluginSurfaceFocusEligibilityProvider active currentUiContextActive>
+            <LayoutCommitBoundary onLayout={() => {
+              layoutScopes.push(getActiveServerAccountScope());
+              expect(sdk.startSession).not.toHaveBeenCalled();
+              expect(browser.peers).toEqual([]);
+              expect(browser.micTracks).toEqual([]);
+              // No SDK conversation/callback was admitted under null Account,
+              // so neither a read nor an effect can cross this B layout commit.
+              expect(getVoiceSessionLifecycleController()?.getSnapshot().canStop).toBe(false);
+            }}><VoiceSessionRuntime /></LayoutCommitBoundary>
+          </PluginSurfaceFocusEligibilityProvider>
+        </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
+      </InjectedAuthProvider>;
+    const screen = await renderRuntimeScreen(renderRuntime(null));
+    generatedRuntimeScreens.push(screen);
+    const lifecycle = getVoiceSessionLifecycleController();
+    if (!lifecycle) throw new Error('Actual no-Account lifecycle unavailable');
+    await act(async () => { await lifecycle.toggle(null); });
     expect(getActiveServerAccountScope()).toBeNull();
-    const renderRuntime = () => React.createElement(
-      LayoutCommitBoundary,
-      {
-        onLayout: () => retainedAttemptHandlerRef.current?.(),
-        children: React.createElement(VoiceSessionRuntime),
-      },
-    );
-    const screen = await renderScreen(renderRuntime());
-    const controller = getVoiceSessionLifecycleController();
-    if (!controller) throw new Error('voice lifecycle controller unavailable');
+    expect(lifecycle.getSnapshot()).toMatchObject({ status: 'error', canStop: false });
+    expect(sdk.startSession).not.toHaveBeenCalled();
+    expect(sdk.endSession).not.toHaveBeenCalled();
+    expect(browser.peers).toEqual([]);
+    expect(browser.micTracks).toEqual([]);
 
+    // The former fake active no-Account OpenAI tuple bypassed the real
+    // Sync.ensureHostedSystemSession Account guard (and credential admission).
+    // Reachable retained callback retirement is kept separately at actual A/B.
     await act(async () => {
-      await controller.toggle(sessionAddress('voice-session-no-account'));
+      await applyAccountScope({ serverId: 'no-account-layout-home', accountId: 'account-b' });
+      if (!accountConnection) throw new Error('Actual Account B unavailable');
+      await screen.update(renderRuntime(accountConnection.credentials));
     });
-    expect(runtime.controller.start).toHaveBeenCalledOnce();
-    expect(retainedAttemptHandlerRef.current).not.toBeNull();
-    expect(attemptLive).toBe(true);
-
-    // The parent layout effect runs after Voice's child layout effects but
-    // before passive credential reconciliation. A no-Account admission has no
-    // previous lifetime callback to retire it.
-    accountScope = await applyAccountScope(accountB);
-    currentAccountPort = accountBPort;
-    await act(async () => {
-      screen.tree.update(renderRuntime());
-      await Promise.resolve();
-    });
-
-    expect(runtime.controller.stop).toHaveBeenCalledWith({ sessionId: 'voice-session-no-account' });
-    expect(attemptLive).toBe(false);
-    expect(accountBRead).not.toHaveBeenCalled();
-    expect(accountBEffect).not.toHaveBeenCalled();
+    expect(layoutScopes[0]).toBeNull();
+    expect(layoutScopes.at(-1)).toEqual({ serverId: accountConnection!.home.id, accountId: 'account-b' });
+    expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+    expect(sdk.startSession).not.toHaveBeenCalled();
+    expect(sdk.endSession).not.toHaveBeenCalled();
+    expect(browser.peers).toEqual([]);
+    expect(browser.micTracks).toEqual([]);
   });
 
   it('fences a pending ordinary provider Start when the server-account scope changes mid-preparation', async () => {
-    const voiceSetting = {
-      providerId: OPENAI_PROVIDER_ID,
-      providers: {
-        [OPENAI_PROVIDER_ID]: {
-          schemaVersion: 1,
-          config: {
-            model: { kind: 'pinned', id: 'gpt-realtime-2.1' },
-            voice: 'marin',
-            instructions: '',
-            turnDetection: 'server_vad',
-            inputTranscriptionModel: '',
-          },
-        },
-      },
-    };
-    let accountScope = { serverId: 'server-a', accountId: 'account-a' };
-    accountScope = await applyAccountScope(accountScope);
-    useSetting.mockImplementation((key: string) => (
-      key === 'voice' || key === 'voiceSettingsV1' ? voiceSetting : null
-    ));
-    useProfile.mockImplementation(() => ({
-      connectedServicesV2: [],
-      connectedServiceCredentialRevisionsV1: [],
-    }));
-    useActiveServerAccountScope.mockImplementation(() => accountScope);
-
     const startDeferred = createDeferred<void>();
-    const pending = createRuntimeAdapter(
-      OPENAI_PROVIDER_ID,
-      {
-        adapterId: null,
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-      },
-      {
-        engineKind: 'realtime',
-        // A Start still between credential mint and carrier creation.
-        start: async () => {
-          await startDeferred.promise;
-        },
-      },
-    );
-    const adapter = {
-      ...pending.controller,
-      resolveSurfaceCapabilities: () => ({
-        allowsGlobalStart: true,
-        controlSessionScope: 'global' as const,
-        requiresVoiceAgentFeature: false,
-        bargeInEnabled: false,
-      }),
-    };
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [adapter],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    // SDK carrier creation is genuinely non-abortable. Account retirement must
+    // revoke the real attempt before its late carrier can publish connected.
+    const { screen, lifecycle, runtime } = await prepareGeneratedVoiceRuntime({ startGate: startDeferred.promise });
     const { voiceCaptureAdmissionController } = await import('@/voice/runtime/input/VoiceCaptureAdmissionController');
-    const { storage } = await import('@/sync/domains/state/storage');
-    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
-    registerStorageStateReader(() => storage.getState());
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-    const controller = getVoiceSessionLifecycleController();
-    if (!controller) throw new Error('voice lifecycle controller unavailable');
-    const start = controller.toggle(sessionAddress('voice-session-account-a'));
-    await vi.waitFor(() => expect(pending.controller.start).toHaveBeenCalledOnce());
-
-    accountScope = { serverId: 'server-b', accountId: 'account-b' };
-    accountScope = await applyAccountScope(accountScope);
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const accountLifetime = captureActiveServerAccountScopeLifetime();
+    if (!accountLifetime) throw new Error('Pending SDK attempt Account lifetime unavailable');
+    const statuses: string[] = [];
+    const unsubscribe = lifecycle.subscribe(() => statuses.push(lifecycle.getSnapshot().status));
+    let start: Promise<void> | undefined;
+    let switching: Promise<AccountScope> | undefined;
     await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-      await Promise.resolve();
+      start = lifecycle.toggle(null);
+      void start.catch(() => undefined);
     });
-
-    expect(pending.controller.stop).toHaveBeenCalledOnce();
-    expect(pending.controller.stop).toHaveBeenCalledWith({
-      sessionId: 'voice-session-account-a',
-    });
-
-    startDeferred.resolve();
-    await act(async () => {
-      await start;
-      await Promise.resolve();
-    });
-    // The fenced attempt settles and hands its exclusive capture back, so the
-    // Account-B user is not left holding an Account-A microphone lease.
-    const readmitted = voiceCaptureAdmissionController.acquire('conversation');
-    expect(readmitted.status).toBe('acquired');
-    if (readmitted.status === 'acquired') readmitted.lease.release();
+    try {
+      await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledOnce());
+      expect(lifecycle.getSnapshot().status).toBe('connecting');
+      switching = applyAccountScope({ serverId: 'server-b', accountId: 'account-b' });
+      void switching.catch(() => undefined);
+      // Real Account admission may join old media cleanup. Observe retirement
+      // before releasing its non-abortable SDK carrier; do not await B first.
+      await vi.waitFor(() => expect(accountLifetime.isCurrent()).toBe(false));
+      expect(statuses).not.toContain('connected');
+      startDeferred.resolve();
+      await act(async () => {
+        await Promise.all([start, switching]);
+        await screen.update(runtime);
+      });
+      await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
+      expect(statuses).not.toContain('connected');
+      expect(lifecycle.getSnapshot().status).toBe('disconnected');
+      // The late SDK carrier is closed and the actual admission owner makes
+      // the microphone available to Account B again.
+      const readmitted = voiceCaptureAdmissionController.acquire('conversation');
+      expect(readmitted.status).toBe('acquired');
+      if (readmitted.status === 'acquired') readmitted.lease.release();
+    } finally {
+      startDeferred.resolve();
+      await Promise.all([start, switching]);
+      unsubscribe();
+    }
   });
 
   it('prefers the selected provider adapter snapshot when multiple adapters are active', async () => {
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: 'local_conversation' };
-      return null;
-    });
-
-    const snapA: Snapshot = {
-      adapterId: 'local_direct',
-      sessionId: 's1',
-      status: 'connected',
-      mode: 'idle',
-      canStop: true,
-    };
-    const snapB: Snapshot = {
-      adapterId: 'local_conversation',
-      sessionId: 's2',
-      status: 'connected',
-      mode: 'speaking',
-      canStop: true,
-    };
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({ adapters: [
-        {
-          id: 'local_direct',
-          ...createStubAdapterControls(),
-          getSnapshot: () => snapA,
-          subscribe: () => () => {},
-        },
-        {
-          id: 'local_conversation',
-          ...createStubAdapterControls(),
-          getSnapshot: () => snapB,
-          subscribe: () => () => {},
-        },
-      ], dispose: createAsyncNoopSpy() }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    const { lifecycle, target } = await mountGeneratedLocalRuntime('local_conversation');
+    const { getVoiceAdapterRegistry } = await import('./voiceAdapterRegistry');
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-    await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    expect(getVoiceSessionSnapshot()).toEqual(snapB);
+    // Both public Local adapters project the same actual Local machine. Their
+    // provider identity differs; no invented second capture/session is needed.
+    const direct = getVoiceAdapterRegistry().get('local_direct')?.getSnapshot();
+    const conversation = getVoiceAdapterRegistry().get('local_conversation')?.getSnapshot();
+    expect(direct).toMatchObject({ adapterId: 'local_direct', sessionId: target.sessionId, status: 'connected' });
+    expect(conversation).toMatchObject({ adapterId: 'local_conversation', sessionId: target.sessionId, status: 'connected' });
+    expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
+    expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: 'local_conversation', sessionId: target.sessionId, status: 'connected' });
   });
 
   it('keeps the active store owner stable when the selected provider changes mid-call', async () => {
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: 'local_conversation' };
-      return null;
-    });
-
-    const snapA: Snapshot = {
-      adapterId: 'local_direct',
-      sessionId: 's1',
-      status: 'connected',
-      mode: 'idle',
-      canStop: true,
-    };
-    const snapB: Snapshot = {
-      adapterId: 'local_conversation',
-      sessionId: 's2',
-      status: 'connected',
-      mode: 'speaking',
-      canStop: true,
-    };
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({ adapters: [
-        {
-          id: 'local_direct',
-          ...createStubAdapterControls(),
-          getSnapshot: () => snapA,
-          subscribe: () => () => {},
-        },
-        {
-          id: 'local_conversation',
-          ...createStubAdapterControls(),
-          getSnapshot: () => snapB,
-          subscribe: () => () => {},
-        },
-      ], dispose: createAsyncNoopSpy() }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-    setVoiceSessionSnapshot(snapA);
-    await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    expect(getVoiceSessionSnapshot()).toEqual(snapA);
+    const { screen, lifecycle, runtime, target } = await mountGeneratedLocalRuntime();
+    const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    const stopped = createDeferred<void>();
+    nativeAudio.nativeModule.restoreAudioSession.mockImplementationOnce(() => stopped.promise);
+    try {
+      await act(async () => {
+        const voice = writeVoiceProviderSettingsConfig(storage.getState().settings.voice, 'local_conversation',
+          VoiceLocalConversationSchema.parse({ tts: { autoSpeakReplies: false } }));
+        storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: 'local_conversation' } }, storage.getState().settings));
+        await screen.update(runtime);
+      });
+      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledOnce());
+      expect(lifecycle.getConfiguredProviderId()).toBe('local_conversation');
+      expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: 'local_direct', sessionId: target.sessionId });
+      expect(recognizer.start).toHaveBeenCalledOnce();
+      const { voiceCaptureAdmissionController } = await import('@/voice/runtime/input/VoiceCaptureAdmissionController');
+      const admission = voiceCaptureAdmissionController.acquire('dictation');
+      if (admission.status === 'acquired') admission.lease.release();
+      expect(admission).toMatchObject({ status: 'busy', activeOwner: 'conversation' });
+    } finally {
+      stopped.resolve();
+      await stopped.promise;
+      await vi.waitFor(() => expect(recognizer.start).toHaveBeenCalledTimes(2));
+    }
   });
 
   it('stops the current owner and starts the newly selected provider after disconnect', async () => {
-    let selectedProviderId = 'local_direct';
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: selectedProviderId };
-      return null;
-    });
-
+    const { screen, lifecycle, runtime, target } = await mountGeneratedLocalRuntime();
     const stopped = createDeferred<void>();
-    const active = createRuntimeAdapter('local_direct', {
-      adapterId: 'local_direct',
-      sessionId: 's1',
-      status: 'connected',
-      mode: 'listening',
-      canStop: true,
-    }, { stop: () => stopped.promise });
-    const selected = createRuntimeAdapter('local_conversation', {
-      adapterId: 'local_conversation',
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
-    });
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({ adapters: [active.controller, selected.controller], dispose: createAsyncNoopSpy() }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-    setVoiceSessionSnapshot(active.getSnapshot());
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    expect(getVoiceSessionSnapshot()).toEqual(active.getSnapshot());
-
-    selectedProviderId = 'local_conversation';
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-    });
-
-    expect(active.controller.stop).toHaveBeenCalledWith({ sessionId: 's1' });
-    expect(selected.controller.start).not.toHaveBeenCalled();
-    expect(getVoiceSessionSnapshot()).toEqual(active.getSnapshot());
-
-    await act(async () => {
-      active.setSnapshot({
-        adapterId: 'local_direct',
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
+    const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    nativeAudio.nativeModule.restoreAudioSession.mockImplementationOnce(() => stopped.promise);
+    try {
+      await act(async () => {
+        const voice = writeVoiceProviderSettingsConfig(storage.getState().settings.voice, 'local_conversation',
+          VoiceLocalConversationSchema.parse({ tts: { autoSpeakReplies: false } }));
+        storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: 'local_conversation' } }, storage.getState().settings));
+        await screen.update(runtime);
       });
-    });
-
-    // Providers can publish disconnected while their media cleanup is still
-    // pending. The next provider must wait for that same Stop to settle.
-    expect(selected.controller.start).not.toHaveBeenCalled();
-    await act(async () => {
+      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledOnce());
+      // The genuine recognizer already emitted its terminal end event, but
+      // media restore still owns capture. A successor cannot start yet.
+      expect(recognizer.abort).not.toHaveBeenCalled();
+      expect(recognizer.start).toHaveBeenCalledOnce();
+      expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: 'local_direct', sessionId: target.sessionId });
+      await act(async () => { stopped.resolve(); await stopped.promise; });
+      await vi.waitFor(() => expect(recognizer.start).toHaveBeenCalledTimes(2));
+      expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
+      expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: 'local_conversation',
+        sessionId: target.sessionId, status: 'connected', canStop: true,
+      });
+      expect(nativeSpeech.getAudioSessionCoordinator().getSnapshot().leaseCount).toBeGreaterThan(0);
+    } finally {
       stopped.resolve();
       await stopped.promise;
-    });
-
-    expect(selected.controller.start).toHaveBeenCalledWith({
-      sessionId: 's1',
-      requestedTargetSessionAddress: null,
-    });
-    expect(getVoiceSessionSnapshot()).toEqual({
-      adapterId: 'local_conversation',
-      sessionId: 's1',
-      status: 'connecting',
-      mode: 'idle',
-      canStop: true,
-    });
+    }
   });
 
   it('stops the current owner and settles to off after a real disconnect snapshot', async () => {
-    let selectedProviderId = 'local_direct';
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: selectedProviderId };
-      return null;
-    });
-
     const stopped = createDeferred<void>();
-    const active = createRuntimeAdapter('local_direct', {
-      adapterId: 'local_direct',
-      sessionId: 's1',
-      status: 'connected',
-      mode: 'listening',
-      canStop: true,
-    }, { stop: () => stopped.promise });
-    const idlePeer = createRuntimeAdapter('local_conversation', {
-      adapterId: 'local_conversation',
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
-    });
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({ adapters: [active.controller, idlePeer.controller], dispose: createAsyncNoopSpy() }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
-    const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-    setVoiceSessionSnapshot(active.getSnapshot());
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    expect(getVoiceSessionSnapshot()).toEqual(active.getSnapshot());
-
-    selectedProviderId = 'off';
-    await act(async () => {
-      screen.tree.update(React.createElement(VoiceSessionRuntime));
-    });
-
-    expect(active.controller.stop).toHaveBeenCalledWith({ sessionId: 's1' });
-    expect(idlePeer.controller.start).not.toHaveBeenCalled();
-    expect(getVoiceSessionSnapshot()).toEqual(active.getSnapshot());
-
-    await act(async () => {
-      active.setSnapshot({
-        adapterId: 'local_direct',
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
+    const { screen, lifecycle, runtime } = await mountGeneratedElevenLabsRuntime();
+    const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    const active = lifecycle.getSnapshot();
+    sdk.endSession.mockImplementation(() => stopped.promise);
+    try {
+      await act(async () => {
+        storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: {
+          ...storage.getState().settings.voice, providerId: 'off',
+        } }, storage.getState().settings));
+        await screen.update(runtime);
       });
+      await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
+      expect(sdk.startSession).toHaveBeenCalledOnce();
+      expect(getVoiceSessionSnapshot()).toEqual({ ...active, status: 'connecting' });
+      await act(async () => {
+        stopped.resolve();
+        await stopped.promise;
+      });
+      await vi.waitFor(() => expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot()));
+      expect(getVoiceSessionSnapshot()).toEqual({
+        adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false,
+      });
+      expect(lifecycle.getConfiguredProviderId()).toBeNull();
+      await act(async () => { await lifecycle.toggle(null); });
+      expect(sdk.startSession).toHaveBeenCalledOnce();
+    } finally {
       stopped.resolve();
       await stopped.promise;
-    });
-
-    expect(getVoiceSessionSnapshot()).toEqual({
-      adapterId: null,
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
-    });
+    }
   });
 
-  it('prefers the selected provider adapter snapshot when the provider id is padded', async () => {
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: ' local_conversation ' };
-      return null;
-    });
-
-    const snapA: Snapshot = {
-      adapterId: 'local_direct',
-      sessionId: 's1',
-      status: 'connected',
-      mode: 'idle',
-      canStop: true,
-    };
-    const snapB: Snapshot = {
-      adapterId: 'local_conversation',
-      sessionId: 's2',
-      status: 'connected',
-      mode: 'speaking',
-      canStop: true,
-    };
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({ adapters: [
-        {
-          id: 'local_direct',
-          ...createStubAdapterControls(),
-          getSnapshot: () => snapA,
-          subscribe: () => () => {},
-        },
-        {
-          id: 'local_conversation',
-          ...createStubAdapterControls(),
-          getSnapshot: () => snapB,
-          subscribe: () => () => {},
-        },
-      ], dispose: createAsyncNoopSpy() }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+  it('starts and publishes the canonical selected provider when its id is padded', async () => {
+    const { lifecycle } = await mountGeneratedElevenLabsRuntime({ selectedProviderId: ` ${ELEVENLABS_PROVIDER_ID} ` });
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-    await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    expect(getVoiceSessionSnapshot()).toEqual(snapB);
+    expect(lifecycle.getConfiguredProviderId()).toBe(ELEVENLABS_PROVIDER_ID);
+    expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
+    expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: ELEVENLABS_PROVIDER_ID,
+      sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, status: 'connected', canStop: true,
+    });
   });
 
   it('keeps the stored local provider as the continuous-mode owner on web', async () => {
-    platformOsMock.value = 'web';
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: 'local_conversation' };
-      return null;
-    });
-
-    const realtimeSnapshot: Snapshot = {
-      adapterId: ELEVENLABS_PROVIDER_ID,
-      sessionId: 's-rt',
-      status: 'connected',
-      mode: 'speaking',
-      canStop: true,
-    };
-    const localSnapshot: Snapshot = {
-      adapterId: 'local_conversation',
-      sessionId: 's-local',
-      status: 'connected',
-      mode: 'listening',
-      canStop: true,
-    };
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({ adapters: [
-        {
-          id: ELEVENLABS_PROVIDER_ID,
-          ...createStubAdapterControls('realtime'),
-          getSnapshot: () => realtimeSnapshot,
-          subscribe: () => () => {},
-        },
-        {
-          id: 'local_conversation',
-          ...createStubAdapterControls(),
-          getSnapshot: () => localSnapshot,
-          subscribe: () => () => {},
-        },
-      ], dispose: createAsyncNoopSpy() }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    const browser = installVoiceWebRtcBrowserBoundary();
+    browserBoundaries.push(browser);
+    vi.stubGlobal('window', new EventTarget());
+    vi.stubGlobal('document', createMountedBrowserDocument());
+    const { lifecycle, target } = await mountGeneratedLocalRuntime('local_conversation', 'web');
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
-
-    await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    expect(getVoiceSessionSnapshot()).toEqual(localSnapshot);
+    const { getVoiceAdapterRegistry } = await import('./voiceAdapterRegistry');
+    expect(platformOsMock.value).toBe('web');
+    expect(getVoiceAdapterRegistry().get('local_direct')?.getSnapshot()).toMatchObject({
+      adapterId: 'local_direct', sessionId: target.sessionId, status: 'connected',
+    });
+    expect(getVoiceAdapterRegistry().get(ELEVENLABS_PROVIDER_ID)?.getSnapshot().status).toBe('disconnected');
+    expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
+    expect(getVoiceSessionSnapshot()).toMatchObject({
+      adapterId: 'local_conversation', sessionId: target.sessionId, status: 'connected', canStop: true,
+    });
+    expect(sdk.startSession).not.toHaveBeenCalled();
   });
 
   it('fails closed when the configured provider id is unsupported', async () => {
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: 'unsupported_provider' };
-      return null;
-    });
-
-    const snapA: Snapshot = {
-      adapterId: 'adapter_a',
-      sessionId: 's1',
-      status: 'connected',
-      mode: 'idle',
-      canStop: true,
-    };
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({ adapters: [
-        {
-          id: 'adapter_a',
-          ...createStubAdapterControls(),
-          getSnapshot: () => snapA,
-          subscribe: () => () => {},
-        },
-      ], dispose: createAsyncNoopSpy() }),
-    }));
+    platformOsMock.value = 'web';
+    sdk.startSession.mockReset();
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { providerId: 'unsupported_provider' } }, storage.getState().settings));
 
     const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
 
-    await renderScreen(React.createElement(VoiceSessionRuntime));
+    const screen = await renderRuntimeScreen(React.createElement(VoiceSessionRuntime));
+    generatedRuntimeScreens.push(screen);
+    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    const lifecycle = getVoiceSessionLifecycleController();
+    if (!lifecycle) throw new Error('Mounted lifecycle unavailable');
+    expect(lifecycle.getConfiguredProviderId()).toBeNull();
+    await act(async () => { await lifecycle.toggle(null); });
+    expect(sdk.startSession).not.toHaveBeenCalled();
 
     expect(getVoiceSessionSnapshot()).toEqual({
       adapterId: null,
@@ -2561,51 +1558,15 @@ describe('VoiceSessionRuntime', () => {
   });
 
   it('keeps realtime capture admission and the active snapshot until unmount stop completes', async () => {
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: OPENAI_PROVIDER_ID };
-      return null;
-    });
+    const { screen, lifecycle } = await mountGeneratedElevenLabsRuntime();
     const stopDeferred = createDeferred<void>();
-    const realtime = createRuntimeAdapter(
-      OPENAI_PROVIDER_ID,
-      {
-        adapterId: OPENAI_PROVIDER_ID,
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-      },
-      {
-        engineKind: 'realtime',
-        stop: async () => {
-          await stopDeferred.promise;
-        },
-      },
-    );
-    const assemblyDispose = createAsyncNoopSpy();
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [realtime.controller],
-        dispose: assemblyDispose,
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    sdk.endSession.mockImplementation(() => stopDeferred.promise);
     const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
     const { voiceCaptureAdmissionController } = await import('@/voice/runtime/input/VoiceCaptureAdmissionController');
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    await act(async () => {
-      await getVoiceSessionLifecycleController()?.toggle(sessionAddress('voice-session'));
-    });
-
-    await act(async () => {
-      screen.tree.unmount();
-    });
-
-    expect(realtime.controller.stop).toHaveBeenCalledWith({ sessionId: 'voice-session' });
+    const activeSnapshot = getVoiceSessionSnapshot();
+    await screen.unmount();
+    await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
     const competingAdmission = voiceCaptureAdmissionController.acquire('dictation');
     if (competingAdmission.status === 'acquired') {
       competingAdmission.lease.release();
@@ -2614,26 +1575,26 @@ describe('VoiceSessionRuntime', () => {
       status: 'busy',
       activeOwner: 'conversation',
     });
-    expect(getVoiceSessionSnapshot()).toMatchObject({
-      adapterId: OPENAI_PROVIDER_ID,
-      sessionId: 'voice-session',
-      status: 'connecting',
-    });
-    expect(assemblyDispose).not.toHaveBeenCalled();
+    expect(getVoiceSessionSnapshot()).toEqual(activeSnapshot);
+    expect(getVoiceSessionLifecycleController()).toBe(lifecycle);
 
     await act(async () => {
       stopDeferred.resolve();
-      await realtime.controller.stop.mock.results[0]?.value;
+      await sdk.endSession.mock.results[0]?.value;
       await Promise.resolve();
     });
 
-    expect(assemblyDispose).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
     expect(getVoiceSessionSnapshot()).toEqual({
+      ...activeSnapshot,
       adapterId: null,
       sessionId: null,
       status: 'disconnected',
       mode: 'idle',
       canStop: false,
+      canCommitInput: false,
+      canHoldToTalk: false,
+      inUseVoice: undefined,
     });
     const admissionAfterStop = voiceCaptureAdmissionController.acquire('dictation');
     expect(admissionAfterStop.status).toBe('acquired');
@@ -2644,251 +1605,131 @@ describe('VoiceSessionRuntime', () => {
 
   it('stops and awaits an active Local Voice adapter before publishing idle on unmount', async () => {
     const stopDeferred = createDeferred<void>();
-    const local = createRuntimeAdapter(
-      'local_direct',
-      {
-        adapterId: 'local_direct',
-        sessionId: 'local-session',
-        status: 'connected',
-        mode: 'listening',
-        canStop: true,
-      },
-      {
-        engineKind: 'local',
-        stop: async () => {
-          await stopDeferred.promise;
-        },
-      },
-    );
-    const assemblyDispose = createAsyncNoopSpy();
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [local.controller],
-        dispose: assemblyDispose,
-      }),
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    const { screen, lifecycle } = await mountGeneratedLocalRuntime();
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
-    const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    await act(async () => {
-      screen.tree.unmount();
-    });
-
-    expect(local.controller.stop).toHaveBeenCalledWith({ sessionId: 'local-session' });
-    expect(getVoiceSessionSnapshot()).toEqual(local.getSnapshot());
-    expect(assemblyDispose).not.toHaveBeenCalled();
-
-    await act(async () => {
+    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    const active = getVoiceSessionSnapshot();
+    nativeAudio.nativeModule.restoreAudioSession.mockImplementation(() => stopDeferred.promise);
+    try {
+      await screen.unmount();
+      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledOnce());
+      expect(recognizer.abort).not.toHaveBeenCalled();
+      expect(getVoiceSessionSnapshot()).toEqual(active);
+      expect(getVoiceSessionLifecycleController()).toBe(lifecycle);
+      await act(async () => {
+        stopDeferred.resolve();
+        await stopDeferred.promise;
+      });
+      await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
+      expect(nativeSpeech.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+      expect(getVoiceSessionSnapshot()).toEqual({
+        adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false,
+      });
+    } finally {
       stopDeferred.resolve();
-      await local.controller.stop.mock.results[0]?.value;
-      await Promise.resolve();
-    });
-
-    expect(assemblyDispose).toHaveBeenCalledOnce();
-    expect(getVoiceSessionSnapshot()).toEqual({
-      adapterId: null,
-      sessionId: null,
-      status: 'disconnected',
-      mode: 'idle',
-      canStop: false,
-    });
+      await stopDeferred.promise;
+    }
   });
 
   it('does not let an earlier StrictMode-equivalent cleanup overwrite a remounted owner', async () => {
-    useSetting.mockImplementation((key: string) => {
-      if (key === 'voice' || key === 'voiceSettingsV1') return { providerId: OPENAI_PROVIDER_ID };
-      return null;
-    });
     const oldStopDeferred = createDeferred<void>();
-    const oldRuntime = createRuntimeAdapter(
-      OPENAI_PROVIDER_ID,
-      {
-        adapterId: OPENAI_PROVIDER_ID,
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-      },
-      {
-        engineKind: 'realtime',
-        stop: async () => {
-          await oldStopDeferred.promise;
-        },
-      },
-    );
-    const freshRuntime = createRuntimeAdapter(
-      OPENAI_PROVIDER_ID,
-      {
-        adapterId: OPENAI_PROVIDER_ID,
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-      },
-      { engineKind: 'realtime' },
-    );
-    const oldAssemblyDispose = createAsyncNoopSpy();
-    const freshAssemblyDispose = createAsyncNoopSpy();
-    let assemblyCount = 0;
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => {
-        assemblyCount += 1;
-        return assemblyCount === 1
-          ? { adapters: [oldRuntime.controller], dispose: oldAssemblyDispose }
-          : { adapters: [freshRuntime.controller], dispose: freshAssemblyDispose };
-      },
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    const { screen: oldScreen, lifecycle: oldController, runtime, options: oldOptions } = await mountGeneratedElevenLabsRuntime();
     const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
-    const oldScreen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    await act(async () => {
-      await getVoiceSessionLifecycleController()?.toggle(sessionAddress('old-session'));
-    });
-    await act(async () => {
-      oldScreen.tree.unmount();
-    });
-
-    const freshScreen = await renderScreen(React.createElement(VoiceSessionRuntime));
-    const freshController = getVoiceSessionLifecycleController();
-    await expect(freshController?.toggle(sessionAddress('fresh-session'))).rejects.toMatchObject({
-      name: 'VoiceCaptureBusyError',
-      activeOwner: 'conversation',
-    });
-    expect(freshRuntime.controller.start).not.toHaveBeenCalled();
-
-    oldRuntime.setSnapshot({
-      adapterId: OPENAI_PROVIDER_ID,
-      sessionId: 'old-session',
-      status: 'connected',
-      mode: 'speaking',
-      canStop: true,
-    });
-    await act(async () => {
+    sdk.endSession.mockImplementationOnce(() => oldStopDeferred.promise);
+    try {
+      await oldScreen.unmount();
+      await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
+      const freshScreen = await renderRuntimeScreen(runtime);
+      generatedRuntimeScreens.push(freshScreen);
+      const freshController = getVoiceSessionLifecycleController();
+      if (!freshController) throw new Error('Remounted Voice lifecycle unavailable');
+      expect(freshController).not.toBe(oldController);
+      expect(freshController.getConfiguredProviderId()).toBe(ELEVENLABS_PROVIDER_ID);
+      const { voiceCaptureAdmissionController } = await import('@/voice/runtime/input/VoiceCaptureAdmissionController');
+      const blocked = voiceCaptureAdmissionController.acquire('dictation');
+      if (blocked.status === 'acquired') blocked.lease.release();
+      expect(blocked).toMatchObject({ status: 'busy', activeOwner: 'conversation' });
+      expect(sdk.startSession).toHaveBeenCalledOnce();
+      await act(async () => {
+        oldOptions.onModeChange?.({ mode: 'speaking' });
+        oldStopDeferred.resolve();
+        await oldStopDeferred.promise;
+      });
+      await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBe(freshController));
+      expect(getVoiceSessionSnapshot()).not.toMatchObject({ status: 'connected', mode: 'speaking' });
+      await vi.waitFor(() => {
+        const admission = voiceCaptureAdmissionController.acquire('dictation');
+        if (admission.status === 'acquired') admission.lease.release();
+        expect(admission.status).toBe('acquired');
+        expect(freshController.getSnapshot().status).toBe('disconnected');
+      });
+      await act(async () => { await freshController.toggle(null); });
+      await vi.waitFor(() => expect(sdk.startSession, JSON.stringify(freshController.getSnapshot())).toHaveBeenCalledTimes(2));
+      expect(getVoiceSessionSnapshot()).toMatchObject({
+        adapterId: ELEVENLABS_PROVIDER_ID, sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, status: 'connected',
+      });
+      await act(async () => { oldOptions.onModeChange?.({ mode: 'speaking' }); });
+      expect(getVoiceSessionSnapshot().mode).toBe('idle');
+      expect(getVoiceSessionLifecycleController()).toBe(freshController);
+    } finally {
       oldStopDeferred.resolve();
-      await oldRuntime.controller.stop.mock.results[0]?.value;
-      await Promise.resolve();
-    });
-
-    expect(getVoiceSessionLifecycleController()).toBe(freshController);
-    expect(getVoiceSessionSnapshot()).not.toMatchObject({
-      sessionId: 'old-session',
-      mode: 'speaking',
-    });
-    expect(oldAssemblyDispose).toHaveBeenCalledOnce();
-
-    await act(async () => {
-      await freshController?.toggle(sessionAddress('fresh-session'));
-    });
-    expect(freshRuntime.controller.start).toHaveBeenCalledWith({
-      sessionId: 'fresh-session',
-      requestedTargetSessionAddress: sessionAddress('fresh-session'),
-    });
-    expect(getVoiceSessionSnapshot()).toMatchObject({
-      sessionId: 'fresh-session',
-      status: 'connecting',
-    });
-
-    await act(async () => {
-      freshScreen.tree.unmount();
-      await Promise.resolve();
-    });
-    expect(freshAssemblyDispose).toHaveBeenCalledOnce();
+      await oldStopDeferred.promise;
+    }
   });
 
   it('does not let deferred Local cleanup stop or overwrite a replacement Local session', async () => {
     const oldStopDeferred = createDeferred<void>();
-    const oldRuntime = createRuntimeAdapter(
-      'local_direct',
-      {
-        adapterId: 'local_direct',
-        sessionId: 'old-local-session',
-        status: 'connected',
-        mode: 'listening',
-        canStop: true,
-      },
-      {
-        engineKind: 'local',
-        stop: async () => {
-          await oldStopDeferred.promise;
-        },
-      },
-    );
-    const freshRuntime = createRuntimeAdapter(
-      'local_direct',
-      {
-        adapterId: 'local_direct',
-        sessionId: null,
-        status: 'disconnected',
-        mode: 'idle',
-        canStop: false,
-      },
-      { engineKind: 'local' },
-    );
-    const oldAssemblyDispose = createAsyncNoopSpy();
-    const freshAssemblyDispose = createAsyncNoopSpy();
-    let assemblyCount = 0;
-
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => {
-        assemblyCount += 1;
-        return assemblyCount === 1
-          ? { adapters: [oldRuntime.controller], dispose: oldAssemblyDispose }
-          : { adapters: [freshRuntime.controller], dispose: freshAssemblyDispose };
-      },
-    }));
-
-    const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    let freshStart: Promise<void> | undefined;
+    const { screen: oldScreen, lifecycle: oldController, runtime } = await mountGeneratedLocalRuntime();
     const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
-    const oldScreen = await renderScreen(React.createElement(VoiceSessionRuntime));
-
-    await act(async () => {
-      oldScreen.tree.unmount();
-    });
-    expect(oldRuntime.controller.stop).toHaveBeenCalledWith({ sessionId: 'old-local-session' });
-    expect(oldAssemblyDispose).not.toHaveBeenCalled();
-
-    const freshScreen = await renderScreen(React.createElement(VoiceSessionRuntime));
-    const freshController = getVoiceSessionLifecycleController();
-    await act(async () => {
-      await freshController?.toggle(sessionAddress('fresh-local-session'));
-    });
-    expect(freshRuntime.controller.start).toHaveBeenCalledWith({
-      sessionId: 'fresh-local-session',
-      requestedTargetSessionAddress: sessionAddress('fresh-local-session'),
-    });
-    expect(getVoiceSessionSnapshot()).toMatchObject({
-      sessionId: 'fresh-local-session',
-      status: 'connecting',
-    });
-
-    await act(async () => {
+    const { storage } = await import('@/sync/domains/state/storage');
+    if (!accountConnection) throw new Error('Replacement Local Account unavailable');
+    const target = { serverId: accountConnection.home.id, sessionId: 'fresh-local-session' };
+    storage.getState().applySessions([
+      createSessionFixture({ id: target.sessionId, serverId: target.serverId, encryptionMode: 'plain', active: true }),
+    ]);
+    nativeAudio.nativeModule.restoreAudioSession.mockImplementationOnce(() => oldStopDeferred.promise);
+    try {
+      await oldScreen.unmount();
+      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledOnce());
+      const freshScreen = await renderRuntimeScreen(runtime);
+      generatedRuntimeScreens.push(freshScreen);
+      const freshController = getVoiceSessionLifecycleController();
+      if (!freshController) throw new Error('Replacement Local lifecycle unavailable');
+      expect(freshController).not.toBe(oldController);
+      await act(async () => {
+        freshStart = freshController.toggle(target);
+        // Keep a failure attributable to the later awaited admission rather
+        // than an unhandled-rejection timer while the native SDK is held.
+        void freshStart.catch(() => {});
+      });
+      expect(recognizer.start).toHaveBeenCalledOnce();
+      expect(freshController.getAttemptTargetSessionAddress()).toEqual(target);
+      expect(getVoiceSessionSnapshot().status).not.toBe('connected');
+      await act(async () => {
+        oldStopDeferred.resolve();
+        await oldStopDeferred.promise;
+      });
+      await act(async () => { await freshStart; });
+      await vi.waitFor(() => expect(recognizer.start).toHaveBeenCalledTimes(2));
+      expect(getVoiceSessionLifecycleController()).toBe(freshController);
+      expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: 'local_direct',
+        sessionId: target.sessionId, status: 'connected', canStop: true,
+      });
+      expect(recognizer.stop).toHaveBeenCalledOnce();
+      expect(recognizer.abort).not.toHaveBeenCalled();
+      expect(nativeSpeech.getAudioSessionCoordinator().getSnapshot().leaseCount).toBeGreaterThan(0);
+      await freshScreen.unmount();
+      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
+      expect(nativeSpeech.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+    } finally {
       oldStopDeferred.resolve();
-      await oldRuntime.controller.stop.mock.results[0]?.value;
-      await Promise.resolve();
-    });
-
-    expect(oldAssemblyDispose).toHaveBeenCalledOnce();
-    expect(getVoiceSessionLifecycleController()).toBe(freshController);
-    expect(getVoiceSessionSnapshot()).toMatchObject({
-      sessionId: 'fresh-local-session',
-      status: 'connecting',
-    });
-    expect(freshRuntime.controller.stop).not.toHaveBeenCalled();
-
-    await act(async () => {
-      freshScreen.tree.unmount();
-      await Promise.resolve();
-    });
-    expect(freshRuntime.controller.stop).toHaveBeenCalledWith({ sessionId: 'fresh-local-session' });
-    expect(freshAssemblyDispose).toHaveBeenCalledOnce();
+      await oldStopDeferred.promise;
+      await freshStart;
+    }
   });
   /**
    * C1 parity — an external provider must reach the runtime exactly like a built-in one.
@@ -2900,34 +1741,35 @@ describe('VoiceSessionRuntime', () => {
    * the lifecycle owner was never told which provider was configured.
    */
   it('configures a persisted external provider once its plugin registers', async () => {
-    const rearmAfterCredentialAuthorityChange = createRearmSpy();
-    const lifecycleController = createStubLifecycleController(rearmAfterCredentialAuthorityChange);
-    setRuntimeModuleFixture('./voiceSessionLifecycleController', () => ({
-      createVoiceSessionLifecycleController: () => lifecycleController,
-    }));
-    setRuntimeModuleFixture('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
-      createBuiltinVoiceAdapterAssembly: () => ({
-        adapters: [],
-        dispose: createAsyncNoopSpy(),
-      }),
-    }));
-    useSetting.mockImplementation((key: string) => key === 'voice' || key === 'voiceSettingsV1'
-      ? {
-          providerId: EXTERNAL_PROVIDER_ID,
-          providers: {
-            [EXTERNAL_PROVIDER_ID]: { schemaVersion: 1, config: {} },
-          },
-        }
-      : null);
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: {
+      providerId: EXTERNAL_PROVIDER_ID,
+      providers: { [EXTERNAL_PROVIDER_ID]: { schemaVersion: 1, config: {} } },
+    } }, storage.getState().settings));
 
     const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
     const {
       commitExternalVoiceProviderRegistration,
       removeExternalVoiceProviderRegistration,
     } = await import('@/voice/registry/externalVoiceProviderRegistrations');
+    const { VoiceProviderContributionSchema } = await import('@happier-dev/protocol/plugins/contributions/voice');
+    const { projectVoiceProviderDeclarationRegistryBase } = await import('@/voice/registry/providerRegistry');
+    const { createExternalVoiceProviderSettingsDescriptor } = await import('@/voice/settings/externalProviderSettings');
+    const declaration = VoiceProviderContributionSchema.parse({
+      id: 'realtime-demo', title: 'External Voice', kind: 'conversation',
+      roles: ['realtime_conversation'], platforms: ['web'],
+      capabilities: { turn: { cancelResponse: false, bargeIn: false } },
+      client: { artifactId: 'voice-runtime', exportName: 'activate' },
+    });
+    if (declaration.kind !== 'conversation') throw new Error('Expected conversation contribution');
 
-    await renderScreen(React.createElement(VoiceSessionRuntime));
-    expect(lifecycleController.setConfiguredProviderId).toHaveBeenLastCalledWith(null);
+    const screen = await renderRuntimeScreen(React.createElement(VoiceSessionRuntime));
+    generatedRuntimeScreens.push(screen);
+    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    const lifecycleController = getVoiceSessionLifecycleController();
+    if (!lifecycleController) throw new Error('Mounted lifecycle unavailable');
+    expect(lifecycleController.getConfiguredProviderId()).toBeNull();
 
     await act(async () => {
       commitExternalVoiceProviderRegistration({
@@ -2940,22 +1782,23 @@ describe('VoiceSessionRuntime', () => {
           pluginId: 'acme.voice.demo',
           providerId: EXTERNAL_PROVIDER_ID,
           settingsSectionId: 'voice.acme-demo',
-          roles: [],
-          requirements: [],
+          ...projectVoiceProviderDeclarationRegistryBase({
+            declaration, providerSettings: createExternalVoiceProviderSettingsDescriptor(declaration.settings),
+          }),
+          declaration,
           source: { kind: 'external', pluginId: 'acme.voice.demo', localId: 'realtime-demo' },
-          projectSettings: () => ({ status: 'ready', modeId: 'byo' }),
-        } as never,
+        },
         adapter: null,
       });
     });
 
-    expect(lifecycleController.setConfiguredProviderId).toHaveBeenLastCalledWith(EXTERNAL_PROVIDER_ID);
+    expect(lifecycleController.getConfiguredProviderId()).toBe(EXTERNAL_PROVIDER_ID);
 
     // Withdrawal is the same authority in the other direction: an uninstalled plugin must not
     // leave the lifecycle owner holding a provider it can no longer resolve.
     await act(async () => {
       removeExternalVoiceProviderRegistration(EXTERNAL_REGISTRATION_TOKEN);
     });
-    expect(lifecycleController.setConfiguredProviderId).toHaveBeenLastCalledWith(null);
+    expect(lifecycleController.getConfiguredProviderId()).toBeNull();
   });
 });

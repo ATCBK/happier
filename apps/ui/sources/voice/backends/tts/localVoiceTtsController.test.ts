@@ -1,5 +1,13 @@
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineFixture } from '@/dev/testkit';
+import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { DaemonVoiceInferenceTtsStreamStartResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
 
 import { createExternalVoiceProviderSettingsDescriptor } from '@/voice/settings/externalProviderSettings';
 import {
@@ -8,94 +16,84 @@ import {
 } from '@/voice/registry/externalVoiceProviderRegistrations';
 import type { VoiceProviderRegistryEntry } from '@/voice/registry/providerRegistry';
 
-const resolveDaemonVoiceInferenceExecutionSpy = vi.fn<
-    (_params: unknown) => Promise<'device' | 'daemon'>
->(
-    async (_params: unknown) => 'daemon' as const,
-);
-const daemonTtsControllerSpeakSpy = vi.fn(async (_params: unknown) => undefined);
-const speakDeviceTextSpy = vi.fn(
-    async (_text: string, _onSpeaking: () => void, _options?: unknown) => undefined,
-);
-const stopDeviceSpeechSpy = vi.fn((_stopper?: unknown) => undefined);
-const speakKokoroTextSpy = vi.fn(async (_params: unknown) => undefined);
-const bundledSpeechSynthesizeSpy = vi.fn(async (_params: unknown) => ({
-    bytes: new Uint8Array([1, 2, 3]),
-    mimeType: 'audio/wav' as const,
-}));
-const playAudioBytesWithStopperSpy = vi.fn(async (params: Readonly<{
-    onPlaybackStarted?: () => void;
-}>) => {
-    params.onPlaybackStarted?.();
-});
+let account: Awaited<ReturnType<typeof serveAccountHomes>>;
+let disconnect: (() => Promise<void>) | undefined;
+const speechBoundary = createVoiceSpeechOutputBoundary({ getAccount: async () => {
+    const home = account.homes.voice!;
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl(home.serverUrl);
+    if (!credentials) throw new Error('TTS Account credentials unavailable');
+    return { home, credentials };
+} });
+const { encodedAudio, machineRpc, expoSpeechSpeak, nativeSynthesize, daemonStreamStartRpc,
+    speechSynthesizeRpc } = speechBoundary;
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { sync } = await import('@/sync/sync');
+const { createLocalVoiceTtsController } = await import('./localVoiceTtsController');
+const { createDefaultLocalVoiceTtsProviderControllers } = await import('./localVoiceTtsProviderControllers');
+const { voiceSettingsParse, readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const initialSettings = storage.getState().settings;
+const initialMachines = storage.getState().machines;
+const initialMachineLists = storage.getState().machineListByServerId;
+const serverFeatures = FeaturesResponseSchema.parse({ features: {
+    voice: { enabled: true }, execution: { runs: { enabled: true } },
+    machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+}, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+    maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000,
+    maxDurationMs: 60_000, maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2,
+    maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1,
+} } } } } });
 
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
-        Platform: { OS: 'ios', select: (spec: Record<string, unknown>) => spec.ios ?? spec.default ?? spec.web },
-    });
-});
-
-vi.mock('@/voice/runtime/daemonInference/daemonVoiceInferencePolicy', () => ({
-    resolveDaemonVoiceInferenceExecution: (params: unknown) =>
-        resolveDaemonVoiceInferenceExecutionSpy(params),
-    resolveLocalNeuralExecutionPolicy: (params: { requestedExecution?: string | null }) => {
-        const requestedExecution = params.requestedExecution ?? 'auto';
-        return {
-            allowDeviceSelection: true,
-            preferredExecution: requestedExecution === 'daemon' ? 'daemon' : 'device',
-            requestedExecution,
-            selectableExecution: requestedExecution,
-        };
-    },
-}));
-
-vi.mock('@/voice/runtime/daemonInference/DaemonTtsController', () => ({
-    DaemonTtsController: vi.fn().mockImplementation(() => ({
-        speak: (params: unknown) => daemonTtsControllerSpeakSpy(params),
-    })),
-}));
-
-vi.mock('@/voice/local/speakDeviceText', () => ({
-    speakDeviceText: (text: string, onSpeaking: () => void, options?: unknown) =>
-        speakDeviceTextSpy(text, onSpeaking, options),
-    stopDeviceSpeech: () => stopDeviceSpeechSpy(),
-}));
-
-vi.mock('@/voice/output/KokoroTtsController', () => ({
-    speakKokoroText: (params: unknown) => speakKokoroTextSpy(params),
-}));
-
-vi.mock('@/voice/credentials/bundledSpeechClient', () => ({
-    bundledSpeechDaemonClient: {
-        transcribe: vi.fn(),
-        synthesize: (params: unknown) => bundledSpeechSynthesizeSpy(params),
-    },
-}));
-
-vi.mock('@/voice/output/playAudioBytesWithStopper', () => ({
-    playAudioBytesWithStopper: (params: Readonly<{ onPlaybackStarted?: () => void }>) =>
-        playAudioBytesWithStopperSpy(params),
-}));
-
-import { createLocalVoiceTtsController } from './localVoiceTtsController';
+afterAll(() => speechBoundary.disposeAudioSession());
 
 describe('localVoiceTtsController', () => {
-    beforeEach(() => {
-        resolveDaemonVoiceInferenceExecutionSpy.mockReset();
-        resolveDaemonVoiceInferenceExecutionSpy.mockResolvedValue('daemon');
-        daemonTtsControllerSpeakSpy.mockReset();
-        daemonTtsControllerSpeakSpy.mockResolvedValue(undefined);
-        speakDeviceTextSpy.mockReset();
-        speakDeviceTextSpy.mockResolvedValue(undefined);
-        speakKokoroTextSpy.mockReset();
-        speakKokoroTextSpy.mockResolvedValue(undefined);
-        bundledSpeechSynthesizeSpy.mockReset();
-        bundledSpeechSynthesizeSpy.mockResolvedValue({
-            bytes: new Uint8Array([1, 2, 3]),
-            mimeType: 'audio/wav',
-        });
-        playAudioBytesWithStopperSpy.mockClear();
+    let featureResponse: () => Response;
+    async function restoreAccount(state: 'enabled' | 'disabled' | 'unavailable' = 'enabled') {
+        featureResponse = state === 'unavailable'
+            ? () => { throw new TypeError('Feature service network failure'); }
+            : () => Response.json(state === 'disabled'
+                ? FeaturesResponseSchema.parse({ ...serverFeatures,
+                    features: { ...serverFeatures.features, voice: { ...serverFeatures.features.voice, enabled: false } } })
+                : serverFeatures);
+        account = await serveAccountHomes({ homes: [{ key: 'voice',
+            serverUrl: `https://tts-controller-${state}.test`, accountId: 'tts-account' }],
+            route: async request => {
+                const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'tts-machine', 'tts-account');
+                if (machineReply) return machineReply;
+                if (request.path === '/v1/features') return featureResponse();
+                if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                return undefined;
+            } });
+        disconnect = await account.restoreActiveConnection();
+        await sync.resumeSync('manual');
+        const machine = createMachineFixture({ id: 'tts-machine', activeAt: Date.now() });
+        storage.setState({ machines: { ...initialMachines, [machine.id]: machine },
+            machineListByServerId: { ...initialMachineLists, [account.homes.voice!.id]: [machine] } });
+        storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ experiments: true, featureToggles: {
+            voice: true, 'execution.runs': true, 'voice.agent': true, 'voice.daemonInference': true,
+        }, voice: { ...storage.getState().settings.voice,
+            executionMachine: { mode: 'fixed', machineId: machine.id, autoMachineId: null } } }, storage.getState().settings));
+    }
+
+    async function retireAccount() {
+        await disconnect?.();
+        disconnect = undefined;
+        await account?.dispose();
+        resetServerFeaturesClientForTests();
+    }
+
+    beforeEach(async () => {
+        speechBoundary.reset();
+        await restoreAccount();
+    });
+
+    afterEach(async () => {
+        await retireAccount();
+        speechBoundary.disposeNativeSdkBridge();
+        storage.setState({ settings: initialSettings, machines: initialMachines, machineListByServerId: initialMachineLists });
     });
 
     it('dispatches a current external dual-role speech provider through normal Local Voice TTS', async () => {
@@ -199,18 +197,8 @@ describe('localVoiceTtsController', () => {
                     },
                 },
             },
-            tts: {
-                provider: providerId,
-                localNeural: {
-                    model: 'kokoro',
-                    assetId: null,
-                    voiceId: null,
-                    speed: null,
-                    execution: 'auto',
-                },
-                autoSpeakReplies: true,
-                bargeInEnabled: true,
-            },
+            tts: { ...readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' })).tts,
+                provider: providerId },
             networkTimeoutMs: 15_000,
             registerPlaybackStopper: () => () => {},
             onSpeaking,
@@ -218,15 +206,15 @@ describe('localVoiceTtsController', () => {
 
         try {
             await expect(controller.speak(request)).resolves.toBeUndefined();
-            expect(bundledSpeechSynthesizeSpy).toHaveBeenCalledWith(expect.objectContaining({
-                entry: expect.objectContaining({ providerId, role: 'both' }),
+            expect(speechSynthesizeRpc).toHaveBeenCalledWith(expect.objectContaining({
+                target: { pluginId, localId: declaration.id },
                 input: 'speak through both roles',
             }));
-            const dispatch = bundledSpeechSynthesizeSpy.mock.calls[0]?.[0];
+            const dispatch = speechSynthesizeRpc.mock.calls[0]?.[0];
             expect(dispatch).not.toHaveProperty('model');
             expect(dispatch).not.toHaveProperty('voiceName');
             expect(dispatch).not.toHaveProperty('format');
-            expect(playAudioBytesWithStopperSpy).toHaveBeenCalledTimes(1);
+            expect(encodedAudio.start).toHaveBeenCalledTimes(1);
             expect(onSpeaking).toHaveBeenCalledTimes(1);
 
             removeExternalVoiceProviderRegistration(token);
@@ -238,253 +226,130 @@ describe('localVoiceTtsController', () => {
         }
     });
 
-    it('delegates provider routing through the configured TTS controller map', async () => {
-        const deviceSpeakSpy = vi.fn(async (_ctx: unknown) => undefined);
-        const localNeuralSpeakSpy = vi.fn(async (_ctx: unknown) => undefined);
-        const googleCloudSpeakSpy = vi.fn(async (_ctx: unknown) => undefined);
-        const openAiCompatSpeakSpy = vi.fn(async (_ctx: unknown) => undefined);
-
-        const controller = createLocalVoiceTtsController({
-            controllers: {
-                device: { speak: deviceSpeakSpy },
-                local_neural: { speak: localNeuralSpeakSpy },
-                'happier.voice.google/google-cloud-tts': { speak: googleCloudSpeakSpy },
-                openai_compat: { speak: openAiCompatSpeakSpy },
-            },
-        });
-
-        await controller.speak({
-            sessionId: 'session-9',
-            text: 'delegate me',
-            settings: {},
-            tts: {
-                provider: 'local_neural',
-                localNeural: {
-                    model: 'kokoro',
-                    assetId: 'kokoro-82m-v1.0-onnx-q8-wasm',
-                    voiceId: 'af_heart',
-                    speed: 1,
-                    execution: 'daemon',
-                },
-                autoSpeakReplies: true,
-                bargeInEnabled: true,
-            },
-            networkTimeoutMs: 15_000,
-            registerPlaybackStopper: () => () => {},
-            onSpeaking: vi.fn(),
-        });
-
-        expect(localNeuralSpeakSpy).toHaveBeenCalledTimes(1);
-        expect(localNeuralSpeakSpy).toHaveBeenCalledWith(expect.objectContaining({
-            sessionId: 'session-9',
-            text: 'delegate me',
+    it('delegates provider routing through a configured map of real TTS controllers', async () => {
+        const defaults = createDefaultLocalVoiceTtsProviderControllers();
+        const controller = createLocalVoiceTtsController({ controllers: {
+            device: defaults.get('local_neural'),
+        } });
+        const onSpeaking = vi.fn();
+        const request = neuralRequest({ text: 'delegate me', onSpeaking });
+        await controller.speak({ ...request, tts: { ...request.tts, provider: 'device' } });
+        expect(daemonStreamStartRpc).toHaveBeenCalledWith(expect.objectContaining({
+            text: 'delegate me', voiceId: 'af_heart',
         }));
-        expect(deviceSpeakSpy).not.toHaveBeenCalled();
-        expect(googleCloudSpeakSpy).not.toHaveBeenCalled();
-        expect(openAiCompatSpeakSpy).not.toHaveBeenCalled();
+        expect(encodedAudio.start).toHaveBeenCalledOnce();
+        expect(onSpeaking).toHaveBeenCalledOnce();
+        expect(expoSpeechSpeak).not.toHaveBeenCalled();
+        expect(nativeSynthesize).not.toHaveBeenCalled();
+        expect(speechSynthesizeRpc).not.toHaveBeenCalled();
     });
 
     it('leaves an unset daemon voice null so the selected pack runtime owns its declared default', async () => {
-        resolveDaemonVoiceInferenceExecutionSpy.mockResolvedValueOnce('daemon');
-        daemonTtsControllerSpeakSpy.mockResolvedValueOnce(undefined);
-        const controller = createLocalVoiceTtsController();
+        const onSpeaking = vi.fn();
+        await createLocalVoiceTtsController().speak(neuralRequest({
+            text: 'use the declared default', packId: 'acme.voice/tts-pack', voiceId: null, onSpeaking,
+        }));
+        expect(daemonStreamStartRpc).toHaveBeenCalledWith(expect.objectContaining({
+            packId: 'acme.voice/tts-pack', voiceId: null,
+        }));
+        expect(encodedAudio.start).toHaveBeenCalledOnce();
+        expect(onSpeaking).toHaveBeenCalledOnce();
+    });
 
-        await controller.speak({
-            sessionId: 'session-default-voice',
-            text: 'use the declared default',
-            settings: {},
-            tts: {
-                provider: 'local_neural',
-                localNeural: {
-                    model: 'kokoro',
-                    assetId: 'acme.voice/tts-pack',
-                    voiceId: null,
-                    speed: 1,
-                    execution: 'daemon',
-                },
-                autoSpeakReplies: true,
-                bargeInEnabled: true,
-            },
-            networkTimeoutMs: 15_000,
-            registerPlaybackStopper: () => () => {},
-            onSpeaking: vi.fn(),
-        });
-
-        expect(daemonTtsControllerSpeakSpy).toHaveBeenCalledWith(expect.objectContaining({
-            packId: 'acme.voice/tts-pack',
-            voiceId: null,
+    it.each([
+        'machine_unreachable', 'runtime_unavailable', 'model_not_installed',
+        'request_timeout', 'unsupported_codec', 'download_failed', 'internal_error',
+    ] as const)('reports %s from explicit daemon local_neural TTS without changing execution or provider', async code => {
+        if (code === 'download_failed') {
+            // Download failure belongs to the client transport, not the daemon error union.
+            daemonStreamStartRpc.mockRejectedValueOnce(new Error('daemon_voice_inference_download_failed'));
+        } else {
+            machineRpc.mockImplementationOnce(async request => {
+                expect(request.method).toBe('daemon.voiceInference.tts.stream.start');
+                await daemonStreamStartRpc(request.payload);
+                return DaemonVoiceInferenceTtsStreamStartResponseSchema.parse({ ok: false,
+                    errorCode: code, error: `daemon_voice_inference_${code}` });
+            });
+        }
+        const onTtsFailed = vi.fn();
+        await createLocalVoiceTtsController().speak(neuralRequest({ onTtsFailed }));
+        expect(daemonStreamStartRpc).toHaveBeenCalledOnce();
+        expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({
+            machineId: 'tts-machine', method: 'daemon.voiceInference.tts.stream.start',
+        }));
+        expect(nativeSynthesize).not.toHaveBeenCalled();
+        expect(expoSpeechSpeak).not.toHaveBeenCalled();
+        expect(encodedAudio.start).not.toHaveBeenCalled();
+        expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({
+            kind: 'tts_failed', reason: `daemon_voice_inference_${code}`,
         }));
     });
 
-  it.each([
-    'machine_unreachable',
-    'runtime_unavailable',
-    'model_not_installed',
-    'request_timeout',
-    'unsupported_codec',
-    'download_failed',
-    'internal_error',
-  ] as const)(
-    'reports %s from explicit daemon local_neural TTS without changing execution or provider',
-    async (code) => {
-      daemonTtsControllerSpeakSpy.mockReset();
-      daemonTtsControllerSpeakSpy.mockRejectedValueOnce(
-        Object.assign(new Error(`daemon_voice_inference_${code}`), { code }),
-      );
-      const onTtsFailed = vi.fn();
-
-            const controller = createLocalVoiceTtsController();
-
-            await controller.speak({
-                sessionId: 'session-1',
-                text: 'hello from daemon fallback',
-                settings: {},
-                tts: {
-                    provider: 'local_neural',
-                    localNeural: {
-                        model: 'kokoro',
-                        assetId: 'kokoro-82m-v1.0-onnx-q8-wasm',
-                        voiceId: 'af_heart',
-                        speed: 1,
-                        execution: 'daemon',
-                    },
-                    autoSpeakReplies: true,
-                    bargeInEnabled: true,
-                },
-                networkTimeoutMs: 15_000,
-                registerPlaybackStopper: () => () => {},
-                onSpeaking: vi.fn(),
-                onTtsFailed,
-            });
-
-      expect(resolveDaemonVoiceInferenceExecutionSpy).toHaveBeenCalledTimes(1);
-      expect(resolveDaemonVoiceInferenceExecutionSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requestedExecution: 'daemon',
-          sessionId: 'session-1',
-          surface: 'tts',
-        }),
-      );
-      expect(daemonTtsControllerSpeakSpy).toHaveBeenCalledTimes(1);
-      expect(speakKokoroTextSpy).not.toHaveBeenCalled();
-      expect(speakDeviceTextSpy).not.toHaveBeenCalled();
-      expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({
-        kind: 'tts_failed',
-        reason: `daemon_voice_inference_${code}`,
-      }));
-    },
-  );
-
-  it.each([
-    Object.assign(new Error('daemon_voice_inference_feature_disabled'), { code: 'feature_disabled' }),
-    new Error('daemon_voice_inference_feature_probe_failed'),
-  ])('reports execution-policy failure without invoking any TTS implementation', async (resolutionError) => {
-      resolveDaemonVoiceInferenceExecutionSpy.mockRejectedValueOnce(resolutionError);
-      const onTtsFailed = vi.fn();
-
-      const controller = createLocalVoiceTtsController();
-
-      await controller.speak({
-        sessionId: 'session-1',
-        text: 'hello from daemon fallback',
-        settings: {},
-        tts: {
-          provider: 'local_neural',
-          localNeural: {
-            model: 'kokoro',
-            assetId: 'kokoro-82m-v1.0-onnx-q8-wasm',
-            voiceId: 'af_heart',
-            speed: 1,
-            execution: 'daemon',
-          },
-          autoSpeakReplies: true,
-          bargeInEnabled: true,
+    it.each(['disabled', 'unavailable'] as const)(
+        'reports %s execution policy without invoking any TTS implementation', async state => {
+            // A warm ready observation is retained during transient failure. These vectors
+            // begin on fresh Homes so the real HTTP producer proves cold fail-closed admission.
+            await retireAccount();
+            await restoreAccount(state);
+            const onTtsFailed = vi.fn();
+            await createLocalVoiceTtsController().speak(neuralRequest({ onTtsFailed }));
+            expect(daemonStreamStartRpc).not.toHaveBeenCalled();
+            expect(nativeSynthesize).not.toHaveBeenCalled();
+            expect(expoSpeechSpeak).not.toHaveBeenCalled();
+            expect(encodedAudio.start).not.toHaveBeenCalled();
+            expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({
+                kind: 'tts_failed', reason: 'daemon_voice_inference_feature_disabled',
+            }));
         },
-        networkTimeoutMs: 15_000,
-          registerPlaybackStopper: () => () => {},
-          onSpeaking: vi.fn(),
-          onTtsFailed,
-        });
+    );
 
-      expect(daemonTtsControllerSpeakSpy).not.toHaveBeenCalled();
-      expect(speakKokoroTextSpy).not.toHaveBeenCalled();
-      expect(speakDeviceTextSpy).not.toHaveBeenCalled();
-      expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({
-        kind: 'tts_failed',
-        reason: resolutionError.message,
-      }));
-  });
-
-  it('reports explicit device local_neural failure without substituting OS speech', async () => {
-    resolveDaemonVoiceInferenceExecutionSpy.mockResolvedValueOnce('device');
-    speakKokoroTextSpy.mockRejectedValueOnce(new Error('kokoro_runtime_unavailable'));
-    const onTtsFailed = vi.fn();
-
-    const controller = createLocalVoiceTtsController();
-    await controller.speak({
-      sessionId: 'session-1',
-      text: 'device kokoro',
-      settings: {},
-      tts: {
-        provider: 'local_neural',
-        localNeural: {
-          model: 'kokoro',
-          assetId: 'kokoro-82m-v1.0-onnx-q8-wasm',
-          voiceId: 'af_heart',
-          speed: 1,
-          execution: 'device',
-        },
-        autoSpeakReplies: true,
-        bargeInEnabled: true,
-      },
-      networkTimeoutMs: 15_000,
-      registerPlaybackStopper: () => () => {},
-      onSpeaking: vi.fn(),
-      onTtsFailed,
+    it('reports explicit device local_neural failure without substituting OS speech', async () => {
+        const filesystem = speechBoundary.reset().filesystem;
+        const manifest = parseModelPackManifest({ packId: 'kokoro-controller-failure', kind: 'tts_sherpa', model: 'kokoro', version: '1',
+            frontend: { lang: 'en' }, voices: [{ id: 'af_heart', title: 'Heart', sid: 0 }], defaultVoiceId: 'af_heart',
+            files: [{ path: 'model.onnx', url: 'https://example.test/model.onnx', sha256: 'a'.repeat(64), sizeBytes: 1 }] });
+        filesystem.files.set(`${filesystem.root}/kokoro-controller-failure/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
+        speechBoundary.nativeInitialize.mockRejectedValueOnce(new Error('kokoro_runtime_unavailable'));
+        const onTtsFailed = vi.fn();
+        await createLocalVoiceTtsController().speak(neuralRequest({ execution: 'device', packId: 'kokoro-controller-failure', onTtsFailed }));
+        expect(speechBoundary.nativeInitialize).toHaveBeenCalledOnce();
+        expect(daemonStreamStartRpc).not.toHaveBeenCalled();
+        expect(expoSpeechSpeak).not.toHaveBeenCalled();
+        expect(encodedAudio.start).not.toHaveBeenCalled();
+        expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({
+            kind: 'tts_failed', reason: 'kokoro_runtime_unavailable',
+        }));
     });
 
-    expect(speakKokoroTextSpy).toHaveBeenCalledTimes(1);
-    expect(daemonTtsControllerSpeakSpy).not.toHaveBeenCalled();
-    expect(speakDeviceTextSpy).not.toHaveBeenCalled();
-    expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'tts_failed',
-      reason: 'kokoro_runtime_unavailable',
-    }));
-  });
-
-  it('does not fall back to other TTS providers when the daemon synthesis is cancelled', async () => {
-    daemonTtsControllerSpeakSpy.mockReset();
-    daemonTtsControllerSpeakSpy.mockRejectedValueOnce(
-      Object.assign(new Error('daemon_voice_inference_cancelled'), { code: 'cancelled' }),
-    );
-    speakDeviceTextSpy.mockClear();
-    speakKokoroTextSpy.mockClear();
-
-    const controller = createLocalVoiceTtsController();
-
-    await expect(controller.speak({
-      sessionId: 'session-1',
-      text: 'hello from daemon cancellation',
-      settings: {},
-      tts: {
-        provider: 'local_neural',
-        localNeural: {
-          model: 'kokoro',
-          assetId: 'kokoro-82m-v1.0-onnx-q8-wasm',
-          voiceId: 'af_heart',
-          speed: 1,
-          execution: 'daemon',
-        },
-        autoSpeakReplies: true,
-        bargeInEnabled: true,
-      },
-      networkTimeoutMs: 15_000,
-      registerPlaybackStopper: () => () => {},
-      onSpeaking: vi.fn(),
-    })).resolves.toBeUndefined();
-
-    expect(daemonTtsControllerSpeakSpy).toHaveBeenCalledTimes(1);
-    expect(speakKokoroTextSpy).not.toHaveBeenCalled();
-    expect(speakDeviceTextSpy).not.toHaveBeenCalled();
-  });
+    it('does not fall back to other TTS providers when daemon synthesis is cancelled', async () => {
+        machineRpc.mockImplementationOnce(async request => {
+            expect(request.method).toBe('daemon.voiceInference.tts.stream.start');
+            await daemonStreamStartRpc(request.payload);
+            return DaemonVoiceInferenceTtsStreamStartResponseSchema.parse({ ok: false,
+                errorCode: 'cancelled', error: 'daemon_voice_inference_cancelled' });
+        });
+        const onTtsFailed = vi.fn();
+        await expect(createLocalVoiceTtsController().speak(neuralRequest({ onTtsFailed }))).resolves.toBeUndefined();
+        expect(daemonStreamStartRpc).toHaveBeenCalledOnce();
+        expect(nativeSynthesize).not.toHaveBeenCalled();
+        expect(expoSpeechSpeak).not.toHaveBeenCalled();
+        expect(encodedAudio.start).not.toHaveBeenCalled();
+        expect(onTtsFailed).not.toHaveBeenCalled();
+    });
 });
+
+function neuralRequest(input: Readonly<{
+    text?: string; packId?: string; voiceId?: string | null; execution?: 'device' | 'daemon';
+    onSpeaking?: () => void; onTtsFailed?: import('./localVoiceTtsProviderControllers').LocalVoiceTtsRequest['onTtsFailed'];
+}> = {}): import('./localVoiceTtsProviderControllers').LocalVoiceTtsRequest {
+    const defaults = readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' }));
+    return {
+        sessionId: 'session-1', text: input.text ?? 'hello from daemon', settings: { voice: storage.getState().settings.voice },
+        tts: { ...defaults.tts, provider: 'local_neural', localNeural: { ...defaults.tts.localNeural,
+            assetId: input.packId ?? 'kokoro-82m-v1.0-onnx-q8-wasm',
+            voiceId: input.voiceId === undefined ? 'af_heart' : input.voiceId, speed: 1,
+            execution: input.execution ?? 'daemon' } },
+        networkTimeoutMs: 15_000, registerPlaybackStopper: () => () => {},
+        onSpeaking: input.onSpeaking ?? (() => {}), ...(input.onTtsFailed ? { onTtsFailed: input.onTtsFailed } : {}),
+    };
+}

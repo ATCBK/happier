@@ -1,15 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storage';
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => true,
-}));
-
-vi.mock('@/voice/agent/getVoiceAgentSessionTeleportAvailability', () => ({
-    getVoiceAgentSessionTeleportAvailability: () => ({ ok: false }),
-}));
+import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -21,30 +14,31 @@ const initialStorageState = getStorage().getState();
 const TARGET_SESSION_ID = 'target-session';
 
 function seedVoiceSession(): void {
-    getStorage().setState((state: any) => ({
+    getStorage().setState((state) => ({
         ...state,
         isDataReady: true,
         settings: {
             ...state.settings,
-            voice: {
+            voice: voiceSettingsParse({
+                ...state.settings.voice,
                 providerId: 'local_conversation',
                 ui: {
                     activityFeedEnabled: false,
                     scopeDefault: 'session',
                     surfaceLocation: 'session',
                 },
-            },
+            }),
         },
         sessions: {
             ...state.sessions,
-            [TARGET_SESSION_ID]: {
+            [TARGET_SESSION_ID]: createSessionFixture({
                 id: TARGET_SESSION_ID,
                 thinking: false,
                 thinkingAt: 0,
                 presence: 'online',
                 active: true,
-                metadata: { summaryText: 'Dashboard auth' },
-            },
+                metadata: { path: '/repo', host: 'test', summaryText: 'Dashboard auth' },
+            }),
         },
     }));
 }
@@ -68,7 +62,7 @@ describe('useVoiceSurfaceModel identity', () => {
             status: 'connected',
             mode: 'listening',
             canStop: true,
-        } as any);
+        });
     });
 
     afterEach(() => {
@@ -83,7 +77,7 @@ describe('useVoiceSurfaceModel identity', () => {
         const hook = await renderHook(() => useVoiceSurfaceModel({
             variant: 'session',
             sessionId: TARGET_SESSION_ID,
-        } as any));
+        }));
 
         const first = hook.getCurrent();
         expect(first).not.toBeNull();
