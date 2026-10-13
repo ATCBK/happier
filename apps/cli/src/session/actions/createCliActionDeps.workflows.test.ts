@@ -260,7 +260,7 @@ describe('createCliActionDeps workflow boundary', () => {
           },
         });
         const response = await session.execute('workflow.run.start', input, { surface: 'agent', actionRequestId: 'request-1' });
-        expect(response.ok).toBe(true);
+        expect(response).toEqual({ ok: true, result: expect.objectContaining({ admission: 'existing' }) });
         if (!response.ok) return response;
         return WorkflowActionOutputSchemasV1['workflow.run.start'].parse(response.result);
       } finally {
