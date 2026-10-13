@@ -102,23 +102,23 @@ continuation paths.
 | Agent | Steer a running turn | Session modes | Dedicated plan control | Accept edits |
 | --- | --- | --- | --- | --- |
 | **Claude** | Yes | Agent modes, built in | Yes | Yes |
-| **Codex** | — | Policy presets, from the agent | — | — |
-| **OpenCode** | — | Agent modes, from the agent | Yes | — |
+| **Codex** | — | Policy presets, from the agent | Runtime-dependent | — |
+| **OpenCode** | — | Agent modes, from the agent | Runtime-dependent | — |
 | **Gemini** | — | — | — | — |
 | **Auggie** | — | — | — | — |
-| **Qwen Code** | — | Agent modes, from the agent | Yes | — |
+| **Qwen Code** | — | Agent modes, from the agent | Runtime-dependent | — |
 | **Kimi** | — | — | — | — |
-| **Kilo** | — | Agent modes, from the agent | Yes | — |
-| **Kiro** | — | Agent modes, from the agent | Yes | — |
-| **Devin** | — | Agent modes, from the agent | Yes | — |
-| **Custom ACP** | — | Agent modes, from the agent | Yes | — |
+| **Kilo** | — | Agent modes, from the agent | Runtime-dependent | — |
+| **Kiro** | — | Agent modes, from the agent | Runtime-dependent | — |
+| **Devin** | — | Agent modes, from the agent | Runtime-dependent | — |
+| **Custom ACP** | — | Agent modes, from the agent | Runtime-dependent | — |
 | **Pi** | Yes | — | — | — |
-| **Copilot** | — | Agent modes, from the agent | Yes | — |
-| **Cursor** | — | Agent modes, from the agent | Yes | — |
+| **Copilot** | — | Agent modes, from the agent | Runtime-dependent | — |
+| **Cursor** | — | Agent modes, from the agent | Runtime-dependent | — |
 | **Grok** | Yes | — | — | — |
-| **Antigravity** | — | — | — | — |
-| **FX** | — | Agent modes, from the agent | Yes | — |
-| **Factory Droid** | — | Agent modes, from the agent | Yes | — |
+| **Antigravity** | — | Agent modes, from the agent | Runtime-dependent | — |
+| **FX** | — | Agent modes, from the agent | Runtime-dependent | — |
+| **Factory Droid** | — | Agent modes, from the agent | Runtime-dependent | — |
 
 Steering is what lets you add a correction to a turn already in flight instead
 of interrupting it. Where an agent cannot steer, Happier interrupts and resends,
@@ -127,9 +127,10 @@ which is slower and loses less than it sounds — see [Steering](/sessions/steer
 **Session modes are not permission modes.** Where the list comes *from the
 agent*, Happier shows whichever modes that build advertises for the session, so
 the choices can differ between versions and the Mode control is hidden when the
-runtime offers none. A dash under "Dedicated plan control" means Happier has no
-plan-specific affordance for that agent — **not** that the agent lacks a plan
-mode. Codex, for instance, reaches `plan` through the Mode control.
+runtime offers none. "Runtime-dependent" under "Dedicated plan control" means
+Plan is available only when the session advertises a `plan` mode or policy
+preset. Codex, for instance, reaches `plan` through the Mode control. A dash
+means Happier declares no plan-specific affordance for that agent.
 
 ## Media and tools
 
@@ -150,7 +151,7 @@ mode. Codex, for instance, reaches `plan` through the Mode control.
 | **Copilot** | Yes | Experimental | — | Experimental (`native_mcp`) | — |
 | **Cursor** | Yes | — | Yes | Experimental (`native_mcp`) | — |
 | **Grok** | — | — | — | Experimental (`native_mcp`) | — |
-| **Antigravity** | Yes | Experimental | — | Yes (`native_mcp`) | — |
+| **Antigravity** | Yes | Experimental | — | Yes (`native_mcp`) | `antigravity` |
 | **FX** | Yes | Yes | — | Yes (`native_mcp`) | — |
 | **Factory Droid** | Yes | Experimental | — | Yes (`native_mcp`) | — |
 
