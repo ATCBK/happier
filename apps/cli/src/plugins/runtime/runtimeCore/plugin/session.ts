@@ -87,6 +87,7 @@ type NativeAgentSessionRuntimeCreation = Readonly<{
     operations: PluginRuntimeHookOperations;
     configuration?: AgentSessionConfigurationSnapshot | null;
     runtimeCapabilities?: HostSessionRuntimeFactoryResult<PluginRuntimeHookOperations>['runtimeCapabilities'];
+    skillsDelivered?: boolean;
     admittedProviderBindingHandoff?: ProviderBindingLaunchHandoffV1 | null;
 }>;
 
@@ -164,6 +165,7 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
     const hasManagedProviderRunServices = currentOperations.managedProviderRunServices !== undefined;
     const hasPrepareTerminalPresentation =
         currentOperations.prepareTerminalPresentation !== undefined;
+    const hasRefreshSkills = currentOperations.refreshSkills !== undefined;
     let runtimeClosed = false;
     let runtimeBindingEpoch = 0;
     let stableRuntimeOperations: PluginRuntimeHookOperations | null = null;
@@ -545,6 +547,14 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
             return currentOperations.readSessionIdentity();
         },
         readSessionStartupInstructions: () => currentOperations.readSessionStartupInstructions?.() ?? null,
+        ...(hasRefreshSkills ? {
+            async refreshSkills(request: Parameters<NonNullable<PluginRuntimeHookOperations['refreshSkills']>>[0],
+                options?: Parameters<NonNullable<PluginRuntimeHookOperations['refreshSkills']>>[1]) {
+                const refresh = currentOperations.refreshSkills;
+                if (!refresh) throw new Error('Declared skill refresh is unavailable for the current native runtime');
+                return await refresh(request, options);
+            },
+        } : {}),
         async updateSessionRuntimeConfig(update: RuntimeTurnConfigUpdate) {
             return await currentOperations.updateSessionRuntimeConfig(update);
         },
@@ -999,6 +1009,9 @@ export async function createNativeAgentHostSessionRuntimePlan(params: Readonly<{
                             : {}),
                         ...(initialRuntime.runtimeCapabilities
                             ? { runtimeCapabilities: initialRuntime.runtimeCapabilities }
+                            : {}),
+                        ...(initialRuntime.skillsDelivered !== undefined
+                            ? { skillsDelivered: initialRuntime.skillsDelivered }
                             : {}),
                         ...(initialRuntime.admittedProviderBindingHandoff
                             ? {

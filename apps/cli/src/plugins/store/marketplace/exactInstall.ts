@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 
-import { decideMarketplaceListingInstallV1, readMarketplaceListingRegistryProfileRequirementV1 } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
+import { decideMarketplaceListingInstallV1, decideMarketplaceListingReviewV1, readMarketplaceListingRegistryProfileRequirementV1 } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
 import type { MarketplaceIndexItemV1, MarketplaceIndexQueryResultV1, MarketplaceListingInstallBlockV1 } from '@happier-dev/protocol';
 
 import { projectExpectedMarketplaceListing } from '@happier-dev/protocol/marketplace/internal';
@@ -54,21 +54,6 @@ export function marketplaceInstallUnavailableReason(item: MarketplaceIndexItemV1
   return availability.ok ? null : availability.message;
 }
 
-export async function queryAllMarketplaceSourceItems(
-  source: MarketplaceIndexSourceConfig,
-  service: Pick<ReturnType<typeof createMarketplaceIndexService>, 'querySources'> = createMarketplaceIndexService(),
-): Promise<MarketplaceIndexQueryResultV1> {
-  const items: MarketplaceIndexItemV1[] = [];
-  let cursor: string | null = null;
-  let latest: MarketplaceIndexQueryResultV1 | null = null;
-  do {
-    latest = await service.querySources({ text: '', cursor, limit: 100, filters: { sourceIds: [source.id], includeUnavailable: true } }, [source]);
-    items.push(...latest.items);
-    cursor = latest.nextCursor;
-  } while (cursor !== null);
-  if (!latest) throw new Error('Marketplace index query returned no result');
-  return { ...latest, items, nextCursor: null };
-}
 
 export type ExactMarketplaceListingResolution = Readonly<{
   source: MarketplaceIndexSourceConfig;
@@ -80,6 +65,7 @@ export function marketplaceListingMatchesExpected(
   expected: ExpectedMarketplaceListingV1,
   listing: MarketplaceIndexItemV1,
 ): boolean {
+  if (!decideMarketplaceListingReviewV1(listing).installable) return false;
   const registryProfileId = listing.artifactAccess.state === 'available'
     ? listing.artifactAccess.registryProfileId
     : null;
@@ -97,6 +83,8 @@ export async function resolveExactMarketplaceListingForInstall(
      * fact installed afterwards comes from the source's own answer.
      */
     packageName?: string;
+    /** The already reviewed release; omitted for latest-listing discovery. */
+    version?: string;
   }>,
   serviceOverride?: Pick<ReturnType<typeof createMarketplaceIndexService>, 'queryExactListing'>,
 ): Promise<
@@ -120,6 +108,7 @@ export async function resolveExactMarketplaceListingForInstall(
     sourceId,
     pluginId,
     ...(params.packageName ? { packageName: params.packageName } : {}),
+    ...(params.version !== undefined ? { version: params.version } : {}),
   });
   if (!exact.ok) {
     return exact;
@@ -131,6 +120,8 @@ export async function resolveExactMarketplaceListingForInstall(
     item.pluginId === pluginId
     && item.source.id === source.id
     && item.source.sourceUrl === source.sourceUrl
+    && (!params.packageName || item.distribution.packageName === params.packageName)
+    && (params.version === undefined || item.distribution.version === params.version)
   )) ?? null;
   if (!listing) {
     return { ok: false, code: 'install_unavailable', message: `No installable exact marketplace listing was found for ${pluginId}.` };
@@ -182,6 +173,7 @@ export async function requestExactMarketplaceInstall(
     pluginId: string;
     /** The clicked listing's package name; see the resolver for why. */
     packageName?: string;
+    version?: string;
     approval?: 'prompt' | 'none';
   }>,
   dependencies: Readonly<{
@@ -194,6 +186,7 @@ export async function requestExactMarketplaceInstall(
     sourceId: params.sourceId,
     pluginId: params.pluginId,
     ...(params.packageName ? { packageName: params.packageName } : {}),
+    ...(params.version !== undefined ? { version: params.version } : {}),
   }, dependencies.marketplaceIndexService);
   if (!resolution.ok) return resolution;
   const { listing: approvedListing, registryProfileId } = resolution.resolution;

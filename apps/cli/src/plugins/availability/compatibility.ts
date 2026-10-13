@@ -1,4 +1,4 @@
-import { createPluginCompatibilityProjectionV1, PluginCompatibilityProjectionV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
+import { createPluginCompatibilityProjectionV1, PluginCompatibilityProjectionV1Schema } from '@happier-dev/protocol/plugins/availability/compatibilityProjectionV1';
 import type { PluginCompatibilityProjectionV1 } from '@happier-dev/protocol';
 
 import { ingestCanonicalPluginManifest } from '@/plugins/manifest/ingest';

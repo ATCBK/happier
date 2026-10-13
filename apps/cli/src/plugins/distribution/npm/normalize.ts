@@ -1,8 +1,8 @@
 import semver from 'semver';
+import { PUBLIC_NPM_REGISTRY_ORIGIN_V1 as PUBLIC_NPM_REGISTRY_ORIGIN } from '@happier-dev/protocol/marketplace/communityNpmDiscoveryV1';
 
 import type { NormalizeNpmArtifactRequestInput, NormalizedNpmArtifactRequest, NpmArtifactSelector, NpmRegistryProfile, NpmRegistrySelection } from './types';
 
-const PUBLIC_NPM_REGISTRY_ORIGIN = 'https://registry.npmjs.org';
 const NPM_PACKAGE_PART = /^[a-z0-9][a-z0-9._~-]*$/;
 const NPM_TAG = /^[a-zA-Z0-9][a-zA-Z0-9._~-]*$/;
 

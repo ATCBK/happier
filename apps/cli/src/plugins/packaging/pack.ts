@@ -7,7 +7,7 @@ import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cl
 import * as tar from 'tar';
 
 import { createMarketplaceNpmDiscoveryProjectionV1 } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
-import { createPluginCompatibilityProjectionV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import { createPluginCompatibilityProjectionV1 } from '@happier-dev/protocol/plugins/availability/compatibilityProjectionV1';
 import type { PluginUiArtifactsManifestV2 } from '@happier-dev/protocol/plugins/ui';
 import { PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1 } from '@happier-dev/plugin-sdk/ui/build';
 

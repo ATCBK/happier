@@ -20,6 +20,7 @@ import type {
     ResolvedWorkflowContribution,
     ResolvedInputTypeContribution,
     ResolvedAtmospherePictureContribution,
+    ResolvedRegistrySourceContribution,
     ResolvedMachineProvisionerContribution,
     ResolvedDragSourceContribution,
     ResolvedDropTargetContribution,
@@ -312,6 +313,7 @@ export function projectLoadedPluginContributes(
     const workflowCandidates: ResolvedWorkflowContribution[] = [];
     const inputTypeCandidates: ResolvedInputTypeContribution[] = [];
     const atmospherePictureCandidates: ResolvedAtmospherePictureContribution[] = [];
+    const registrySourceCandidates: ResolvedRegistrySourceContribution[] = [];
     const machineProvisionerCandidates: ResolvedMachineProvisionerContribution[] = [];
     const dragSourceCandidates: ResolvedDragSourceContribution[] = [];
     const dropTargetCandidates: ResolvedDropTargetContribution[] = [];
@@ -886,6 +888,11 @@ export function projectLoadedPluginContributes(
             pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
             manifestPath: contribution.manifestPath, definition: contribution.definition });
     }
+    for (const contribution of pluginRegistry.registrySources) {
+        registrySourceCandidates.push({ provenance: params.provenance, source: { kind: contribution.sourceSpec.kind },
+            pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
+            manifestPath: contribution.manifestPath, definition: contribution.definition });
+    }
     for (const contribution of pluginRegistry.atmospherePictures) {
         atmospherePictureCandidates.push({ provenance: params.provenance, source: { kind: contribution.sourceSpec.kind },
             pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
@@ -1016,6 +1023,7 @@ export function projectLoadedPluginContributes(
         workflows: Object.freeze(workflowCandidates),
         inputTypes: Object.freeze(inputTypeCandidates),
         atmospherePictures: Object.freeze(atmospherePictureCandidates),
+        registrySources: Object.freeze(registrySourceCandidates),
         machineProvisioners: Object.freeze(machineProvisionerCandidates),
         dragSources: Object.freeze(dragSourceCandidates),
         dropTargets: Object.freeze(dropTargetCandidates),

@@ -11,6 +11,7 @@ import type {
   PluginWorkflowContributionV1,
   PluginInputTypeContributionV1,
   PluginAtmospherePictureContributionV1,
+  PluginRegistrySourceContributionV1,
   PluginDragSourceContributionV1,
   PluginDropTargetContributionV1,
   PluginEventContributionV1,
@@ -171,6 +172,7 @@ export type PluginContributionRegistry = Readonly<{
   workflows: readonly PluginOwnedContribution<PluginWorkflowContributionV1>[];
   inputTypes: readonly PluginOwnedContribution<PluginInputTypeContributionV1>[];
   atmospherePictures: readonly PluginOwnedContribution<PluginAtmospherePictureContributionV1>[];
+  registrySources: readonly PluginOwnedContribution<PluginRegistrySourceContributionV1>[];
   machineProvisioners: readonly PluginOwnedContribution<MachineProvisionerContributionV1>[];
   dragSources: readonly PluginOwnedClientExecutableContribution<PluginDragSourceContributionV1>[];
   dropTargets: readonly PluginOwnedClientExecutableContribution<PluginDropTargetContributionV1>[];
@@ -418,6 +420,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
   const workflows: PluginOwnedContribution<PluginWorkflowContributionV1>[] = [];
   const inputTypes: PluginOwnedContribution<PluginInputTypeContributionV1>[] = [];
   const atmospherePictures: PluginOwnedContribution<PluginAtmospherePictureContributionV1>[] = [];
+  const registrySources: PluginOwnedContribution<PluginRegistrySourceContributionV1>[] = [];
   const machineProvisioners: PluginOwnedContribution<MachineProvisionerContributionV1>[] = [];
   const dragSources: PluginOwnedClientExecutableContribution<PluginDragSourceContributionV1>[] = [];
   const dropTargets: PluginOwnedClientExecutableContribution<PluginDropTargetContributionV1>[] = [];
@@ -1072,6 +1075,15 @@ export function buildPluginContributionRegistry(params: Readonly<{
         sourceSpec: plugin.sourceSpec, definition,
       });
     }
+    for (const definition of readSemanticDefinitions<PluginRegistrySourceContributionV1>('registrySources')) {
+      registrySources.push({
+        pluginId: plugin.pluginId, pluginVersion: plugin.manifest.version,
+        identity: createPluginContributionIdentity({ pluginId: plugin.pluginId, localId: definition.id }),
+        pluginRootPath: plugin.pluginRootPath, manifestPath: plugin.manifestPath,
+        daemonEntryPath: plugin.daemonEntryPath, devDaemonEntryPath: plugin.devDaemonEntryPath,
+        sourceSpec: plugin.sourceSpec, definition,
+      });
+    }
     for (const definition of readSemanticDefinitions<PluginAtmospherePictureContributionV1>('atmospherePictures')) {
       atmospherePictures.push({
         pluginId: plugin.pluginId, pluginVersion: plugin.manifest.version,
@@ -1182,6 +1194,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
     workflows: Object.freeze(workflows),
     inputTypes: Object.freeze(inputTypes),
     atmospherePictures: Object.freeze(atmospherePictures),
+    registrySources: Object.freeze(registrySources),
     machineProvisioners: Object.freeze(machineProvisioners),
     dragSources: Object.freeze(dragSources),
     dropTargets: Object.freeze(dropTargets),

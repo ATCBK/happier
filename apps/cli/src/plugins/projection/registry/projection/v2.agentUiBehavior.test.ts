@@ -7,6 +7,15 @@ import {
 
 import { buildPluginProjectionV2 } from './v2';
 import type { ResolvedContributionRegistry } from '../types';
+import { projectManifestAgentContribution } from '../projectManifestAgentContribution';
+import { adaptDaemonContributionRegistryProjectionToMergedProjectionInputs } from '../../../../../../ui/sources/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
+import { resolveAgentCatalogProjection } from '../../../../../../ui/sources/agents/backendCatalog/agentCatalogProjection';
+import { readCurrentProjectedAgentCapabilities } from '../../../../../../ui/sources/agents/backendCatalog/currentAgentCapabilities';
+import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '../sources/generatedBundledPluginManifests';
+import { readBundledPluginManifest } from '../builtIn/locators';
+import { ingestCanonicalPluginManifest } from '../../../manifest/ingest';
+import { createMcpServerActionExecuteV1, MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { loadMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 
 function emptyRegistry(): ResolvedContributionRegistry {
     return {
@@ -29,6 +38,60 @@ function emptyRegistry(): ResolvedContributionRegistry {
 }
 
 describe('external Agent UI-behavior descriptor projection', () => {
+    it('carries generated MCP control declarations through the daemon and the strict tools list consumer', async () => {
+        const agents = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.flatMap(locator => {
+            const ingestion = ingestCanonicalPluginManifest(readBundledPluginManifest(locator), {
+                manifestAuthority: 'bundled_first_party', sourceProvenance: 'localSource',
+            });
+            if (!ingestion.ok) throw new Error(JSON.stringify(ingestion.diagnostics));
+            return (ingestion.manifest.contributes.agents ?? []).map(definition => projectManifestAgentContribution({
+                definition, pluginId: locator.pluginId, provenance: 'first_party', source: { kind: 'bundled' },
+            }));
+        });
+        const registry = { ...emptyRegistry(), agents } satisfies ResolvedContributionRegistry;
+        const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 1 }));
+        const execute = createMcpServerActionExecuteV1({
+            readCatalog: () => loadMcpServerCatalogV1({ mode: 'plain', material: null,
+                readRow: async () => ({ status: 'present', revision: 1, content: { t: 'plain', v: {
+                    v: 1, bindings: [], servers: [{ id: 'server', name: 'server', transport: 'stdio',
+                        stdio: { command: 'fixture', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
+                } } }) }),
+            readToolAgentFacts: async () => ({ agents: Object.keys(projection.agentsById).flatMap(agentId => {
+                const current = readCurrentProjectedAgentCapabilities({ projection, agentId });
+                return current ? [{ agentId, ...current.capabilities.tools }] : [];
+            }) }),
+            mutate: async () => { throw new Error('Tools list does not write'); },
+            machine: async () => { throw new Error('Tools list does not launch MCP'); },
+        });
+        const receipt = await execute({ actionId: 'mcp.servers.tools.list', input: { serverId: 'server' },
+            context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } });
+        if (!receipt.ok) throw new Error(receipt.errorCode);
+        const listed = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.list'].parse(receipt.result);
+        expect(listed.perAgent.status).toBe('ready');
+        const byId = new Map(listed.perAgent.agents.map(agent => [agent.agentId, agent]));
+        expect(byId.get('claude')).toMatchObject({ off: 'hidden', approval: 'host' });
+        expect(byId.get('pi')).toMatchObject({ off: 'hidden', approval: 'host' });
+        expect(byId.get('kilo')).toMatchObject({ off: 'blocked', approval: 'host' });
+        expect(byId.get('codex')).toMatchObject({ off: null, approval: null });
+        const adapted = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
+        expect(resolveAgentCatalogProjection('claude', { enabledAgentIds: [],
+            mergedProviderProjectionById: adapted.mergedProviderProjectionById }).title).toBe('Claude');
+    });
+    it('carries registry aliases through the real manifest catalog, daemon wire and client catalog', () => {
+        const definition = PluginContributesV2Schema.parse({ agents: [{
+            id: 'claude', title: 'Claude', runtime: { kind: 'custom' }, primary: 'sessions',
+            capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+            catalog: { acpRegistryIds: ['claude-acp'] },
+        }] }).agents[0]!;
+        const agent = projectManifestAgentContribution({ definition, pluginId: 'happier.agent.claude',
+            provenance: 'first_party', source: { kind: 'bundled' } });
+        const registry = { ...emptyRegistry(), agents: [agent] } satisfies ResolvedContributionRegistry;
+        const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 1 }));
+        expect(projection.agentsById.claude?.acpRegistryIds).toEqual(['claude-acp']);
+        const adapted = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
+        expect(resolveAgentCatalogProjection('claude', { enabledAgentIds: [],
+            mergedProviderProjectionById: adapted.mergedProviderProjectionById }).acpRegistryIds).toEqual(['claude-acp']);
+    });
     it('projects manifest identity text equally for bundled and external Agents', () => {
         const definition = PluginContributesV2Schema.parse({
             agents: [{

@@ -3,9 +3,12 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
-import { createMarketplaceNpmDiscoveryProjectionV1, deriveMarketplaceNpmCompatibilityPlatformsV1, MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1, MarketplaceIndexEntryV1Schema, MarketplaceIndexSourceSnapshotV1Schema, marketplaceNpmDiscoveryProjectionEqualV1 } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
+import { MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1, MarketplaceIndexSourceSnapshotV1Schema } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
 import type { MarketplaceIndexSourceKindV1, MarketplaceIndexSourceSnapshotV1 } from '@happier-dev/protocol';
-import { parseMarketplaceIndexSourceSnapshotV1, readMarketplaceNpmDiscoveryProjectionV1 } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
+import { parseMarketplaceIndexSourceSnapshotV1 } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
+import { buildCommunityNpmSearchUrlV1, readCommunityNpmSearchV1, projectCommunityNpmListingV1 } from '@happier-dev/protocol/marketplace/communityNpmDiscoveryV1';
+import { assertRegistryMarketplaceCatalogSourceV1, bindRegistryMarketplaceCatalogV1,
+  type RegistrySourceV1, type RegistrySourceDescriptorV1 } from '@happier-dev/protocol/registries';
 
 import {
   assertRemoteAcquisitionUrl,
@@ -17,7 +20,6 @@ import { readRemoteJsonResponseWithLimits, resolvePluginRemoteCatalogMaxBytes, r
 import { createNpmRegistryHttpsClient } from '@/plugins/distribution/npm/httpsClient';
 import { normalizeNpmArtifactRequest } from '@/plugins/distribution/npm/normalize';
 import { resolveNpmArtifactMetadata, type NpmRegistryJsonClient } from '@/plugins/distribution/npm/resolver';
-import type { ResolvedNpmArtifact } from '@/plugins/distribution/npm/types';
 import { projectPluginFailureText } from '@/plugins/runtime/lifecycle/utils';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
@@ -28,11 +30,8 @@ import { isNetworkConnectionErrorCode } from '@/api/client/classifyServerEndpoin
  * composed with the caller's search text rather than replaced by it, so a
  * user query narrows the ecosystem instead of leaving it.
  */
-const COMMUNITY_NPM_ECOSYSTEM_QUALIFIER = 'keywords:happier-plugin';
 /**
- * npm search serves one bounded snapshot per query. The merged marketplace
- * index owns paging across sources, so each cursor page is cut from the same
- * source snapshot instead of refetching a wider or differently offset result.
+ * npm search serves one bounded processing page per query.
  * 100 matches the marketplace query owner's maximum processing page size;
  * npm's total and returned counts remain visible for continuation. It is not
  * a total catalog limit or an asserted npm transport ceiling.
@@ -68,16 +67,13 @@ type CacheRecord = Readonly<{
    * 304-revalidated — only when this equals the request being loaded.
    */
   requestUrl: string;
+  /** An exact npm metadata selector, absent for latest discovery. */
+  exactVersion?: string;
   fetchedAtMs: number;
   etag: string | null;
   lastModified: string | null;
   snapshot: MarketplaceIndexSourceSnapshotV1;
   communityNpmPage: CommunityNpmPage | null;
-}>;
-
-type CommunityNpmSearchCandidate = Readonly<{
-  request: ReturnType<typeof normalizeNpmArtifactRequest>;
-  publisher: Readonly<{ id: string; displayName: string }>;
 }>;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -97,13 +93,6 @@ function withConfiguredSourcePresentation(
   return { ...snapshot, source: { ...snapshot.source, title: sourceTitle } };
 }
 
-function readCommunityNpmPublisher(candidate: Readonly<Record<string, unknown>>): CommunityNpmSearchCandidate['publisher'] | null {
-  const publisher = candidate.publisher;
-  if (!isRecord(publisher) || typeof publisher.username !== 'string') return null;
-  const username = publisher.username.trim();
-  return username ? { id: username, displayName: username } : null;
-}
-
 /**
  * The one query a marketplace source serves. A community npm source turns it
  * into exactly one search request; a published catalog document ignores it.
@@ -115,6 +104,7 @@ function readCommunityNpmPublisher(candidate: Readonly<Record<string, unknown>>)
 export type MarketplaceIndexSourceQuery = Readonly<{
   text: string;
   exactPackageName?: string;
+  exactVersion?: string;
   from?: number;
   size?: number;
 }>;
@@ -136,20 +126,7 @@ export type LoadedMarketplaceIndexSource = MarketplaceIndexSourceSnapshotV1 & Re
  * request.
  */
 export function buildCommunityNpmSearchUrl(sourceUrl: string, query?: MarketplaceIndexSourceQuery): string {
-  const url = new URL(sourceUrl);
-  const terms = [
-    COMMUNITY_NPM_ECOSYSTEM_QUALIFIER,
-    ...(query?.exactPackageName ? [query.exactPackageName] : []),
-    ...(query?.exactPackageName ? [] : [(query?.text ?? '').trim()]),
-  ].filter((term) => term.length > 0);
-  url.searchParams.set('text', terms.join(' '));
-  const size = query?.exactPackageName
-    ? MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1
-    : Math.max(1, Math.min(query?.size ?? MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1, MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1));
-  const from = query?.exactPackageName ? 0 : Math.max(0, query?.from ?? 0);
-  url.searchParams.set('from', String(from));
-  url.searchParams.set('size', String(size));
-  return url.toString();
+  return buildCommunityNpmSearchUrlV1(new URL(sourceUrl).origin, query ?? { text: '' });
 }
 
 export async function parseCommunityNpmDiscovery(
@@ -168,44 +145,27 @@ export async function parseCommunityNpmDiscovery(
      * and resolving metadata for them would be an untargeted scan.
      */
     exactPackageName?: string;
+    exactVersion?: string;
     from?: number;
     size?: number;
   }>,
 ): Promise<LoadedMarketplaceIndexSource> {
   const maxCandidates = Math.max(1, Math.min(dependencies.maxCandidates ?? MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1, MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1));
   const searchHits: readonly unknown[] = isRecord(raw) && Array.isArray(raw.objects) ? raw.objects : [];
-  const total = isRecord(raw) && Number.isSafeInteger(raw.total) && Number(raw.total) >= 0
-    ? Number(raw.total)
-    : searchHits.length;
   const from = Math.max(0, dependencies.from ?? 0);
   const size = Math.max(1, Math.min(dependencies.size ?? maxCandidates, MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1));
-  // A targeted request keeps only the named package, then the window bound
-  // applies. Bounding first would let the neighbours npm returned ahead of the
-  // exact hit push it out of the window.
-  const objects = (dependencies.exactPackageName
-    ? searchHits.filter((candidate) => (
-      isRecord(candidate) && isRecord(candidate.package) && candidate.package.name === dependencies.exactPackageName
-    ))
-    : searchHits).slice(0, maxCandidates);
-
   const registryOrigin = new URL(source.sourceUrl).origin;
-  const requests: CommunityNpmSearchCandidate[] = objects.flatMap((candidate) => {
-    if (!isRecord(candidate)) return [];
-    const pkg = candidate.package;
-    if (!isRecord(pkg)) return [];
-    const packageName = pkg.name;
-    const version = pkg.version;
-    const publisher = readCommunityNpmPublisher(pkg);
-    if (typeof packageName !== 'string' || typeof version !== 'string') return [];
-    if (!publisher) return [];
+  const { candidates, total } = readCommunityNpmSearchV1(raw, {
+    from, size: maxCandidates, exactPackageName: dependencies.exactPackageName,
+  });
+  const requests = candidates.flatMap((candidate) => {
     try {
       const request = normalizeNpmArtifactRequest({
-        packageName,
-        selector: version,
+        packageName: candidate.packageName,
+        selector: dependencies.exactVersion ?? candidate.version,
         curatedExactOrigin: registryOrigin,
       });
-      if (request.selector.kind !== 'exact' || request.selector.value !== version) return [];
-      return [{ request, publisher }];
+      return [{ request, publisher: candidate.publisher }];
     } catch {
       return [];
     }
@@ -230,7 +190,7 @@ export async function parseCommunityNpmDiscovery(
       skippedMetadataCandidates += 1;
       continue;
     }
-    const outcome = parseCommunityNpmMetadataEntry(result.value.artifact, result.value.publisher);
+    const outcome = projectCommunityNpmListingV1({ ...result.value.artifact, publisher: result.value.publisher });
     if (outcome.status === 'listed') {
       entries.push(outcome.entry);
     } else if (outcome.reason === 'unsupported-discovery-version') {
@@ -263,59 +223,6 @@ export async function parseCommunityNpmDiscovery(
   return { ...snapshot, communityNpmPage: { from, size, returned: searchHits.length, total } };
 }
 
-type CommunityNpmMetadataEntryOutcome =
-  | Readonly<{ status: 'listed'; entry: MarketplaceIndexSourceSnapshotV1['entries'][number] }>
-  | Readonly<{ status: 'skipped'; reason: 'unsupported-discovery-version' | 'unusable-metadata' }>;
-
-function parseCommunityNpmMetadataEntry(
-  artifact: ResolvedNpmArtifact,
-  publisher: Readonly<{ id: string; displayName: string }>,
-): CommunityNpmMetadataEntryOutcome {
-  const happier = artifact.versionMetadata.happier;
-  if (!isRecord(happier)) return { status: 'skipped', reason: 'unusable-metadata' };
-  // Forward-compatible reader admission: unknown additive fields are
-  // normalized away, malformed or missing known fields skip the package, and
-  // a newer projection version gets its own diagnostic reason.
-  const discovery = readMarketplaceNpmDiscoveryProjectionV1(happier.marketplaceDiscovery);
-  if (discovery.status === 'unsupported-version') return { status: 'skipped', reason: 'unsupported-discovery-version' };
-  if (discovery.status !== 'parsed' || !artifact.compatibility?.projection) return { status: 'skipped', reason: 'unusable-metadata' };
-  let expectedDiscovery;
-  try {
-    expectedDiscovery = createMarketplaceNpmDiscoveryProjectionV1({
-      compatibility: artifact.compatibility.projection,
-      manifestDigest: discovery.projection.manifestDigest,
-    });
-  } catch {
-    return { status: 'skipped', reason: 'unusable-metadata' };
-  }
-  if (!marketplaceNpmDiscoveryProjectionEqualV1(discovery.projection, expectedDiscovery)) return { status: 'skipped', reason: 'unusable-metadata' };
-  const happierRange = artifact.compatibility.projection.manifest.engines?.happier;
-  const parsed = MarketplaceIndexEntryV1Schema.safeParse({
-    pluginId: discovery.projection.pluginId,
-    publisher,
-    display: discovery.projection.display,
-    distribution: {
-      kind: 'npm',
-      registryOrigin: artifact.registryOrigin,
-      packageName: artifact.packageName,
-      version: artifact.version,
-      integrity: artifact.integrity,
-    },
-    manifestDigest: discovery.projection.manifestDigest,
-    compatibility: {
-      ...(happierRange === undefined ? {} : { happier: happierRange }),
-      platforms: deriveMarketplaceNpmCompatibilityPlatformsV1(artifact.compatibility.projection),
-    },
-    summary: discovery.projection.summary,
-    review: { status: 'unreviewed', reviewedAt: null },
-    categories: [],
-    media: [],
-    updatePolicy: 'allowed',
-    links: {},
-  });
-  if (!parsed.success) return { status: 'skipped', reason: 'unusable-metadata' };
-  return { status: 'listed', entry: parsed.data };
-}
 
 /**
  * Cache slots are bounded by source, not by query: one replaceable discovery
@@ -347,6 +254,7 @@ async function readCache(
     const raw = JSON.parse(await readFile(path, 'utf8')) as unknown;
     if (!isRecord(raw)) return { record: null, corrupt: true };
     const record = raw as Partial<CacheRecord>;
+    if (record.exactVersion !== undefined && typeof record.exactVersion !== 'string') return { record: null, corrupt: true };
     if (record.t !== 'happier_marketplace_index_source_cache_v1' || record.sourceUrl !== source.sourceUrl || typeof record.requestUrl !== 'string' || typeof record.fetchedAtMs !== 'number' || record.fetchedAtMs > nowMs) return { record: null, corrupt: true };
     const snapshot = MarketplaceIndexSourceSnapshotStoredReadSchema.safeParse(record.snapshot);
     if (!snapshot.success) return { record: null, corrupt: true };
@@ -358,7 +266,8 @@ async function readCache(
       && Number.isSafeInteger(record.communityNpmPage.total)
       ? record.communityNpmPage as CommunityNpmPage
       : null;
-    return { record: { t: record.t, sourceUrl: source.sourceUrl, requestUrl: record.requestUrl, fetchedAtMs: record.fetchedAtMs, etag: typeof record.etag === 'string' ? record.etag : null, lastModified: typeof record.lastModified === 'string' ? record.lastModified : null, snapshot: snapshot.data, communityNpmPage: page }, corrupt: false };
+    return { record: { t: record.t, sourceUrl: source.sourceUrl, requestUrl: record.requestUrl, fetchedAtMs: record.fetchedAtMs, etag: typeof record.etag === 'string' ? record.etag : null, lastModified: typeof record.lastModified === 'string' ? record.lastModified : null, snapshot: snapshot.data, communityNpmPage: page,
+      ...(record.exactVersion === undefined ? {} : { exactVersion: record.exactVersion }) }, corrupt: false };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { record: null, corrupt: false };
     return { record: null, corrupt: true };
@@ -375,6 +284,7 @@ function isOfflineRefreshError(error: unknown): boolean {
 export async function loadMarketplaceIndexSource(params: Readonly<{
   source: { id: string; title: string; sourceUrl: string; kind: MarketplaceIndexSourceKindV1 };
   happyHomeDir?: string;
+  registrySource?: RegistrySourceDescriptorV1;
   /** The discovery query; community npm search requests are built from it. */
   query?: MarketplaceIndexSourceQuery;
   now?: () => number;
@@ -383,6 +293,13 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
   communityNpmClient?: NpmRegistryJsonClient;
 }>): Promise<LoadedMarketplaceIndexSource> {
   const sourceUrl = validateSourceUrl(params.source.sourceUrl);
+  const registrySource: RegistrySourceV1 = params.registrySource ?? {
+    id: params.source.id, title: params.source.title, url: sourceUrl, format: 'happier-catalog',
+    kinds: ['plugin'], enabled: true, addedAt: 0,
+  };
+  // Admission also precedes joining an in-flight request or reusing cached
+  // metadata; neither may supply an invalid descriptor's source authority.
+  if (params.source.kind !== 'community-npm') assertRegistryMarketplaceCatalogSourceV1(registrySource);
   const requestUrl = params.source.kind === 'community-npm'
     ? validateSourceUrl(buildCommunityNpmSearchUrl(sourceUrl, params.query))
     : sourceUrl;
@@ -393,17 +310,21 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
   // query from the same request URL, so they keep the single discovery slot.
   const exactLookupSlot = params.source.kind === 'community-npm' && Boolean(params.query?.exactPackageName);
   const cachePath = sourceCachePath(params.happyHomeDir, sourceUrl, exactLookupSlot ? 'exact' : 'discovery');
+  const exactVersion = params.source.kind === 'community-npm' ? params.query?.exactVersion : undefined;
   // The slot path no longer distinguishes queries, so the request identity
   // joins the in-flight key: two concurrent searches for one source must
   // never merge into one fetch and hand one query's snapshot to the other.
-  const key = `${cachePath}\u0000${requestUrl}\u0000${params.source.id}`;
+  const key = `${cachePath}\u0000${requestUrl}\u0000${params.source.id}\u0000${JSON.stringify(exactVersion ?? null)}`;
   const existing = inFlight.get(key);
   if (existing) return await existing;
   const operation: Promise<MarketplaceIndexSourceSnapshotV1> = (async (): Promise<MarketplaceIndexSourceSnapshotV1> => {
     const now = params.now ?? Date.now;
     const cacheRead = await readCache(cachePath, { ...params.source, sourceUrl }, now());
     const cached = cacheRead.record;
-    const revalidatable = cached?.requestUrl === requestUrl ? cached : null;
+    // Search ETags describe latest search hits, not a retained version's
+    // packument facts. A pinned npm release always reacquires its metadata.
+    const revalidatable = cached?.requestUrl === requestUrl && cached.exactVersion === exactVersion
+      && exactVersion === undefined ? cached : null;
     try {
       const opened = await openRemoteAcquisition({
         url: requestUrl,
@@ -436,9 +357,10 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
             from: params.query?.from,
             size: Number.isSafeInteger(size) && size > 0 ? size : undefined,
             ...(params.query?.exactPackageName ? { exactPackageName: params.query.exactPackageName } : {}),
+            ...(exactVersion !== undefined ? { exactVersion } : {}),
           });
         } else {
-          parsed = parseMarketplaceIndexSourceSnapshotV1(body);
+          parsed = bindRegistryMarketplaceCatalogV1(parseMarketplaceIndexSourceSnapshotV1(body), registrySource);
         }
         // Immutable identity decides the binding match; the editable local
         // title is overlaid as presentation metadata, never compared.
@@ -446,7 +368,8 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
         const { communityNpmPage = null, ...parsedSnapshot } = parsed;
         const boundSnapshot = withConfiguredSourcePresentation(parsedSnapshot, params.source.title);
         const snapshot: LoadedMarketplaceIndexSource = { ...boundSnapshot, freshness: { state: 'fresh', fetchedAtMs: now() }, ...(communityNpmPage ? { communityNpmPage } : {}) };
-        await writeJsonAtomic(cachePath, { t: 'happier_marketplace_index_source_cache_v1', sourceUrl, requestUrl, fetchedAtMs: now(), etag: response.headers.get('etag'), lastModified: response.headers.get('last-modified'), snapshot: boundSnapshot, communityNpmPage } satisfies CacheRecord);
+        await writeJsonAtomic(cachePath, { t: 'happier_marketplace_index_source_cache_v1', sourceUrl, requestUrl, fetchedAtMs: now(), etag: response.headers.get('etag'), lastModified: response.headers.get('last-modified'), snapshot: boundSnapshot, communityNpmPage,
+          ...(exactVersion === undefined ? {} : { exactVersion }) } satisfies CacheRecord);
         return snapshot;
       } finally {
         await opened.dispose().catch(() => undefined);

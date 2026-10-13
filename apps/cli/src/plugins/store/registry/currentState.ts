@@ -330,7 +330,10 @@ export function createPluginRegistryStateStore(params?: Readonly<{
     pluginId: string,
     updatePolicy: PluginUpdatePolicyV1,
   ) => Promise<PluginRegistryStateMutationResult | null>;
-  forgetTrustWithResult: (pluginId: string) => Promise<PluginRegistryStateMutationResult | null>;
+  forgetTrustWithResult: (
+    pluginId: string,
+    options?: Readonly<{ expectedDevelopmentRootId: string }>,
+  ) => Promise<PluginRegistryStateMutationResult | null>;
   uninstall: (pluginId: string) => Promise<PluginStateFileV1>;
   uninstallWithResult: (
     pluginId: string,
@@ -1641,6 +1644,7 @@ export function createPluginRegistryStateStore(params?: Readonly<{
 
   async function forgetTrustWithResult(
     pluginId: string,
+    options?: Readonly<{ expectedDevelopmentRootId: string }>,
   ): Promise<PluginRegistryStateMutationResult | null> {
     requireRuntimeLifecycle();
     while (true) {
@@ -1650,6 +1654,16 @@ export function createPluginRegistryStateStore(params?: Readonly<{
       const reference = current.commit.pluginOccurrenceIds[pluginId];
       const isSourceInPlaceDevelopment = catalogRecord?.source.kind === 'path'
         && catalogRecord.source.devWatch === true;
+      // Source removal may precede installation or name another root with the same id.
+      // Recheck its exact durable authority on every CAS retry; ordinary revocation stays strict.
+      if (options && (
+        !isSourceInPlaceDevelopment
+        || !installation
+        || !pluginDistributionIdentitiesEqual(installation.source.distribution, {
+          kind: 'localPath',
+          canonicalPath: options.expectedDevelopmentRootId,
+        })
+      )) return null;
       if (!catalogRecord || !installation || (!reference && !isSourceInPlaceDevelopment)) {
         throw new Error(`Unknown plugin id: ${pluginId}`);
       }

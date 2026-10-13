@@ -51,7 +51,7 @@ const EMPTY_SYSTEM_TOOLS: readonly PluginSystemToolContributionV1[] = Object.fre
 function projectManifestAgentStaticCatalogEntry(params: Readonly<{
     definition: PluginAgentContributionV2;
     systemTools: readonly PluginSystemToolContributionV1[];
-}>): Partial<Pick<ResolvedCatalogEntry, 'agentCliSystemTool' | 'vendorResumeSupport'>> {
+}>): Partial<Pick<ResolvedCatalogEntry, 'agentCliSystemTool' | 'vendorResumeSupport' | 'acpRegistryIds'>> {
     const catalog = params.definition.catalog;
     const declaredCliSystemToolId = catalog?.agentCliSystemTool?.toolId;
     const boundCliSystemToolId = declaredCliSystemToolId
@@ -59,6 +59,7 @@ function projectManifestAgentStaticCatalogEntry(params: Readonly<{
         ? declaredCliSystemToolId
         : null;
     return Object.freeze({
+        ...(catalog?.acpRegistryIds ? { acpRegistryIds: Object.freeze([...catalog.acpRegistryIds]) } : {}),
         ...(catalog?.vendorResume
             ? { vendorResumeSupport: catalog.vendorResume.support }
             : {}),

@@ -48,6 +48,14 @@ async function materializePlugin(rootDir: string): Promise<void> {
 }
 
 describe('buildPluginInstallApprovalPreview', () => {
+  it('previews the requested marketplace pin without presenting unverified permissions as empty', async () => {
+    const source = { kind: 'marketplace', sourceId: 'marketplace:team', pluginId: 'acme.plugin', version: '1.2.3' };
+    expect(await buildPluginInstallApprovalPreview({ input: { source, machineId: 'machine-1' },
+      defaultPreview: { actionId: 'plugins.install' } })).toMatchObject({
+      actionId: 'plugins.install', pluginInstall: { ok: true, source, machineId: 'machine-1',
+        permissionsDisclosure: 'pendingDaemonEvaluation' },
+    });
+  });
   it('summarizes local plugin identity, source provenance, and declared permissions before install', async () => {
     const workspaceRoot = await createTempDir('happier-plugin-install-preview-workspace-');
     const pluginRoot = await createTempDir('happier-plugin-install-preview-source-', workspaceRoot);

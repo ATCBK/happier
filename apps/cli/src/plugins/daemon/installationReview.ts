@@ -1,6 +1,6 @@
 import { PLUGIN_CONTRIBUTION_CATALOG_V2 } from '@happier-dev/protocol/plugins/contributions/catalog';
 import { PLUGIN_HOST_ACCESS_CAPABILITY_CATALOG_V2 } from '@happier-dev/protocol/plugins/manifest/v2';
-import type { PluginHostAccessRequestV2, PluginUpdatePolicyV1 } from '@happier-dev/protocol';
+import type { PluginHostAccessRequestV2, PluginUpdatePolicyV1, MarketplaceIndexSourceKindV1 } from '@happier-dev/protocol';
 import type { PluginInstallationReview } from '@happier-dev/protocol/marketplace/internal';
 
 import type { NpmArtifactCompatibilitySelection } from '@/plugins/distribution/npm/types';
@@ -57,7 +57,7 @@ export type PluginInstallationReviewSourceFacts =
       blockedNewerVersions?: NpmArtifactCompatibilitySelection['blockedNewerVersions'];
       marketplaceSource?: Readonly<{
         id: string;
-        kind: 'curated' | 'community-npm' | 'user';
+        kind: MarketplaceIndexSourceKindV1;
         sourceUrl: string;
       }>;
       updatePolicy: PluginUpdatePolicyV1;

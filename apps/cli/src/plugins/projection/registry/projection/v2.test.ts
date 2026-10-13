@@ -1619,18 +1619,21 @@ describe('buildPluginProjectionV2', () => {
             generation: 6,
         });
 
-        expect(projection.familiesById.mcp?.entriesById['server:acme-server']).toMatchObject({
-            id: 'server:acme-server',
+        expect(projection.familiesById.mcp?.entriesById['server:acme.mcp/acme-server']).toMatchObject({
+            id: 'server:acme.mcp/acme-server',
+            localId: 'acme-server',
             pluginId: 'acme.mcp',
             contributionKind: 'server',
             title: 'Acme hosted',
             transport: { kind: 'http', url: 'https://mcp.example.test/' },
         });
-        expect(projection.familiesById.mcp?.entriesById['discoverySource:acme-discovery']).toMatchObject({
-            id: 'discoverySource:acme-discovery',
+        expect(projection.familiesById.mcp?.entriesById['discoverySource:acme.mcp/acme-discovery']).toMatchObject({
+            id: 'discoverySource:acme.mcp/acme-discovery',
+            localId: 'acme-discovery',
             pluginId: 'acme.mcp',
             contributionKind: 'discoverySource',
             title: 'Acme discovery',
+            loadedInHappierSessions: true,
         });
         expect(projection.familiesById.mcp?.entriesById['backendClient:acme.backendClient']).toBeUndefined();
         expect(projection.familiesById.mcp?.entriesById['tool:acme.tool']).toBeUndefined();

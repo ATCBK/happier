@@ -23,6 +23,7 @@ import {
   resolveExecutablePluginRuntimeRegistry,
   type PluginRuntimeGenerationAuthority,
   type PluginRuntimeMachineAdmissionTransport,
+  type ResolvedExecutablePluginRuntimeRegistry,
 } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import type { PluginRuntimeActivationRegistryLease } from '@/plugins/runtime/composition/activationAssembly';
 import type { StablePluginConnectedAccountsOwner } from '@/plugins/runtime/invocation/services/connectedAccounts';
@@ -256,6 +257,7 @@ export function createDaemonPluginRegistryRuntimeLifecycle(params: Readonly<{
   /** Explicit operator mode: retain daemon administration while external plugin code is skipped. */
   startupMode?: 'normal' | 'pluginRecovery';
   beforePublish?: PluginRuntimeRegistryBeforePublish;
+  beforeInstallPublish?: (registry: ResolvedExecutablePluginRuntimeRegistry, pluginIds: readonly string[]) => Promise<void>;
   resolveDevelopmentSourceAuthority?: (input: Readonly<{
     pluginId: string;
     rootPath: string;
@@ -764,7 +766,11 @@ export function createDaemonPluginRegistryRuntimeLifecycle(params: Readonly<{
               changedPluginIds: durableCandidate.changedPluginIds,
               durableRevision: record.revision,
               runningSessionDisposition: durableCandidate.runningSessionDisposition,
-              ...(params.beforePublish ? { beforePublish: params.beforePublish } : {}),
+              beforePublish: async (candidateRegistry, publish) => {
+                if (durableCandidate.mutationKind === 'install') await params.beforeInstallPublish?.(candidateRegistry, durableCandidate.changedPluginIds);
+                if (params.beforePublish) await params.beforePublish(candidateRegistry, publish);
+                else publish();
+              },
             });
             if (!adoption.ok || !adoption.registry) {
               throw new Error('Prepared plugin runtime registry adoption did not publish');

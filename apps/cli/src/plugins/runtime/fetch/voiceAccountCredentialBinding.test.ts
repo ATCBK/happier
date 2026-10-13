@@ -35,9 +35,14 @@ import {
     createVoiceAccountPluginHttpCredentialBindingHost as createUnboundVoiceAccountPluginHttpCredentialBindingHost,
     createVoiceAccountOperationService,
 } from './voiceAccountCredentialBinding';
-import * as persistence from '@/persistence';
+import { writeCredentialsTokenOnlyForServerId } from '@/persistence';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
+import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 
 function createVoiceAccountPluginHttpCredentialBindingHost(
     params: Parameters<typeof createUnboundVoiceAccountPluginHttpCredentialBindingHost>[0],
@@ -257,14 +262,16 @@ function publishCredential(
         loadedAtMs: 1,
         settingsSecretsReadKeys: [],
         connectedPurposeCatalog: { status: 'ready', revision: 1,
-            record: { key: 'purposes', value: { v: 1, bindings: [] } } },
-        settings: {
-            secrets: [{
+            record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [] }) } },
+        settings: protocol.accountSettingsParse({
+            secrets: [protocol.SavedSecretSchema.parse({
                 id: 'account-voice-key',
                 name: 'Account voice key',
                 kind: 'apiKey',
                 encryptedValue: { _isSecretValue: true, value: 'long-lived-account-secret' },
-            }],
+                createdAt: 1,
+                updatedAt: 1,
+            })],
             voiceSettingsV1: {
                 credentialBindings: [{
                     contribution,
@@ -280,7 +287,7 @@ function publishCredential(
                     },
                 }],
             },
-        } as never,
+        }),
     });
 }
 
@@ -298,16 +305,18 @@ function publishDormantCredentialSelection(
         settingsVersion,
         loadedAtMs: 1,
         settingsSecretsReadKeys: [],
-        connectedPurposeCatalog: { status: 'ready', revision: 1, record: { key: 'purposes', value: { v: 1,
+        connectedPurposeCatalog: { status: 'ready', revision: 1, record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1,
             bindings: selection === 'connectedAccount' ? [{ purpose: { consumer: contribution, purpose: 'voice.client-auth' },
-                target: { kind: 'account', account: { service: { pluginId: 'happier.agent.openai', localId: 'openai' }, accountId: 'openai-account' } } }] : [] } } },
-        settings: {
-            secrets: [{
+                target: { kind: 'account', account: { service: { pluginId: 'happier.agent.openai', localId: 'openai' }, accountId: 'openai-account' } } }] : [] }) } },
+        settings: protocol.accountSettingsParse({
+            secrets: [protocol.SavedSecretSchema.parse({
                 id: 'account-voice-key',
                 name: 'Account voice key',
                 kind: 'apiKey',
                 encryptedValue: { _isSecretValue: true, value: 'long-lived-account-secret' },
-            }],
+                createdAt: 1,
+                updatedAt: 1,
+            })],
             voiceSettingsV1: {
                 credentialBindings: [{
                     contribution,
@@ -324,7 +333,7 @@ function publishDormantCredentialSelection(
                     },
                 }],
             },
-        } as never,
+        }),
     });
 }
 
@@ -471,7 +480,15 @@ function createCatalogService(
 
 describe('Voice account Plugin fetch credential binding', () => {
     it('admits the captured purpose row before selecting a declared Voice operation from existing Settings', async () => {
-        const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'voice-owner' })).toString('base64url')}.signature`, encryption: null };
+        const home = await createTempDir('happier-voice-credential-binding-');
+        const envScope = createEnvKeyScope(['HAPPIER_SERVER_URL', 'HAPPIER_HOME_DIR', 'HAPPIER_TOKEN', 'HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE']);
+        envScope.patch({ HAPPIER_SERVER_URL: 'http://voice-account.test', HAPPIER_HOME_DIR: home,
+            HAPPIER_TOKEN: undefined, HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE: undefined });
+        reloadConfiguration();
+        try {
+        const provenance = AuthTokenProvenanceSchema.parse({ v: 1, kind: 'terminal', authority: 'account_automation' });
+        const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'voice-owner', provenance })).toString('base64url')}.signature`, encryption: null };
+        await writeCredentialsTokenOnlyForServerId(configuration.activeServerId, { token: credentials.token });
         publishCredential();
         const snapshot = getActiveAccountSettingsSnapshot();
         if (!snapshot) throw new Error('Missing Voice fixture');
@@ -481,7 +498,6 @@ describe('Voice account Plugin fetch credential binding', () => {
         })] };
         setActiveAccountSettingsSnapshot({ ...snapshot, scopeKey: resolveAccountSettingsScopeKey(credentials),
             settings: protocol.accountSettingsParse(raw), rawSettings: raw, connectedPurposeCatalog: { status: 'loading' } });
-        vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
         vi.spyOn(axios, 'get').mockImplementation(async input => {
             const path = new URL(String(input)).pathname;
             if (path.endsWith('/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
@@ -502,6 +518,12 @@ describe('Voice account Plugin fetch credential binding', () => {
         await expect(service.request({ operationId: 'client-auth', parameters: {}, signal })).resolves.toMatchObject({ status: 200 });
         expect(getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog).toMatchObject({ status: 'ready', revision: 4,
             record: { key: 'purposes', value: { v: 1, bindings: [] } } });
+        } finally {
+            vi.restoreAllMocks();
+            envScope.restore();
+            reloadConfiguration();
+            await removeTempDir(home);
+        }
     });
   afterEach(() => {
     resetActiveAccountSettingsSnapshotForTests();

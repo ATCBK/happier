@@ -1,0 +1,17 @@
+import { projectPluginRegistrySourceDeclarationV1 } from '@happier-dev/protocol/registries';
+import { definePluginProjectionFamilyV2 } from '@/plugins/projection/families';
+
+export const registrySourcesProjectionFamily = definePluginProjectionFamilyV2({
+    family: 'registrySources',
+    project: ({ registry, pluginExecutionOriginsByPluginId }) => ({
+        family: 'registrySources',
+        entriesById: Object.freeze(Object.fromEntries((registry.registrySources ?? []).flatMap(entry => {
+            if (!entry.pluginVersion) return [];
+            const declaration = projectPluginRegistrySourceDeclarationV1({ pluginId: entry.pluginId,
+                pluginVersion: entry.pluginVersion, definition: entry.definition });
+            const origin = pluginExecutionOriginsByPluginId?.[entry.pluginId];
+            return [[declaration.id, Object.freeze({ ...declaration,
+                ...(origin ? { serverIdentityId: origin.serverIdentityId, materializationRef: origin.materializationRef } : {}) })]];
+        }))),
+    }),
+});

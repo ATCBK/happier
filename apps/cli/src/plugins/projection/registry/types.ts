@@ -125,6 +125,7 @@ export type ResolvedRoleContribution = ResolvedTargetUiContribution<PluginRoleDe
 export type ResolvedWorkflowContribution = ResolvedTargetUiContribution<PluginWorkflowContributionV1>;
 export type ResolvedInputTypeContribution = ResolvedTargetUiContribution<PluginInputTypeContributionV1>;
 export type ResolvedAtmospherePictureContribution = ResolvedTargetUiContribution<PluginAtmospherePictureContributionV1>;
+export type ResolvedRegistrySourceContribution = ResolvedTargetUiContribution<import('@happier-dev/protocol').PluginRegistrySourceContributionV1>;
 export type ResolvedMachineProvisionerContribution = ResolvedTargetUiContribution<MachineProvisionerContributionV1>;
 export type ResolvedClientExecutableContribution<T> = ResolvedTargetUiContribution<T> & Readonly<{
     pluginRootPath: string;
@@ -857,6 +858,7 @@ export type ResolvedContributionInputs = Readonly<{
     workflows?: readonly ResolvedWorkflowContribution[];
     inputTypes?: readonly ResolvedInputTypeContribution[];
     atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
+    registrySources?: readonly ResolvedRegistrySourceContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];
@@ -920,6 +922,7 @@ export type ResolvedContributionRegistry = Readonly<{
     workflows?: readonly ResolvedWorkflowContribution[];
     inputTypes?: readonly ResolvedInputTypeContribution[];
     atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
+    registrySources?: readonly ResolvedRegistrySourceContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];

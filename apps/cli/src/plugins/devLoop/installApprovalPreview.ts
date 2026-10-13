@@ -42,6 +42,17 @@ function withDefaultPreview(defaultPreview: unknown, pluginInstall: unknown): un
  */
 export async function buildPluginInstallApprovalPreview(params: PluginInstallApprovalPreviewParams): Promise<unknown> {
   const input = readInput(params.input);
+  const requestedSourceInput = readInput(input.source);
+  if (readString(requestedSourceInput, 'kind') === 'marketplace') {
+    return withDefaultPreview(params.defaultPreview, {
+      ok: true,
+      source: requestedSourceInput,
+      machineId: readString(input, 'machineId'),
+      // These are requested operands, not acquired manifest or permission facts.
+      // The exact daemon candidate owns the later Install and Trust disclosure.
+      permissionsDisclosure: 'pendingDaemonEvaluation',
+    });
+  }
   const locator = readString(input, 'path');
   const dev = readBoolean(input, 'dev');
   const force = readBoolean(input, 'force');

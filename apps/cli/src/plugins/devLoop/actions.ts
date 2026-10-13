@@ -16,6 +16,11 @@ import { runPluginAuthorToolchain, type PluginAuthorToolchainOperation } from '@
 import { runPluginAuthorDoctor } from '@/plugins/authoring/doctor';
 import { packLocalPlugin } from '@/plugins/packaging/pack';
 import { resolveInvokerName } from '@/cli/runtime/resolveInvokerName';
+import { configuration } from '@/configuration';
+import { requestExactMarketplaceInstall } from '@/plugins/store/marketplace/exactInstall';
+import type { createMarketplaceIndexService } from '@/plugins/store/marketplace/service';
+import { resolveArchiveExpectedIntegrity } from '@/plugins/distribution/archive/integrity';
+import type { PluginChangeRequest } from '@/plugins/daemon/changeContract';
 
 export type PluginDevLoopActionId = PluginDevLoopActionIdV1;
 
@@ -26,6 +31,8 @@ export type PluginDevLoopActionServices = Readonly<{
   readUserPluginChangeStatus?: typeof readUserPluginChangeStatus;
   requestUserPluginChange?: typeof requestUserPluginChange;
   controlPluginDevelopment?: typeof controlDaemonPluginDevelopment;
+  /** Captured Account reader supplied by the production Action composition. */
+  marketplaceIndexService?: Pick<ReturnType<typeof createMarketplaceIndexService>, 'queryExactListing'>;
 }>;
 
 type PluginDevLoopActionInput = Readonly<Record<string, unknown>>;
@@ -315,7 +322,60 @@ export async function executePluginDevLoopAction(
   }
 
   if (params.actionId === 'plugins.install') {
+    const source = readInput(input.source);
+    if (readString(source, 'kind') === 'marketplace') {
+      if (!services.marketplaceIndexService) return {
+        ok: false, errorCode: 'account_credentials_unavailable', error: 'account_credentials_unavailable',
+      };
+      const result = await requestExactMarketplaceInstall({
+        happyHomeDir: params.happyHomeDir ?? configuration.happyHomeDir,
+        sourceId: readString(source, 'sourceId'),
+        pluginId: readString(source, 'pluginId'),
+        version: readString(source, 'version'),
+        ...(readString(source, 'packageName') ? { packageName: readString(source, 'packageName') } : {}),
+        // The Action prepares a candidate. Only the authenticated present-user
+        // review boundary may answer that daemon-issued pending decision.
+        approval: 'none',
+      }, { requestChange: services.requestUserPluginChange, marketplaceIndexService: services.marketplaceIndexService });
+      if (!result.ok) return {
+        ok: false, kind: 'plugins_install', outcome: 'failed',
+        diagnostics: [{ code: result.code, message: result.message }],
+        change: result.code === 'registry_profile_required'
+          ? { kind: 'registryProfileRequired', ...result.requirement }
+          : { kind: 'failed', code: result.code, message: result.message },
+      };
+      if (isPluginPendingReview(result.change)) return projectPendingReview('plugins_install', result.change);
+      return result.change.kind === 'committed'
+        ? { ok: true, kind: 'plugins_install', outcome: 'applied', change: result.change }
+        : { ok: false, kind: 'plugins_install', outcome: 'failed', change: result.change,
+          diagnostics: [{ code: `plugin_change_${result.change.kind}`, message: 'The daemon did not apply the plugin install.' }] };
+    }
     const locator = readString(input, 'path');
+    const sourceKind = readString(input, 'kind');
+    if (readString(input, 'selector') && sourceKind !== 'npm'
+      || readString(input, 'integrity') && sourceKind !== 'archive') return {
+      ok: false, kind: 'plugins_install', outcome: 'failed', diagnostics: [{
+        code: 'plugin_source_kind_unsupported', message: 'Selectors require npm installs; integrity requires archive installs.',
+      }],
+    };
+    if (sourceKind === 'archive' || sourceKind === 'npm') {
+      if (readBoolean(input, 'dev')) return {
+        ok: false, kind: 'plugins_install', outcome: 'failed',
+        diagnostics: [{ code: 'plugin_source_kind_unsupported', message: 'Development installs require a local path.' }],
+      };
+      const request: PluginChangeRequest = sourceKind === 'npm'
+        ? { kind: 'installNpm', packageName: locator,
+          ...(readString(input, 'selector') ? { selector: readString(input, 'selector') } : {}) }
+        : { kind: 'installArchive', locator,
+          expectedIntegrity: await resolveArchiveExpectedIntegrity({ locator, explicitIntegrity: readString(input, 'integrity') || null }) };
+      if (readBoolean(input, 'dryRun')) return { ok: true, kind: 'plugins_install', dryRun: true, request };
+      const change = await (services.requestUserPluginChange ?? requestUserPluginChange)({ request, approval: 'none' });
+      if (isPluginPendingReview(change)) return projectPendingReview('plugins_install', change);
+      return change.kind === 'committed'
+        ? { ok: true, kind: 'plugins_install', outcome: 'applied', change }
+        : { ok: false, kind: 'plugins_install', outcome: 'failed', change,
+          diagnostics: [{ code: `plugin_change_${change.kind}`, message: 'The daemon did not apply the plugin install.' }] };
+    }
     if (isRemotePluginInstallLocator(locator)) {
       return {
         ok: false,
@@ -371,6 +431,15 @@ export async function executePluginDevLoopAction(
 
   if (params.actionId === 'plugins.uninstall') {
     const pluginId = readString(input, 'pluginId');
+    if (readBoolean(input, 'deleteData')) {
+      const change = await (services.requestUserPluginChange ?? requestUserPluginChange)({
+        request: { kind: 'uninstallAndDeleteData', pluginId }, approval: 'none',
+      });
+      return change.kind === 'committed'
+        ? { ok: true, kind: 'plugins_uninstall', change }
+        : { ok: false, kind: 'plugins_uninstall', change,
+          diagnostics: [{ code: `plugin_change_${change.kind}`, message: 'The daemon did not remove the plugin data.' }] };
+    }
     const result = await uninstallPluginFromCatalog({
       pluginId,
       happyHomeDir: params.happyHomeDir,

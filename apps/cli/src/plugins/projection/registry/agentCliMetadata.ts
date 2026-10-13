@@ -235,6 +235,7 @@ export function createManifestAgentCatalogEntry(params: Readonly<{
     const toolDelivery = 'tools' in params.definition.capabilities
         ? params.definition.capabilities.tools?.delivery
         : undefined;
+    const toolFacts = 'tools' in params.definition.capabilities ? params.definition.capabilities.tools : undefined;
     const skills = 'skills' in params.definition.capabilities
         ? params.definition.capabilities.skills
         : undefined;
@@ -255,6 +256,8 @@ export function createManifestAgentCatalogEntry(params: Readonly<{
         ...(toolDelivery
             ? { toolDelivery }
             : {}),
+        ...(toolFacts?.mcpToolControl ? { mcpToolControl: toolFacts.mcpToolControl } : {}),
+        ...(toolFacts?.mcpToolLoading ? { mcpToolLoading: toolFacts.mcpToolLoading } : {}),
         ...(skills ? { skills } : {}),
         ...(connectedServiceIds.length > 0 ? { connectedServiceIds } : {}),
         ...(connectedAccountServiceIds.length > 0 ? { connectedAccountServiceIds } : {}),

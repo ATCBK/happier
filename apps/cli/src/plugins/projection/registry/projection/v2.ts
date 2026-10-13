@@ -46,6 +46,7 @@ import { rolesProjectionFamily } from '../roles';
 import { workflowsProjectionFamily } from '../workflows';
 import { inputTypesProjectionFamily } from '../inputTypes';
 import { atmospherePicturesProjectionFamily } from '../atmospherePictures';
+import { registrySourcesProjectionFamily } from '../registrySources';
 import { machineProvisionersProjectionFamily } from '../machineProvisioners';
 import { dragSourcesProjectionFamily, dropTargetsProjectionFamily } from '../entityDragDrop';
 import {
@@ -417,6 +418,9 @@ function collectPluginContributionMetadata(
     for (const picture of registry.atmospherePictures ?? []) {
         upsert(picture);
     }
+    for (const source of registry.registrySources ?? []) {
+        upsert(source);
+    }
 
     return metadata;
 }
@@ -649,6 +653,7 @@ export function buildAgentsById(
             settingsBackendId: readOptionalString(projectionDefinition.settingsBackendId),
             catalogAgentId: readAgentProjectionCatalogAgentId(projectionDefinition),
             iconAgentId: readOptionalString(projectionDefinition.iconAgentId),
+            ...(agent.catalogEntry?.acpRegistryIds ? { acpRegistryIds: [...agent.catalogEntry.acpRegistryIds] } : {}),
             ...(connectedServiceIds.length > 0
                 ? { connectedServiceIds: [...connectedServiceIds] }
                 : {}),
@@ -957,6 +962,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         workflowsProjectionFamily,
         inputTypesProjectionFamily,
         atmospherePicturesProjectionFamily,
+        registrySourcesProjectionFamily,
         machineProvisionersProjectionFamily,
         dragSourcesProjectionFamily,
         dropTargetsProjectionFamily,

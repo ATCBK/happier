@@ -1,10 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import axios from 'axios';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildQualifiedPluginContributionKey, PluginManifestV2Schema } from '@happier-dev/protocol';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 
 import { createLocalPathPluginDistributionIdentity, createPluginTrustRecord } from '@/plugins/store/install/trustIdentity';
 import { PluginStateFileV1Schema } from '@/plugins/store/state';
@@ -34,8 +36,7 @@ import {
   type ResolvedExecutablePluginRuntimeRegistry,
 } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import { readInstalledPluginCatalog } from '@/plugins/projection/catalog/installed';
-import { joinInstalledCatalogRuntimeIntrospection } from '@/plugins/projection/introspection/catalogSnapshot';
+import { readCurrentDaemonPluginCatalog } from '@/plugins/daemon/currentCatalog';
 import {
   evaluatePluginDevelopmentCandidate,
   projectEvaluatedPluginDevelopmentSource,
@@ -47,16 +48,40 @@ import { createDaemonPluginRegistryRuntimeLifecycle } from './registryRuntimeLif
 
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('node:fs')>();
-  const { BUNDLED_PLUGIN_PUBLICATION_FAILURES_RELATIVE_PATH } = await import('@happier-dev/cli-common/bundledPluginPublicationPolicy');
+  const { createBundledPluginPublicationFsFixture } = await import('@/plugins/projection/registry/builtIn/locators.testkit');
+  const { PluginUiArtifactsManifestV2Schema } = await import('@happier-dev/protocol/plugins/ui');
+  const { computePluginUiArtifactSha256DigestV1, computePluginUiArtifactFileSetSha256DigestV1 } = await import('@happier-dev/protocol/plugins/ui/artifactIntegrity');
+  const { normalizePluginManifestV2 } = await import('@/plugins/manifest/normalize');
+  const publicationFs = createBundledPluginPublicationFsFixture(fs);
   return {
-    ...fs,
-    // This source-level external-plugin fixture has no failed bundled publication.
-    // Substitute only that installed filesystem record; manifest/catalog projection stays real.
+    ...publicationFs,
+    // Source lifecycle tests consume bundled catalog metadata, never UI bundle
+    // execution. Complete the filesystem graph fixture from the real declaration
+    // when ignored output predates a new Triage renderer; keep every existing slot.
     readFileSync: vi.fn((path: Parameters<typeof fs.readFileSync>[0], options?: Parameters<typeof fs.readFileSync>[1]) => {
       if (typeof path === 'string'
-        && path.replaceAll('\\', '/').endsWith(`/${BUNDLED_PLUGIN_PUBLICATION_FAILURES_RELATIVE_PATH}`)
-        && options === 'utf8') return '[]';
-      return fs.readFileSync(path, options);
+        && path.replaceAll('\\', '/').endsWith('/triage/dist/happier-plugin-ui/ui-artifacts.json')
+        && options === 'utf8') {
+        const graph = PluginUiArtifactsManifestV2Schema.parse(JSON.parse(fs.readFileSync(path, 'utf8')));
+        const manifest = normalizePluginManifestV2(JSON.parse(fs.readFileSync(
+          new URL('../../../../assets/bundled-plugin-manifests/triage.json', import.meta.url), 'utf8',
+        )));
+        const bytes = new TextEncoder().encode('exports.renderSurface = () => null;');
+        const entries = [...graph.entries];
+        for (const renderer of manifest.contributes.ui.renderers) {
+          if (renderer.kind !== 'reactNative' || entries.some(entry => entry.artifactId === renderer.artifact)) continue;
+          const entry = `react-native/${renderer.artifact}/entry.cjs.bundle`;
+          entries.push({
+            artifactId: renderer.artifact, tier: 'reactNative', entry,
+            files: [{ relativePath: entry, digest: computePluginUiArtifactSha256DigestV1(bytes), byteSize: bytes.byteLength }],
+            digest: computePluginUiArtifactFileSetSha256DigestV1([{ relativePath: entry, bytes }]),
+            builtWith: { bundler: 'esbuild', version: '0.27.2' },
+            executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0',
+          });
+        }
+        return JSON.stringify(PluginUiArtifactsManifestV2Schema.parse({ ...graph, entries }));
+      }
+      return publicationFs.readFileSync(path, options);
     }),
   };
 });
@@ -482,6 +507,7 @@ async function invokeIdentity(
 }
 
 describe('daemon plugin registry runtime lifecycle owner', () => {
+  afterEach(() => vi.restoreAllMocks());
   it('rejects development preparation when its saved plugin is disabled', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-development-disabled-runtime-'));
     const pluginId = 'acme.development.disabled';
@@ -1457,15 +1483,18 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       happyHomeDir,
       runtimeLifecycle: createDaemonPluginRegistryRuntimeLifecycle({ happyHomeDir, reloadController }),
     });
+    const { createDaemonPluginRuntimeOwner } = await import('@/plugins/daemon/runtimeOwner');
+    const owner = createDaemonPluginRuntimeOwner({
+      happyHomeDir,
+      staleCandidateCleanup: 'disabled',
+      reloadController,
+      connectedAccounts: createUnusedConnectedAccountsOwner(),
+    });
     try {
       await store.initialize();
-      // Production cold start: the runtime owner publishes one full resolve.
-      await (await reloadController.acquireRuntimeRegistry({
-        resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
-          happyHomeDir,
-          generation: reloadController.getState().generation + 1,
-        }),
-      })).release();
+      // Real cold-start composition binds bundled Resource producers as well
+      // as the external lazy plugin before publishing the serving registry.
+      await owner.initialize();
       const lazySlot = reloadController.readPluginSlot?.(lazy.input.pluginId);
       const lazyServing = lazySlot?.current;
       expect(lazyServing?.occurrenceId).toBeTruthy();
@@ -1501,6 +1530,7 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
         await lease.release();
       }
     } finally {
+      await owner.changeService.shutdown();
       await reloadController.shutdown();
       await rm(happyHomeDir, { recursive: true, force: true });
     }
@@ -1816,10 +1846,7 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       });
       const lease = await reloadController.acquireRuntimeRegistry();
       try {
-        const catalog = joinInstalledCatalogRuntimeIntrospection(
-          await readInstalledPluginCatalog({ happyHomeDir }),
-          lease.registry,
-        );
+        const catalog = await readCurrentDaemonPluginCatalog({ happyHomeDir, reloadController });
         expect(catalog).toContainEqual(expect.objectContaining({
           pluginId,
           enabled: false,
@@ -2144,7 +2171,8 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       await owner.initialize();
       const registry = reloadController.getState().activeRegistry;
       expect(registry).not.toBeNull();
-      expect(registry?.activatedPluginIds).toEqual(new Set([healthy.input.pluginId]));
+      expect(registry?.activatedPluginIds.has(healthy.input.pluginId)).toBe(true);
+      expect(registry?.activatedPluginIds.has(rejected.input.pluginId)).toBe(false);
       expect(registry?.pluginDiagnosticsByPluginId[rejected.input.pluginId]).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ code: 'plugin_trust_approval_required' }),
@@ -2196,7 +2224,9 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       await owner.initialize();
       const registry = reloadController.getState().activeRegistry;
       expect(registry).not.toBeNull();
-      expect(registry?.activatedPluginIds).toEqual(new Set());
+      for (const pluginId of [first.input.pluginId, second.input.pluginId]) {
+        expect(registry?.activatedPluginIds.has(pluginId)).toBe(false);
+      }
       expect(onInitialRegistryPublished).toHaveBeenCalledOnce();
       for (const pluginId of [first.input.pluginId, second.input.pluginId]) {
         expect(registry?.pluginDiagnosticsByPluginId[pluginId]).toEqual(
@@ -2287,8 +2317,8 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       connectedAccounts: createUnusedConnectedAccountsOwner(),
     });
     await normalOwner.initialize();
-    expect(normalController.getState().activeRegistry?.activatedPluginIds)
-      .toEqual(new Set());
+    expect(normalController.getState().activeRegistry?.activatedPluginIds.has(fixture.input.pluginId))
+      .toBe(false);
     expect(normalController.getState().activeRegistry?.pluginDiagnosticsByPluginId[fixture.input.pluginId])
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ code: 'plugin_daemon_module_load_failed' }),
@@ -2297,12 +2327,27 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
     await normalController.shutdown();
 
     const recoveryController = createPluginReloadController({ happyHomeDir });
+    // The server census is outside this daemon process. The isolated Home has
+    // no managed resources; exercise the real preflight parser and change path.
+    vi.spyOn(axios, 'post').mockImplementation(async (url) => {
+      expect(url).toBe(`https://plugin-recovery.example.test${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read']}`);
+      return { data: PluginAvailabilityIntentReadActionOutputV1Schema.parse({
+        availabilityCursor: 0, hostingCapability: { enabled: false },
+        intent: null, release: null, uiArtifacts: [], packageAssets: [],
+        managedResources: [], managedResourcesReviewed: true,
+      }) };
+    });
     const recoveryOwner = createDaemonPluginRuntimeOwner({
       happyHomeDir,
       staleCandidateCleanup: 'disabled',
       reloadController: recoveryController,
       connectedAccounts: createUnusedConnectedAccountsOwner(),
       startupMode: 'pluginRecovery',
+      managedResourcePreflight: {
+        credentials: { token: 'plugin-recovery-fixture', encryption: null },
+        serverUrl: 'https://plugin-recovery.example.test', homeId: 'plugin-recovery-home',
+        controller: { machineId: 'plugin-recovery-machine', installationId: 'plugin-recovery-installation' },
+      },
     });
     await recoveryOwner.initialize();
 
@@ -2315,10 +2360,12 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
         }),
       ]),
     );
-    await expect(recoveryOwner.changeService.requestPluginChange({
+    const disable = await recoveryOwner.changeService.requestPluginChange({
       kind: 'disable',
       pluginId: fixture.input.pluginId,
-    })).resolves.toMatchObject({
+    });
+    expect(disable.kind, JSON.stringify(disable)).toBe('committed');
+    expect(disable).toMatchObject({
       kind: 'committed',
       pluginId: fixture.input.pluginId,
     });

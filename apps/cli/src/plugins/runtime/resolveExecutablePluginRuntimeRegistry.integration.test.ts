@@ -1897,7 +1897,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                     runtimeKind: 'custom',
                     pluginId: 'acme.mcp.session',
                 } satisfies ResolvedAgentRuntimeContribution;
-                const createHostOwners = (
+                const createHostOwners = async (
                     permissionHandlerOverride: Readonly<{
                         handleToolCall: ProviderEnforcedPermissionHandler['handleToolCall'];
                     }>,
@@ -1956,7 +1956,16 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                             })),
                         }),
                     } satisfies HostSessionRuntimeFactoryParams;
-                    return createNativeAgentSessionHostServiceOwners({
+                    const attachments: Readonly<{ dispose(): void | Promise<void> }>[] = [];
+                    const resolvedMcpServers = await runtimeRegistry.materializePluginMcpServers!({
+                        scope: { kind: 'session', sessionId: 'session-1' }, directory: pluginRoot, permissionHandler,
+                        servers: [{ id: 'plugin:acme.mcp.session/session-tools', name: 'session-tools', transport: { kind: 'http', url: 'http://127.0.0.1' },
+                            scope: { sessionId: 'session-1', directory: pluginRoot } },
+                        { id: 'pi.docs', name: 'discovered-docs', transport: { kind: 'http', url: 'https://mcp.example.test/discovered' },
+                            scope: { sessionId: 'session-1', directory: pluginRoot } }],
+                        addDisposable: attachment => attachments.push(attachment),
+                    });
+                    const owners = createNativeAgentSessionHostServiceOwners({
                         runtimeRegistry,
                         identity: {
                             pluginId: 'acme.mcp.session',
@@ -1978,20 +1987,25 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                                 ? { accountSettings: hostRuntimeParams.accountSettings }
                                 : {}),
                             permissionHandler: hostRuntimeParams.permissionHandler,
+                            readResolvedMcpServers: () => resolvedMcpServers,
                         },
                         sessionId: 'session-1',
                         directory: pluginRoot,
                         signal: new AbortController().signal,
                     });
+                    return { ...owners, async dispose() {
+                        await owners.dispose();
+                        await Promise.all(attachments.map(attachment => attachment.dispose()));
+                    } };
                 };
-                const hostOwners = createHostOwners({ handleToolCall });
+                const hostOwners = await createHostOwners({ handleToolCall });
                 const projected = await hostOwners.mcp.resolveForSession({
                     sessionId: 'session-1',
                     directory: pluginRoot,
                 });
                 expect(projected).toEqual(expect.arrayContaining([
                     expect.objectContaining({
-                        id: 'acme.mcp.session/session-tools',
+                        id: 'plugin:acme.mcp.session/session-tools',
                         transport: {
                             kind: 'http',
                             url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/),
@@ -2010,7 +2024,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 ]));
                 expect(projected).toHaveLength(2);
                 const projectedDynamic = projected?.find((server) => (
-                    server.id === 'acme.mcp.session/session-tools'
+                    server.id === 'plugin:acme.mcp.session/session-tools'
                 ));
                 const projectedUrl = projectedDynamic?.transport.kind === 'http'
                     ? projectedDynamic.transport.url
@@ -2025,7 +2039,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 const projectedTools = await projectedClient.listTools();
                 expect(projectedTools.tools).toEqual([
                     expect.objectContaining({
-                        name: expect.stringMatching(/^happier\.proxy_[a-f0-9]{24}$/),
+                        name: 'confirm',
                     }),
                 ]);
                 await expect(projectedClient.callTool({
@@ -2045,7 +2059,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 })).rejects.toBeInstanceOf(Error);
 
                 const reboundHandleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
-                const reboundHostOwners = createHostOwners({
+                const reboundHostOwners = await createHostOwners({
                     handleToolCall: reboundHandleToolCall,
                 });
                 const reboundProjected = await reboundHostOwners.mcp.resolveForSession({
@@ -2053,7 +2067,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                     directory: pluginRoot,
                 });
                 const reboundDynamic = reboundProjected.find((server) => (
-                    server.id === 'acme.mcp.session/session-tools'
+                    server.id === 'plugin:acme.mcp.session/session-tools'
                 ));
                 const reboundProjectedUrl = reboundDynamic?.transport.kind === 'http'
                     ? reboundDynamic.transport.url
@@ -2163,6 +2177,11 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 promptAssets: [{
                     id: 'committed-instructions', kind: 'systemPrompt', resource: 'shared',
                     target: { kind: 'agent', agent: 'novel-reviewer' }, priority: 4,
+                }, {
+                    id: 'optional-disabled-instructions', kind: 'guidelines', resource: 'shared',
+                    target: { kind: 'agent', agent: 'novel-reviewer' }, priority: 5,
+                    availability: { disabledWhen: { fact: 'plugin.enabled', operator: 'equals', value: true },
+                        disabledReason: 'Automatic instructions are disabled' },
                 }],
             },
         };
@@ -2444,7 +2463,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
             });
             const promptAssetBlocks = await runtimeRegistry.resolvePromptAssetBlocks({ agentId: 'acme.resource.action/novel-reviewer' });
             const machineKey = new Uint8Array(32).fill(9);
-            const promptPlan = await resolveEffectiveCodingPromptPlan({
+            const promptPlan = await resolveEffectiveCodingPromptPlan({ toolDelivery: 'native_mcp',
                 credentials: {
                     token: 'token',
                     encryption: { type: 'dataKey', machineKey, publicKey: deriveBoxPublicKeyFromSeed(machineKey) },
@@ -2457,6 +2476,9 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 scope: 'session',
                 text: 'committed prompt bytes',
             }]);
+            await expect(runtimeRegistry.resolvePromptAssetBlocks({ agentId: 'acme.resource.action/novel-reviewer',
+                selectedAsset: { pluginId: 'acme.resource.action', localId: 'optional-disabled-instructions' },
+            })).rejects.toMatchObject({ code: 'PLUGIN_PROMPT_ASSET_POLICY_DENIED' });
             expect(promptPlan.plan.blocks.filter((block) => block.id === promptAssetBlocks[0]?.id)).toEqual(promptAssetBlocks);
             await runtimeRegistry.activateContributionsOnDemand([{
                 pluginId: 'acme.resource.action', family: 'actions', localId: 'read-prompt',

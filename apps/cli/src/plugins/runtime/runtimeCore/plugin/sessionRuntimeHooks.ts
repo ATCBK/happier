@@ -61,6 +61,7 @@ export type PluginRuntimeHookOperations = RuntimeTurnOperations & Readonly<{
     interruptPendingInputAndRun?: PluginRuntimeInterruptPendingInputAndRun;
     rollbackConversation?: SessionRollbackRuntimeFacet['rollbackConversation'];
     refreshGoal?: SessionRuntimeControls['refreshGoal'];
+    refreshSkills?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionRuntime['refreshSkills'];
     setGoal?: SessionRuntimeControls['setGoal'];
     clearGoal?: SessionRuntimeControls['clearGoal'];
     listVendorPlugins?: SessionRuntimeControls['listVendorPlugins'];

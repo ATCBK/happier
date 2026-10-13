@@ -58,6 +58,7 @@ import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/se
 import { activateContributionModule } from '@/plugins/runtime/lifecycle/activation/activateContributionModule';
 import type { ContributionRuntimeRegistration } from '@/plugins/runtime/api/registrationRightsHost';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { readRetainedBundledAgentFactory } from '@/plugins/runtime/retainedBundledAgentFactory';
 import {
     composeNativeAgentSessionRuntimeContext,
     createNativeAgentSessionHostServices,
@@ -95,6 +96,7 @@ const ACP_AGENT_IDS = new Set([
     'codex',
     'copilot',
     'cursor',
+    'custom-acp',
     'devin',
     'droid',
     'fx',
@@ -273,6 +275,7 @@ function createMatrixSettingsService(
                 get: async <T extends JsonValue = JsonValue>(
                     key: string,
                 ): Promise<T | null> => (values[key] ?? null) as T | null,
+                snapshot: async () => ({ values }),
             };
         },
     };
@@ -682,6 +685,7 @@ function createClaudeExecBoundaryContext(input: Readonly<{
                         featureId === 'agents.claude.unifiedTerminal',
                 },
                 terminalHost: {
+                    adoptExistingHost: async () => null,
                     resolve: async () => ({
                         status: 'resolved' as const,
                         hostKind: 'zellij' as const,
@@ -950,9 +954,11 @@ describe('first-party runner Agent factory matrix', () => {
             'antigravity',
             'auggie',
             'claude',
+            'codebuddy',
             'codex',
             'copilot',
             'cursor',
+            'custom-acp',
             'devin',
             'droid',
             'fx',
@@ -1313,6 +1319,13 @@ describe('first-party runner Agent factory matrix', () => {
                             agent.id,
                         ).toBeUndefined();
                     }
+                    // Bundled snapshot custody attests the published module,
+                    // whose path/load mode differ from source activation.
+                    const retainedFactory = readRetainedBundledAgentFactory(
+                        immutableManifest.manifest,
+                        localAgentId,
+                    );
+                    expect(retainedFactory.locator, agent.id).toEqual(locator);
                     const binding =
                         createAgentSessionRunnerFactoryBinding({
                             v: 1,
@@ -1328,10 +1341,10 @@ describe('first-party runner Agent factory matrix', () => {
                                         'first-party-agent-runtime-factory-matrix',
                                 },
                             },
-                            locator,
+                            locator: retainedFactory.locator,
                             normalizedModulePath:
-                                resolution.normalizedModulePath,
-                            loadMode: resolution.loadMode,
+                                retainedFactory.normalizedModulePath,
+                            loadMode: retainedFactory.loadMode,
                         });
                     const leaf = await loadRetainedAgentRuntimeLeaf({
                         paths,

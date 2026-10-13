@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createPluginCompatibilityProjectionV1,
   PluginManifestV2Schema,
@@ -20,10 +20,16 @@ import {
 import type { PluginGenerationCustodyRetirementRemoteDependencies } from '@/plugins/store/registry/generationCustodyRetirement';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { createNpmRegistryProfileService } from '@/plugins/distribution/npm/profiles/service';
-import { createMarketplaceSourceRegistryStore } from '@/plugins/store/marketplace/sources/store';
-import { COMMUNITY_NPM_MARKETPLACE_SOURCE } from '@/plugins/store/marketplace/service';
+import {curatedMarketplaceSourceFixture,communityMarketplaceSourceFixture,publishAccountRegistrySourcesFixture,publishMarketplaceUserBindingFixture} from '@/plugins/testkit/accountRegistrySources';
+import {resetActiveAccountSettingsSnapshotForTests} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import {createMarketplaceIndexService} from '@/plugins/store/marketplace/service';
 import { marketplaceListingMatchesExpected } from '@/plugins/store/marketplace/exactInstall';
-import { createMarketplaceIndex } from '@/plugins/store/marketplace/index';
+import * as undici from 'undici';
+import * as https from 'node:https';
+import {EventEmitter} from 'node:events';
+import type {ClientRequest,IncomingMessage} from 'node:http';
+import {createMarketplaceNpmDiscoveryProjectionV1} from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
+import {PluginCompatibilityProjectionV1Schema} from '@happier-dev/protocol/plugins/availability/v1';
 
 import { createDaemonPluginChangeService } from './changeService';
 import type { DaemonPluginChangeService } from './changeService';
@@ -36,7 +42,13 @@ import {
 
 import { createDaemonNpmPluginChangePreparer } from './npmChangePreparer';
 
+// Only third-party DNS/HTTP transport is mocked below.
+vi.mock('node:dns/promises',async original=>({...await original<typeof import('node:dns/promises')>(),lookup:async()=>[{address:'93.184.216.34',family:4}]}));
+vi.mock('undici',async original=>{const actual=await original<typeof import('undici')>();return {...actual,fetch:vi.fn(actual.fetch)};});
+vi.mock('node:https',async original=>{const actual=await original<typeof import('node:https')>();return {...actual,request:vi.fn(actual.request)};});
 const roots: string[] = [];
+const COMMUNITY_NPM_MARKETPLACE_SOURCE=communityMarketplaceSourceFixture();
+beforeEach(()=>publishAccountRegistrySourcesFixture());
 
 /**
  * Reports what the runtime adopted exactly as `registryRuntimeLifecycle` does:
@@ -56,6 +68,7 @@ function reportAdoptedGenerations(
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();vi.mocked(undici.fetch).mockReset();vi.mocked(https.request).mockReset();resetActiveAccountSettingsSnapshotForTests();
   await Promise.all(roots.splice(0).map(async (root) => await rm(root, { recursive: true, force: true })));
 });
 
@@ -218,11 +231,11 @@ function curatedListing(
     integrity: string;
     manifestDigest: string;
   }>,
-  source: Readonly<{ id: string; sourceUrl: string; registryProfileId?: string | null }>,
+  source: Readonly<{ id: string; sourceUrl: string; registryProfileId?: string | null;origin?:'curated'|'user'|'community-npm' }>,
   overrides: Partial<ExpectedMarketplaceListingV1> = {},
 ): ExpectedMarketplaceListingV1 {
   return {
-    source: { id: source.id, kind: 'curated', sourceUrl: source.sourceUrl },
+    source: { id: source.id, kind: source.origin??'curated', sourceUrl: source.sourceUrl },
     pluginId: 'acme.npm-candidate',
     publisher: { id: 'acme', displayName: 'Acme' },
     packageName: fixture.packageName,
@@ -231,7 +244,7 @@ function curatedListing(
     version: fixture.version,
     integrity: fixture.integrity,
     manifestDigest: fixture.manifestDigest,
-    review: { status: 'approved', reviewedAt: '2026-07-21T00:00:00.000Z' },
+    review: source.origin==='user'?{status:'unreviewed',reviewedAt:null}:{ status: 'approved', reviewedAt: '2026-07-21T00:00:00.000Z' },
     updatePolicy: 'allowed',
     ...overrides,
   } as ExpectedMarketplaceListingV1;
@@ -243,6 +256,7 @@ function exactMarketplaceIndexSourceSnapshot(params: Readonly<{
     version: string;
     integrity: string;
     manifestDigest: string;
+    metadata?:Readonly<{versions:Readonly<Record<string,unknown>>}>;
   }>;
   source: Readonly<{
     id: string;
@@ -297,74 +311,34 @@ function exactMarketplaceIndexSourceSnapshot(params: Readonly<{
   };
 }
 
-function exactMarketplaceSourceConfig(source: Parameters<typeof exactMarketplaceIndexSourceSnapshot>[0]['source']) {
-  const origin = source.origin ?? 'curated';
-  return {
-    id: source.id,
-    title: source.title ?? (origin === 'curated' ? 'Curated marketplace' : 'Community npm'),
-    sourceUrl: source.sourceUrl,
-    enabled: true,
-    origin,
-    registryProfileId: source.registryProfileId ?? null,
-  };
-}
-
-/**
- * The double for the one exact-listing method the preparer consumes. The
- * remote source document is stubbed, but the persisted source binding is still
- * resolved for real: which source id may answer, and whether its URL/profile
- * binding moved, is the fact the preparer depends on. A case whose listing
- * moves between install and update passes a thunk.
- */
+/** Remote catalog/npm response fixture beneath the real exact source service. */
 function exactMarketplaceIndexService(
-  happyHomeDir: string,
-  params: Parameters<typeof exactMarketplaceIndexSourceSnapshot>[0]
-    | (() => Parameters<typeof exactMarketplaceIndexSourceSnapshot>[0]),
-) {
-  const read = typeof params === 'function' ? params : () => params;
-  return {
-    queryExactListing: vi.fn(async (query: Readonly<{ sourceId: string; pluginId: string; packageName?: string }>) => {
-      const current = read();
-      const configured = exactMarketplaceSourceConfig(current.source);
-      const persisted = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read())
-        .sources.find((entry) => entry.id === query.sourceId)
-        ?? (query.sourceId === COMMUNITY_NPM_MARKETPLACE_SOURCE.id ? COMMUNITY_NPM_MARKETPLACE_SOURCE : null);
-      if (!persisted || !persisted.enabled) {
-        return {
-          ok: false as const,
-          code: 'install_unavailable' as const,
-          message: 'No enabled exact marketplace source is configured for this Install and trust action.',
-        };
-      }
-      if (persisted.sourceUrl !== configured.sourceUrl
-        || (persisted.registryProfileId ?? null) !== configured.registryProfileId) {
-        return {
-          ok: false as const,
-          code: 'source_changed' as const,
-          message: 'The persisted marketplace source binding changed while exact facts were loading.',
-        };
-      }
-      const snapshot = exactMarketplaceIndexSourceSnapshot(current);
-      const indexed = createMarketplaceIndex({
-        revision: 1,
-        sources: [snapshot],
-        query: { text: '', cursor: null, limit: 1, filters: { sourceIds: [query.sourceId], pluginIds: [query.pluginId], includeUnavailable: true } },
-      });
-      return {
-        ok: true as const,
-        source: configured,
-        result: {
-          ...indexed,
-          items: indexed.items.map((item) => ({
-            ...item,
-            artifactAccess: configured.registryProfileId
-              ? { state: 'available' as const, registryProfileId: configured.registryProfileId }
-              : { state: 'public' as const, registryProfileId: null },
-          })),
-        },
-      };
-    }),
-  };
+  happyHomeDir:string,
+  params:Parameters<typeof exactMarketplaceIndexSourceSnapshot>[0]|(()=>Parameters<typeof exactMarketplaceIndexSourceSnapshot>[0]),
+){
+  const read=typeof params==='function'?params:()=>params;
+  vi.mocked(undici.fetch).mockImplementation(async()=>{
+    const current=read();
+    if(current.source.origin==='community-npm')return new undici.Response(JSON.stringify({total:1,objects:[{package:{name:current.fixture.packageName,version:current.fixture.version,publisher:{username:'acme'}}}]}),{status:200});
+    return new undici.Response(JSON.stringify(exactMarketplaceIndexSourceSnapshot(current)),{status:200});
+  });
+  // Native HTTPS is a genuine npm metadata boundary, not a resolver or registry double.
+  vi.mocked(https.request).mockImplementation(((options:unknown,callback:(response:IncomingMessage)=>void)=>{
+    const emitter=new EventEmitter() as EventEmitter & {end():void;destroy(error?:Error):void};
+    emitter.end=()=>queueMicrotask(()=>{
+      const current=read();const metadata=current.fixture.metadata;
+      const raw=metadata?.versions[current.fixture.version];
+      if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error('npm metadata fixture absent');
+      const version=raw as Record<string,unknown>; // Untrusted external npm metadata fixture.
+      const happier=version.happier as Record<string,unknown>;
+      const compatibility=PluginCompatibilityProjectionV1Schema.parse(happier.compatibilityProjection);
+      const discovery=createMarketplaceNpmDiscoveryProjectionV1({compatibility,manifestDigest:current.fixture.manifestDigest});
+      const published={...metadata,versions:{...metadata?.versions,[current.fixture.version]:{...version,happier:{...happier,marketplaceDiscovery:discovery}}}};
+      callback(Object.assign(Readable.from([JSON.stringify(published)]),{statusCode:200,headers:{'content-type':'application/json'}}) as unknown as IncomingMessage);
+    });
+    emitter.destroy=error=>{if(error)emitter.emit('error',error);};return emitter as unknown as ClientRequest;
+  }) as typeof https.request);
+  return createMarketplaceIndexService({happyHomeDir});
 }
 
 /**
@@ -569,7 +543,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
             sourceUrl: COMMUNITY_NPM_MARKETPLACE_SOURCE.sourceUrl,
           },
           pluginId: 'acme.npm-candidate',
-          publisher: { id: 'acme', displayName: 'Acme' },
+          publisher: { id: 'acme', displayName: 'acme' },
           packageName: fixture.packageName,
           registryOrigin: 'https://registry.npmjs.org',
           version: fixture.version,
@@ -613,9 +587,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-npm-change-home-'));
     roots.push(happyHomeDir);
     const fixture = await createNpmPackageFixture({ markerPath: join(happyHomeDir, 'never') });
-    const marketplaceSource = (
-      await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()
-    ).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     const adopt = vi.fn(async () => undefined);
     const prepareRuntime = vi.fn(async () => ({ abort: async () => undefined, adopt }));
     const marketplaceIndexService = exactMarketplaceIndexService(happyHomeDir, { fixture, source: marketplaceSource });
@@ -722,7 +694,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       markerPath: join(happyHomeDir, 'later'),
       version: '1.2.4',
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     const service = createNpmPluginChangeService({
@@ -797,7 +769,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
         }],
       },
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     const marketplaceIndexService = exactMarketplaceIndexService(
@@ -1305,9 +1277,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       markerPath: join(happyHomeDir, 'update'),
       version: '1.2.4',
     });
-    const marketplaceSource = (
-      await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()
-    ).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     const runtimeLifecycle = {
       prepare: async () => ({ abort: async () => undefined, adopt: async () => undefined }),
     };
@@ -1365,7 +1335,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       version: '1.2.4',
       includeCompatibilityProjection: false,
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     const runtimeLifecycle = {
       prepare: async () => ({ abort: async () => undefined, adopt: async () => undefined }),
     };
@@ -1513,7 +1483,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       version: '1.2.4',
       hostAccess: { required: [], optional: [retainedAccess] },
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     const marketplaceIndexService = exactMarketplaceIndexService(
@@ -1564,7 +1534,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       markerPath: join(happyHomeDir, 'update'),
       version: '1.2.4',
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     const marketplaceIndexService = exactMarketplaceIndexService(
@@ -1676,7 +1646,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
         }],
       },
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     const marketplaceIndexService = exactMarketplaceIndexService(
@@ -1733,7 +1703,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       markerPath: join(happyHomeDir, 'update'),
       version: '1.2.4',
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     const allowedPolicy = { updatePolicy: 'allowed' } as const;
@@ -1785,7 +1755,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       packageName: '@other-publisher/npm-candidate',
       version: '1.2.4',
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = await publishMarketplaceUserBindingFixture({sourceUrl:'https://catalog.example/substitutions.json'});
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     let activeMarketplaceListingOverrides: Partial<ExpectedMarketplaceListingV1> | undefined;
@@ -1824,8 +1794,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       action: 'test', machineId: 'machine-1', expectedRevision: 1, mutationId: 'mutation-test-other-registry',
       profileId: 'registry_other',
     });
-    const reboundSource = await createMarketplaceSourceRegistryStore({ happyHomeDir })
-      .upsertSource({ sourceUrl: marketplaceSource.sourceUrl, registryProfileId: 'registry_other' });
+    const reboundSource = await publishMarketplaceUserBindingFixture({ sourceUrl: marketplaceSource.sourceUrl, registryProfileId: 'registry_other' });
     activeClient = channelFixture.client;
     activeMarketplaceFixture = channelFixture;
     activeMarketplaceListingOverrides = { registryOrigin: 'https://other-registry.example.test' };
@@ -1839,7 +1808,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
     expect(channelResult).toMatchObject({ kind: 'reviewRequired' });
     if (channelResult.kind !== 'reviewRequired') throw new Error('Expected channel-substitution review');
     await service.decidePluginChange({ pendingChangeId: channelResult.pendingChangeId, decision: 'cancel' });
-    await createMarketplaceSourceRegistryStore({ happyHomeDir }).setSourceRegistryProfile(marketplaceSource.id, null);
+    await publishMarketplaceUserBindingFixture({sourceUrl:marketplaceSource.sourceUrl});
 
     activeClient = publisherFixture.client;
     activeMarketplaceFixture = publisherFixture;
@@ -1879,7 +1848,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
         }],
       },
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     const marketplaceIndexService = exactMarketplaceIndexService(
@@ -1921,7 +1890,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       markerPath: join(happyHomeDir, 'update'),
       version: '1.2.4',
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     const marketplaceIndexService = exactMarketplaceIndexService(
@@ -1966,7 +1935,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       markerPath: join(happyHomeDir, 'update'),
       version: '1.2.4',
     });
-    const marketplaceSource = (await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     let activeClient = initialFixture.client;
     let activeMarketplaceFixture = initialFixture;
     const marketplaceIndexService = exactMarketplaceIndexService(
@@ -2022,8 +1991,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-npm-change-home-'));
     roots.push(happyHomeDir);
     const fixture = await createNpmPackageFixture({ markerPath: join(happyHomeDir, 'never') });
-    const sourceStore = createMarketplaceSourceRegistryStore({ happyHomeDir });
-    const marketplaceSource = (await sourceStore.read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     const prepareRuntime = vi.fn(async () => ({ abort: async () => undefined, adopt: async () => undefined }));
     const service = createDaemonPluginChangeService({
       prepare: createDaemonNpmPluginChangePreparer({
@@ -2057,7 +2025,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
     });
     if (result.kind !== 'reviewRequired') throw new Error('Expected curated npm Install and trust review');
 
-    await sourceStore.setSourceEnabled(marketplaceSource.id, false);
+    publishAccountRegistrySourcesFixture([],[marketplaceSource.id]);
     await expect(service.decidePluginChange({
       pendingChangeId: result.pendingChangeId,
       decision: 'installAndTrust',
@@ -2072,8 +2040,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-npm-change-home-'));
     roots.push(happyHomeDir);
     const fixture = await createNpmPackageFixture({ markerPath: join(happyHomeDir, 'never') });
-    const sourceStore = createMarketplaceSourceRegistryStore({ happyHomeDir });
-    const marketplaceSource = (await sourceStore.read()).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     const prepareRuntime = vi.fn(async () => ({ abort: async () => undefined, adopt: async () => undefined }));
     // The source re-answers with a different review timestamp than the one the
     // user approved, so revalidation at apply must refuse the change.
@@ -2185,10 +2152,8 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       action: 'test', machineId: 'machine-1', expectedRevision: 2, mutationId: 'mutation-test-private',
       profileId: 'registry_private',
     });
-    const sourceStore = createMarketplaceSourceRegistryStore({ happyHomeDir });
-    const seededSource = (await sourceStore.read()).sources[0]!;
-    const marketplaceSource = await sourceStore.upsertSource({
-      sourceUrl: seededSource.sourceUrl,
+    const marketplaceSource = await publishMarketplaceUserBindingFixture({
+      sourceUrl: 'https://catalog.example/private.json',
       registryProfileId: 'registry_private',
     });
     const createClient = vi.fn((options: Readonly<{
@@ -2213,7 +2178,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       registryOrigin: 'https://registry.npmjs.org',
       registryProfileId: 'registry_private',
       expectedMarketplaceListing: {
-        source: { id: marketplaceSource.id, kind: 'curated', sourceUrl: marketplaceSource.sourceUrl },
+        source: { id: marketplaceSource.id, kind: 'user', sourceUrl: marketplaceSource.sourceUrl },
         pluginId: 'acme.npm-candidate',
         publisher: { id: 'acme', displayName: 'Acme' },
         packageName: fixture.packageName,
@@ -2222,7 +2187,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
         version: fixture.version,
         integrity: fixture.integrity,
         manifestDigest: fixture.manifestDigest,
-        review: { status: 'approved', reviewedAt: '2026-07-21T00:00:00.000Z' },
+        review: {status:'unreviewed',reviewedAt:null},
         updatePolicy: 'allowed',
       },
     } as const;
@@ -2243,7 +2208,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
       registryProfileId: 'registry_private',
       marketplaceSource: {
         id: marketplaceSource.id,
-        kind: 'curated',
+        kind: 'user',
         sourceUrl: marketplaceSource.sourceUrl,
       },
     });
@@ -2260,9 +2225,9 @@ describe('createDaemonNpmPluginChangePreparer', () => {
     });
     expect(JSON.stringify(installedBeforeLogout.plugins['acme.npm-candidate'])).not.toContain('boundary-secret');
 
-    await sourceStore.upsertSource({ sourceUrl: marketplaceSource.sourceUrl, registryProfileId: 'registry_other' });
+    await publishMarketplaceUserBindingFixture({ sourceUrl: marketplaceSource.sourceUrl, registryProfileId: 'registry_other' });
     await expect(prepare(request)).rejects.toMatchObject({ code: 'source_changed' });
-    await sourceStore.upsertSource({ sourceUrl: marketplaceSource.sourceUrl, registryProfileId: 'registry_private' });
+    await publishMarketplaceUserBindingFixture({ sourceUrl: marketplaceSource.sourceUrl, registryProfileId: 'registry_private' });
 
     await profiles.mutate({
       action: 'logout', machineId: 'machine-1', expectedRevision: 3, mutationId: 'mutation-logout-private',
@@ -2293,8 +2258,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
         createClient,
       }),
     });
-    const sourceStore = createMarketplaceSourceRegistryStore({ happyHomeDir });
-    const userSource = await sourceStore.upsertSource({ sourceUrl: 'https://catalog.acme.example.test/index.json', origin: 'user' });
+    const userSource = await publishMarketplaceUserBindingFixture({ sourceUrl: 'https://catalog.acme.example.test/index.json' });
     const request = {
       kind: 'installNpm',
       packageName: fixture.packageName,
@@ -2471,9 +2435,7 @@ describe('createDaemonNpmPluginChangePreparer', () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-npm-change-home-'));
     roots.push(happyHomeDir);
     const fixture = await createNpmPackageFixture({ markerPath: join(happyHomeDir, 'never') });
-    const marketplaceSource = (
-      await createMarketplaceSourceRegistryStore({ happyHomeDir }).read()
-    ).sources[0]!;
+    const marketplaceSource = curatedMarketplaceSourceFixture();
     const prepareRuntime = vi.fn(async () => ({ abort: async () => undefined, adopt: async () => undefined }));
     const prepare = createDaemonNpmPluginChangePreparer({
       happyHomeDir,

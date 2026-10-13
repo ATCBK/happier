@@ -40,6 +40,11 @@ function sessionAgent(open: readonly ('create' | 'resume' | 'fork')[]) {
 }
 
 describe('projectManifestAgentContribution', () => {
+    it('retains ACP registry identities at the canonical catalog projection', () => {
+        const contribution = project({ ...sessionAgent(['create']), catalog: { acpRegistryIds: ['claude-acp'] } });
+        expect(contribution.catalogEntry?.acpRegistryIds).toEqual(['claude-acp']);
+        expect(project(sessionAgent(['create'])).catalogEntry?.acpRegistryIds).toBeUndefined();
+    });
     it('consumes declarative ACP recovery policy through the shared host backoff owner', async () => {
         const contribution = project({ ...sessionAgent(['create', 'resume']), runtime: {
             kind: 'acp', transport: { kind: 'stdio', executable: { kind: 'systemTool', id: 'fixture-acp' } },

@@ -7,9 +7,10 @@ export const mcpProjectionFamily = definePluginProjectionFamilyV2({
             family: 'mcp',
             entriesById: Object.fromEntries([
                 ...(registry.mcpServers ?? []).map((server) => [
-                    `server:${server.definition.id}`,
+                    `server:${server.pluginId}/${server.definition.id}`,
                     {
-                        id: `server:${server.definition.id}`,
+                        id: `server:${server.pluginId}/${server.definition.id}`,
+                        localId: server.definition.id,
                         pluginId: server.pluginId,
                         contributionKind: 'server',
                         title: server.definition.title,
@@ -21,14 +22,16 @@ export const mcpProjectionFamily = definePluginProjectionFamilyV2({
                     },
                 ]),
                 ...(registry.mcpDiscoverySources ?? []).map((source) => [
-                    `discoverySource:${source.definition.id}`,
+                    `discoverySource:${source.pluginId}/${source.definition.id}`,
                     {
-                        id: `discoverySource:${source.definition.id}`,
+                        id: `discoverySource:${source.pluginId}/${source.definition.id}`,
+                        localId: source.definition.id,
                         pluginId: source.pluginId,
                         contributionKind: 'discoverySource',
                         title: source.definition.title,
                         description: source.definition.description,
                         resultSchema: source.definition.resultSchema,
+                        loadedInHappierSessions: source.definition.loadedInHappierSessions,
                         availability: source.definition.availability,
                     },
                 ]),

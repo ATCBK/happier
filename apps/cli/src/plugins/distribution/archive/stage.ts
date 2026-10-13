@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { createPluginCompatibilityProjectionV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import { createPluginCompatibilityProjectionV1 } from '@happier-dev/protocol/plugins/availability/compatibilityProjectionV1';
 import { createPackageAssetArchiveV1, readDeclaredPackageAssetsV1 } from '@happier-dev/protocol/plugins/availability/packageAssetV1';
 import type { PluginCompatibilityProjectionV1 } from '@happier-dev/protocol';
 import type { PackageAssetArchiveV1 } from '@happier-dev/protocol/plugins/availability';

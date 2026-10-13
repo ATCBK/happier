@@ -1,4 +1,5 @@
 import semver from 'semver';
+import { readCommunityNpmPackumentVersionV1 } from '@happier-dev/protocol/marketplace/communityNpmDiscoveryV1';
 
 import { evaluatePluginCompatibilityProjection } from '@/plugins/availability/compatibility';
 import type { PluginCompatibilityDiagnostic } from '@/plugins/validation/diagnostics/types';
@@ -245,24 +246,21 @@ export async function resolveNpmArtifactMetadata(params: Readonly<{
     versions,
   });
   const version = selection.version;
-  const manifest = asRecord(versions[version], `version '${version}' metadata`);
-  if (manifest.name !== params.request.packageName || manifest.version !== version) throw new Error('Npm package identity mismatch in version metadata');
+  const admitted = readCommunityNpmPackumentVersionV1(packument, {
+    packageName: params.request.packageName, version, registryOrigin: params.request.registryOrigin,
+  });
+  if (!admitted.ok) throw new Error(admitted.reason === 'identity_mismatch'
+    ? 'Npm package identity mismatch in version metadata' : 'Invalid npm dist metadata or tarball origin');
+  const manifest = admitted.versionMetadata;
   const dist = asRecord(manifest.dist, 'dist metadata');
-  const integrity = requiredString(dist.integrity, 'dist.integrity');
-  const tarballUrl = requiredString(dist.tarball, 'dist.tarball');
-  let parsedTarball: URL;
-  try { parsedTarball = new URL(tarballUrl); } catch { throw new Error('Invalid npm dist.tarball URL'); }
-  if (parsedTarball.protocol !== 'https:' || parsedTarball.origin !== params.request.registryOrigin || parsedTarball.username || parsedTarball.password) {
-    throw new Error('Npm tarball origin does not match the selected registry origin');
-  }
 
   return {
     registryOrigin: params.request.registryOrigin,
     packageName: params.request.packageName,
     version,
     versionMetadata: manifest,
-    integrity,
-    tarballUrl: parsedTarball.toString(),
+    integrity: admitted.integrity,
+    tarballUrl: admitted.tarballUrl,
     signatures: parseSignatures(dist.signatures),
     provenance: parseProvenance(dist.attestations, params.request.registryOrigin),
     compatibility: selection.compatibility,

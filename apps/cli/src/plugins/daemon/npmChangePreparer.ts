@@ -50,12 +50,12 @@ import {
   createMarketplaceIndexService,
   resolveExactMarketplaceSourceBinding,
   resolveMarketplaceArtifactAccess,
+  type MarketplaceRegistrySourcesReaderV1,
 } from '@/plugins/store/marketplace/service';
 import {
   marketplaceListingMatchesExpected,
   resolveExactMarketplaceListingForInstall,
 } from '@/plugins/store/marketplace/exactInstall';
-import { createMarketplaceSourceRegistryStore } from '@/plugins/store/marketplace/sources/store';
 
 import {
   PluginRegistryProfileRequiredError,
@@ -189,10 +189,11 @@ async function assertMarketplaceSourceBindingCurrent(
   happyHomeDir: string,
   request: Extract<PluginChangeRequest, { kind: 'installNpm' }>,
   npmRegistryProfiles: NpmRegistryProfileArtifactService,
+  readRegistrySources?: MarketplaceRegistrySourcesReaderV1,
 ): Promise<void> {
   const expected = request.expectedMarketplaceListing;
   if (!expected) return;
-  const binding = await resolveExactMarketplaceSourceBinding({ happyHomeDir, sourceId: expected.source.id });
+  const binding = await resolveExactMarketplaceSourceBinding({ happyHomeDir, sourceId: expected.source.id, readRegistrySources });
   if (!binding.ok
     || binding.source.origin !== expected.source.kind
     || binding.source.sourceUrl !== expected.source.sourceUrl
@@ -251,6 +252,7 @@ async function assertMarketplaceListingCurrent(
     sourceId: expected.source.id,
     pluginId: expected.pluginId,
     packageName: expected.packageName,
+    version: expected.version,
   }, service);
   if (!result.ok || !marketplaceListingMatchesExpected(expected, result.resolution.listing)) {
     throw new NpmRegistryProfileOperationError('source_changed');
@@ -356,6 +358,7 @@ export function createDaemonNpmPluginChangePreparer(params: Readonly<{
   npmRegistryProfiles?: NpmRegistryProfileArtifactService;
   createClient?: CreateNpmRegistryClient;
   marketplaceIndexService?: Pick<ReturnType<typeof createMarketplaceIndexService>, 'queryExactListing'>;
+  readRegistrySources?: MarketplaceRegistrySourcesReaderV1;
   nowMs?: () => number;
   generationCustodyRetirement?: PluginGenerationCustodyRetirementRemoteDependencies;
 }>): (
@@ -366,6 +369,9 @@ export function createDaemonNpmPluginChangePreparer(params: Readonly<{
     ?? createNpmRegistryProfileService({ happyHomeDir: params.happyHomeDir });
   const createClient = params.createClient ?? createNpmRegistryHttpsClient;
   const nowMs = params.nowMs ?? Date.now;
+  const marketplaceIndexService = params.marketplaceIndexService ?? createMarketplaceIndexService({
+    happyHomeDir: params.happyHomeDir, readRegistrySources: params.readRegistrySources,
+  });
   const createMutationStore = (
     onApplied?: (record: PluginRegistryCommitRecord) => void,
   ) => createPluginRegistryStateStore({
@@ -382,7 +388,7 @@ export function createDaemonNpmPluginChangePreparer(params: Readonly<{
       throw new Error(`Plugin change '${request.kind}' is not implemented by the npm candidate adapter`);
     }
     assertMarketplaceRequestMatchesListing(request);
-    await assertMarketplaceSourceBindingCurrent(params.happyHomeDir, request, npmRegistryProfiles);
+    await assertMarketplaceSourceBindingCurrent(params.happyHomeDir, request, npmRegistryProfiles, params.readRegistrySources);
     const installedUpdate = context?.installedUpdate;
     const requestedUpdatePolicy = installedUpdate?.updatePolicy
       ?? request.expectedMarketplaceListing?.updatePolicy
@@ -579,7 +585,7 @@ export function createDaemonNpmPluginChangePreparer(params: Readonly<{
             return { kind: 'failed' as const, code: 'plugin_install_trust_required' };
           }
           try {
-            await assertMarketplaceListingCurrent(params.happyHomeDir, request, params.marketplaceIndexService);
+            await assertMarketplaceListingCurrent(params.happyHomeDir, request, marketplaceIndexService);
             const applySnapshot = await registryStateStore.readSnapshot();
             const existingAtApply = applySnapshot.state.plugins[staged.candidate.manifest.id];
             if (

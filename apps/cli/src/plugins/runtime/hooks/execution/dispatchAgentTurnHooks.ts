@@ -344,6 +344,7 @@ export function resolvePluginToolPromptContributionsThroughRuntimeRegistry(
 
 export async function resolvePluginPromptAssetBlocks(params: Readonly<{
   agentId: string;
+  onOptionalUnavailable?: (fact: import('@/agent/prompting/contributions/resolvePromptAssetContributionBlocks').OptionalPromptAssetUnavailable) => void;
   selectedAsset?: Readonly<{ pluginId: string; localId: string }>;
   sessionId?: string;
   machineId?: string;

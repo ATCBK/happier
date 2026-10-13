@@ -4,6 +4,7 @@ import {
   type DaemonPluginChangeOwner,
 } from '@/plugins/daemon/changeService';
 import { createDaemonNpmPluginChangePreparer } from '@/plugins/daemon/npmChangePreparer';
+import type { MarketplaceRegistrySourcesReaderV1 } from '@/plugins/store/marketplace/service';
 import { createDaemonPathPluginChangePreparer } from '@/plugins/daemon/pathChangePreparer';
 import { readServerPluginManagedResources, type PluginManagedResourcePreflightBinding } from '@/plugins/availability/serverPublisher';
 import { readCurrentDaemonPluginCatalog } from '@/plugins/daemon/currentCatalog';
@@ -27,6 +28,9 @@ import {
 } from '@/plugins/store/registry/currentState';
 import type { PluginRegistryCommitRecord } from '@/plugins/store/registry/commitRecord';
 import { logger } from '@/ui/logger';
+import { seedPluginMcpServerDefaults } from '@/mcp/runtime/seedPluginMcpServerDefaults';
+import { createCliMcpServerStore, type CliMcpServerStore } from '@/settings/mcp/mcpServerStore';
+import { readCredentials } from '@/persistence';
 import type { StablePluginConnectedAccountsOwner } from '@/plugins/runtime/invocation/services/connectedAccounts';
 import type {
   ManagedServiceSessionBaseUrlResolver,
@@ -103,6 +107,9 @@ export type DaemonPluginAvailabilityReporter = Readonly<{
 export function createDaemonPluginRuntimeOwner(params: Readonly<{
   readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
   happyHomeDir: string;
+  /** Captured daemon Account source owner, shared by staging and review revalidation. */
+  readRegistrySources?: MarketplaceRegistrySourcesReaderV1;
+  mcpServerStore?: Pick<CliMcpServerStore, 'readCatalogForOperation' | 'mutate'>;
   managedResourcePreflight?: PluginManagedResourcePreflightBinding;
   /** Daemon-owned live machine identity for host-stamped nested Action callers. */
   resolveCurrentMachineId?: () => string | null;
@@ -212,6 +219,14 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     input,
   ) => developmentRoots?.resolveDevelopmentSourceAuthority(input) ?? null;
   const runtimeLifecycle = createDaemonPluginRegistryRuntimeLifecycle({
+    beforeInstallPublish: async (registry, pluginIds) => {
+      const declarations = (registry.contributes.mcpServers ?? []).filter(entry => entry.pluginId && pluginIds.includes(entry.pluginId));
+      if (declarations.length === 0) return;
+      const credentials = params.mcpServerStore ? null : await readCredentials();
+      const store = params.mcpServerStore ?? (credentials ? createCliMcpServerStore({ credentials }) : null);
+      if (!store) throw new Error('mcp_plugin_defaults_account_unavailable');
+      await seedPluginMcpServerDefaults({ declarations, store });
+    },
     readSpawnFailureLimits: params.readSpawnFailureLimits,
     happyHomeDir: params.happyHomeDir,
     ...(params.executeClientAction ? { executeClientAction: params.executeClientAction } : {}),
@@ -322,6 +337,7 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
   });
   const prepareNpm = createDaemonNpmPluginChangePreparer({
     happyHomeDir: params.happyHomeDir,
+    readRegistrySources: params.readRegistrySources,
     runtimeLifecycle,
     onRegistryApplied,
     ...(params.generationCustodyRetirement
@@ -451,7 +467,9 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
           await createPluginRegistryStateStore({
             happyHomeDir: params.happyHomeDir,
             runtimeLifecycle,
-          }).forgetTrustWithResult(input.pluginId);
+          }).forgetTrustWithResult(input.pluginId, {
+            expectedDevelopmentRootId: input.registeredRootId,
+          });
         },
       });
     },

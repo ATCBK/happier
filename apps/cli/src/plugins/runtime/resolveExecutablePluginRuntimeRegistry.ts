@@ -385,6 +385,7 @@ import { projectPluginFailureText } from './lifecycle/utils';
 import { reconcilePluginGenerationCustodyRetirement } from '../store/registry/generationCustodyRetirement';
 import { logger } from '@/ui/logger';
 import { bindPromptAssetContributionBlocks } from '@/agent/prompting/contributions/bindPromptAssetContributionBlocks';
+import type { OptionalPromptAssetUnavailable } from '@/agent/prompting/contributions/resolvePromptAssetContributionBlocks';
 import type { PromptBlockV1 } from '@happier-dev/protocol';
 import type { RuntimeActionExecute } from '@happier-dev/protocol';
 import {
@@ -419,6 +420,10 @@ import { createVoiceCredentialResolver } from '@/daemon/voice/credentials/resolv
 import {
     createPluginMcpSessionResolver,
 } from './context/mcp';
+import { projectPluginMcpServerItems } from '@/mcp/runtime/pluginMcpServerItems';
+import { mcpPluginItemIdV1, parseMcpPluginItemIdV1, type McpPluginItemV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import type { McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import type { PluginExecutionScopeV1 } from '@happier-dev/protocol';
 import {
     createPluginHostedMcpServerHandle,
     createPluginHostedMcpServerRegistry,
@@ -883,6 +888,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
             pluginId: string;
             pluginVersion: string;
             signal?: AbortSignal;
+            permissionHandler?: Pick<import('@/agent/permissions/providerEnforced/handler').ProviderEnforcedPermissionHandler, 'handleToolCall'>;
             addDisposable?: (disposable: Readonly<{
                 dispose(): void | Promise<void>;
             }>) => unknown;
@@ -890,13 +896,21 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
                 input: McpSessionResolutionInput,
             ): Promise<Readonly<{
                 bindingId: string;
-                sessionId: string;
+                sessionId?: string;
+                executionRunId?: string;
                 directory: string;
                 servers: readonly ResolvedSessionMcpServer[];
-                currentSession: HostCurrentSessionUiServices;
+                currentSession?: HostCurrentSessionUiServices;
             }> | null>;
         }>,
     ): PluginMcpSessionResolver | null;
+    projectMcpServerItems?(catalog: McpServerCatalogV1): Promise<readonly McpPluginItemV1[]>;
+    materializePluginMcpServers?(input: Readonly<{
+        scope: PluginExecutionScopeV1; directory: string; servers: readonly ResolvedSessionMcpServer[]; signal?: AbortSignal;
+        currentSession?: HostCurrentSessionUiServices;
+        permissionHandler?: Pick<import('@/agent/permissions/providerEnforced/handler').ProviderEnforcedPermissionHandler, 'handleToolCall'>;
+        addDisposable(disposable: Readonly<{ dispose(): void | Promise<void> }>): unknown;
+    }>): Promise<readonly ResolvedSessionMcpServer[]>;
     discoverMcpServersForDetection?(params: Readonly<{
         pluginId: string;
         localId: string;
@@ -1007,6 +1021,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     ): ReturnType<StablePluginResourcesOwner['getPluginBrandAsset']>;
     resolvePromptAssetBlocks(params: Readonly<{
         agentId: string;
+        onOptionalUnavailable?: (fact: OptionalPromptAssetUnavailable) => void;
         selectedAsset?: Readonly<{ pluginId: string; localId: string }>;
         sessionId?: string;
         featureIds?: readonly string[];
@@ -4819,7 +4834,10 @@ export async function resolveExecutablePluginRuntimeRegistry(
             && effect.seed.plugin.id === effect.ref.pluginId
             && effect.seed.contribution.qualifiedId
                 === `${effect.ref.pluginId}/mcp.discoverySources/${effect.ref.localId}`;
-        const resourceSelections = hostOwnedDiscovery
+        const hostOwnedServer = effect.seed.plugin.id === effect.ref.pluginId
+            && effect.seed.contribution.qualifiedId === `${effect.ref.pluginId}/mcp.servers/${effect.ref.localId}`
+            && authoritativeContributes.mcpServers?.some(entry => entry.pluginId === effect.ref.pluginId && entry.definition.id === effect.ref.localId);
+        const resourceSelections = hostOwnedDiscovery || hostOwnedServer
             ? Object.freeze([])
             : (() => {
                 const operation = effect.operation === 'connect'
@@ -7125,6 +7143,42 @@ export async function resolveExecutablePluginRuntimeRegistry(
             );
         },
         addRuntimeDisposable: activatedRegistry.addRuntimeDisposable,
+        projectMcpServerItems(catalog) {
+            return projectPluginMcpServerItems({ catalog, activePlugins: authoritativeContributes.mcpServers ?? [],
+                resolveExecutable: async (ref, pluginId) => {
+                    const executable = await executableResolver(ref, pluginId);
+                    if (executable.release) activatedRegistry.addRuntimeDisposable(pluginId, { dispose: executable.release });
+                    return executable;
+                },
+            });
+        },
+        async materializePluginMcpServers(input) {
+            let servers = input.servers;
+            const pluginIds = [...new Set(servers.flatMap(server => {
+                const ref = parseMcpPluginItemIdV1(server.id);
+                const declaration = ref && authoritativeContributes.mcpServers?.find(entry => entry.pluginId === ref.pluginId && entry.definition.id === ref.localId);
+                return ref && declaration?.definition.kind === 'dynamic' ? [ref.pluginId] : [];
+            }))];
+            for (const pluginId of pluginIds) {
+                input.signal?.throwIfAborted();
+                const declarations = authoritativeContributes.mcpServers?.filter(entry => entry.pluginId === pluginId && entry.definition.kind === 'dynamic'
+                    && servers.some(server => server.id === mcpPluginItemIdV1({ pluginId, localId: entry.definition.id }))) ?? [];
+                await activateContributionsOnDemand(declarations.map(entry => ({ pluginId, family: 'mcp.servers', localId: entry.definition.id })));
+                const target = resolveExactActivationTarget(pluginId);
+                const resolutionInput: McpSessionResolutionInput = input.scope.kind === 'session' ? { sessionId: input.scope.sessionId }
+                    : { executionRunId: input.scope.executionRunId };
+                const resolver = target && resolvedRuntimeRegistryOwner?.createPluginMcpSessionResolver?.({ pluginId,
+                    pluginVersion: target.manifest.version, signal: input.signal, addDisposable: input.addDisposable, permissionHandler: input.permissionHandler,
+                    resolveHostSession: async () => ({ bindingId: input.scope.kind === 'session' ? input.scope.sessionId : input.scope.executionRunId,
+                        ...resolutionInput, directory: input.directory,
+                        servers, ...(input.currentSession ? { currentSession: input.currentSession } : {}) }),
+                });
+                if (!resolver) throw new PluginError({ code: 'plugin_mcp_transport_unavailable', message: 'Plugin MCP attachment is unavailable' });
+                servers = await resolver.resolveForSession({ ...resolutionInput, directory: input.directory });
+            }
+            input.signal?.throwIfAborted();
+            return servers;
+        },
         createPluginMcpSessionResolver(mcpParams) {
             const target = resolveExactActivationTarget(mcpParams.pluginId);
             if (!target || target.manifest.version !== mcpParams.pluginVersion) return null;
@@ -7169,7 +7223,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
             return createPluginMcpSessionResolver({
                 resolveForSession: async (input) => {
                     const hostSession = await mcpParams.resolveHostSession(input);
-                    if (!hostSession || !isOccurrenceCurrent() || mcpParams.signal?.aborted) {
+                    mcpParams.signal?.throwIfAborted();
+                    if (!hostSession) {
                         return Object.freeze([]);
                     }
                     const seed: PluginInvocationServicesSeed = Object.freeze({
@@ -7185,18 +7240,27 @@ export async function resolveExecutablePluginRuntimeRegistry(
                         sourceCustody,
                         correlationId: randomUUID(),
                         surface: 'agent',
-                        session: Object.freeze({ id: hostSession.sessionId }),
+                        ...(hostSession.sessionId ? { session: Object.freeze({ id: hostSession.sessionId }) } : {}),
                         currentSession: hostSession.currentSession,
                         signal: mcpParams.signal ?? new AbortController().signal,
                         isOccurrenceCurrent,
                     });
-                    const stableService = mcpHost.bind(seed);
-                    const available = await stableService.list({
-                        sessionId: hostSession.sessionId,
-                    });
                     const projected: ResolvedSessionMcpServer[] = [...hostSession.servers];
-                    for (const item of available.items) {
-                        if (item.state !== 'available') continue;
+                    for (const [index, selected] of hostSession.servers.entries()) {
+                        const ref = parseMcpPluginItemIdV1(selected.id);
+                        const declaration = ref && authoritativeContributes.mcpServers?.find(entry => entry.pluginId === mcpParams.pluginId
+                            && entry.pluginId === ref.pluginId && entry.definition.id === ref.localId);
+                        if (!ref || declaration?.definition.kind !== 'dynamic') continue;
+                        const item = { ref };
+                        const currentSession = hostSession.sessionId && mcpParams.permissionHandler
+                            ? (await import('@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions')).createNativeAgentCurrentSessionUiServices({
+                                permissionHandler: mcpParams.permissionHandler, pluginId: ref.pluginId, contributionId: ref.localId,
+                                runtimeId: `${ref.pluginId}/mcp.servers/${ref.localId}`, sessionId: hostSession.sessionId,
+                                occurrenceId, sourceCustody, signal: mcpParams.signal, isCurrent: isOccurrenceCurrent,
+                            }) : hostSession.currentSession;
+                        const stableService = mcpHost.bind({ ...seed, contribution: { id: ref.localId,
+                            qualifiedId: `${ref.pluginId}/mcp.servers/${ref.localId}` }, ...(currentSession ? { currentSession } : {}) }, [{ serverRefs: [ref],
+                            discoverySourceRefs: [], operations: ['listTools', 'callTools'] }]);
                         const attachmentKey = [
                             mcpParams.pluginId,
                             occurrenceId,
@@ -7208,18 +7272,14 @@ export async function resolveExecutablePluginRuntimeRegistry(
                         let attachment = sessionAttachments.get(attachmentKey);
                         if (!attachment) {
                             attachment = (async () => {
-                                const client = await stableService.connect(item.ref, {
-                                    sessionId: hostSession.sessionId,
-                                    elicitation: {
-                                        mode: 'hostMediated',
-                                        sessionId: hostSession.sessionId,
-                                    },
-                                });
+                                const client = await stableService.connect(item.ref, hostSession.sessionId
+                                    ? { sessionId: hostSession.sessionId, elicitation: { mode: 'hostMediated', sessionId: hostSession.sessionId } }
+                                    : { elicitation: { mode: 'reject' } });
                                 try {
                                     const tools = await client.listTools();
                                     const spec: PluginHostedMcpServerSpec = Object.freeze({
                                         id: `stable-${randomUUID()}`,
-                                        name: item.title,
+                                        name: selected.name,
                                         transport: Object.freeze({
                                             kind: 'hosted',
                                             exposure: Object.freeze({
@@ -7229,10 +7289,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                                         }),
                                         hosted: Object.freeze({
                                             tools: Object.freeze(tools.items.map((tool) => Object.freeze({
-                                                name: `happier.proxy_${createHash('sha256')
-                                                    .update(`${item.ref.pluginId}\0${item.ref.localId}\0${tool.name}`)
-                                                    .digest('hex')
-                                                    .slice(0, 24)}`,
+                                                name: tool.name,
                                                 ...(tool.description === undefined ? {} : { description: tool.description }),
                                                 inputSchema: tool.inputSchema,
                                                 ...(tool.outputSchema === undefined ? {} : { outputSchema: tool.outputSchema }),
@@ -7257,6 +7314,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                                         spec,
                                         registry: hostedRegistry,
                                         startRuntimeEndpoint: startPluginHostedMcpLoopbackServer,
+                                        toolNameSource: 'mcpServer',
                                     });
                                     if (!handle.endpoint || handle.endpoint.kind !== 'loopbackHttp') {
                                         await handle.dispose();
@@ -7282,14 +7340,15 @@ export async function resolveExecutablePluginRuntimeRegistry(
                                         }
                                     };
                                     const resolved: ResolvedSessionMcpServer = Object.freeze({
-                                        id: `${item.ref.pluginId}/${item.ref.localId}`,
-                                        name: item.title,
+                                        id: selected.id,
+                                        name: selected.name,
+                                        ...(selected.title ? { title: selected.title } : {}),
                                         transport: Object.freeze({
                                             kind: 'http',
                                             url: handle.endpoint.url,
                                         }),
                                         scope: Object.freeze({
-                                            sessionId: hostSession.sessionId,
+                                            ...(hostSession.sessionId ? { sessionId: hostSession.sessionId } : { executionRunId: hostSession.executionRunId }),
                                             directory: hostSession.directory,
                                         }),
                                     });
@@ -7306,7 +7365,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                             });
                             sessionAttachments.set(attachmentKey, attachment);
                         }
-                        projected.push((await attachment).resolved);
+                        projected[index] = (await attachment).resolved;
                     }
                     return Object.freeze(projected.sort((left, right) => (
                         left.id.localeCompare(right.id) || left.name.localeCompare(right.name)
@@ -8175,6 +8234,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 promptParams.excludePluginIds ?? [],
             );
             return await bindPromptAssetContributionBlocks({
+                onOptionalUnavailable: promptParams.onOptionalUnavailable,
                 promptAssets: (authoritativeContributes.promptAssets ?? [])
                     .filter((asset) => !excludedPluginIds.has(asset.pluginId)),
                 resolveContributionOccurrence: (pluginId) => (
