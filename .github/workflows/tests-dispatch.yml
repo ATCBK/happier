@@ -184,7 +184,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: read
     uses: ./.github/workflows/tests.yml
     secrets: inherit
     with:
@@ -291,7 +290,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: read
     uses: ./.github/workflows/extended-db-tests.yml
     with:
       select_jobs_explicitly: true

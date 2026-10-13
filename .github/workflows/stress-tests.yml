@@ -30,7 +30,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: read
     uses: ./.github/workflows/tests.yml
     with:
       select_jobs_explicitly: true
@@ -57,7 +56,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: read
     uses: ./.github/workflows/tests.yml
     with:
       select_jobs_explicitly: true
