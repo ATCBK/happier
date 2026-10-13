@@ -9,7 +9,7 @@ import {
   type McpServerCatalogEntryV1,
   type McpServersSettingsV1,
 } from '../mcp/servers/settingsV1.js';
-import type { ValueRefV1 } from '../valueRefs/valueRefV1.js';
+import { listValueRefSecretIdsV1, resolveValueRefPlaintextV1, type ValueRefV1 } from '../valueRefs/valueRefV1.js';
 
 const RunnerReviewedMcpServerV1Schema = z.object({
   serverId: z.string().min(1),
@@ -26,7 +26,7 @@ const RunnerReviewedMcpServerV1Schema = z.object({
     ...Object.values(value.config.env),
     ...Object.values(value.config.remote?.headers ?? {}),
   ];
-  if (refs.some((ref) => ref.t === 'savedSecret')) {
+  if (refs.some((ref) => listValueRefSecretIdsV1(ref).length > 0)) {
     context.addIssue({ code: 'custom', path: ['config'], message: 'Reviewed MCP material must resolve Saved Secret values before handoff' });
   }
 });
@@ -75,7 +75,7 @@ function resolvePortableValueRef(input: Readonly<{
   path: string;
   ref: ValueRefV1;
   resolveSavedSecret: (secretId: string) => Readonly<{ value: string; revision: number }> | null;
-}>): { ok: true; value: ValueRefV1; savedSecretRevision: Readonly<{ secretId: string; revision: number }> | null } | RunnerMcpMaterializationFailureV1 {
+}>): { ok: true; value: ValueRefV1; savedSecretRevisions: readonly Readonly<{ secretId: string; revision: number }>[] } | RunnerMcpMaterializationFailureV1 {
   if (input.ref.t === 'savedSecret') {
     const resolved = input.resolveSavedSecret(input.ref.secretId);
     return resolved === null
@@ -83,20 +83,38 @@ function resolvePortableValueRef(input: Readonly<{
       : {
           ok: true,
           value: { t: 'literal', v: resolved.value },
-          savedSecretRevision: { secretId: input.ref.secretId, revision: resolved.revision },
+          savedSecretRevisions: [{ secretId: input.ref.secretId, revision: resolved.revision }],
         };
   }
   // Portable preparation has no Session identity to assert. Retain the
   // symbolic reference for the ordinary runtime materializer to resolve/omit.
   if (input.ref.t === 'sessionAttested') {
-    return { ok: true, value: input.ref, savedSecretRevision: null };
+    return { ok: true, value: input.ref, savedSecretRevisions: [] };
+  }
+  if (input.ref.t === 'template') {
+    // Unobserved Machine variables stay unavailable; the shared renderer decides
+    // whether the template actually needs them.
+    const vars = Object.fromEntries(Object.entries(input.ref.vars)
+      .filter(([, value]) => value.t !== 'literal' || !value.v.includes('${')));
+    const revisions = new Map<string, number>();
+    let secretUnavailable = false;
+    const value = resolveValueRefPlaintextV1({ ...input.ref, vars }, secretId => {
+      const resolved = input.resolveSavedSecret(secretId);
+      if (!resolved) { secretUnavailable = true; return null; }
+      revisions.set(secretId, resolved.revision);
+      return resolved.value;
+    });
+    return value === null ? { ok: false, reason: secretUnavailable ? 'saved_secret_unavailable' : 'endpoint_environment',
+      serverId: input.serverId, valuePath: input.path } : { ok: true, value: { t: 'literal', v: value },
+      savedSecretRevisions: [...revisions].map(([secretId, revision]) => ({ secretId, revision })),
+    };
   }
   // Environment expansion is Machine-owned in the ordinary runtime. A creator
   // cannot truthfully freeze an endpoint value it has never observed.
   if (input.ref.v.includes('${')) {
     return { ok: false, reason: 'endpoint_environment', serverId: input.serverId, valuePath: input.path };
   }
-  return { ok: true, value: input.ref, savedSecretRevision: null };
+  return { ok: true, value: input.ref, savedSecretRevisions: [] };
 }
 
 function materializeConfig(input: Readonly<{
@@ -110,7 +128,7 @@ function materializeConfig(input: Readonly<{
     const resolved = resolvePortableValueRef({ serverId: input.serverId, path: `env:${key}`, ref, resolveSavedSecret: input.resolveSavedSecret });
     if (!resolved.ok) return resolved;
     env[key] = resolved.value;
-    if (resolved.savedSecretRevision) savedSecretRevisions.set(resolved.savedSecretRevision.secretId, resolved.savedSecretRevision.revision);
+    for (const reference of resolved.savedSecretRevisions) savedSecretRevisions.set(reference.secretId, reference.revision);
   }
   if (input.config.transport === 'stdio') return {
     ok: true,
@@ -122,7 +140,7 @@ function materializeConfig(input: Readonly<{
     const resolved = resolvePortableValueRef({ serverId: input.serverId, path: `header:${key}`, ref, resolveSavedSecret: input.resolveSavedSecret });
     if (!resolved.ok) return resolved;
     headers[key] = resolved.value;
-    if (resolved.savedSecretRevision) savedSecretRevisions.set(resolved.savedSecretRevision.secretId, resolved.savedSecretRevision.revision);
+    for (const reference of resolved.savedSecretRevisions) savedSecretRevisions.set(reference.secretId, reference.revision);
   }
   return {
     ok: true,
