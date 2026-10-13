@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
 import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
 
 installTokenStorageWebPlatformMocks();
 
@@ -18,12 +19,15 @@ vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
     ),
 }));
 
+// Keep the real runtime graph loaded; its cold imports are collection work, not request work.
+await import('./SessionAttentionReminderRuntime');
+
 function snapshotResponse(params: Readonly<{ version: number; sessionId: string; remindAt: number }>): Response {
-    return new Response(JSON.stringify({
+    return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
         snapshot: {
             schemaVersion: 1,
             version: params.version,
-            pins: [{ sessionId: params.sessionId, sortKey: 'pin-a', pinnedAt: 10 }],
+            pins: [{ sessionId: params.sessionId, sortKey: 'pin-a', pinnedAt: 10, listPinned: true, railPinned: false }],
             folders: [],
             folderAssignments: [],
             tags: [],
@@ -32,7 +36,7 @@ function snapshotResponse(params: Readonly<{ version: number; sessionId: string;
             labels: [],
             attentionStandings: [{ sessionId: params.sessionId, standing: true, remindAt: params.remindAt, updatedAt: 1 }],
         },
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
 }
 
 function accountToken(sub: string): string {
@@ -57,7 +61,6 @@ describe('refreshSessionAttentionReminderInventory Account currentness', () => {
         restoreLocalStorage = installLocalStorageMock().restore;
         restoreWebLocks = installWebLockManagerMock().restore;
         network.pending.length = 0;
-        vi.resetModules();
     });
 
     afterEach(() => {
