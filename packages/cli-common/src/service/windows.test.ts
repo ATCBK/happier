@@ -5,12 +5,46 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildListWindowsScheduledTaskFolderPowerShellCommand,
   buildRemoveWindowsScheduledTaskIfPresentPowerShellCommand,
   buildReadWindowsScheduledTaskStatusPowerShellCommand,
   buildStopWindowsScheduledTaskIfRunningPowerShellCommand,
+  parseWindowsScheduledTaskFolderPowerShellJson,
   parseWindowsScheduledTaskStatusPowerShellJson,
   renderWindowsScheduledTaskWrapperPs1,
 } from './windows';
+
+describe('Windows scheduled task folder listing PowerShell helper', () => {
+  it('lists only the requested task folder instead of enumerating every scheduled task', () => {
+    const command = buildListWindowsScheduledTaskFolderPowerShellCommand({ taskFolder: '\\Happier\\' });
+
+    expect(command).toContain('Schedule.Service');
+    expect(command).toContain('.GetFolder("\\Happier")');
+    expect(command).toContain('ConvertTo-Json');
+    expect(command).not.toContain('schtasks');
+  });
+
+  it('parses task paths from invariant JSON and rejects anything else', () => {
+    expect(parseWindowsScheduledTaskFolderPowerShellJson('["\\\\Happier\\\\happier-daemon.default"]'))
+      .toEqual(['\\Happier\\happier-daemon.default']);
+    expect(parseWindowsScheduledTaskFolderPowerShellJson('[]')).toEqual([]);
+    // The COM producer emits explicit [] for an empty inventory; blank output proves nothing.
+    expect(parseWindowsScheduledTaskFolderPowerShellJson('')).toBeNull();
+    expect(parseWindowsScheduledTaskFolderPowerShellJson(' \r\n')).toBeNull();
+    expect(parseWindowsScheduledTaskFolderPowerShellJson('ERROR: The system cannot find the file specified.')).toBeNull();
+    expect(parseWindowsScheduledTaskFolderPowerShellJson('[1]')).toBeNull();
+  });
+
+  it.runIf(process.platform === 'win32')('reports a missing task folder as empty without parsing localized errors', () => {
+    const result = spawnSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+      buildListWindowsScheduledTaskFolderPowerShellCommand({ taskFolder: `\\HappierMissingFolderTest${process.pid}\\` }),
+    ], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+
+    expect(result.status).toBe(0);
+    expect(parseWindowsScheduledTaskFolderPowerShellJson(result.stdout)).toEqual([]);
+  });
+});
 
 // Windows PowerShell 5.1 appends redirected streams as UTF-16LE; PowerShell 7 writes UTF-8.
 function readPowerShellLog(path: string): string {
