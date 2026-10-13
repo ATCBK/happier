@@ -80,7 +80,7 @@ export function useMcpServerTools(serverId: string | null, catalogRevision: numb
         if (!serverId || !scope || !ready) return;
         let cancelled = false;
         void (async () => {
-            const result = await execute('mcp.servers.tools.list', { serverId }).catch((error: unknown) => ({
+            const result = await readTools(readKey, scope, serverId).catch((error: unknown) => ({
                 ok: false as const, errorCode: error instanceof Error ? error.message : 'mcp_tools_list_failed', error: '' }));
             if (cancelled || !binding?.isCurrent()) return;
             const parsed = result?.ok ? MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.list'].safeParse(result.result) : null;
@@ -91,7 +91,8 @@ export function useMcpServerTools(serverId: string | null, catalogRevision: numb
                     errorCode: !result.ok ? result.errorCode ?? 'mcp_tools_list_failed' : parsed ? 'mcp_tools_list_invalid' : 'mcp_tools_list_failed' });
         })();
         return () => { cancelled = true; };
-    }, [catalogRevision, execute, installedKey, nonce, ready, scope, serverId]);
+        // The read key tracks authority and facts; the mounted mutation callback is not a read invalidation.
+    }, [readKey, ready, scope, serverId]);
 
     const current = state.key === key ? state : { key, status: 'loading' as const, list: null };
     const listRef = React.useRef(current.list);
