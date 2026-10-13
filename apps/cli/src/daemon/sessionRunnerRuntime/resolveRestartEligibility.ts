@@ -1,4 +1,5 @@
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
+import { isSessionRunnerWindowsHostedLaunchV1, readSessionRunnerDaemonLaunchRefusalV1 } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
 
 import type { TrackedSession } from '@/daemon/types';
 
@@ -50,14 +51,15 @@ export function shouldRefreshSessionRunnerResumeIdentity(
 function isWindowsHostedRunner(tracked: TrackedSession): boolean {
   const launchMode = tracked.spawnOptions?.windowsRemoteSessionLaunchMode
     ?? tracked.spawnOptions?.windowsRemoteSessionConsole;
-  return launchMode === 'windows_terminal' || launchMode === 'console' || launchMode === 'visible';
+  return isSessionRunnerWindowsHostedLaunchV1(launchMode);
 }
 
 export function resolveSessionRunnerRestartEligibility(
   tracked: TrackedSession | null | undefined,
 ): SessionRunnerRestartEligibility {
   if (!tracked) return { eligible: false, disabledReason: 'no_tracked_process' };
-  if (tracked.startedBy !== 'daemon') return { eligible: false, disabledReason: 'not_daemon_started' };
+  const daemonLaunchRefusal = readSessionRunnerDaemonLaunchRefusalV1(tracked.startedBy);
+  if (daemonLaunchRefusal) return { eligible: false, disabledReason: daemonLaunchRefusal };
   if (readSessionRunnerStartingModeFromProcessCommand(tracked.processCommand) !== 'remote') {
     return { eligible: false, disabledReason: 'not_remote_started' };
   }

@@ -26,6 +26,17 @@ function trackedRunner(overrides: Partial<TrackedSession> = {}): TrackedSession 
 }
 
 describe('resolveSessionRunnerRestartEligibility', () => {
+  it.each(['windows_terminal', 'console'] as const)('retains resume refusal precedence for a %s hosted runner', windowsRemoteSessionLaunchMode => {
+    const spawnOptions = { directory: '/workspace', windowsRemoteSessionLaunchMode };
+    expect(resolveSessionRunnerRestartEligibility(trackedRunner({ spawnOptions, vendorResumeId: undefined })))
+      .toEqual({ eligible: false, disabledReason: 'missing_resume_identity' });
+    expect(resolveSessionRunnerRestartEligibility(trackedRunner({ spawnOptions })))
+      .toEqual({ eligible: false, disabledReason: 'windows_hosted_runner' });
+  });
+  it('refuses non-daemon launches before evaluating resume or process witnesses', () => {
+    expect(resolveSessionRunnerRestartEligibility(trackedRunner({ startedBy: 'terminal' })))
+      .toEqual({ eligible: false, disabledReason: 'not_daemon_started' });
+  });
   it('accepts the Agent resume id byte-exact and rejects whitespace-only identity', () => {
     const exactResume = '  provider\nses/AB+cd==  ';
     const eligible = { eligible: true, disabledReason: null };
