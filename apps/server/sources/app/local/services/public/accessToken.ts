@@ -22,20 +22,6 @@ export function readLocalServicePublicTokenCookie(headers: Record<string, unknow
     return null;
 }
 
-export function scopedLocalServicePublicTokenCookie(input: Readonly<{
-    path: string;
-    rawToken: string;
-    secure: boolean;
-}>): string {
-    return [
-        `${LOCAL_SERVICE_PUBLIC_TOKEN_COOKIE_NAME}=${encodeURIComponent(input.rawToken)}`,
-        `Path=${input.path}`,
-        "HttpOnly",
-        "SameSite=Lax",
-        input.secure ? "Secure" : null,
-    ].filter((part): part is string => Boolean(part)).join("; ");
-}
-
 export function localServicePublicTokenCookiePath(exposureId: string): string {
     return `/v1/local-services/public/${encodeURIComponent(exposureId)}`;
 }
