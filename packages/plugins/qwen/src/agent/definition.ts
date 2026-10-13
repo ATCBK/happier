@@ -3,6 +3,7 @@ const QWEN_AGENT_ID = 'qwen';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: QWEN_AGENT_ID,
+  acpRegistryIds: ['qwen-code'] as const,
   core: {
     id: QWEN_AGENT_ID,
     cliSubcommand: 'qwen',

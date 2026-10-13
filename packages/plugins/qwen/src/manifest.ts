@@ -57,6 +57,7 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
         },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         // Resume-only: supported Qwen ACP releases answer `session/list`, so
@@ -74,7 +75,8 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
           },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: { user: [['.qwen', 'skills'], ['.agents', 'skills']], project: [['.qwen', 'skills'], ['.agents', 'skills']] } },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],

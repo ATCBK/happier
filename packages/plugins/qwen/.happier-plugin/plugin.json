@@ -22,6 +22,33 @@
               "resume"
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".qwen",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".qwen",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "surfaces": [
             "externalSessions"
           ],
@@ -30,6 +57,9 @@
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "qwen-code"
+          ],
           "vendorResume": {
             "support": "supported"
           }
@@ -169,6 +199,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],
