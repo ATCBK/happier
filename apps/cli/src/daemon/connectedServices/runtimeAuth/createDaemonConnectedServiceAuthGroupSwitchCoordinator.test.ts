@@ -191,7 +191,6 @@ describe('createDaemonConnectedServiceAuthGroupSwitchCoordinator', () => {
       activeProfileId: 'backup',
       expectedGeneration: 1,
       overrideRuntimeCooldown: true,
-      switchReason: 'usage_limit',
     });
     expect(restartSession).toHaveBeenCalledWith({
       serviceId: 'openai-codex',

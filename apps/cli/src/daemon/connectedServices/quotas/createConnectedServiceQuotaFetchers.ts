@@ -21,10 +21,7 @@ export function createConnectedServiceAccountFetchers(
   env: NodeJS.ProcessEnv,
   descriptors: ReadonlyArray<ConnectedServiceQuotaFetcherDescriptor> = getConnectedServiceQuotaFetcherDescriptors(),
 ): Readonly<{ quotaFetchers: ConnectedServiceQuotaFetcher[]; subscriptionFetchers: ConnectedServiceSubscriptionFetcher[] }> {
-  const staleAfterMs = parsePositiveIntEnv(env.HAPPIER_CONNECTED_SERVICES_QUOTAS_STALE_AFTER_MS, 30 * 60_000, {
-    min: 5_000,
-    max: 24 * 60 * 60_000,
-  });
+  const staleAfterMs = readConnectedServiceQuotaStaleAfterMs(env);
 
   const quotaFetchers: ConnectedServiceQuotaFetcher[] = [];
   const subscriptionFetchers: ConnectedServiceSubscriptionFetcher[] = [];
@@ -36,4 +33,11 @@ export function createConnectedServiceAccountFetchers(
     if (subscription) subscriptionFetchers.push(subscription);
   }
   return { quotaFetchers, subscriptionFetchers };
+}
+
+export function readConnectedServiceQuotaStaleAfterMs(env: NodeJS.ProcessEnv): number {
+  return parsePositiveIntEnv(env.HAPPIER_CONNECTED_SERVICES_QUOTAS_STALE_AFTER_MS, 30 * 60_000, {
+    min: 5_000,
+    max: 24 * 60 * 60_000,
+  });
 }
