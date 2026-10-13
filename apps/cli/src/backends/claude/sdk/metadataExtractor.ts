@@ -43,6 +43,7 @@ export async function extractSDKMetadata(options?: Readonly<{ claudeCodeIncludeI
             prompt: 'hello',
             options: {
                 maxTurns: 1,
+                extraArgs: ['--no-session-persistence'],
                 env,
                 executable: runtimeExecutable,
                 pathToClaudeCodeExecutable: claudePath,

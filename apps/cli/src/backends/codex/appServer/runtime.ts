@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { canPublishSessionResumeIdentity } from '@/session/metadata/sessionIdentityPublication';
 import { join } from 'node:path';
 import type { PermissionResult } from '@/agent/permissions/permissionResult';
 
@@ -2143,7 +2144,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
         return null;
     };
 
-    const publishThreadId = (): void => {
+    const publishThreadId = (isExistingResume = false): void => {
+        if (!canPublishSessionResumeIdentity({
+            isExistingResume,
+            hasResumeEvidence: nativeReadyThreadId !== null && nativeReadyThreadId === threadId,
+        })) return;
         void publishCodexSessionIdMetadata({
             session: params.session,
             getCodexThreadId: () => threadId,
@@ -2179,7 +2184,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         const nextThreadId = trimSessionId(requestedThreadId);
         if (!nextThreadId) return;
         threadId = nextThreadId;
-        publishThreadId();
+        publishThreadId(true);
     };
 
     const publishSessionControls = async (
@@ -3898,7 +3903,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
         if (!threadId && activityThreadId) {
             threadId = activityThreadId;
-            publishThreadId();
         }
 
         if (hasProviderTurnAlreadyTerminated(activityParams, startedTurnId)) {
@@ -3910,6 +3914,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
 
         nativeReadyThreadId = activeThreadId;
+        publishThreadId();
 
         pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
         activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
