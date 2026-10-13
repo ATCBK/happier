@@ -4443,6 +4443,75 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     }
   });
 
+  it('records a turn end before throttle recovery cleanup settles', async () => {
+    const sessionRegistryModule = await import('./sessionRegistry');
+    const { withJsonOwnerFileLock } = await import('@/utils/fs/jsonOwnerFileLock');
+    const markerSpy = vi.spyOn(sessionRegistryModule, 'updateSessionMarkerActiveTurn').mockResolvedValue(true);
+    const throttleStorePath = '/tmp/happy-home/servers/active/connected-services/temporary-throttle-recovery.json';
+    let releaseStoreLock: (() => void) | null = null;
+    let storeLock: Promise<void> | null = null;
+    try {
+      await runStaleRunnerOnUpdateScenario(async ({ run, waitUntil }) => {
+        await waitUntil(() => harness.getTurnLifecycleHandler() !== null && harness.getSessionRunnerStatusHandler() !== null);
+        const turnLifecycleHandler = harness.getTurnLifecycleHandler()!;
+        const statusHandler = harness.getSessionRunnerStatusHandler()!;
+        await turnLifecycleHandler({ sessionId: 'sess-current-on-update', event: 'prompt_or_steer', turnId: 'turn-1' });
+
+        // An armed capacity recovery makes a completed turn clear it from the durable store.
+        await mkdir(dirname(throttleStorePath), { recursive: true });
+        await writeFile(throttleStorePath, JSON.stringify({
+          v: 1,
+          intentsBySessionId: {
+            'sess-current-on-update': {
+              v: 1, status: 'waiting', issueFingerprint: 'temporary-throttle:test', armedAtMs: 0,
+              nextRetryAtMs: Date.now() + 3_600_000, retryAfterMs: null, resetAtMs: null,
+              attemptCount: 0, capacityFailureCount: 1, maxAttempts: 0, lastError: null, continuation: null,
+            },
+          },
+        }));
+        // Hold the store's real file lock so that cleanup stays pending.
+        let storeLockHeld = false;
+        storeLock = withJsonOwnerFileLock({
+          lockPath: `${throttleStorePath}.lock`,
+          timeoutMs: 10_000,
+          staleAfterMs: 30_000,
+          errorCode: 'test_lock_timeout',
+        }, async () => {
+          storeLockHeld = true;
+          await new Promise<void>((resolve) => { releaseStoreLock = resolve; });
+        });
+        await waitUntil(() => storeLockHeld);
+
+        const lifecycle = turnLifecycleHandler({
+          sessionId: 'sess-current-on-update',
+          event: 'assistant_message_end',
+          terminalStatus: 'completed',
+          turnId: 'turn-1',
+        });
+        let disabledReason: unknown = 'turn_in_progress';
+        for (let attempt = 0; attempt < 100 && disabledReason === 'turn_in_progress'; attempt += 1) {
+          disabledReason = (await statusHandler({ sessionId: 'sess-current-on-update' })).plannedRestart.disabledReason;
+          if (disabledReason === 'turn_in_progress') await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(disabledReason).not.toBe('turn_in_progress');
+
+        releaseStoreLock!();
+        await storeLock;
+        await lifecycle;
+        harness.requestShutdown('happier-cli');
+        await run;
+      }, {
+        // Keep the startup pass from signalling so the scenario isolates turn-lifecycle ordering.
+        isPidSafe: async () => false,
+      });
+    } finally {
+      (releaseStoreLock as (() => void) | null)?.();
+      await storeLock;
+      await rm(throttleStorePath, { force: true });
+      markerSpy.mockRestore();
+    }
+  });
+
   it('ignores live connected-service restart intents during startup without signalling the runner', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {

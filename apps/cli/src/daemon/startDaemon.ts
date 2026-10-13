@@ -7187,7 +7187,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       handleConnectedServiceTurnLifecycle: async (input) => {
         const lifecycleObservedAtMs = Date.now();
         // A starting turn must be visible to restart gates before the awaited marker write; turn
-        // ends keep their order so deferred switches run only after the marker is settled.
+        // ends are recorded once the marker is settled, before any slower recovery cleanup, so a
+        // pending or failed cleanup cannot leave the session looking busy.
         const isTurnStart = input.event === 'prompt_or_steer' || input.event === 'task_started';
         if (isTurnStart) {
           connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
@@ -7201,14 +7202,14 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           event: input.event,
           ...(input.turnId ? { turnId: input.turnId } : {}),
         });
-        if (trackedTurnResult.status === 'recorded') {
-          await temporaryThrottleRecoveryScheduler.recordTurnLifecycle({ ...input, observedAtMs: lifecycleObservedAtMs });
-        }
         if (!isTurnStart) {
           connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
             sessionId: input.sessionId,
             event: input.event,
           });
+        }
+        if (trackedTurnResult.status === 'recorded') {
+          await temporaryThrottleRecoveryScheduler.recordTurnLifecycle({ ...input, observedAtMs: lifecycleObservedAtMs });
         }
         // REV-1: failTurn emits `assistant_message_end` too — a FAILED turn (the
         // usage-limit interruption itself) is not provider-activity proof and must
