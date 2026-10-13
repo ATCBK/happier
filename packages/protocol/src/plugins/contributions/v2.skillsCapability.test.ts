@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PluginAgentContributionV2Schema } from './v2.js';
+import { PluginAgentContributionV2Schema, PluginAgentAcpSkillsSessionDeliveryV2Schema } from './v2.js';
 
 const skills = { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported' };
 const delivery = { kind: 'env_path_list', envKey: 'AGENT_SKILLS', separator: ',', value: 'skills_root' };
@@ -45,6 +45,14 @@ describe('Agent skills declarations', () => {
         directory: 'fixture', fileName: 'mcp.json', serversKey: 'mcpServers',
       },
     })).success).toBe(true);
+  });
+  it('keeps the native skills subdirectory inside its portable Agent directory', () => {
+    for (const subdirectory of ['skills', 'agent-skills']) {
+      expect(PluginAgentAcpSkillsSessionDeliveryV2Schema.safeParse({ kind: 'native_config_skills_dir', subdirectory }).success).toBe(true);
+    }
+    for (const subdirectory of ['..', '../skills', '..\\skills', '/skills', 'C:\\skills', 'nested/skills', 'NUL']) {
+      expect(PluginAgentAcpSkillsSessionDeliveryV2Schema.safeParse({ kind: 'native_config_skills_dir', subdirectory }).success).toBe(false);
+    }
   });
   it('rejects unknown executable declaration keys at every skills boundary', () => {
     expect(PluginAgentContributionV2Schema.safeParse(agent({ ...skills, unexpected: true })).success).toBe(false);

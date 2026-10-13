@@ -169,7 +169,7 @@ describe('plugin contribution catalog', () => {
 
   it('accounts for every schema family with executable semantic metadata', () => {
     expect(PLUGIN_CORE_CONTRIBUTION_FAMILIES_V2.map((entry) => entry.family)).toEqual([
-      'agents', 'providers', 'machineProvisioners', 'actions', 'commands', 'tools', 'resources', 'inputTypes', 'atmospherePictures', 'dragSources', 'dropTargets', 'transcriptActivities', 'sessionInfoSections',
+      'agents', 'providers', 'machineProvisioners', 'actions', 'commands', 'tools', 'resources', 'inputTypes', 'atmospherePictures', 'registrySources', 'dragSources', 'dropTargets', 'transcriptActivities', 'sessionInfoSections',
       'sessionHeaderActions', 'browserTargets', 'browserActions', 'settings', 'events',
       'executionRunProfiles', 'roles', 'workflows', 'notifications', 'notificationChannels', 'scmHostingProviders',
       'scmBackends', 'connectedAccountDescriptors', 'managedDependencies', 'systemTools',
@@ -222,6 +222,7 @@ describe('plugin contribution catalog', () => {
       'machineProvisioners',
       'inputTypes',
       'atmospherePictures',
+      'registrySources',
       'dragSources',
       'dropTargets',
       'pluginUi',

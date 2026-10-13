@@ -32,6 +32,12 @@ const agent = {
 } as const;
 
 describe('Agent catalog declarations', () => {
+  it('admits ACP registry identity declarations independently of other catalog facts', () => {
+    const contribution = { ...agent, catalog: { acpRegistryIds: ['claude-acp', 'alternate-agent'] } };
+    expect(PluginAgentContributionV2Schema.parse(contribution).catalog).toEqual(contribution.catalog);
+    expect(PluginAgentContributionV2Schema.safeParse({ ...agent, catalog: { acpRegistryIds: [''] } }).success).toBe(false);
+    expect(PluginAgentContributionV2Schema.safeParse({ ...agent, catalog: { acpRegistryIds: ['Claude ACP'] } }).success).toBe(false);
+  });
   it('admits declared JSON output independently of continuation and rejects unknown formats or capability fields', () => {
     const contribution = { ...agent, capabilities: {
       ...agent.capabilities, structuredOutput: { formats: ['json'] },

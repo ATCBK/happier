@@ -6,13 +6,19 @@ import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { SERVER_IDENTITY_ID_PATTERN } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 import { PluginCollectionContractRefV1Schema } from '../data/collectionContractRefV1.js';
-import { PluginManifestV2Schema } from '../manifest/v2.js';
+import { PluginPortableReleaseManifestV1Schema } from './compatibilityProjectionV1.js';
+export {
+  PluginPortableReleaseManifestV1Schema,
+  PluginCompatibilityProjectionV1Schema,
+  createPluginCompatibilityProjectionV1,
+  pluginCompatibilityProjectionEqualV1,
+  type PluginPortableReleaseManifestV1,
+  type PluginCompatibilityProjectionV1,
+} from './compatibilityProjectionV1.js';
 import { PluginDeclaredUiEntriesV1Schema } from '../../daemon/contributionRegistryProjection.js';
 import { PluginIdSchema } from '../pluginId.js';
 import {
   PluginUiArtifactIdV2Schema,
-  PluginUiArtifactsManifestV2Schema,
-  type PluginUiArtifactsManifestV2,
 } from '../ui/uiArtifactsManifest.js';
 import { PluginUiArtifactDigestV1Schema } from '../ui/artifactIntegrity.js';
 import {
@@ -56,50 +62,6 @@ export {
   PluginReleaseVersionV1Schema,
   type PluginReleaseRefV1,
 } from './releaseRefV1.js';
-
-/**
- * Availability consumes the canonical manifest parser's output. The manifest schema
- * already rejects source/private locator fields; source verification remains at the
- * acquisition owner and is deliberately not persisted here.
- */
-export const PluginPortableReleaseManifestV1Schema: typeof PluginManifestV2Schema = PluginManifestV2Schema;
-export type PluginPortableReleaseManifestV1 = z.infer<typeof PluginPortableReleaseManifestV1Schema>;
-
-/**
- * The generated compatibility input published beside an immutable
- * package version. It deliberately contains only canonical manifest and UI
- * artifact facts: host/SDK build provenance is not an author-controlled
- * compatibility switch and therefore has no field here.
- */
-export const PluginCompatibilityProjectionV1Schema = lazyZodSchema(() => z.object({
-  version: z.literal(1),
-  manifest: PluginPortableReleaseManifestV1Schema,
-  uiArtifacts: PluginUiArtifactsManifestV2Schema,
-}).strict());
-export type PluginCompatibilityProjectionV1 = z.infer<typeof PluginCompatibilityProjectionV1Schema>;
-
-/**
- * Generates the only comparison payload from the canonical manifest and
- * generated UI inventory already admitted by package build/staging owners.
- */
-export function createPluginCompatibilityProjectionV1(input: Readonly<{
-  manifest: PluginPortableReleaseManifestV1;
-  uiArtifacts: PluginUiArtifactsManifestV2;
-}>): PluginCompatibilityProjectionV1 {
-  return PluginCompatibilityProjectionV1Schema.parse({
-    version: 1,
-    manifest: input.manifest,
-    uiArtifacts: input.uiArtifacts,
-  });
-}
-
-export function pluginCompatibilityProjectionEqualV1(
-  left: unknown,
-  right: unknown,
-): boolean {
-  return createCanonicalJsonSigningInput(PluginCompatibilityProjectionV1Schema.parse(left))
-    === createCanonicalJsonSigningInput(PluginCompatibilityProjectionV1Schema.parse(right));
-}
 
 /**
  * Immutable release slots retain only compatibility facts emitted by the

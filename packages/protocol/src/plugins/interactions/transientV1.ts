@@ -275,7 +275,9 @@ const InteractionTransientStrictJsonValueV1Schema = lazyZodSchema(() => z.unknow
 
 const InteractionTransientApprovalSubjectV1Schema = lazyZodSchema(() => z.object({
   kind: z.literal('tool'),
-  name: boundedIdentifier('Interaction approval tool names'),
+  // Complete native tool names share the enclosing request's JSON-byte and
+  // Unicode validation; they are not short host-generated custody identifiers.
+  name: z.string().min(1),
   input: InteractionTransientStrictJsonValueV1Schema,
 }).strict());
 export type InteractionTransientApprovalSubjectV1 = z.infer<typeof InteractionTransientApprovalSubjectV1Schema>;

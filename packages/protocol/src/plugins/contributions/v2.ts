@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { isPortableRelativePath } from '../../filesystem/portablePathSegment.js';
+import { AcpRegistryAgentV1Schema } from '../../registries/registryItemsV1.js';
 import { PluginAgentAcpStderrRulesV2Schema } from './agentAcpStderrRules.js';
 import { PluginCaptureSourceContributionV1Schema } from './captureSources.js';
 import { MachineProvisionerContributionV1Schema, validateMachineProvisionerContributionsV1 } from './machineProvisioners.js';
@@ -112,8 +114,10 @@ import { PluginRoleDeclarationV1Schema } from './roles.js';
 import { PluginWorkflowContributionV1Schema } from './workflows.js';
 import { PluginInputTypeContributionV1Schema } from './inputTypes.js';
 import { PluginAtmospherePictureContributionV1Schema } from './atmospherePictures.js';
+import { PluginRegistrySourceContributionV1Schema } from './registrySources.js';
 export { PluginInputTypeContributionV1Schema, type PluginInputTypeContributionV1 } from './inputTypes.js';
 export { PluginAtmospherePictureContributionV1Schema, type PluginAtmospherePictureContributionV1 } from './atmospherePictures.js';
+export { PluginRegistrySourceContributionV1Schema, type PluginRegistrySourceContributionV1 } from './registrySources.js';
 import { PluginDragSourceContributionV1Schema, PluginDropTargetContributionV1Schema } from './entityDragDrop.js';
 export * from './entityDragDrop.js';
 import {
@@ -338,7 +342,13 @@ export const PluginAgentAcpSkillsSessionDeliveryV2Schema = lazyZodSchema(() => z
     directoriesKeyPath: z.array(z.string().min(1)).min(1),
     disabledKeyPath: z.array(z.string().min(1)).min(1).optional(),
   }).strict(),
-  z.object({ kind: z.literal('native_config_skills_dir'), subdirectory: z.string().min(1) }).strict(),
+  z.object({
+    kind: z.literal('native_config_skills_dir'),
+    subdirectory: z.string().min(1).refine(
+      value => !value.includes('/') && isPortableRelativePath(value),
+      'Native skills subdirectories must be portable path segments.',
+    ),
+  }).strict(),
 ]));
 export type PluginAgentAcpSkillsSessionDeliveryV2 = z.infer<typeof PluginAgentAcpSkillsSessionDeliveryV2Schema>;
 
@@ -445,15 +455,19 @@ export const PluginAgentToolsDeliveryV2Schema = lazyZodSchema(() => z.enum([
   'shell_bridge',
 ]));
 export type PluginAgentToolsDeliveryV2 = z.infer<typeof PluginAgentToolsDeliveryV2Schema>;
+/** Resolved host value; an absent manifest declaration is unsupported. */
+export type AgentToolsDelivery = PluginAgentToolsDeliveryV2 | 'unsupported';
 
 export function agentReceivesUserMcpServersV1(
-  delivery: PluginAgentToolsDeliveryV2 | 'unsupported' | undefined,
+  delivery: AgentToolsDelivery | undefined,
 ): boolean {
   return delivery === 'native_mcp' || delivery === 'native_extension';
 }
 
 export const PluginAgentToolsCapabilityV2Schema = lazyZodSchema(() => z.object({
   delivery: PluginAgentToolsDeliveryV2Schema,
+  mcpToolControl: z.object({ off: z.enum(['hidden', 'blocked']), approval: z.enum(['native', 'host']) }).strict().optional(),
+  mcpToolLoading: z.enum(['every_turn', 'on_demand']).optional(),
 }).strict());
 export type PluginAgentToolsCapabilityV2 = z.infer<typeof PluginAgentToolsCapabilityV2Schema>;
 
@@ -560,6 +574,8 @@ export { AgentUiProjectedDeclarationV1Schema, type AgentUiProjectedDeclarationV1
  * contributed Agent and a bundled one reach the same catalog contract.
  */
 export const PluginAgentCatalogV2Schema = lazyZodSchema(() => z.object({
+  /** ACP Registry identities for this Agent; discovery only, never runtime routing. */
+  acpRegistryIds: z.array(AcpRegistryAgentV1Schema.shape.id).optional(),
   /**
    * Native (vendor-owned) Session resume. Absent means the host infers the level
    * from the declared `capabilities.sessions.open` list, which cannot express
@@ -585,7 +601,8 @@ export const PluginAgentCatalogV2Schema = lazyZodSchema(() => z.object({
   resumeChecklist: PluginAgentResumeChecklistV1Schema.optional(),
 }).strict().refine(
   (value) => (
-    value.vendorResume !== undefined
+    value.acpRegistryIds !== undefined
+    || value.vendorResume !== undefined
     || value.agentCliSystemTool !== undefined
     || value.codingPromptBehavior !== undefined
     || value.resumeChecklist !== undefined
@@ -890,6 +907,7 @@ export const PLUGIN_CORE_CONTRIBUTION_FAMILIES_V2 = [
   definePluginContributionFamilyV2({ family: 'resources', schema: PluginResourceContributionV2Schema }),
   definePluginContributionFamilyV2({ family: 'inputTypes', schema: PluginInputTypeContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'atmospherePictures', schema: PluginAtmospherePictureContributionV1Schema }),
+  definePluginContributionFamilyV2({ family: 'registrySources', schema: PluginRegistrySourceContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'dragSources', schema: PluginDragSourceContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'dropTargets', schema: PluginDropTargetContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'transcriptActivities', schema: PluginTranscriptActivityContributionV1Schema }),

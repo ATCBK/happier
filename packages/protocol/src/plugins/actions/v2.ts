@@ -315,6 +315,10 @@ function isExactQualifiedConnectedAccountRefInputLeaf(
 }
 
 function isExactQualifiedServiceInputLeaf(service: PluginJsonSchemaV2): boolean {
+  const alternatives = expandDeclaredInputAlternatives(service);
+  if (alternatives.length !== 1 || alternatives[0] !== service) {
+    return alternatives.every(isExactQualifiedServiceInputLeaf);
+  }
   if (
     service.type !== 'object'
     || service.additionalProperties !== false
@@ -325,8 +329,10 @@ function isExactQualifiedServiceInputLeaf(service: PluginJsonSchemaV2): boolean 
     || !service.required.includes('pluginId')
     || !service.required.includes('localId')
   ) return false;
-  return service.properties.pluginId?.type === 'string'
-    && service.properties.localId?.type === 'string';
+  return [service.properties.pluginId, service.properties.localId].every((identity) => (
+    identity?.type === 'string'
+    || identity?.type === undefined && typeof identity?.const === 'string'
+  ));
 }
 
 function isExactOrNullableQualifiedConnectedAccountRefInputLeaf(

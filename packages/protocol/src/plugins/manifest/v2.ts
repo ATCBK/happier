@@ -2,6 +2,8 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 import semver from 'semver';
+import { PluginEnginesV2Schema } from './engines.js';
+export { PluginEnginesV2Schema, type PluginEnginesV2 } from './engines.js';
 
 import { PluginOptionalStringSchema } from '../_shared.js';
 import { CanonicalHttpOriginSchema } from '../../http/canonicalHttpOrigin.js';
@@ -19,14 +21,6 @@ import {
   PluginLocalizedStringV2Schema,
 } from '../contributions/publicTypes.js';
 import { PluginDirectSecretDeclarationV1Schema } from '../contributions/settings.js';
-
-export const PluginEnginesV2Schema = lazyZodSchema(() => z.object({
-  happier: z.string().trim().min(1).refine(
-    (value) => !/[x*]/i.test(value) && semver.validRange(value) !== null,
-    'engines.happier must be a non-wildcard semver range.',
-  ).optional(),
-}).strict().optional());
-export type PluginEnginesV2 = z.infer<typeof PluginEnginesV2Schema>;
 
 export const PLUGIN_RUNTIME_API_VERSION = 1 as const;
 const PluginAgentFactoryLocatorV1Schema = lazyZodSchema(() => z.object({

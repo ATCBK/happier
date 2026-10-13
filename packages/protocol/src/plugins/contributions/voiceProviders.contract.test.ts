@@ -86,6 +86,22 @@ const hostOperation = Object.freeze({
 });
 
 describe('canonical Voice provider declarations', () => {
+  it('accepts an optional localized conversation description without opening the executable declaration', () => {
+    const declaration = {
+      id: 'conversation', title: 'Conversation', kind: 'conversation',
+      roles: ['realtime_conversation'], platforms: ['web'],
+      capabilities: { turn: { cancelResponse: false, bargeIn: false } },
+      client: { artifactId: 'voice-runtime', exportName: 'activate' },
+    };
+    const description = { key: 'voice.service.description', fallback: 'Talk with this service.' };
+    expect(VoiceProviderContributionSchema.parse({ ...declaration, description })).toHaveProperty('description', description);
+    expect(VoiceProviderContributionSchema.parse(declaration)).not.toHaveProperty('description');
+    expect(VoiceProviderContributionSchema.parse({ ...declaration, description: 'Talk with this service.' }))
+      .toHaveProperty('description', 'Talk with this service.');
+    expect(VoiceProviderContributionSchema.safeParse({ ...declaration, description: { key: 'missing-fallback' } }).success).toBe(false);
+    expect(VoiceProviderContributionSchema.safeParse({ ...declaration, description: { ...description, unknown: true } }).success).toBe(false);
+    expect(VoiceProviderContributionSchema.safeParse({ ...declaration, unknown: true }).success).toBe(false);
+  });
   it('preserves inline Voice unions and credential bounds in public Manifest JSON', () => {
     const manifest = createPluginManifestJsonSchemaV2();
     const object = (value: unknown): Record<string, unknown> => {

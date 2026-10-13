@@ -835,6 +835,7 @@ const VoiceAgentRuntimeVersionSchema = lazyZodSchema(() => z.string().min(1).max
 const VoiceConversationProviderContributionSchema = lazyZodSchema(() => z.object({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
+  description: PluginLocalizedStringV2Schema.optional(),
   mark: VoiceServiceMarkSchema.optional(),
   kind: z.literal('conversation'),
   roles: uniqueBoundedArray(

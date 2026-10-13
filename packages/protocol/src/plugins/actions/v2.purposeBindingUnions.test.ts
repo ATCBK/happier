@@ -2,26 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { PluginActionContributionV2Schema, PluginActionInputHintsV2Schema } from './v2.js';
 import type { PluginJsonSchemaV2 } from '../contributions/publicTypes.js';
+import { QualifiedConnectedAccountRefJsonSchema } from '../../connect/qualifiedConnectedAccountPersistence.js';
 
 const localized = { key: 'plugin.title', fallback: 'Title' };
 
-const qualifiedAccountRef: PluginJsonSchemaV2 = {
-  type: 'object',
-  properties: {
-    service: {
-      type: 'object',
-      properties: {
-        pluginId: { type: 'string' },
-        localId: { type: 'string' },
-      },
-      required: ['pluginId', 'localId'],
-      additionalProperties: false,
-    },
-    accountId: { type: 'string' },
-  },
-  required: ['service', 'accountId'],
-  additionalProperties: false,
-};
+const qualifiedAccountRef: PluginJsonSchemaV2 = QualifiedConnectedAccountRefJsonSchema;
 
 const nullableQualifiedAccountRef: PluginJsonSchemaV2 = {
   anyOf: [qualifiedAccountRef, { type: 'null' }],
@@ -102,10 +87,30 @@ function scanAction(inputSchema: PluginJsonSchemaV2) {
 }
 
 describe('Connected Account purpose bindings across union-shaped Action inputs', () => {
+  it('rejects a service identity union when any arm is not an exact qualified identity', () => {
+    const service = qualifiedAccountRef.properties?.service;
+    const canonicalArms = service?.anyOf;
+    if (!canonicalArms?.length) throw new Error('expected canonical service identity alternatives');
+    const invalidServices: readonly PluginJsonSchemaV2[] = [
+      { type: 'null' },
+      { type: 'string' },
+      { type: 'object', properties: { pluginId: { const: 'happier' } }, required: ['pluginId'], additionalProperties: false },
+      { type: 'object', properties: { pluginId: { const: 1 }, localId: { const: 'mcp-sign-in' } }, required: ['pluginId', 'localId'], additionalProperties: false },
+      { ...canonicalArms[0], additionalProperties: true },
+    ];
+    for (const invalidService of invalidServices) {
+      const accountRef: PluginJsonSchemaV2 = {
+        ...qualifiedAccountRef,
+        properties: { ...qualifiedAccountRef.properties, service: { anyOf: [...canonicalArms, invalidService] } },
+      };
+      expect(PluginActionContributionV2Schema.safeParse(scanAction(scanInputSchema(accountRef))).success).toBe(false);
+    }
+  });
+
   it('admits one explicit account or native service path per configured-source input arm', () => {
     const serviceRef = qualifiedAccountRef.properties?.service;
     if (!serviceRef) throw new Error('expected qualified service schema');
-    const selection = {
+    const selection: PluginJsonSchemaV2 = {
       anyOf: [{
         type: 'object' as const, properties: { account: qualifiedAccountRef },
         required: ['account'], additionalProperties: false as const,

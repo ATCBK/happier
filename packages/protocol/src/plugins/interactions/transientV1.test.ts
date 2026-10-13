@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import { McpServerCatalogEntryV1Schema } from '../../mcp/servers/settingsV1.js';
+import { parseMcpToolWireNameV1 } from '../../mcp/servers/tools/mcpToolIdentityV1.js';
+import { createTransientInteractionOwner } from './owner.js';
 import {
+  InteractionTransientAuthorRequestV1Schema,
   InteractionTransientRequestV1Schema,
   InteractionTransientResultV1Schema,
+  MAX_INTERACTION_TRANSIENT_JSON_BYTES_V1,
   normalizeInteractionTransientRequestV1,
   validateInteractionTransientSettlementV1,
 } from './transientV1.js';
@@ -184,6 +189,111 @@ describe('transient interaction contract', () => {
         }],
       },
     });
+  });
+
+  it('preserves complete catalog-admitted MCP tool identities through author normalization and the strict reader', async () => {
+    const server = McpServerCatalogEntryV1Schema.parse({
+      id: 'server-long',
+      name: `server_${'a'.repeat(128)}`,
+      transport: 'stdio',
+      stdio: { command: 'fixture-mcp', args: [] },
+      env: {},
+      createdAt: 1,
+      updatedAt: 1,
+      toolsSnapshot: {
+        checkedAt: 1,
+        machineId: 'machine-1',
+        tools: [{ name: `tool_${'🛠'.repeat(200)}`, tokens: 1 }],
+      },
+    });
+    const tool = server.toolsSnapshot!.tools[0]!;
+    const wireName = `mcp__${server.name}__${tool.name}`;
+    expect(parseMcpToolWireNameV1(wireName, new Set([server.name]))).toEqual({
+      server: server.name, tool: tool.name,
+    });
+
+    const author = {
+      kind: 'approval' as const,
+      title: 'Run MCP tool?',
+      subject: { kind: 'tool' as const, name: wireName, input: { text: 'original input' } },
+    };
+    const normalized = normalizeInteractionTransientRequestV1(author, stamp);
+    expect(normalized.ok).toBe(true);
+    if (!normalized.ok) throw new Error('The complete MCP identity was rejected.');
+    const consumed = InteractionTransientRequestV1Schema.parse(JSON.parse(JSON.stringify(normalized.value)));
+    expect(consumed).toMatchObject({
+      kind: 'approval',
+      subject: { kind: 'tool', name: wireName, input: { text: 'original input' } },
+    });
+    const owner = createTransientInteractionOwner({
+      scope: stamp.scope,
+      sessionSignal: new AbortController().signal,
+      deadlineMs: null,
+      isOccurrenceCurrent: () => true,
+      createRequestId: () => stamp.requestId,
+      present: async (request) => {
+        const received = InteractionTransientRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+        expect(received).toMatchObject({ kind: 'approval', subject: author.subject });
+        return { requestId: received.requestId, kind: 'approval', status: 'approved' };
+      },
+    });
+    await expect(owner.request(author, { requester: stamp.requester })).resolves.toEqual({
+      requestId: stamp.requestId, kind: 'approval', status: 'approved',
+    });
+    expect(owner.current()).toEqual([]);
+  });
+
+  it('uses the existing whole-request byte budget for complete tool names in author and normalized requests', () => {
+    const author = {
+      kind: 'approval',
+      title: 'Run MCP tool?',
+      subject: { kind: 'tool', name: '', input: {} },
+    } as const;
+    const encoder = new TextEncoder();
+    const normalizedBase = { ...stamp, ...author };
+    const name = 'n'.repeat(MAX_INTERACTION_TRANSIENT_JSON_BYTES_V1 - encoder.encode(JSON.stringify(normalizedBase)).byteLength);
+    const atBudget = { ...author, subject: { ...author.subject, name } };
+    const normalized = normalizeInteractionTransientRequestV1(atBudget, stamp);
+    expect(normalized.ok).toBe(true);
+    if (!normalized.ok) throw new Error('The request at the existing byte budget was rejected.');
+    expect(encoder.encode(JSON.stringify(normalized.value)).byteLength).toBe(MAX_INTERACTION_TRANSIENT_JSON_BYTES_V1);
+
+    const aboveNormalizedBudget = { ...atBudget, subject: { ...atBudget.subject, name: `${name}n` } };
+    expect(InteractionTransientAuthorRequestV1Schema.safeParse(aboveNormalizedBudget).success).toBe(true);
+    expect(normalizeInteractionTransientRequestV1(aboveNormalizedBudget, stamp)).toEqual({
+      ok: false, code: 'invalid_interaction_request',
+    });
+    expect(InteractionTransientRequestV1Schema.safeParse({ ...stamp, ...aboveNormalizedBudget }).success).toBe(false);
+    const aboveAuthorBudget = { ...author, subject: { ...author.subject, name: 'n'.repeat(MAX_INTERACTION_TRANSIENT_JSON_BYTES_V1) } };
+    expect(InteractionTransientAuthorRequestV1Schema.safeParse(aboveAuthorBudget).success).toBe(false);
+    expect(normalizeInteractionTransientRequestV1(aboveAuthorBudget, stamp)).toEqual({
+      ok: false, code: 'invalid_interaction_request',
+    });
+  });
+
+  it('keeps approval tool names nonempty, Unicode-valid and closed while retaining short custody and question identifiers', () => {
+    const author = {
+      kind: 'approval', title: 'Run tool?', subject: { kind: 'tool', name: 'Bash', input: {} },
+    } as const;
+    for (const name of ['', 'mcp__server__\ud800', 'mcp__server__\udc00']) {
+      const invalid = { ...author, subject: { ...author.subject, name } };
+      expect(normalizeInteractionTransientRequestV1(invalid, stamp)).toEqual({ ok: false, code: 'invalid_interaction_request' });
+      expect(InteractionTransientRequestV1Schema.safeParse({ ...stamp, ...invalid }).success).toBe(false);
+    }
+    expect(normalizeInteractionTransientRequestV1({
+      ...author, subject: { ...author.subject, unexpected: true },
+    }, stamp)).toEqual({ ok: false, code: 'invalid_interaction_request' });
+    const longId = 'i'.repeat(129);
+    for (const invalidStamp of [
+      { ...stamp, requestId: longId },
+      { ...stamp, requester: { ...stamp.requester, occurrenceId: longId } },
+      { ...stamp, requester: { ...stamp.requester, invocationId: longId } },
+    ]) {
+      expect(normalizeInteractionTransientRequestV1(author, invalidStamp)).toEqual({ ok: false, code: 'invalid_interaction_request' });
+    }
+    expect(normalizeInteractionTransientRequestV1({
+      kind: 'questions', questions: [{ id: longId, prompt: 'Why?', type: 'text' }],
+    }, stamp)).toEqual({ ok: false, code: 'invalid_interaction_request' });
   });
 
   it('rejects unknown keys, duplicate question ids, and mismatched terminal kinds', () => {
