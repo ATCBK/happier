@@ -1,5 +1,6 @@
 import type { ToolCall } from "../../messages/messageTypes.js";
 import { SessionPermissionApprovalReviewerClaimV1Schema, SessionPermissionDecisionActorV1Schema } from '@happier-dev/protocol/sessions/permissions/v1';
+import { ResolvedMcpToolIdentityV1Schema } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 
 export type ReducerStoredPermission = {
     tool: string;
@@ -16,6 +17,7 @@ export type ReducerStoredPermission = {
     // Backward-compatible field name used by some clients/agents.
     allowTools?: string[];
     suggestions?: unknown;
+    mcpTool?: NonNullable<ToolCall['permission']>['mcpTool'];
     decision?: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
     decisionActor?: NonNullable<ToolCall['permission']>['decisionActor'];
 };
@@ -39,6 +41,7 @@ export function buildToolPermissionFromStored(
         allowedTools: resolveStoredPermissionAllowedTools(permission),
         decision: permission.decision,
         suggestions: permission.suggestions,
+        ...(permission.mcpTool ? { mcpTool: permission.mcpTool } : {}),
         ...(permission.decisionActor ? { decisionActor: permission.decisionActor } : {}),
     };
 }
@@ -96,8 +99,10 @@ export function buildReducerStoredPermissionFromCompletedRequest(completed: Read
     decision?: ReducerStoredPermission['decision'] | null;
     permissionDecisionActorV1?: unknown;
     permissionDecisionClaimV1?: unknown;
+    mcpTool?: unknown;
 }>): ReducerStoredPermission {
     const actor = SessionPermissionDecisionActorV1Schema.safeParse(completed.permissionDecisionActorV1);
+    const mcpTool = ResolvedMcpToolIdentityV1Schema.safeParse(completed.mcpTool);
     const reviewerClaim = SessionPermissionApprovalReviewerClaimV1Schema.safeParse(completed.permissionDecisionClaimV1);
     const decisionActor = reviewerClaim.success && completed.status === 'approved'
         ? { kind: 'approvalReviewer' as const }
@@ -115,6 +120,7 @@ export function buildReducerStoredPermissionFromCompletedRequest(completed: Read
         mode: completed.mode || undefined,
         allowedTools: getCompletedAllowedTools(completed),
         decision: completed.decision || undefined,
+        ...(mcpTool.success ? { mcpTool: mcpTool.data } : {}),
         ...(decisionActor ? { decisionActor } : {}),
     };
 }

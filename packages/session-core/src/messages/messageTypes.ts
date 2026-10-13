@@ -3,6 +3,7 @@ import type { MessageStructuredPresentationV1, SessionPermissionDecisionActorV1 
 import { MessageMeta } from "./messageMetaTypes.js";
 import type { TranscriptObservationMetadata } from "./transcriptObservationProvenance.js";
 import type { TranscriptAccountActorMetadata } from "./transcriptAccountActor.js";
+import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 
 export type ToolCall = {
     // Provider-side identifier for this tool call (e.g. ACP callId, Claude tool_use id).
@@ -39,6 +40,7 @@ export type ToolCall = {
          * (e.g. Claude Agent SDK `permission_suggestions` / `PermissionUpdate[]`).
          */
         suggestions?: unknown;
+        mcpTool?: ResolvedMcpToolIdentityV1;
     };
 };
 

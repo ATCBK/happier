@@ -7,6 +7,7 @@ import { isSessionActionConfirmationRequest } from '@happier-dev/protocol/sessio
 import { resolvePendingRequestAttentionReasonV1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { resolveAgentRequestKind } from '@happier-dev/protocol/activity/agentRequestSummary';
 import type { AgentRequestKind, SessionActionConfirmationsV1 } from '@happier-dev/protocol';
+import { ResolvedMcpToolIdentityV1Schema, type ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 
 export type PendingRequestFacts = Readonly<{
     sessionId: string;
@@ -33,6 +34,7 @@ export type SessionPendingRequest = Readonly<{
     arguments: unknown;
     createdAt: number | null;
     permissionSuggestions?: unknown;
+    mcpTool?: ResolvedMcpToolIdentityV1;
 }>;
 
 /** Request age never falls back to session activity; unknown dates follow known dates. */
@@ -134,6 +136,7 @@ function mergePendingRequestMetadata(
 ): SessionPendingRequest {
     return {
         ...preferred,
+        ...(preferred.mcpTool ?? secondary.mcpTool ? { mcpTool: preferred.mcpTool ?? secondary.mcpTool } : {}),
         ...(preferred.responseTarget ?? secondary.responseTarget
             ? { responseTarget: preferred.responseTarget ?? secondary.responseTarget }
             : {}),
@@ -277,6 +280,7 @@ export function collectTranscriptRequestStates(
                         kind: resolveAgentRequestKind({ toolName, requestKind: permission.kind }),
                         arguments: message.tool?.input,
                         createdAt,
+                        ...(permission.mcpTool ? { mcpTool: permission.mcpTool } : {}),
                         ...(Array.isArray(permission.suggestions) && permission.suggestions.length > 0
                             ? { permissionSuggestions: permission.suggestions }
                             : {}),
@@ -340,6 +344,7 @@ function listPendingAgentStateRequests(agentState: AgentState | SessionActionCon
         if (!toolName) return [];
         const createdAt = typeof request.createdAt === 'number' ? request.createdAt : null;
         if (isPendingRequestCoveredByCompleted(completed as Record<string, unknown> | null | undefined, id, createdAt, request)) return [];
+        const mcpTool = ResolvedMcpToolIdentityV1Schema.safeParse('mcpTool' in request ? request.mcpTool : undefined);
         return [{
             id,
             ...(typeof request.turnId === 'string' && request.turnId.trim().length > 0
@@ -357,6 +362,7 @@ function listPendingAgentStateRequests(agentState: AgentState | SessionActionCon
                 requestKind: request.kind,
             }),
             arguments: request.arguments,
+            ...(mcpTool.success ? { mcpTool: mcpTool.data } : {}),
             createdAt,
             ...(getRequestPermissionSuggestions(request) ? { permissionSuggestions: getRequestPermissionSuggestions(request) } : {}),
         }];

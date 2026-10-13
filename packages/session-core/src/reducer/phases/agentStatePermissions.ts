@@ -5,6 +5,7 @@ import {
 import { compareToolCalls } from "../../tools/toolComparison.js";
 import type { AgentState } from '../../state/index.js';
 import type { ToolCall } from "../../messages/messageTypes.js";
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { isRequestInterruptedPlaceholder } from "../../pending/requestInterruptedPlaceholder.js";
 import { equalOptionalStringArrays } from "../helpers/arrays.js";
 import type { ReducerState } from "../reducer.js";
@@ -168,6 +169,7 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                                 status: 'pending',
                                 kind: typeof request.kind === 'string' ? request.kind : undefined,
                                 suggestions: request.permissionSuggestions,
+                                mcpTool: request.mcpTool,
                             };
                             hasChanged = true;
                         }
@@ -206,6 +208,10 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                             message.tool.permission.kind = request.kind;
                             hasChanged = true;
                         }
+                        if (message.tool.permission && !sameStrictJsonValue(message.tool.permission.mcpTool ?? null, request.mcpTool ?? null)) {
+                            message.tool.permission.mcpTool = request.mcpTool;
+                            hasChanged = true;
+                        }
                         if (message.tool.permission && request.permissionSuggestions !== undefined && message.tool.permission.suggestions !== request.permissionSuggestions) {
                             message.tool.permission.suggestions = request.permissionSuggestions;
                             hasChanged = true;
@@ -238,6 +244,7 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                             status: 'pending',
                             kind: typeof request.kind === 'string' ? request.kind : undefined,
                             suggestions: request.permissionSuggestions,
+                            mcpTool: request.mcpTool,
                         }
                     };
 
@@ -276,6 +283,7 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                     status: 'pending',
                     kind: typeof request.kind === 'string' ? request.kind : undefined,
                     suggestions: request.permissionSuggestions,
+                    mcpTool: request.mcpTool,
                 });
             }
         }
