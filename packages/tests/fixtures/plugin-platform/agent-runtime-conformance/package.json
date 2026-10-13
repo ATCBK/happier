@@ -5,6 +5,7 @@
   "type": "module",
   "files": [
     ".happier-plugin/plugin.json",
-    "daemon.mjs"
+    "daemon.mjs",
+    "agent-runtime.mjs"
   ]
 }

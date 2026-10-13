@@ -27,6 +27,7 @@
         "capability": "process",
         "reason": "Exercise the packed contribution through the canonical process and protocol owners",
         "scope": {
+          "envKeys": ["HAPPIER_FIXTURE_AGENT_HOME"],
           "executables": [
             {
               "kind": "systemTool",
@@ -57,7 +58,13 @@
       {
         "id": "watch-measured-event",
         "kind": "subscription",
-        "event": "measured-event"
+        "target": {
+          "kind": "plugin",
+          "event": {
+            "pluginId": "acme.native-runtime-proof",
+            "localId": "measured-event"
+          }
+        }
       }
     ],
     "agents": [
@@ -68,9 +75,16 @@
         "runtime": {
           "kind": "custom"
         },
+        "cli": {
+          "displayName": "Fixture Agent executable",
+          "executable": { "binaryName": "node", "sourcePreference": "system-first" },
+          "install": { "managed": null, "manual": { "kind": "none" } },
+          "auth": { "support": "unsupported", "loginLaunches": [] }
+        },
         "primary": "sessions",
         "capabilities": {
           "sessions": {
+            "startupInstructions": { "versions": [1], "revisionChanges": "resume" },
             "open": [
               "create",
               "resume"
@@ -104,7 +118,6 @@
         "execution": {
           "target": "daemon"
         },
-        "placement": "primary",
         "dangerLevel": "safe",
         "hostAccess": [
           "fixture-runtime-process"

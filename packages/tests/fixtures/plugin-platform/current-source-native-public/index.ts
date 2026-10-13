@@ -24,6 +24,15 @@ export const { manifest, activate } = definePlugin({
   id: pluginId,
   version: QA_REVISION === 'v1' ? '0.0.1' : '0.0.2',
   entrypoints: { daemon: './dist/index.js' },
+  registrySources: {
+    'qa-skills': {
+      title: 'Current source QA skills',
+      format: 'git',
+      kinds: ['skill'],
+      url: 'https://github.com/happier-dev/happier',
+      path: '.agents/skills',
+    },
+  },
   agents: {
     'qa-agent': {
       declaration: {
