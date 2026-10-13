@@ -202,7 +202,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         lastPreviewOpenRef.current = decision.nextLastPreviewOpen;
         const openAs = decision.openAs;
         dispatch({ type: 'openDetailsTab', scopeId, tab, openAs, origin: paneRegion });
-        presentPane?.({ scopeId, pane: 'details' });
+        presentPane?.({ scopeId, pane: 'details', tab });
     }, [detailsPaneTabsBehavior, dispatch, paneRegion, presentPane, scopeId]);
 
     const setDetailsTabState = React.useCallback((tabKey: string, nextState: unknown) => {

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { Href } from 'expo-router';
 import { useDestinationParams, useDestinationRouter, useDestinationFocus, useDestinationVisibility, useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
 import type { DetailsTab } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 
@@ -126,10 +127,15 @@ export function SessionDetailsDestinationBody() {
     const returnToSession = React.useCallback(() => {
         // Responsive pane presentation replaces the Session route with Details;
         // its previous history entry need not be this Session.
+        const returnSurface = normalizeSessionDetailsSourceSurface(params.sourceSurface) ?? 'chat';
         pane.closeDetails();
-        persistSessionSurface(sessionId, normalizeSessionDetailsSourceSurface(params.sourceSurface) ?? 'chat', routeScope.serverId);
-        router.replace(fallbackDetailsHref);
-    }, [fallbackDetailsHref, pane.closeDetails, params.sourceSurface, persistSessionSurface, routeScope.serverId, router, sessionId]);
+        // Retire Git's presentation before Chat mounts its web pane URL writer;
+        // otherwise retained right-pane state can immediately navigate back to Git.
+        if (returnSurface === 'chat') pane.closeRight();
+        persistSessionSurface(sessionId, returnSurface, routeScope.serverId);
+        // The canonical Session route owner emits only registered Session hrefs.
+        router.replace(fallbackDetailsHref as Href);
+    }, [fallbackDetailsHref, pane.closeDetails, pane.closeRight, params.sourceSurface, persistSessionSurface, routeScope.serverId, router, sessionId]);
     const openDestinationTab = React.useCallback((tab: DetailsTab) => {
         const selection = buildActiveDetailsRouteParams([tab], tab.key);
         const query = new URLSearchParams();

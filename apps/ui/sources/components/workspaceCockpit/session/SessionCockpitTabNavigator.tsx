@@ -24,6 +24,8 @@ import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/la
 import { useDeviceType } from '@/utils/platform/responsive';
 import { useAppRightSidebarTabInputs } from '@/components/appShell/rightSidebar/appRightSidebarTabs';
 import { PanePresentationProvider, type PanePresentationIntent } from '@/components/appShell/panes/panePresentation';
+import { buildActiveDetailsRouteParams } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 import {
     isSessionPluginMobileSurface,
@@ -313,6 +315,8 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
                                             >
                                                 <SessionCockpitPanePresentationBoundary
                                                     scopeId={props.scopeId}
+                                                    sessionId={props.sessionId}
+                                                    serverId={sessionServerId}
                                                     catalog={catalog}
                                                     navigate={navigation.navigate}
                                                     commitSurface={commitNavigatorSurface}
@@ -339,12 +343,27 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
 
 function SessionCockpitPanePresentationBoundary(props: React.PropsWithChildren<Readonly<{
     scopeId: string;
+    sessionId: string;
+    serverId: string | null;
     catalog: readonly SessionCockpitMobileCatalogEntry[];
     navigate: (surface: SessionMobileSurface) => void;
     commitSurface: (surface: SessionMobileSurface) => void;
 }>>) {
+    const router = useDestinationRouter();
     const presentPane = React.useCallback((intent: PanePresentationIntent) => {
         if (intent.scopeId !== props.scopeId) return;
+        if (intent.pane === 'details') {
+            const query = buildActiveDetailsRouteParams([intent.tab], intent.tab.key);
+            if (query.details) {
+                // Publish the accepted target before switching scenes. Waiting
+                // for pane hydration lets the outer chrome emit an empty URL.
+                router.replace({ pathname: '/session/[id]/details', params: {
+                    id: props.sessionId,
+                    ...(props.serverId ? { serverId: props.serverId } : {}),
+                    ...query,
+                } });
+            }
+        }
         const entry = intent.pane === 'right' ? props.catalog.find((candidate) => candidate.owner === 'rightSidebar' && (
             intent.destination?.kind === 'plugin'
                 ? candidate.tab.owner === 'plugin'
@@ -356,7 +375,7 @@ function SessionCockpitPanePresentationBoundary(props: React.PropsWithChildren<R
         if (!target) return;
         props.navigate(target);
         props.commitSurface(target);
-    }, [props.catalog, props.commitSurface, props.navigate, props.scopeId]);
+    }, [props.catalog, props.commitSurface, props.navigate, props.scopeId, props.serverId, props.sessionId, router]);
     return <PanePresentationProvider value={presentPane}>{props.children}</PanePresentationProvider>;
 }
 
