@@ -6,8 +6,9 @@ export type { McpServerCatalogMutationV1, McpServerCatalogSnapshotV1, McpServerC
   McpServerCatalogScopeV1, McpServerCatalogMutationResponseV1 } from "./catalogSchemasV1.js";
 import type { AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
 import { projectStoredMcpServerCatalogV1, openMcpServerCatalogContentV1, type McpServerCatalogV1, type McpServerCatalogRowReadResponseV1, type McpServerCatalogRowMutationResponseV1, McpServerCatalogV1Schema } from './serverRowsV1.js';
-import type { McpServersSettingsV1 } from './settingsV1.js';
-import { applyReachRulesChangeV1, type ReachRulesWriteContextV1 } from '../../reach/reachRulesChangeV1.js';
+import { isMcpPluginItemIdV1, type McpServersSettingsV1 } from './settingsV1.js';
+import { applyReachRulesChangeV1, resolveCreateReachV1, type ReachRulesWriteContextV1 } from '../../reach/reachRulesChangeV1.js';
+export type McpServerCatalogWriteContextV1 = ReachRulesWriteContextV1 & Readonly<{ pluginItemIds?: readonly string[] }>;
 
 export { listMcpServerCatalogSavedSecretRefsV1, rewriteMcpServerCatalogSavedSecretRefsV1,
   remapMcpServerCatalogSavedSecretReferencesV1 } from './serverRowsV1.js';
@@ -15,11 +16,25 @@ export { listMcpServerCatalogSavedSecretRefsV1, rewriteMcpServerCatalogSavedSecr
 
 /** Definitions and their bindings share one validation and one durable row CAS. */
 export function applyMcpServerCatalogMutationV1(catalog: McpServerCatalogV1, rawChange: McpServerCatalogMutationV1,
-  ctx?: ReachRulesWriteContextV1): McpServerCatalogV1 {
+  ctx?: McpServerCatalogWriteContextV1): McpServerCatalogV1 {
   McpServerCatalogV1Schema.parse(catalog);
   const change = McpServerCatalogMutationV1Schema.parse(rawChange);
+  const admittedPluginItem = (id: string) => isMcpPluginItemIdV1(id) && ctx?.pluginItemIds?.includes(id) === true;
+  if (change.kind === 'plugin-defaults') {
+    if (!ctx) throw new Error('Plugin defaults require the catalog write context');
+    const rules = [...new Set(change.serverIds)].flatMap(serverId => {
+      if (!admittedPluginItem(serverId)) throw new Error(`Plugin server not found: ${serverId}`);
+      if (catalog.bindings.some(rule => rule.serverId === serverId)) return [];
+      const created = resolveCreateReachV1({ kind: 'mcp_server', caller: { surface: 'rpc' },
+        ctx: { nowMs: ctx.nowMs, newId: () => `plugin-default:${serverId.slice('plugin:'.length)}` } });
+      if (!created.ok) throw new Error(created.code);
+      return created.rules.map(rule => ({ ...rule, serverId }));
+    });
+    return rules.length ? McpServerCatalogV1Schema.parse({ ...catalog, bindings: [...catalog.bindings, ...rules] }) : catalog;
+  }
   if (change.kind === 'server-create-batch') {
     for (const { entry, rules } of change.entries) {
+      if (entry.id.startsWith('plugin:')) throw new Error('Plugin MCP item ids are reserved');
       for (const binding of rules) {
         if (binding.serverId !== entry.id) throw new Error(`Binding serverId mismatch: ${binding.serverId}`);
       }
@@ -43,14 +58,31 @@ export function applyMcpServerCatalogMutationV1(catalog: McpServerCatalogV1, raw
     if (change.change.kind === 'replace' && serverIds.length !== 1) throw new Error('replace_needs_one_item');
     const ids = new Set(serverIds);
     const next = serverIds.flatMap(serverId => {
-      // Stored plugin ids are reserved shapes, not live items. Their write
-      // admission co-lands with the plugin item producer in P2 U8 / P7 U7.5.
-      if (!catalog.servers.some(server => server.id === serverId)) throw new Error(`Server not found: ${serverId}`);
+      if (!catalog.servers.some(server => server.id === serverId) && !admittedPluginItem(serverId)) throw new Error(`Server not found: ${serverId}`);
       return applyReachRulesChangeV1(catalog.bindings.filter(rule => rule.serverId === serverId), change.change, ctx).map(rule => ({ ...rule, serverId }));
     });
     return McpServerCatalogV1Schema.parse({ ...catalog, bindings: [...catalog.bindings.filter(rule => !ids.has(rule.serverId)), ...next] });
   }
+  if (change.kind === 'tools-change') {
+    const server = catalog.servers.find(entry => entry.id === change.serverId && !entry.id.startsWith('plugin:'));
+    if (!server && !admittedPluginItem(change.serverId)) throw new Error(`Server not found: ${change.serverId}`);
+    const settings = server ?? catalog.pluginServers?.[change.serverId];
+    const overrides = new Map(Object.entries(settings?.tools?.overrides ?? {}));
+    for (const [name, setting] of Object.entries(change.settings.tools ?? {})) {
+      if (setting === 'inherit') overrides.delete(name);
+      else overrides.set(name, setting);
+    }
+    const tools = { default: change.settings.default ?? settings?.tools?.default ?? 'ask', overrides: Object.fromEntries(overrides) };
+    if (!server) return McpServerCatalogV1Schema.parse({ ...catalog,
+      pluginServers: { ...catalog.pluginServers, [change.serverId]: { ...settings, tools } } });
+    return McpServerCatalogV1Schema.parse({ ...catalog,
+      servers: catalog.servers.map(entry => entry.id === server.id ? { ...entry, tools } : entry),
+    });
+  }
   const exists = catalog.servers.some(entry => entry.id === change.entry.id);
+  if ((change.kind === 'server-create' || change.kind === 'server-duplicate') && change.entry.id.startsWith('plugin:')) {
+    throw new Error('Plugin MCP item ids are reserved');
+  }
   if (change.kind === 'server-create' && exists) throw new Error(`Duplicate server id: ${change.entry.id}`);
   if ((change.kind === 'server-update' || change.kind === 'server-upsert') && !exists) throw new Error(`Server not found: ${change.entry.id}`);
   if (change.kind === 'server-duplicate') {
@@ -70,7 +102,7 @@ export function applyMcpServerCatalogMutationV1(catalog: McpServerCatalogV1, raw
 /** Capture, comparison and acknowledgement all belong to the same row mutation. */
 export async function commitMcpServerCatalogMutationV1(input: Readonly<{
   catalog: McpServerCatalogV1; revision: number; change: McpServerCatalogMutationV1; scope: McpServerCatalogScopeV1 | null;
-  ctx?: ReachRulesWriteContextV1;
+  ctx?: McpServerCatalogWriteContextV1;
   writeCatalog(value: Readonly<{ catalog: McpServerCatalogV1; expectedRevision: number }>): Promise<McpServerCatalogRowMutationResponseV1>;
 }>): Promise<McpServerCatalogMutationResponseV1> {
   let catalog: McpServerCatalogV1;

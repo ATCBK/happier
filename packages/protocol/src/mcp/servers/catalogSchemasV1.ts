@@ -2,13 +2,15 @@ import { z } from 'zod';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
-import { McpServerCatalogEntryV1Schema, McpServerRuleV1Schema, refineMcpServerCatalogV1 } from './settingsV1.js';
+import { McpServerCatalogEntryV1Schema, McpServerRuleV1Schema, McpServerPluginSettingsMapV1Schema,
+  McpServerToolSettingsPatchV1Schema, refineMcpServerCatalogV1 } from './settingsV1.js';
 import { ReachRuleV1Schema } from '../../reach/reachRuleV1.js';
 import { ReachRulesChangeV1Schema, type ReachRulesChangeV1 } from '../../reach/reachRulesChangeV1.js';
 
 
 export const McpServerCatalogV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1), servers: z.array(McpServerCatalogEntryV1Schema), bindings: z.array(McpServerRuleV1Schema),
+  pluginServers: McpServerPluginSettingsMapV1Schema.optional(),
 }).strict().superRefine(refineMcpServerCatalogV1));
 export type McpServerCatalogV1 = z.infer<typeof McpServerCatalogV1Schema>;
 export const StoredMcpServerCatalogV1Schema = createStoredReadSchema(McpServerCatalogV1Schema);
@@ -104,6 +106,8 @@ export const McpServerCatalogMutationV1Schema = lazyZodSchema(() => z.discrimina
     entry: McpServerCatalogEntryV1Schema, rules: z.array(McpServerRuleV1Schema) }).strict(),
   z.object({ kind: z.literal('server-remove'), serverId: z.string().min(1), removeBindings: z.boolean().default(false) }).strict(),
   z.object({ kind: z.literal('rules-change'), serverIds: z.array(z.string().min(1)).min(1), change: ReachRulesChangeV1Schema }).strict(),
+  z.object({ kind: z.literal('tools-change'), serverId: z.string().min(1), settings: McpServerToolSettingsPatchV1Schema }).strict(),
+  z.object({ kind: z.literal('plugin-defaults'), serverIds: z.array(z.string().min(1)) }).strict(),
 ]));
 
 export type McpServerCatalogMutationV1 = Exclude<z.infer<typeof McpServerCatalogMutationV1Schema>, { kind: 'rules-change' }>

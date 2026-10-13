@@ -28,6 +28,18 @@ const retainedCatalog = { ...catalog,
 };
 
 describe('MCP catalog row authority', () => {
+  it('does not interpret admitted tool names as credential carrier fields', () => {
+    const tools = { default: 'ask' as const, overrides: { savedSecretId: 'allow' as const, apiSecretRef: 'off' as const } };
+    const source = { ...catalog, servers: catalog.servers.map(server => ({ ...server, tools })),
+      pluginServers: { 'plugin:fixture/server': { tools } } };
+    expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
+      .toEqual({ status: 'opened', catalog: source });
+    expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: {
+      ...source, servers: source.servers.map(server => ({ ...server, tools: { ...tools, futureSecretRef: 'hidden' } })),
+    } } })).toMatchObject({ status: 'partial', diagnostics: [
+      { path: 'servers[0].tools.futureSecretRef', reason: 'unclassified-reference' },
+    ] });
+  });
   it('preserves attested references through catalog admission and secret rewrites', () => {
     const source: McpServerCatalogV1 = { ...catalog,
       servers: catalog.servers.map(server => ({ ...server, remote: { ...server.remote!, headers: {

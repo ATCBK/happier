@@ -1,5 +1,5 @@
 import type { McpServerCatalogEntryV1 } from './settingsV1.js';
-import type { ValueRefV1 } from '../../valueRefs/valueRefV1.js';
+import { listValueRefSecretIdsV1, type ValueRefV1 } from '../../valueRefs/valueRefV1.js';
 
 export type McpServerAuthModeV1 = 'none' | 'savedSecret' | 'machineEnv' | 'plainText';
 
@@ -18,7 +18,7 @@ export function inferMcpServerAuthModeV1(server: Pick<McpServerCatalogEntryV1, '
   const refs = valueRefsFromServer(server);
   if (refs.length === 0) return 'none';
 
-  if (refs.some((valueRef) => valueRef?.t === 'savedSecret')) {
+  if (refs.some((valueRef) => listValueRefSecretIdsV1(valueRef).length > 0)) {
     return 'savedSecret';
   }
 

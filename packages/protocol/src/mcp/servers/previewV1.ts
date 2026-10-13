@@ -11,6 +11,7 @@ import { inferMcpServerAuthModeV1 } from './authModeV1.js';
 import { McpServerCatalogEntryTransportV1Schema } from './settingsV1.js';
 import { SessionMcpSelectionV1Schema, type SessionMcpSelectionV1 } from './sessionSelectionV1.js';
 import { SessionCapabilitySelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
+import { SpawnCapabilitiesPreviewSuccessV1Schema } from '../../actions/specs/sessionCapabilities.js';
 
 export type ManagedSessionMcpAvailabilityV1 = 'active' | 'available' | 'unavailable';
 export type ManagedSessionMcpPortabilityV1 = 'portable' | 'machine_scoped';
@@ -36,20 +37,22 @@ function releasedReason(reason: CapabilitySelectionReasonV1, portable: boolean):
 }
 
 export function projectManagedMcpSelectionV1(result: ResolveSessionCapabilitiesV1Result, input: Readonly<{
-  settings: McpServersSettingsV1; context: ReachContextV1; selection?: SessionMcpSelectionV1 | null }>): ManagedMcpSelectionProjectionV1 {
+  settings: McpServersSettingsV1; context: ReachContextV1; selection?: SessionMcpSelectionV1 | null;
+  wireNamesByServerId?: Readonly<Record<string, string>> }>): ManagedMcpSelectionProjectionV1 {
   const selection = SessionMcpSelectionV1Schema.parse(input.selection ?? {});
   const itemsByName: Record<string, ManagedMcpProjectionItemV1> = {};
   const selectedServersByName: Record<string, ResolvedMcpServerV1> = {};
   for (const item of result.mcp.items) {
+    const name = input.wireNamesByServerId?.[item.id] ?? item.name;
     const rules = input.settings.bindings.filter(rule => rule.serverId === item.id && (rule.agentId === undefined || rule.agentId === input.context.agentId));
     const portable = isReachPortableV1(rules);
     const binding = rules.find(rule => rule.id === item.decidedBy?.ruleId);
-    itemsByName[item.name] = { serverId: item.id, name: item.name, ...(item.title ? { title: item.title } : {}), transport: item.effectiveConfig.transport,
+    itemsByName[name] = { serverId: item.id, name, ...(item.title ? { title: item.title } : {}), transport: item.effectiveConfig.transport,
       bindingId: item.decidedBy?.ruleId ?? null, bindingTargetKind: item.decidedBy?.target ?? null, selected: item.selected, selectable: item.selectable,
       availability: item.selected ? 'active' : item.selectable ? 'available' : 'unavailable', reasonCode: releasedReason(item.reason, portable),
       portability: portable ? 'portable' : 'machine_scoped', defaultSelected: selection.managedServersEnabled && binding?.enabled === true,
       effectiveConfig: item.effectiveConfig };
-    if (item.selected) selectedServersByName[item.name] = { serverId: item.id, name: item.name, bindingId: item.decidedBy?.ruleId ?? null,
+    if (item.selected) selectedServersByName[name] = { serverId: item.id, name, bindingId: item.decidedBy?.ruleId ?? null,
       enabled: true, config: item.effectiveConfig };
   }
   return { strictMode: result.mcp.strictMode, selection, itemsByName, selectedServersByName };
@@ -154,8 +157,11 @@ export type DetectedMcpPreviewEntryV1 = z.infer<typeof DetectedMcpPreviewEntryV1
 
 export const DaemonMcpServersPreviewRequestSchema = lazyZodSchema(() => z.object({
   machineId: z.string().min(1),
-  directory: z.string().min(1).max(10_000),
+  directory: z.string().min(1).max(10_000).optional(),
   agentId: z.string().min(1),
+  sessionId: z.string().min(1).optional(),
+  profileId: z.string().min(1).optional(),
+  projectKey: z.string().min(1).optional(),
   capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.optional(),
   selection: SessionMcpSelectionV1Schema.optional(),
 }).passthrough());
@@ -168,6 +174,10 @@ export const DaemonMcpServersPreviewResponseSchema = lazyZodSchema(() => z.union
     managed: z.array(ManagedMcpPreviewEntryV1Schema),
     detected: z.array(DetectedMcpPreviewEntryV1Schema),
     warnings: z.array(z.string()).optional(),
+    machinePlatform: SpawnCapabilitiesPreviewSuccessV1Schema.shape.machinePlatform.optional(),
+    mcp: SpawnCapabilitiesPreviewSuccessV1Schema.shape.mcp.optional(),
+    skills: SpawnCapabilitiesPreviewSuccessV1Schema.shape.skills.optional(),
+    applyTiming: SpawnCapabilitiesPreviewSuccessV1Schema.shape.applyTiming.optional(),
   }).passthrough(),
   z.object({
     ok: z.literal(false),

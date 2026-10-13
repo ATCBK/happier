@@ -9,9 +9,9 @@ import { StrictJsonValueSchema, sameStrictJsonValue, type JsonValue } from '../.
 import { isAccountScopedBlobCiphertextForKind } from '../../crypto/accountScopedCipherEnvelope.js';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
 import { appendSavedSecretReferencePathV1, listSavedSecretReferenceCarrierPathsV1, parseSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
-import { McpServerCatalogEntryV1Schema, McpServerRuleV1Schema, McpServerConfigOverrideFieldsV1Schema, isMcpPluginItemIdV1,
+import { McpServerCatalogEntryV1Schema, McpServerRuleV1Schema, McpServerConfigOverrideFieldsV1Schema, McpServerPluginSettingsMapV1Schema, isMcpPluginItemIdV1,
   type McpServerCatalogEntryV1, type McpServerRuleV1 } from './settingsV1.js';
-import type { ValueRefV1 } from '../../valueRefs/valueRefV1.js';
+import { listValueRefSavedSecretRefsV1, remapValueRefSavedSecretReferencesV1, type ValueRefV1 } from '../../valueRefs/valueRefV1.js';
 import { normalizeReachRulesV1 } from '../../reach/reachRulesChangeV1.js';
 import { splitRetainedMcpServerConfigurationV1 } from './splitRetainedMcpServerConfigurationV1.js';
 
@@ -28,6 +28,7 @@ export function assertMcpServerCatalogContentForModeV1(content: StoredMcpServerC
 
 const storedServer = createStoredReadSchema(McpServerCatalogEntryV1Schema);
 const storedBinding = createStoredReadSchema(McpServerRuleV1Schema);
+const storedPluginServers = createStoredReadSchema(McpServerPluginSettingsMapV1Schema);
 // Only the provenance-owned 0.2 source reader admits configuration on a rule.
 const retainedBinding = createStoredReadSchema(McpServerRuleV1Schema.extend({ overrides: McpServerConfigOverrideFieldsV1Schema.optional() }));
 
@@ -69,11 +70,16 @@ export function projectStoredMcpServerCatalogV1(value: unknown,
     } else bindings.push(parsed.data);
   }
   const normalizedBindings = [...new Set(bindings.map(rule => rule.serverId))].flatMap(serverId => normalizeReachRulesV1(bindings.filter(rule => rule.serverId === serverId)));
+  const pluginServers = raw.pluginServers === undefined ? null : storedPluginServers.safeParse(raw.pluginServers);
+  if (pluginServers && !pluginServers.success) diagnostics.push({ path: 'pluginServers', reason: 'invalid-stored-content' });
   const catalog: McpServerCatalogV1 = { v: 1, ...(authority === 'retained-source'
-    ? splitRetainedMcpServerConfigurationV1(servers, normalizedBindings) : { servers, bindings: normalizedBindings }) };
+    ? splitRetainedMcpServerConfigurationV1(servers, normalizedBindings) : { servers, bindings: normalizedBindings }),
+    ...(pluginServers?.success ? { pluginServers: pluginServers.data } : {}),
+  };
   if (authority === 'active') for (const reference of listMcpServerCatalogSavedSecretRefsV1(catalog)) {
     try {
-      if (parseSavedSecretRefV1(reference.secretId).kind === 'shared_resource') continue;
+      const referenceKind = parseSavedSecretRefV1(reference.secretId).kind;
+      if (referenceKind === 'shared_resource' || referenceKind === 'personal') continue;
     } catch { /* A recognizable but invalid reference cannot authorize runtime or census. */ }
     diagnostics.push({ path: reference.path, reason: 'unclassified-reference' });
   }
@@ -93,7 +99,18 @@ export function projectStoredMcpServerCatalogV1(value: unknown,
       admittedPaths.add(ref.path.replace(/^bindings\[0\]/u, `bindings[${index}]`));
     }
   });
+  // Tool names are arbitrary dictionary keys, not credential field names.
+  // Only validated enum-valued override leaves get this classification;
+  // unknown policy fields still go through the original carrier sweep.
+  const toolPolicyPaths = new Set(candidates.flatMap(({ entry, index }) =>
+    listSavedSecretReferenceCarrierPathsV1(entry.tools?.overrides, { initialPath: `servers[${index}].tools.overrides` })));
+  if (pluginServers?.success) for (const [itemId, settings] of Object.entries(pluginServers.data)) {
+    for (const path of listSavedSecretReferenceCarrierPathsV1(settings.tools?.overrides, {
+      initialPath: `${appendSavedSecretReferencePathV1('pluginServers', itemId)}.tools.overrides`,
+    })) toolPolicyPaths.add(path);
+  }
   for (const path of listSavedSecretReferenceCarrierPathsV1(raw)) {
+    if (toolPolicyPaths.has(path)) continue;
     if (authority === 'active' && /^bindings\[\d+\]\.overrides(?:\.|\[|$)/u.test(path)) continue;
     if (!admittedPaths.has(path)) diagnostics.push({ path, reason: 'unclassified-reference' });
   }
@@ -196,13 +213,19 @@ export function sealMcpServerCatalogContentV1(input: Readonly<{
 
 export function listMcpServerCatalogSavedSecretRefsV1(catalog: McpServerCatalogV1): readonly Readonly<{ path: string; secretId: string }>[] {
   const refs: Array<{ path: string; secretId: string }> = [];
+  const visitRef = (value: ValueRefV1, path: string) => {
+    for (const ref of listValueRefSavedSecretRefsV1(value)) refs.push({
+      path: ref.path ? `${path}.${ref.path}` : path, secretId: ref.secretId,
+    });
+  };
   const visit = (values: Readonly<Record<string, ValueRefV1 | null>> | undefined, path: string) => {
-    for (const [key, value] of Object.entries(values ?? {})) if (value?.t === 'savedSecret') {
-      refs.push({ path: appendSavedSecretReferencePathV1(path, key), secretId: value.secretId });
+    for (const [key, value] of Object.entries(values ?? {})) if (value !== null) {
+      visitRef(value, appendSavedSecretReferencePathV1(path, key));
     }
   };
   catalog.servers.forEach((entry, index) => {
     visit(entry.env, `servers[${index}].env`); visit(entry.remote?.headers, `servers[${index}].remote.headers`);
+    if (entry.remote?.urlTemplate) visitRef(entry.remote.urlTemplate, `servers[${index}].remote.urlTemplate`);
     entry.configOverrides?.forEach((override, overrideIndex) => {
       visit(override.envPatch, `servers[${index}].configOverrides[${overrideIndex}].envPatch`);
       visit(override.remote?.headersPatch, `servers[${index}].configOverrides[${overrideIndex}].remote.headersPatch`);
@@ -212,13 +235,15 @@ export function listMcpServerCatalogSavedSecretRefsV1(catalog: McpServerCatalogV
 }
 
 export function remapMcpServerCatalogSavedSecretReferencesV1(catalog: McpServerCatalogV1, mapping: Readonly<Record<string, string>>): McpServerCatalogV1 {
-  const rewrite = <T extends ValueRefV1 | null>(value: T): T | ValueRefV1 => value?.t === 'savedSecret' && Object.hasOwn(mapping, value.secretId)
-    ? { ...value, secretId: mapping[value.secretId]! } : value;
+  const rewrite = <T extends ValueRefV1 | null>(value: T): T | ValueRefV1 => value === null
+    ? value : remapValueRefSavedSecretReferencesV1(value, mapping);
   const values = <T extends ValueRefV1 | null>(input: Readonly<Record<string, T>>): Record<string, T | ValueRefV1> =>
     Object.fromEntries(Object.entries(input).map(([key, value]) => [key, rewrite(value)]));
   return McpServerCatalogV1Schema.parse({ ...catalog,
     servers: catalog.servers.map(entry => ({ ...entry, env: values(entry.env),
-      ...(entry.remote ? { remote: { ...entry.remote, headers: values(entry.remote.headers) } } : {}),
+      ...(entry.remote ? { remote: { ...entry.remote, headers: values(entry.remote.headers),
+        ...(entry.remote.urlTemplate ? { urlTemplate: rewrite(entry.remote.urlTemplate) } : {}),
+      } } : {}),
       ...(entry.configOverrides ? { configOverrides: entry.configOverrides.map(override => ({ ...override,
         ...(override.envPatch ? { envPatch: values(override.envPatch) } : {}),
         ...(override.remote ? { remote: { ...override.remote,

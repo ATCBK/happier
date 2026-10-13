@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { AgentIdV1Schema } from '../../agents/agentIdV1.js';
 import { McpServerRuleV1Schema, McpServerConfigOverrideFieldsV1Schema, ReachPlaceV1Schema,
-  McpServerCatalogEntryTransportV1Schema, McpServerCatalogEntryV1Schema } from './settingsV1.js';
+  McpServerCatalogEntryTransportV1Schema, McpServerCatalogEntryV1Schema, McpServerToolsSnapshotV1Schema } from './settingsV1.js';
 import { applyMcpServerConfigOverrideV1 } from './resolveMcpServerConfigForContextV1.js';
 
 /**
@@ -154,12 +154,19 @@ export const DaemonMcpServersTestResponseSchema = lazyZodSchema(() => z.union([
     toolCount: z.number().int().min(0),
     toolNamesSample: z.array(z.string()).optional(),
     durationMs: z.number().int().min(0),
+    tools: McpServerToolsSnapshotV1Schema.shape.tools.optional(),
+    protocolVersion: McpServerToolsSnapshotV1Schema.shape.protocolVersion,
+    serverInfo: McpServerToolsSnapshotV1Schema.shape.serverInfo,
+    instructions: McpServerToolsSnapshotV1Schema.shape.instructions,
+    stderrTail: z.string().optional(),
   }).passthrough(),
   z.object({
     ok: z.literal(false),
     errorCode: DaemonMcpServersTestErrorCodeSchema,
     error: z.string().min(1),
     durationMs: z.number().int().min(0),
+    runtimeMissing: z.string().min(1).optional(),
+    stderrTail: z.string().optional(),
   }).passthrough(),
 ]));
 export type DaemonMcpServersTestResponse = z.infer<typeof DaemonMcpServersTestResponseSchema>;

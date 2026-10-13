@@ -15,13 +15,18 @@ function patchValues(base: Record<string, ValueRefV1>, patch?: Record<string, Va
 /** Configuration never reads or writes reach enablement. */
 export function applyMcpServerConfigOverrideV1(server: McpServerCatalogEntryV1, override?: McpServerConfigOverrideFieldsV1): McpServerCatalogEntryV1 {
   if (!override) return server;
+  let remote = server.remote;
+  if (remote && override.remote) {
+    const { urlTemplate: _urlTemplate, ...remoteWithoutTemplate } = remote;
+    remote = { ...(override.remote.url !== undefined ? remoteWithoutTemplate : remote),
+      ...(override.remote.url !== undefined ? { url: override.remote.url } : {}),
+      ...(override.remote.headersPatch ? { headers: patchValues(remote.headers, override.remote.headersPatch) } : {}),
+    };
+  }
   return { ...server,
     ...(override.envPatch ? { env: patchValues(server.env, override.envPatch) } : {}),
     ...(server.stdio && override.stdio ? { stdio: { ...server.stdio, ...override.stdio } } : {}),
-    ...(server.remote && override.remote ? { remote: { ...server.remote,
-      ...(override.remote.url !== undefined ? { url: override.remote.url } : {}),
-      ...(override.remote.headersPatch ? { headers: patchValues(server.remote.headers, override.remote.headersPatch) } : {}),
-    } } : {}),
+    ...(remote ? { remote } : {}),
   };
 }
 
