@@ -3,6 +3,7 @@ import type { Socket } from 'socket.io-client';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { SessionSystemRecordStored } from '@happier-dev/protocol';
 import type { SessionEffectiveAccessV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { assertBoundaryImportOrder, recordBoundaryImportOriginal } from './assertBoundaryImportOrder';
 
 /** Session/record HTTP fixture below the real Sync, authority, repository and codec owners. */
@@ -17,13 +18,19 @@ export function createSessionSystemRecordHttpFixture(params: Readonly<{
     const request: NonNullable<Parameters<typeof import('@/utils/system/runtimeFetch').setRuntimeFetch>[0]> = async url => {
         const parsed = new URL(String(url));
         const prefix = `/v2/sessions/${encodeURIComponent(params.sessionId)}`;
-        if (parsed.pathname === prefix) return Response.json({ session: {
-            id: params.sessionId, createdAt: 1, updatedAt: 2, seq: 0, active: true, activeAt: 2,
-            encryptionMode: params.encryptionMode ?? 'plain', dataEncryptionKey: params.dataEncryptionKey ?? null,
-            metadataVersion: 0, metadata: JSON.stringify({ path: '/repo', host: 'test' }),
-            agentStateVersion: 1, agentState: null, share: null,
-            ...(params.effectiveAccess ? { effectiveAccess: params.effectiveAccess } : {}),
-        } });
+        if (parsed.pathname === prefix) {
+            const session = {
+                id: params.sessionId, createdAt: 1, updatedAt: 2, seq: 0, active: true, activeAt: 2,
+                encryptionMode: params.encryptionMode ?? 'plain', dataEncryptionKey: params.dataEncryptionKey ?? null,
+                metadataVersion: 0, metadata: JSON.stringify({ path: '/repo', host: 'test' }),
+                agentStateVersion: 1, agentState: null, share: null,
+                ...(params.effectiveAccess ? { effectiveAccess: params.effectiveAccess,
+                    responsibleAccountId: null, responsibleAccount: null } : {}),
+            };
+            // Negotiated access replies carry the complete responsibility projection;
+            // the strict current reader must not reinterpret an omitted pair as unassigned.
+            return Response.json({ session: params.effectiveAccess ? SessionCurrentProjectionRecordV1Schema.parse(session) : session });
+        }
         if (parsed.pathname === `${prefix}/system-records/record`) {
             const localId = parsed.searchParams.get('localId');
             if (localId) recordReads.push(localId);

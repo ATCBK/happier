@@ -9,6 +9,7 @@ import type {
     PluginProjectedComposerControlEntryV1,
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import { renderScreen } from '@/dev/testkit';
 
 const logSpy = vi.hoisted(() => vi.fn());
 
@@ -525,26 +526,19 @@ describe('plugin contributed composer Action chips', () => {
         };
 
         const on = readChip(true);
-        if (!React.isValidElement<Readonly<Record<string, unknown>>>(on.selectable)) {
-            throw new Error('expected a selectable Composer control chip');
-        }
-        // Native keeps its own selected state; the web tree gets valid button
-        // semantics instead of nothing at all.
-        expect(on.selectable.props.accessibilityState).toEqual({ selected: true });
-        expect(on.selectable.props['aria-pressed']).toBe(true);
-
-        const off = readChip(false);
-        if (!React.isValidElement<Readonly<Record<string, unknown>>>(off.selectable)) {
-            throw new Error('expected a selectable Composer control chip');
-        }
-        expect(off.selectable.props['aria-pressed']).toBe(false);
-
-        // A control with no on/off state must not be announced as an unpressed
-        // toggle.
-        if (!React.isValidElement<Readonly<Record<string, unknown>>>(off.plain)) {
-            throw new Error('expected a plain Composer control chip');
-        }
-        expect(off.plain.props).not.toHaveProperty('aria-pressed');
+        const screen = await renderScreen(<>{on.selectable}{on.plain}</>);
+        try {
+            // Observe the rendered public chip shell: it owns the platform semantics.
+            const selectable = () => screen.findHostByTestId('plugin-composer-control:acme.channels/live-toggle')!;
+            expect(selectable().props.accessibilityRole).toBe('button');
+            expect(selectable().props.accessibilityState).toEqual({ selected: true });
+            expect(selectable().props['aria-pressed']).toBe(true);
+            const off = readChip(false);
+            await screen.update(<>{off.selectable}{off.plain}</>);
+            expect(selectable().props['aria-pressed']).toBe(false);
+            // A stateless Action stays a plain button, without toggle semantics.
+            expect(screen.findHostByTestId('plugin-composer-control:acme.channels/plain')!.props).not.toHaveProperty('aria-pressed');
+        } finally { await screen.unmount(); }
     });
 
     it('keeps choice selection on the options instead of announcing the opener as selected', () => {
@@ -1585,7 +1579,7 @@ describe('plugin contributed composer Action chips', () => {
         ]);
     });
 
-    it('gives adjacent plugin Actions and controls distinct native physical targets while retaining dense web chips', () => {
+    it('gives adjacent plugin Actions and controls distinct native physical targets while retaining dense web chips', async () => {
         const primary = [
             descriptor({ localId: 'configure', placement: 'composer.primary' }),
             descriptor({ localId: 'refresh', placement: 'composer.primary' }),
@@ -1617,26 +1611,26 @@ describe('plugin contributed composer Action chips', () => {
             chipAnchorRef: React.createRef(),
             popoverAnchorRef: React.createRef(),
         };
-        const renderFrames = () => chips.map((chip) => {
-            const node = chip.render(context);
-            if (!React.isValidElement<{
-                hitSlop?: unknown;
-                style?: (state: Readonly<{ pressed: boolean }>) => unknown;
-                testID?: string;
-            }>(node)) throw new Error('expected a visible plugin composer chip');
-            const style = node.props.style?.({ pressed: false });
-            const flattened = (Array.isArray(style) ? style : [style]).reduce<Record<string, unknown>>((result, part) => (
-                part && typeof part === 'object' ? { ...result, ...part } : result
-            ), {});
-            return { hitSlop: node.props.hitSlop, style: flattened, testID: node.props.testID };
-        });
+        const renderFrames = async () => {
+            const screen = await renderScreen(<>{chips.map((chip, index) => <React.Fragment key={index}>{chip.render(context)}</React.Fragment>)}</>);
+            try {
+                return screen.root.findAll(node => typeof node.type === 'string' && typeof node.props.testID === 'string'
+                    && node.props.testID.startsWith('plugin-composer-')).map(node => {
+                    const style = typeof node.props.style === 'function' ? node.props.style({ pressed: false }) : node.props.style;
+                    const flattened = (Array.isArray(style) ? style : [style]).reduce<Record<string, unknown>>((result, part) => (
+                        part && typeof part === 'object' ? { ...result, ...part } : result
+                    ), {});
+                    return { hitSlop: node.props.hitSlop, style: flattened, testID: node.props.testID };
+                });
+            } finally { await screen.unmount(); }
+        };
         const platform = Platform as unknown as { OS: string };
         const originalPlatform = platform.OS;
 
         try {
             for (const [nativePlatform, minimumTarget] of [['ios', 44], ['android', 48]] as const) {
                 platform.OS = nativePlatform;
-                const frames = renderFrames();
+                const frames = await renderFrames();
                 expect(frames.map((frame) => frame.testID)).toEqual([
                     'plugin-composer-action:acme.channels/configure',
                     'plugin-composer-action:acme.channels/refresh',
@@ -1656,7 +1650,7 @@ describe('plugin contributed composer Action chips', () => {
             }
 
             platform.OS = 'web';
-            for (const frame of renderFrames()) {
+            for (const frame of await renderFrames()) {
                 expect(frame.hitSlop).toBeUndefined();
                 expect(frame.style).toMatchObject({ width: 32, height: 32 });
                 expect(frame.style.minWidth).toBeUndefined();

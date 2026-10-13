@@ -55,8 +55,10 @@ beforeEach(() => {
     }));
 });
 
-it('keeps an untouched Usage widget unchanged while its default UI edit awaits canonical approval', async () => {
-    setActionPolicy(normalizeActionsSettingsV1({ v: 1 }));
+it('keeps an untouched Usage widget unchanged while its configured UI edit awaits canonical approval', async () => {
+    setActionPolicy(normalizeActionsSettingsV1({ v: 1,
+        actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } },
+    }));
     const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
         { id: 'overview', name: 'Overview', items: [{ kind: 'widget' as const, instance: {
             v: 1 as const, id: 'displayed', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {},

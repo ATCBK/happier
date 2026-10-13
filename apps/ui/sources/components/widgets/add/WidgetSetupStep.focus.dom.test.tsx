@@ -18,7 +18,7 @@ import { WidgetSetupStep } from './WidgetSetupStep';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-it.each(['typing', 'arrival'] as const)('preserves the %s intent from the setup command through menu mount, rerender and late choices', async intent => {
+it.each(['typing', 'arrival'] as const)('preserves the %s focus after the setup command through rerender and late choices', async intent => {
     const search = document.createElement('input');
     const container = document.createElement('div');
     document.body.append(search, container);
@@ -38,29 +38,28 @@ it.each(['typing', 'arrival'] as const)('preserves the %s intent from the setup 
             fields: fields.map(entry => entry.field), context: {}, viewerValues: {}, validateValue: () => ({ status: 'valid' }) }),
         submit: async () => ({ ok: true }),
     };
-    function InputAfterCommandCommit({ requested }: { requested: boolean }) {
-        React.useLayoutEffect(() => {
-            if (!requested || intent !== 'typing') return;
-            search.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
-            search.value = 'Session summaryx';
-            search.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'x' }));
-        }, [requested]);
-        return null;
-    }
-    const render = (requested: boolean, ready: boolean) => <>
+    const render = (ready: boolean) => <>
         <WidgetSetupStep setup={ready ? { ...setup, fields: fields.map(entry => ({ ...entry, field: {
             ...entry.field, options: Array.from({ length: 6 }, (_, index) => ({ value: `session-${index}`, label: `Session ${index}` })),
         } })) } : { ...setup }} phone={false} commandRef={commandRef} onDone={() => {}} testID="setup" />
-        <InputAfterCommandCommit requested={requested} />
     </>;
     try {
-        await act(async () => root.render(render(false, false)));
+        await act(async () => root.render(render(false)));
         search.focus();
         expect(commandRef.current).toBeTypeOf('function');
-        await act(async () => { commandRef.current!(); root.render(render(true, false)); });
+        await act(async () => { commandRef.current!(); root.render(render(false)); });
+        expect(document.querySelector('[data-testid="setup.field.session"]')?.contains(document.activeElement)).toBe(true);
+        if (intent === 'typing') {
+            // Real typing goes to the input the user focuses. Dispatching a key to an
+            // unfocused sibling during layout did not represent a browser interaction.
+            search.focus();
+            search.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
+            search.value = 'Session summaryx';
+            search.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'x' }));
+        }
         expect(document.querySelector('[data-testid="setup.field.session.option.0"]')).toBeNull();
-        await act(async () => root.render(render(true, false)));
-        await act(async () => root.render(render(true, true)));
+        await act(async () => root.render(render(false)));
+        await act(async () => root.render(render(true)));
         const first = document.querySelector('[data-testid="setup.field.session.option.0"]');
         expect(first).not.toBeNull();
         if (intent === 'typing') expect(document.activeElement).toBe(search);

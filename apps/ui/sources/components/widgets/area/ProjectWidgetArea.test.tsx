@@ -144,7 +144,7 @@ it('opens a foreign-Home Source dashboard as that Home viewer and refuses its re
     expect(document.writes).toHaveLength(writes);
     expect(homes.requests.filter(request => request.home === 'document' && request.path.startsWith('/v1/artifacts')).every(request => request.accountId === 'foreign-viewer')).toBe(true);
     expect(homes.requests.filter(request => request.home === 'source' && request.path === `/v1/artifacts/${artifactId}`)).toEqual([]);
-  } finally { await disconnect(); homes.dispose(); }
+  } finally { await disconnect(); await homes.dispose(); }
 });
 
 it.each([false, true])(
@@ -160,6 +160,13 @@ it.each([false, true])(
       serverUrl: `https://project-layout-select-${routeOwned}.test`,
       accountId: 'viewer',
       request: async (input, init) => {
+        if (new URL(String(input)).pathname === '/v2/account/settings') {
+          // This selection scenario needs an acknowledged document, not a
+          // pending Create approval. Persist the user's waiver at the Home boundary.
+          return Response.json({ content: { t: 'plain', v: { actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, approvalWaivedSurfaces: { 'widgets.area.layout.create': ['ui'] },
+          }) } }, version: 1 });
+        }
         const response = new URL(String(input)).pathname.startsWith(
           '/v1/artifacts',
         )
@@ -192,7 +199,7 @@ it.each([false, true])(
           { surface, layoutId: 'empty', name: 'Empty' },
           { ...context, surface: 'ui' },
         ),
-      ).toMatchObject({ ok: true });
+      ).toMatchObject({ ok: true, result: { surface: { owner: { layoutId: 'empty' } } } });
       const checkout: WorkspaceRefV1 = {
         id: 'checkout',
         serverId: connection.home.id,
@@ -227,18 +234,17 @@ it.each([false, true])(
         }),
       );
       await act(async () => {
-        expect(
-          await executor.execute(
-            'widgets.area.layout.select',
-            {
-              surface: {
-                ...surface,
-                owner: { ...surface.owner, layoutId: 'empty' },
-              },
+        const selected = await executor.execute(
+          'widgets.area.layout.select',
+          {
+            surface: {
+              ...surface,
+              owner: { ...surface.owner, layoutId: 'empty' },
             },
-            context,
-          ),
-        ).toMatchObject({ ok: true });
+          },
+          context,
+        );
+        expect(selected, JSON.stringify(selected)).toMatchObject({ ok: true });
       });
       await vi.waitFor(() =>
         expect(hook.getCurrent().layout.state).toMatchObject({
@@ -498,6 +504,10 @@ it('binds the authorized portable Source reactively without losing a Source-free
     ).toMatchObject({ ok: false, errorCode: 'widget_area_scope_retired' });
     await hook.unmount();
   } finally {
+    // This scenario deliberately invalidates the Profile without switching the
+    // fixture's transport. End that owned connection before restoring store bytes.
+    const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+    await disconnectActiveServerConnection();
     restoreLoader();
     await connection.dispose();
     storage.setState(previous);
@@ -516,8 +526,8 @@ it.each(['owner', 'view'] as const)(
     const connection = await restoreServerAccountForTest({
       serverUrl: `https://project-disclosure-${access}.test`,
       accountId: 'viewer',
-      request: (input, init) =>
-        area?.request(input, init) ?? fallback.request(input, init),
+      request: (input, init) => new URL(String(input)).pathname.startsWith('/v1/artifacts') && area
+        ? area.request(input, init) : fallback.request(input, init),
     });
     const restoreLoader = await installRealActionExecutorModuleLoader();
     try {
@@ -630,6 +640,10 @@ it.each(['owner', 'view'] as const)(
         screen
           .findAllByType(WidgetFrame)
           .find((node) => node.props.testID.endsWith('.widget.readme.frame'))!;
+      await vi.waitFor(() => expect(frame(), JSON.stringify({ text: screen.getTextContent(),
+        frames: screen.findAllByType(WidgetFrame).map(node => node.props.testID),
+        scope: storage.getState().settingsScope,
+      })).toBeDefined());
       expect(frame().props.disclosure.collapsed).toBe(true);
       const readCommands = await executor.execute('ui.current_context.read', {}, { surface: 'agent' });
       expect(readCommands.ok).toBe(true);
@@ -1050,6 +1064,10 @@ it('binds a Source-free personal Project dashboard through the real Action and A
     expect(area.writes).toHaveLength(writes);
     await hook.unmount();
   } finally {
+    // A synthetic Profile withdrawal retires the captured content lifetime but
+    // leaves this test's same Home transport alive; close it explicitly.
+    const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+    await disconnectActiveServerConnection();
     restoreLoader();
     await connection.dispose();
     storage.setState(previous);
@@ -1122,12 +1140,15 @@ it('keeps an attached shared Project dashboard owner distinct from its viewer un
           },
           version: 2,
         });
-      return area?.request(input, init) ?? fallback.request(input, init);
+      return new URL(String(input)).pathname.startsWith('/v1/artifacts') && area
+        ? area.request(input, init) : fallback.request(input, init);
     },
   });
   const restoreLoader = await installRealActionExecutorModuleLoader();
   try {
     // The routing scenario's immediate move is admitted by persisted Account policy, never an executor bypass.
+    expect(storage.getState().settingsScope, JSON.stringify({ profile: storage.getState().profileScope,
+      settings: storage.getState().settingsScope, home: connection.home.id })).toEqual({ serverId: connection.home.id, accountId: 'viewer' });
     await sync.refreshAccountSettingsFromServer(2, {
       serverId: connection.home.id,
       accountId: 'viewer',
