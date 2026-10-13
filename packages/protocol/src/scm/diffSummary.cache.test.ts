@@ -6,9 +6,25 @@ import {
   ScmDiffSummaryGenerateInputSchema,
   ScmDiffSummaryGenerateOutputSchema,
   buildScmDiffSummaryCacheKey,
+  isDurableScmDiffSummaryCacheKey,
 } from './diffSummary.js';
 
 describe('SCM diff-summary cache protocol', () => {
+  it('keeps checkpoint identities durable, digest-independent and separated by evidence mode', () => {
+    const base = { source: { kind: 'turnCheckpoint' as const,
+      checkpointReceiptId: 'checkpoint.diff_computed',
+      checkpointRef: 'refs/happier/checkpoints/scope/turn-final/turn-1' },
+      summarySchemaVersion: 4, resolvedSelector: { catalogId: 'profile:fast-summary' } };
+    const key = buildScmDiffSummaryCacheKey(base);
+    expect(key).toEqual('checkpoint:refs%2Fhappier%2Fcheckpoints%2Fscope%2Fturn-final%2Fturn-1:receipt:checkpoint.diff_computed:evidence:reconciled:schema:4:selector:profile%3Afast-summary');
+    expect(isDurableScmDiffSummaryCacheKey(key)).toBe(true);
+    expect(buildScmDiffSummaryCacheKey({ ...base, volatileDiffDigest: 'digest-a' })).toBe(key);
+    expect(buildScmDiffSummaryCacheKey({ ...base, volatileDiffDigest: 'digest-b' })).toBe(key);
+    expect(buildScmDiffSummaryCacheKey({ ...base, source: { ...base.source, turnEvidenceMode: 'reconciled' } })).toBe(key);
+    expect(buildScmDiffSummaryCacheKey({ ...base, source: { ...base.source, turnEvidenceMode: 'checkpoint' } })).not.toBe(key);
+    expect(() => buildScmDiffSummaryCacheKey({ ...base, resolvedSelector: { label: 'Fast summary' } }))
+      .toThrow(/resolved catalog id/i);
+  });
   it('does not reuse summary-only analysis for requested walkthrough output', () => {
     const base = { source: { kind: 'comparison' as const, comparisonId: 'exact-tree-pair' },
       summarySchemaVersion: 1, resolvedSelector: { catalogId: 'model:one' } };
@@ -39,6 +55,10 @@ describe('SCM diff-summary cache protocol', () => {
   });
 
   it('marks working-tree cache descriptors as volatile instead of durable', () => {
+    const key = buildScmDiffSummaryCacheKey({ source: { kind: 'workingTree', volatileSourceVersion: 'status-1' },
+      summarySchemaVersion: 4, resolvedSelector: { catalogId: 'profile:fast-summary' } });
+    expect(key).toEqual('volatile-working-tree:status-1:schema:4:selector:profile%3Afast-summary');
+    expect(isDurableScmDiffSummaryCacheKey(key)).toBe(false);
     expect(ScmDiffSummaryCacheKeyDescriptorSchema.parse({
       source: { kind: 'workingTree' },
       volatileSourceVersion: 'status-1',
