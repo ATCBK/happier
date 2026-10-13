@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import { BUNDLED_AGENT_DEFINITIONS_BY_ID } from './bundledAgentDefinitions.js';
+import { readFileSync } from 'node:fs';
+import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest';
+import { getAgentCore } from '../manifest.js';
 
 describe('bundledAgentDefinitions', () => {
+  it('publishes the manifest-owned skills declaration for offline capability edits', () => {
+    const manifest = PluginManifestV2Schema.parse(JSON.parse(readFileSync(new URL('../../../../apps/cli/assets/bundled-plugin-manifests/codex.json', import.meta.url), 'utf8')));
+    const declaration = manifest.contributes?.agents?.find(agent => agent.id === 'codex')?.capabilities?.skills;
+    expect(declaration).toBeDefined();
+    expect(getAgentCore('codex')).toHaveProperty('skills', declaration);
+  });
   it('keeps native Agent CLI metadata as the generated authority', () => {
     const claudeDefinition = BUNDLED_AGENT_DEFINITIONS_BY_ID.claude as Readonly<Record<string, unknown>>;
 

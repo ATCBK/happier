@@ -89,7 +89,12 @@ export const ACP_WRITE_LIKE_PERMISSION_KINDS = Object.freeze([
 // Retained public projection; the protocol owns the approval decision.
 export const ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES = listHappierToolAutoApprovedNamesV1();
 
-const ACP_TOOL_SAFE_ALLOW_PERMISSIONS = listHappierToolAutoApprovedNameSpellingsV1();
+// These native permission maps are consumed by OpenCode/Kilo, whose MCP tool
+// names are <server>_<tool>. ACP title aliases belong to host recognition only.
+const ACP_TOOL_SAFE_ALLOW_PERMISSIONS = [
+  ...listHappierToolAutoApprovedNameSpellingsV1('happier_'),
+  ...listHappierToolAutoApprovedNameSpellingsV1('happy_'),
+];
 
 const ACP_TOOL_KNOWN_PERMISSION_KEYS = [
   ...ACP_TOOL_READ_PERMISSIONS,

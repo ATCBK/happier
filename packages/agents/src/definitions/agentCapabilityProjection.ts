@@ -42,6 +42,8 @@ export type AgentDefinitionCapabilityFacts = Readonly<{
   localControl?: AgentLocalControlDeclaration | null;
   tools?: Readonly<{
     delivery?: string;
+    mcpToolControl?: Readonly<{ off: string; approval: string }>;
+    mcpToolLoading?: string;
   }> | null;
   structuredOutput?: Readonly<{ formats: readonly string[] }>;
 }>;
@@ -149,7 +151,12 @@ function projectToolsCapability(
   ) {
     return null;
   }
-  return { delivery };
+  const control = facts.tools?.mcpToolControl;
+  const mcpToolControl: PluginAgentToolsCapabilityV2['mcpToolControl'] = control && (control.off === 'hidden' || control.off === 'blocked') && (control.approval === 'native' || control.approval === 'host')
+    ? { off: control.off, approval: control.approval } as const : undefined;
+  const mcpToolLoading = facts.tools?.mcpToolLoading;
+  return { delivery, ...(mcpToolControl ? { mcpToolControl } : {}),
+    ...(mcpToolLoading === 'every_turn' || mcpToolLoading === 'on_demand' ? { mcpToolLoading } : {}) };
 }
 
 /**

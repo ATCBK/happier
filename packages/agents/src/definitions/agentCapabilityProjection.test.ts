@@ -23,6 +23,15 @@ const MINIMAL_SESSIONS = {
 } as const;
 
 describe('projectAgentCapabilitiesV2FromDefinition', () => {
+  it('projects MCP control and loading only from explicit definition facts', () => {
+    expect(projectAgentCapabilitiesV2FromDefinition({ ...NO_CAPABILITIES, tools: {
+      delivery: 'native_mcp', mcpToolControl: { off: 'blocked', approval: 'host' }, mcpToolLoading: 'on_demand',
+    } }, { sessions: MINIMAL_SESSIONS })).toMatchObject({ tools: {
+      delivery: 'native_mcp', mcpToolControl: { off: 'blocked', approval: 'host' }, mcpToolLoading: 'on_demand',
+    } });
+    expect(projectAgentCapabilitiesV2FromDefinition({ ...NO_CAPABILITIES, tools: { delivery: 'native_mcp' } }, { sessions: MINIMAL_SESSIONS }).tools)
+      .toEqual({ delivery: 'native_mcp' });
+  });
   it('keeps manifest-owned skills on Session and execution-primary projections', () => {
     const skills = { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' } as const;
     expect(projectAgentCapabilitiesV2FromDefinition(NO_CAPABILITIES, { sessions: MINIMAL_SESSIONS, skills }))

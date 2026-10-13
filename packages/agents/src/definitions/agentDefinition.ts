@@ -27,6 +27,8 @@ type ReleasedFlatSessionMetadataRuntimeDescriptorReaderDefinition = Readonly<{
  */
 export type AgentDefinition = Readonly<{
   id: AgentId;
+  /** ACP Registry identities published through this Agent's manifest catalog. */
+  acpRegistryIds?: readonly string[];
   core: AgentCore;
   sessionModeDescriptor: AgentSessionModeDescriptor;
   sessionModesKind: AgentSessionModesKind;

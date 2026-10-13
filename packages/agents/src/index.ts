@@ -585,8 +585,6 @@ export type {
   SessionPermissionFollowUpPromptDeliveryV1,
   SessionPermissionFollowUpPromptIntentV1,
   SessionPermissionModeV1,
-  SessionPermissionPersistAllowRuleScopeV1,
-  SessionPermissionPersistAllowRuleV1,
   SessionPermissionUpdateV1,
   SessionPermissionsServiceV1,
   SessionRuntimeAuthRefreshRequestV1,

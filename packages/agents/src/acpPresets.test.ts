@@ -45,14 +45,19 @@ describe('native Agent ACP presets', () => {
       '*': 'deny',
       read: 'allow',
       edit: 'deny',
-      change_title: 'allow',
+      happier_change_title: 'allow',
     });
   });
 
   it('keeps the static approval list narrow and provider-neutral', () => {
     expect(ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES).toEqual(listHappierToolAutoApprovedNamesV1());
     const policy = resolveAcpToolPermissionPolicy('plan');
-    for (const name of listHappierToolAutoApprovedNameSpellingsV1()) expect(policy[name], name).toBe('allow');
+    for (const prefix of ['happier_', 'happy_']) {
+      for (const name of listHappierToolAutoApprovedNameSpellingsV1(prefix)) expect(policy[name], name).toBe('allow');
+    }
+    expect(policy.mcp__happier__action_execute).toBeUndefined();
+    expect(policy['change-title']).toBeUndefined();
+    expect(policy.action_execute).toBeUndefined();
     expect(acpPresetExports).not.toHaveProperty('resolveOpenCodeStylePermissionPolicy');
   });
 });

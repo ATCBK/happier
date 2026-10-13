@@ -43,6 +43,9 @@ export const BUNDLED_AGENT_DEFINITION_IDS: readonly string[] = Object.freeze([
 
 const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "antigravity": Object.freeze(({
+  "acpRegistryIds": [
+    "antigravity-acp"
+  ],
   "cli": {
     "auth": {
       "loginLaunches": [
@@ -141,6 +144,30 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".gemini",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".gemini",
+            "antigravity-cli",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "experimental"
@@ -163,6 +190,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "settingsBackendId": "antigravity"
 }) as const),
   "auggie": Object.freeze(({
+  "acpRegistryIds": [
+    "auggie"
+  ],
   "cli": {
     "auth": {
       "loginLaunches": [
@@ -221,6 +251,41 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".augment",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".augment",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "experimental"
@@ -244,6 +309,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "none"
 }) as const),
   "claude": Object.freeze(({
+  "acpRegistryIds": [
+    "claude-acp"
+  ],
   "cli": {
     "auth": {
       "credentialPaths": [
@@ -395,6 +463,37 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": true,
       "persisted": true
     },
+    "skills": {
+      "delivery": "session_dir",
+      "liveReload": "supported",
+      "nativeDisable": "supported",
+      "nativeRoots": {
+        "plugin": [
+          [
+            ".claude",
+            "plugins",
+            "cache",
+            "*",
+            "{plugin}",
+            "*",
+            "skills"
+          ]
+        ],
+        "project": [
+          [
+            ".claude",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".claude",
+            "skills"
+          ]
+        ]
+      },
+      "usageEvidence": "reported"
+    },
     "structuredOutput": {
       "formats": [
         "json"
@@ -402,6 +501,10 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     },
     "tools": {
       "delivery": "native_mcp",
+      "mcpToolControl": {
+        "approval": "host",
+        "off": "hidden"
+      },
       "support": "supported"
     }
   },
@@ -978,6 +1081,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "staticAgentModes"
 }) as const),
   "codebuddy": Object.freeze(({
+  "acpRegistryIds": [
+    "codebuddy-code"
+  ],
   "cli": {
     "auth": {
       "environmentVariables": [
@@ -1056,6 +1162,25 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".codebuddy",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".codebuddy",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "experimental"
@@ -1083,6 +1208,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "acpAgentModes"
 }) as const),
   "codex": Object.freeze(({
+  "acpRegistryIds": [
+    "codex-acp"
+  ],
   "cli": {
     "auth": {
       "environmentVariables": [
@@ -1310,6 +1438,41 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": true,
       "persisted": true
     },
+    "skills": {
+      "delivery": "session_dir",
+      "liveReload": "supported",
+      "nativeDisable": "supported",
+      "nativeRoots": {
+        "plugin": [
+          [
+            ".codex",
+            "plugins",
+            "cache",
+            "*",
+            "{plugin}",
+            "*",
+            "skills"
+          ]
+        ],
+        "project": [
+          [
+            ".agents",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".codex",
+            "skills"
+          ]
+        ]
+      },
+      "usageEvidence": "reported"
+    },
     "structuredOutput": {
       "formats": [
         "json"
@@ -1466,6 +1629,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "acpPolicyPresets"
 }) as const),
   "copilot": Object.freeze(({
+  "acpRegistryIds": [
+    "github-copilot-cli"
+  ],
   "cli": {
     "auth": {
       "credentialPaths": [
@@ -1537,6 +1703,37 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".github",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".copilot",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "experimental"
@@ -1560,6 +1757,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "acpAgentModes"
 }) as const),
   "cursor": Object.freeze(({
+  "acpRegistryIds": [
+    "cursor"
+  ],
   "cli": {
     "auth": {
       "environmentVariables": [
@@ -1634,6 +1834,49 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": true,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".cursor",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".codex",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".cursor",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".codex",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "experimental"
@@ -1695,6 +1938,11 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported"
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "experimental"
@@ -1717,6 +1965,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "acpAgentModes"
 }) as const),
   "devin": Object.freeze(({
+  "acpRegistryIds": [
+    "devin"
+  ],
   "cli": {
     "auth": {
       "loginLaunches": [
@@ -1788,6 +2039,38 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": true,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".devin",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".windsurf",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".config",
+            "devin",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "supported"
@@ -1814,6 +2097,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "acpAgentModes"
 }) as const),
   "droid": Object.freeze(({
+  "acpRegistryIds": [
+    "factory-droid"
+  ],
   "cli": {
     "auth": {
       "environmentVariables": [
@@ -1918,6 +2204,41 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     "sessionStorage": {
       "direct": true,
       "persisted": true
+    },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".factory",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".agent",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".factory",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".agent",
+            "skills"
+          ]
+        ]
+      }
     },
     "tools": {
       "delivery": "native_mcp",
@@ -2034,6 +2355,69 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": true,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".fx",
+            "skills"
+          ],
+          [
+            "skills"
+          ],
+          [
+            ".opencode",
+            "skills"
+          ],
+          [
+            ".codex",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".claw",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".fx",
+            "skills"
+          ],
+          [
+            ".config",
+            "opencode",
+            "skills"
+          ],
+          [
+            ".codex",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".claw",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "supported"
@@ -2060,6 +2444,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "acpAgentModes"
 }) as const),
   "gemini": Object.freeze(({
+  "acpRegistryIds": [
+    "gemini"
+  ],
   "cli": {
     "auth": {
       "environmentVariables": [
@@ -2130,6 +2517,33 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".gemini",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".gemini",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "supported"
@@ -2198,6 +2612,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "none"
 }) as const),
   "grok": Object.freeze(({
+  "acpRegistryIds": [
+    "grok-build"
+  ],
   "cli": {
     "auth": {
       "environmentVariables": [
@@ -2303,6 +2720,45 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".grok",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".cursor",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".grok",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".cursor",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "experimental"
@@ -2325,6 +2781,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "none"
 }) as const),
   "kilo": Object.freeze(({
+  "acpRegistryIds": [
+    "kilo"
+  ],
   "cli": {
     "auth": {
       "loginLaunches": [
@@ -2385,8 +2844,51 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".kilo",
+            "skills"
+          ],
+          [
+            ".kilocode",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".kilo",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
+      "mcpToolControl": {
+        "approval": "host",
+        "off": "blocked"
+      },
       "support": "experimental"
     }
   },
@@ -2409,6 +2911,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "acpAgentModes"
 }) as const),
   "kimi": Object.freeze(({
+  "acpRegistryIds": [
+    "kimi"
+  ],
   "cli": {
     "auth": {
       "loginLaunches": [
@@ -2506,6 +3011,54 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".kimi",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".codex",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".config",
+            "agents",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ],
+          [
+            ".kimi",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".codex",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "experimental"
@@ -2593,6 +3146,25 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     "sessionStorage": {
       "direct": true,
       "persisted": true
+    },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".kiro",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".kiro",
+            "skills"
+          ]
+        ]
+      }
     },
     "tools": {
       "delivery": "native_mcp",
@@ -2752,6 +3324,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "acpAgentModes"
 }) as const),
   "opencode": Object.freeze(({
+  "acpRegistryIds": [
+    "opencode"
+  ],
   "cli": {
     "auth": {
       "loginLaunches": [
@@ -2874,6 +3449,46 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": true,
       "persisted": true
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".opencode",
+            "skills"
+          ],
+          [
+            ".opencode",
+            "skill"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".config",
+            "opencode",
+            "skills"
+          ],
+          [
+            ".claude",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_mcp",
       "support": "supported"
@@ -2972,6 +3587,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "acpAgentModes"
 }) as const),
   "pi": Object.freeze(({
+  "acpRegistryIds": [
+    "pi-acp"
+  ],
   "cli": {
     "auth": {
       "environmentVariables": [
@@ -3073,8 +3691,40 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": true
     },
+    "skills": {
+      "delivery": "session_dir",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".pi",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".pi",
+            "agent",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ]
+      }
+    },
     "tools": {
       "delivery": "native_extension",
+      "mcpToolControl": {
+        "approval": "host",
+        "off": "hidden"
+      },
       "support": "experimental"
     }
   },
@@ -3098,6 +3748,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
   "sessionModesKind": "none"
 }) as const),
   "qwen": Object.freeze(({
+  "acpRegistryIds": [
+    "qwen-code"
+  ],
   "cli": {
     "auth": {
       "loginLaunches": [
@@ -3157,6 +3810,33 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     "sessionStorage": {
       "direct": false,
       "persisted": true
+    },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported",
+      "nativeRoots": {
+        "project": [
+          [
+            ".qwen",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ],
+        "user": [
+          [
+            ".qwen",
+            "skills"
+          ],
+          [
+            ".agents",
+            "skills"
+          ]
+        ]
+      }
     },
     "tools": {
       "delivery": "native_mcp",
@@ -3233,6 +3913,11 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "direct": false,
       "persisted": false
     },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported"
+    },
     "tools": {
       "delivery": "unsupported",
       "support": "unsupported"
@@ -3306,6 +3991,11 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     "sessionStorage": {
       "direct": false,
       "persisted": false
+    },
+    "skills": {
+      "delivery": "none",
+      "liveReload": "unsupported",
+      "nativeDisable": "unsupported"
     },
     "tools": {
       "delivery": "unsupported",

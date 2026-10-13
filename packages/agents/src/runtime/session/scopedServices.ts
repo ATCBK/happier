@@ -318,13 +318,6 @@ export type SessionPermissionFollowUpPromptIntentV1 = Readonly<{
   delivery: SessionPermissionFollowUpPromptDeliveryV1;
 }>;
 
-export type SessionPermissionPersistAllowRuleScopeV1 = 'session' | 'workspace' | 'account';
-
-export type SessionPermissionPersistAllowRuleV1 = Readonly<{
-  scope: SessionPermissionPersistAllowRuleScopeV1;
-  toolName?: string;
-}>;
-
 export type SessionPermissionDecisionResultV1 = Readonly<{
   decision: SessionPermissionDecisionV1;
   rationale?: string;
@@ -340,12 +333,6 @@ export type SessionPermissionDecisionResultV1 = Readonly<{
    * of smuggling user text through provider-local permission payloads.
    */
   followUpPrompt?: SessionPermissionFollowUpPromptIntentV1;
-  /**
-   * Optional typed persistence intent for an approved permission rule. Provider-specific
-   * permission update payloads can still ride `updatedPermissions`, but the persistence scope is
-   * explicit on the public decision surface before it freezes.
-   */
-  persistAllowRule?: SessionPermissionPersistAllowRuleV1;
   /**
    * Optional host-rewritten tool input returned by the active permission surface.
    */

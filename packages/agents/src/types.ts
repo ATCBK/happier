@@ -1,8 +1,10 @@
-export type { ConnectedServiceId } from '@happier-dev/protocol';
+export type { ConnectedServiceId, AgentToolsDelivery } from '@happier-dev/protocol';
 import { SESSION_PERMISSION_MODES } from '@happier-dev/protocol/sessions/metadata/permission-modes';
 import type { SessionNativeVendorResumeIdFieldV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import {
     type ConnectedServiceId,
+    type PluginAgentSkillsCapabilityV2,
+    type AgentToolsDelivery,
     type ConnectedServicesProviderConfigSharingModeV1,
     type ConnectedServicesProviderStateSharingModeV1,
 } from '@happier-dev/protocol';
@@ -52,7 +54,6 @@ export type PermissionIntent = (typeof PERMISSION_INTENTS)[number];
 
 export type VendorResumeSupportLevel = 'supported' | 'unsupported' | 'experimental';
 export type VendorHandoffSupportLevel = 'supported' | 'unsupported' | 'experimental';
-export type AgentToolsDelivery = 'native_mcp' | 'native_extension' | 'shell_bridge' | 'unsupported';
 export type AgentToolsSupportLevel = 'supported' | 'experimental' | 'unsupported';
 export type AgentLocalControlTopology = 'exclusive' | 'shared';
 export type AgentLocalControlAttachStrategy = 'terminal_host' | 'provider_attach' | 'unsupported';
@@ -151,6 +152,8 @@ export type AgentRuntimeInputConfig = Readonly<{
 export type AgentToolsConfig = Readonly<{
     delivery: AgentToolsDelivery;
     support: AgentToolsSupportLevel;
+    mcpToolControl?: Readonly<{ off: 'hidden' | 'blocked'; approval: 'native' | 'host' }>;
+    mcpToolLoading?: 'every_turn' | 'on_demand';
 }>;
 
 export type AgentCoreRuntimeControlSurface = Readonly<{
@@ -167,6 +170,12 @@ export type AgentCoreRuntimeControlSurface = Readonly<{
 
 export type AgentCore = Readonly<{
     id: BundledAgentId;
+    /** Read projection of the manifest-owned skills declaration, for offline capability decisions. */
+    skills?: Readonly<Omit<PluginAgentSkillsCapabilityV2, 'nativeRoots'> & {
+        nativeRoots?: Readonly<{
+            [Key in keyof NonNullable<PluginAgentSkillsCapabilityV2['nativeRoots']>]: readonly (readonly string[])[];
+        }>;
+    }>;
     /**
      * Whether this agent contributes a concrete backend definition.
      *
