@@ -6,7 +6,9 @@ import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/libra
 import { createSkillStore, type SkillSessionDirItem } from './skillStore';
 
 const scratch: string[] = [];
+const pendingReadCleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
+    for (const cleanup of pendingReadCleanup.splice(0)) await cleanup();
     for (const root of scratch.splice(0)) {
         // The fixture deliberately contains read-only immutable trees.
         const writable = async (path: string): Promise<void> => {
@@ -19,7 +21,7 @@ afterEach(async () => {
         await rm(root, { recursive: true, force: true });
     }
 });
-function skill(name = 'guide', content = 'Use the guide'): SkillSessionDirItem {
+function skill(name = 'guide', content = name === 'guide' ? 'Use the guide' : `Use ${name}`): SkillSessionDirItem {
     const files = [
         { path: 'SKILL.md', contentKind: 'utf8' as const, contentBase64: Buffer.from(content).toString('base64') },
         { path: 'scripts/run.sh', contentKind: 'utf8' as const, contentBase64: Buffer.from('#!/bin/sh\necho guide\n').toString('base64'), unixMode: 0o755 },
@@ -86,6 +88,8 @@ describe('daemon skill store', () => {
         const session = skill('session'); const run = skill('run'); const library = skill('library'); const unused = skill('unused');
         await f.ensure('session-one', [session]);
         await f.ensure('session-one/runs/run-one', [run]);
+        const independentRun = skill('independent-run');
+        await f.ensure('index-parent/runs/run-only', [independentRun]);
         await f.ensure('retired', [library, unused]);
         await f.store.releaseSkillSessionDirs('retired');
         const staging = join(f.happyHomeDir, 'skills', 'cache', '.staging-interrupted');
@@ -100,11 +104,69 @@ describe('daemon skill store', () => {
         await expect(lstat(staging)).rejects.toMatchObject({ code: 'ENOENT' });
         const roots = await f.store.readLiveSkillCachePaths();
         expect(roots.reliable).toBe(true);
-        expect(roots.paths).toEqual(new Set([f.cachePath(session), f.cachePath(run)]));
+        expect(roots.paths.has(f.cachePath(session))).toBe(true);
+        expect(roots.paths.has(f.cachePath(run))).toBe(true);
+        expect(roots.paths.has(f.cachePath(independentRun))).toBe(true);
+    });
+    it('does not block ensure on external GC reads and sweeps using the latest Session and Run manifests', async () => {
+        const f = await fixture();
+        let entered!: () => void;
+        let release!: () => void;
+        const readEntered = new Promise<void>(resolve => { entered = resolve; });
+        const externalRead = new Promise<void>(resolve => { release = resolve; });
+        let readFinished = false;
+        let readUnavailable = false;
+        const store = createSkillStore({ happyHomeDir: f.happyHomeDir,
+            // The Account library read is an external service boundary; its response is held open.
+            readLibraryDigests: async () => {
+                if (readUnavailable) throw new Error('Account library is unavailable');
+                entered(); await externalRead; readFinished = true; return [];
+            } });
+        const unused = skill('unused');
+        await store.ensureSkillSessionDir({ ownerKey: 'retired', items: [unused], nativeDisables: [] });
+        await store.releaseSkillSessionDirs('retired');
+        const collection = store.collectSkillCache();
+        await readEntered;
+        const live = skill('live'); const run = skill('live-run');
+        const sessionEnsure = store.ensureSkillSessionDir({ ownerKey: 'live', items: [live], nativeDisables: [] });
+        const runEnsure = store.ensureSkillSessionDir({ ownerKey: 'live/runs/run-one', items: [run], nativeDisables: [] });
+        const cleanup = async () => { release(); await Promise.allSettled([collection, sessionEnsure, runEnsure]); };
+        pendingReadCleanup.push(cleanup);
+        try {
+            await Promise.all([sessionEnsure, runEnsure]);
+            expect(readFinished).toBe(false);
+            release(); await collection;
+            expect(await readFile(join(f.cachePath(live), 'SKILL.md'), 'utf8')).toBe('Use live');
+            expect(await readFile(join(f.cachePath(run), 'SKILL.md'), 'utf8')).toBe('Use live-run');
+            await expect(lstat(f.cachePath(unused))).rejects.toMatchObject({ code: 'ENOENT' });
+            const stale = await store.ensureSkillSessionDir({ ownerKey: 'stale', items: [unused], nativeDisables: [] });
+            const libraryOnly = skill('library-only');
+            await store.ensureSkillSessionDir({ ownerKey: 'library-only', items: [libraryOnly], nativeDisables: [] });
+            await store.releaseSkillSessionDirs('library-only');
+            readUnavailable = true;
+            await store.collectSkillCache();
+            await store.reconcileSkillSessionDirs({ liveSessionIds: ['live'] });
+            expect(await lstat(stale.pluginRoot)).toBeDefined();
+            expect(await lstat(f.cachePath(unused))).toBeDefined();
+            expect(await lstat(f.cachePath(libraryOnly))).toBeDefined();
+        } finally { await cleanup(); }
+    });
+    it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')('isolates an unwritable staging parent without publishing partial cache content', async () => {
+        const f = await fixture();
+        const cache = join(f.happyHomeDir, 'skills', 'cache');
+        await mkdir(cache, { recursive: true });
+        await chmod(cache, 0o555);
+        try {
+            const result = await f.ensure('session-one');
+            expect(result.failed).toEqual([{ skillId: skill().skillId, reason: 'materialize_failed', detail: 'EACCES' }]);
+            expect(await readdir(cache)).toEqual([]);
+            expect(await readdir(result.skillsRoot)).toEqual([]);
+        } finally { await chmod(cache, 0o700); }
     });
     it('retains everything when a session manifest or live inventory is unreadable', async () => {
         const f = await fixture();
         const session = await f.ensure('session-one');
+        await chmod(join(session.pluginRoot, 'session.json'), 0o600);
         await writeFile(join(session.pluginRoot, 'session.json'), '{bad');
         expect((await f.store.readLiveSkillCachePaths()).reliable).toBe(false);
         await f.store.collectSkillCache({ libraryDigests: [] });
@@ -116,6 +178,8 @@ describe('daemon skill store', () => {
         const f = await fixture();
         const live = await f.ensure('live'); const stale = await f.ensure('stale');
         await f.ensure('stale/runs/run-one', [skill('run')]);
+        await f.store.reconcileSkillSessionDirs({ liveSessionIds: ['live'], libraryDigests: null });
+        expect(await lstat(stale.pluginRoot)).toBeDefined();
         await f.store.reconcileSkillSessionDirs({ liveSessionIds: ['live'], libraryDigests: [] });
         expect(await lstat(live.pluginRoot)).toBeDefined();
         await expect(lstat(stale.pluginRoot)).rejects.toMatchObject({ code: 'ENOENT' });

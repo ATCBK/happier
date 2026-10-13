@@ -1,0 +1,87 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod';
+import { EnsureSkillSessionDirInputSchema, EnsureSkillSessionDirResultSchema, type SkillStore } from './skillStore';
+import { SessionStartedSuccessReportSchema } from '@/daemon/sessions/sessionStartedReportSchema';
+import { bindTrackedSessionIdentity, adoptTrackedSessionRunnerIdentity, resolveSessionReportTrackedCorrelation } from '@/daemon/sessions/sessionReportCorrelation';
+import type { TrackedSession } from '@/daemon/types';
+import { configuration } from '@/configuration';
+import { registerExternalSessionIdentity } from '@/daemon/sessions/onHappySessionWebhook';
+import type { SkillUsageRecorder } from './skillUsage';
+
+export const SKILL_SESSION_DIR_PATH = '/skills/session-dir';
+export const SKILL_USAGE_PATH = '/skills/usage';
+export const RecordSkillUseInputSchema = z.object({
+    skillIds: z.array(z.string().min(1)),
+    account: z.object({ accountId: z.string().min(1), serverHttpBaseUrl: z.string().url() }).strict(),
+}).strict();
+export const RecordSkillUseResultSchema = z.object({ ok: z.literal(true) }).strict();
+export const SkillSessionStartupIdentitySchema = SessionStartedSuccessReportSchema.pick({ metadata: true })
+    .extend({ pid: z.number().int().positive() }).strict();
+export const SkillSessionDirControlRequestSchema = EnsureSkillSessionDirInputSchema.extend({
+    startupIdentity: SkillSessionStartupIdentitySchema.optional(),
+}).strict();
+export function registerSkillControlRoutes(app: FastifyInstance, input: Readonly<{
+    skillStore?: SkillStore;
+    skillUsageRecorder?: SkillUsageRecorder;
+    getChildren: () => TrackedSession[];
+    pidToTrackedSession?: Map<number, TrackedSession>;
+    requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    isShuttingDown: () => boolean;
+}>): void {
+    app.withTypeProvider<ZodTypeProvider>().post(SKILL_USAGE_PATH, {
+        schema: { body: RecordSkillUseInputSchema, response: { 200: RecordSkillUseResultSchema,
+            503: z.object({ errorCode: z.literal('skills_unavailable') }).strict() } },
+        preHandler: input.requireAuth,
+    }, async (request, reply) => {
+        if (input.isShuttingDown() || !input.skillUsageRecorder) return reply.code(503).send({ errorCode: 'skills_unavailable' });
+        await input.skillUsageRecorder.recordSkillUse(request.body);
+        return { ok: true as const };
+    });
+    app.withTypeProvider<ZodTypeProvider>().post(SKILL_SESSION_DIR_PATH, {
+        schema: { body: SkillSessionDirControlRequestSchema, response: { 200: EnsureSkillSessionDirResultSchema,
+            503: z.object({ errorCode: z.literal('skills_unavailable') }).strict() } },
+        preHandler: input.requireAuth,
+    }, async (request, reply) => {
+        if (input.isShuttingDown() || !input.skillStore) return reply.code(503).send({ errorCode: 'skills_unavailable' });
+        const { startupIdentity, ...content } = request.body;
+        // Run folders share their parent Session's existing process custody;
+        // the context names that parent, never the Run resolver's process.
+        if (content.ownerKey.includes('/') && !startupIdentity) {
+            return reply.code(503).send({ errorCode: 'skills_unavailable' });
+        }
+        if (startupIdentity) {
+            const { metadata, pid } = startupIdentity;
+            if (!metadata || typeof metadata !== 'object' || metadata.hostPid !== pid || typeof metadata.path !== 'string'
+                || (metadata.happyHomeDir && metadata.happyHomeDir !== configuration.happyHomeDir)) {
+                return reply.code(503).send({ errorCode: 'skills_unavailable' });
+            }
+            const sessionId = content.ownerKey.split('/')[0]!;
+            const correlated = await resolveSessionReportTrackedCorrelation({ metadata, pid,
+                pidToTrackedSession: new Map(input.getChildren().map(tracked => [tracked.pid, tracked])),
+                // Identity binding must not claim or settle the readiness waiter.
+                pidToAwaiter: new Map(),
+            });
+            if (correlated.kind === 'refused') {
+                return reply.code(503).send({ errorCode: 'skills_unavailable' });
+            }
+            if (correlated.kind === 'matched') {
+                if (!input.getChildren().includes(correlated.tracked)
+                    || correlated.tracked.reportMarkerCustody?.retiring
+                    || !bindTrackedSessionIdentity(correlated.tracked, sessionId)) {
+                    return reply.code(503).send({ errorCode: 'skills_unavailable' });
+                }
+                if ('cancellationIdentity' in correlated) {
+                    adoptTrackedSessionRunnerIdentity(correlated.tracked, correlated.cancellationIdentity);
+                }
+            } else {
+                if (!input.pidToTrackedSession) return reply.code(503).send({ errorCode: 'skills_unavailable' });
+                const tracked = await registerExternalSessionIdentity({ pidToTrackedSession: input.pidToTrackedSession, pid, sessionId, metadata });
+                if (!tracked) {
+                    return reply.code(503).send({ errorCode: 'skills_unavailable' });
+                }
+            }
+        }
+        return input.skillStore.ensureSkillSessionDir(content);
+    });
+}

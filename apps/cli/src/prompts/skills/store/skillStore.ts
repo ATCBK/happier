@@ -1,10 +1,12 @@
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import type { Stats } from 'node:fs';
 import { z } from 'zod';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PromptBundleEntryV1Schema, validatePromptBundleBodyV1AgainstSchemaId, type PromptBundleEntryV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
+import { createAbsolutePathSymlink } from '@happier-dev/plugin-sdk/fs';
 
 const segment = z.string().min(1).refine(value => value !== '.' && value !== '..' && !/[\\/\0]/u.test(value));
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
@@ -44,7 +46,7 @@ async function directoryEntries(path: string): Promise<string[]> {
 }
 /** The single writer makes its immutable trees writable for retirement; never follows links. */
 async function removeOwnedTree(path: string): Promise<void> {
-    let info;
+    let info: Stats;
     try { info = await lstat(path); }
     catch (error) { if (errorCode(error) === 'ENOENT') return; throw error; }
     if (!info.isSymbolicLink()) {
@@ -91,17 +93,18 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                     if (path === manifests[0] && manifests.length > 1 && !await exists(path)) continue;
                     const items = await readManifest(path);
                     if (!items) return { reliable: false, paths };
+                    paths.add(sessionRoot);
                     for (const item of items) paths.add(cacheDirectory(item.digest));
                 }
             }
             return { reliable: true, paths };
         } catch { return { reliable: false, paths }; }
     };
-    const collect = async (request: CollectionInput): Promise<void> => {
-        let libraryDigests: readonly string[] | null;
-        try { libraryDigests = request.libraryDigests !== undefined ? request.libraryDigests : await input.readLibraryDigests?.() ?? null; }
-        catch { return; }
-        if (libraryDigests === null) return;
+    const readLibraryDigests = async (request: CollectionInput): Promise<readonly string[] | null> => {
+        try { return request.libraryDigests !== undefined ? request.libraryDigests : await input.readLibraryDigests?.() ?? null; }
+        catch { return null; }
+    };
+    const collect = async (libraryDigests: readonly string[]): Promise<void> => {
         const roots = await readRoots();
         if (!roots.reliable) return;
         const marked = new Set(roots.paths);
@@ -164,7 +167,7 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                     try {
                         const source = materialized.get(item.name)!;
                         if (platform === 'win32') { await cp(source, temporary, { recursive: true }); await makeReadOnly(temporary); }
-                        else await symlink(source, temporary, 'dir');
+                        else await createAbsolutePathSymlink({ sourcePath: source, destinationPath: temporary, sourceKind: 'directory' });
                         if (platform === 'win32') await removeOwnedTree(destination);
                         await rename(temporary, destination);
                     } catch (error) {
@@ -190,22 +193,28 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                 return { pluginRoot, skillsRoot, failed };
             });
         },
-        readSkillSessionItems(ownerKey: string): Promise<readonly SkillSessionItem[] | null> {
-            return serialize(() => readManifest(join(ownerDirectory(ownerKey), 'session.json')));
-        },
         releaseSkillSessionDirs(sessionId: string): Promise<void> {
             return serialize(() => removeOwnedTree(ownerDirectory(segment.parse(sessionId))));
         },
-        collectSkillCache(request: CollectionInput = {}): Promise<void> { return serialize(() => collect(request)); },
+        async collectSkillCache(request: CollectionInput = {}): Promise<void> {
+            // Remote inventory must not hold up unrelated Session materialization.
+            const libraryDigests = await readLibraryDigests(request);
+            if (libraryDigests !== null) await serialize(() => collect(libraryDigests));
+        },
         readLiveSkillCachePaths(): Promise<SkillCachePaths> { return serialize(readRoots); },
-        reconcileSkillSessionDirs(request: Readonly<{ liveSessionIds: readonly string[] | null; libraryDigests?: readonly string[] | null }>): Promise<void> {
+        async reconcileSkillSessionDirs(request: Readonly<{ liveSessionIds: readonly string[] | null; libraryDigests?: readonly string[] | null }>): Promise<void> {
+            if (request.liveSessionIds === null) return;
+            const libraryDigests = await readLibraryDigests(request);
+            if (libraryDigests === null) return;
+            // The daemon's only caller awaits this after re-adoption and before
+            // admitting Session control. Its live census stays a startup input.
+            const liveSessionIds = request.liveSessionIds;
             return serialize(async () => {
-                if (request.liveSessionIds === null) return;
-                const live = new Set(request.liveSessionIds.map(id => segment.parse(id)));
+                const live = new Set(liveSessionIds.map(id => segment.parse(id)));
                 // Inventory uncertainty prevents both folder deletion and the subsequent cache sweep.
                 if (!(await readRoots()).reliable) return;
                 for (const sessionId of await directoryEntries(sessions)) if (!live.has(sessionId)) await removeOwnedTree(ownerDirectory(sessionId));
-                await collect(request);
+                await collect(libraryDigests);
             });
         },
     };
