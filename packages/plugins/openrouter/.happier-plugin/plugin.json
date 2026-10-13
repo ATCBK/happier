@@ -1,4 +1,8 @@
 {
+  "brand": {
+    "iconResourceId": "brand-icon",
+    "monochrome": true
+  },
   "contributes": {
     "accountCollections": [],
     "actions": [],
@@ -94,7 +98,6 @@
             "protocol": "openai-responses"
           }
         ],
-        "icon": "openrouter",
         "id": "openrouter",
         "kind": "aggregator",
         "name": "OpenRouter",
@@ -102,8 +105,16 @@
         "websiteUrl": "https://openrouter.ai"
       }
     ],
+    "registrySources": [],
     "requestInterceptors": [],
-    "resources": [],
+    "resources": [
+      {
+        "contentType": "image/png",
+        "id": "brand-icon",
+        "kind": "asset",
+        "path": "assets/brand.png"
+      }
+    ],
     "roles": [],
     "scmBackends": [],
     "scmHostingProviders": [],
