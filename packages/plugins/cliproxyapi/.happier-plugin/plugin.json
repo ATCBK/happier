@@ -1,4 +1,8 @@
 {
+  "brand": {
+    "iconResourceId": "brand-icon",
+    "monochrome": true
+  },
   "contributes": {
     "accountCollections": [],
     "actions": [],
@@ -218,8 +222,16 @@
         "websiteUrl": "https://github.com/router-for-me/CLIProxyAPI"
       }
     ],
+    "registrySources": [],
     "requestInterceptors": [],
-    "resources": [],
+    "resources": [
+      {
+        "contentType": "image/png",
+        "id": "brand-icon",
+        "kind": "asset",
+        "path": "assets/brand.png"
+      }
+    ],
     "roles": [],
     "scmBackends": [],
     "scmHostingProviders": [],
