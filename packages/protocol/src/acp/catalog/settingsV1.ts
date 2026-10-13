@@ -5,6 +5,8 @@ import { createStoredReadSchema, defineStoredReadProjection } from '../../json/s
 import { ValueRefV1Schema, type ValueRefV1 } from '../../valueRefs/valueRefV1.js';
 import { PluginAgentAcpStderrRulesV2Schema } from '../../plugins/contributions/agentAcpStderrRules.js';
 import { PinnedArchiveAssetsByPlatformSchema, PinnedArchivePlatformSchema } from '../../installables/sourceKind.js';
+import { RegistryProvenanceV1Schema } from '../../registries/registryItemsV1.js';
+import { RegistryUpstreamV1Schema } from '../../registries/registryUpstreamV1.js';
 
 const ACP_CATALOG_ID_REGEX = /^[a-z0-9][a-z0-9._-]*$/;
 const ACP_ENV_KEY_REGEX = /^[A-Z_][A-Z0-9_]*$/;
@@ -72,12 +74,25 @@ export const AcpBackendLaunchV1Schema = lazyZodSchema(() => z.discriminatedUnion
 ]));
 export type AcpBackendLaunchV1 = z.infer<typeof AcpBackendLaunchV1Schema>;
 
+export const AcpBackendOriginV1Schema = lazyZodSchema(() => z.object({
+  kind: z.literal('registry'),
+  provenance: RegistryProvenanceV1Schema,
+  iconUrl: z.string().optional(),
+  publisher: z.string().optional(),
+  license: z.string().optional(),
+  repository: z.string().optional(),
+  website: z.string().optional(),
+  upstream: RegistryUpstreamV1Schema.optional(),
+}).strict());
+export type AcpBackendOriginV1 = Readonly<z.infer<typeof AcpBackendOriginV1Schema>>;
+
 export const AcpBackendDefinitionV1Schema = lazyZodSchema(() => z.object({
   id: AcpCatalogIdV1Schema,
   name: AcpCatalogIdV1Schema,
   title: z.string().min(1),
   description: z.string().min(1).optional(),
   launch: AcpBackendLaunchV1Schema,
+  origin: AcpBackendOriginV1Schema.optional(),
   env: z.record(AcpEnvKeyV1Schema, ValueRefV1Schema).default({}),
   auth: AcpBackendAuthConfigV1Schema.optional(),
   runtime: AcpConfiguredRuntimeV1Schema.optional(),

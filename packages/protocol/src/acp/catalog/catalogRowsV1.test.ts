@@ -9,6 +9,41 @@ const definition = { id: 'custom', name: 'custom', title: 'Custom', launch: { ki
     createdAt: 1, updatedAt: 1 };
 
 describe('Account ACP catalog rows', () => {
+    it('admits a private personal resource ref without reviving opaque Settings secret ids', () => {
+        // IR-97: createPersonal returns the resource owner's canonical resource ref even with no grants.
+        const secretId = formatSharedSavedSecretRefV1('private-personal-key');
+        const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ ...definition,
+            env: { TOKEN: { t: 'savedSecret', secretId } },
+        }] });
+        expect(openAcpCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: record } }))
+            .toEqual({ status: 'opened', record });
+        expect(listAcpCatalogSavedSecretRefsV1(record)).toEqual([{ path: 'definitions[0].env.TOKEN', secretId }]);
+    });
+
+    it('rejects personal credentials nested in templates at the ACP declaration boundary', () => {
+        expect(AcpCatalogRecordV1Schema.safeParse({ v: 1, definitions: [{ ...definition, env: { TOKEN: {
+            t: 'template', template: 'Bearer {key}', vars: { key: { t: 'savedSecret', secretId: 'personal-key' } },
+        } } }] }).success).toBe(false);
+    });
+    it('admits and rewrites template credentials without bypassing the ACP reference policy', () => {
+        const secretId = formatSharedSavedSecretRefV1('template-key');
+        const replacement = formatSharedSavedSecretRefV1('replacement-key');
+        const template = { t: 'template' as const, template: 'Bearer {key}', vars: {
+            key: { t: 'savedSecret' as const, secretId },
+        } };
+        const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ ...definition, env: { TOKEN: template } }] });
+        expect(openAcpCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: record } }))
+            .toEqual({ status: 'opened', record });
+        expect(listAcpCatalogSavedSecretRefsV1(record)).toEqual([
+            { path: 'definitions[0].env.TOKEN.vars.key', secretId },
+        ]);
+        expect(listAcpCatalogSavedSecretRefsV1(rewriteAcpCatalogSavedSecretRefsV1(record, secretId, replacement))).toEqual([
+            { path: 'definitions[0].env.TOKEN.vars.key', secretId: replacement },
+        ]);
+        expect(AcpCatalogRecordV1Schema.safeParse({ ...record, definitions: [{ ...definition,
+            env: { TOKEN: { ...template, vars: { key: { t: 'savedSecret', secretId: 'personal-key' } } } },
+        }] }).success).toBe(false);
+    });
     it('retains canonical definition defaults while closing current row fields', () => {
         const { capabilities: _capabilities, env: _env, launch, ...fields } = definition;
         const { args: _args, ...minimalLaunch } = launch;

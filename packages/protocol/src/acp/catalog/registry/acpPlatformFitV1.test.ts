@@ -20,4 +20,8 @@ describe('resolveAcpPlatformFitV1', () => {
   it('reports uv unavailable until the managed uv consumer lands', () => {
     expect(resolveAcpPlatformFitV1({ kind: 'uv', package: 'agent', version: '1', args: [] }, { platform: 'linux', arch: 'x64' })).toEqual({ kind: 'cant_run', reason: 'managed_uv_unavailable' });
   });
+  it('uses the same distribution preference for registry previews as mapped launches', () => {
+    expect(resolveAcpPlatformFitV1({ npm: { package: 'agent', version: '1.0.0', args: [], env: {} } }, { platform: 'linux', arch: 'x64' })).toEqual({ kind: 'can_run', via: 'npm' });
+    expect(resolveAcpPlatformFitV1({ binary: { 'linux-x64': { archiveUrl: 'https://example.com/agent.tar.bz2', command: './agent', args: [], env: {} } } }, { platform: 'linux', arch: 'x64' })).toEqual({ kind: 'cant_run', reason: 'archive_type_unsupported' });
+  });
 });

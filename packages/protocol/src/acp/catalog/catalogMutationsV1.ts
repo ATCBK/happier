@@ -1,6 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 import { AcpCatalogRecordV1Schema, AcpCatalogRowMutationV1Schema } from './catalogSchemasV1.js';
+import { AcpPlatformFitV1Schema } from './registry/acpPlatformFitV1.js';
 
 import {
   AcpBackendDefinitionV1Schema,
@@ -37,6 +38,7 @@ export const AcpBackendAuthoringInputV1Schema = lazyZodSchema(() => z.object({
   name: z.string(),
   title: z.string(),
   description: z.string().optional(),
+  origin: AcpBackendDefinitionV1Schema.shape.origin.optional(),
   launch: AcpBackendLaunchV1Schema,
   env: AcpBackendDefinitionV1Schema.shape.env.optional(),
   auth: z.object({
@@ -61,6 +63,7 @@ export type AcpCatalogMutationErrorCodeV1 =
   | 'acp_backend_invalid'
   | 'acp_backend_name_conflict'
   | 'acp_backend_id_conflict'
+  | 'registry_change_requires_install'
   | 'acp_backend_not_found';
 
 /**
@@ -72,6 +75,7 @@ export type AcpBackendUpsertResultV1 =
   | Readonly<{ ok: false; code: 'acp_backend_invalid'; message: string; fields: readonly string[] }>
   | Readonly<{ ok: false; code: 'acp_backend_name_conflict'; message: string; fields: readonly ['name'] }>
   | Readonly<{ ok: false; code: 'acp_backend_id_conflict'; message: string; fields: readonly ['id'] }>
+  | Readonly<{ ok: false; code: 'registry_change_requires_install'; message: string; fields: readonly ['launch', 'origin'] }>
   | Readonly<{ ok: false; code: 'acp_catalog_unavailable'; message: string; fields: readonly ['catalog'] }>;
 
 export type AcpBackendDeleteResultV1 =
@@ -107,20 +111,24 @@ export function applyAcpBackendUpsertV1(input: Readonly<{
   settings: unknown;
   backend: AcpBackendAuthoringInputV1;
   nowMs: number;
-  mode?: 'upsert' | 'create';
+  mode?: 'upsert' | 'create' | 'registryInstall';
 }>): AcpBackendUpsertResultV1 {
   const settings = readWritableCatalog(input.settings);
   if (!settings) return { ok: false, code: 'acp_catalog_unavailable', message: 'ACP catalog requires repair before editing', fields: ['catalog'] };
   const authored = input.backend;
   const id = authored.id.trim();
   const previous = settings.backends.find((entry) => entry.id === id) ?? null;
-  if (previous && input.mode === 'create') {
+  if (previous && (input.mode === 'create' || input.mode === 'registryInstall'
+    && (!previous.origin || !authored.origin
+      || previous.origin.provenance.sourceId !== authored.origin.provenance.sourceId
+      || previous.origin.provenance.itemId !== authored.origin.provenance.itemId))) {
     return { ok: false, code: 'acp_backend_id_conflict', message: `Duplicate ACP backend id: ${id}`, fields: ['id'] };
   }
   const parsed = AcpBackendDefinitionV1Schema.safeParse({
     ...(previous?.runtime ? { runtime: previous.runtime } : {}),
     ...(previous?.compatibility ? { compatibility: previous.compatibility } : {}),
     ...authored,
+    origin: authored.origin ?? previous?.origin,
     id,
     name: authored.name.trim(),
     title: authored.title.trim(),
@@ -148,6 +156,15 @@ export function applyAcpBackendUpsertV1(input: Readonly<{
     };
   }
   const backend = parsed.data;
+  // Both operands have passed the same canonical schema, which fixes property order.
+  // An ordinary editor may change env/defaults, but admission and executable provenance
+  // belong to the separately confirmed registry install Action.
+  if (input.mode !== 'registryInstall' && (backend.origin || previous?.origin)
+    && (!previous || JSON.stringify(backend.launch) !== JSON.stringify(previous.launch)
+      || JSON.stringify(backend.origin) !== JSON.stringify(previous.origin))) {
+    return { ok: false, code: 'registry_change_requires_install',
+      message: 'Registry executable and provenance changes require the registry install Action', fields: ['launch', 'origin'] };
+  }
   if (settings.backends.some((entry) => entry.id !== backend.id && entry.name === backend.name)) {
     return { ok: false, code: 'acp_backend_name_conflict', message: `Duplicate ACP backend name: ${backend.name}`, fields: ['name'] };
   }
@@ -206,6 +223,7 @@ function validateCapturedRevision(input: Readonly<{ expectedRevision?: number | 
 }
 export const AgentsAcpBackendsUpsertInputV1Schema = lazyZodSchema(() => z.object({
   backend: AcpBackendAuthoringInputV1Schema,
+  dryRun: z.boolean().optional(),
   ...capturedRevisionFields(),
 }).strict().superRefine(validateCapturedRevision));
 export type AgentsAcpBackendsUpsertInputV1 = z.infer<typeof AgentsAcpBackendsUpsertInputV1Schema>;
@@ -226,11 +244,16 @@ export const AcpCatalogCleanupV1Schema = lazyZodSchema(() => z.discriminatedUnio
 ]));
 export type AcpCatalogCleanupV1 = z.infer<typeof AcpCatalogCleanupV1Schema>;
 
-export const AgentsAcpBackendsUpsertOutputV1Schema = lazyZodSchema(() => z.object({
+export const AgentsAcpBackendsUpsertOutputV1Schema = lazyZodSchema(() => z.union([z.object({
   backend: AcpBackendDefinitionV1Schema,
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   cleanup: AcpCatalogCleanupV1Schema.optional(),
-}).strict());
+}).strict(), z.object({
+  dryRun: z.literal(true),
+  backend: AcpBackendDefinitionV1Schema,
+  machines: z.array(z.object({ machineId: z.string().min(1), fit: AcpPlatformFitV1Schema,
+    commandFound: z.boolean().nullable() }).strict()),
+}).strict()]));
 
 /** `agents.acp.backends.delete`: remove one custom ACP agent from the Account catalog. */
 export const AgentsAcpBackendsDeleteInputV1Schema = lazyZodSchema(() => z.object({

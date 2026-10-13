@@ -12,6 +12,8 @@ import { listSavedSecretReferenceCarrierPathsV1 } from '../../account/settings/s
 import { isAccountScopedBlobCiphertextForKind } from '../../crypto/accountScopedCipherEnvelope.js';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
 import { AcpCatalogSettingsV1StoredSchema } from './settingsV1.js';
+import { listValueRefSavedSecretRefsV1, remapValueRefSavedSecretReferencesV1 } from '../../valueRefs/valueRefV1.js';
+import { appendSavedSecretReferencePathV1 } from '../../account/settings/savedSecretReferenceV1.js';
 
 export const ACP_CATALOG_ACCOUNT_ROW_KEY_V1 = '@happier/account/acp/v1/catalog' as const;
 export const ACP_CATALOG_ROWS_ROUTE_V1 = '/v1/account/entity-rows/acp' as const;
@@ -178,19 +180,19 @@ export function sealAcpCatalogMigrationContentV1(input: Readonly<{
 /** The configured catalog owns its credential slots; the composite Secret owner consumes this census. */
 export function listAcpCatalogSavedSecretRefsV1(record: AcpCatalogRecordV1): readonly Readonly<{ path: string; secretId: string }>[] {
   return record.definitions.flatMap((definition, index) => Object.entries(definition.env).flatMap(([name, value]) =>
-    value.t === 'savedSecret' ? [{ path: `definitions[${index}].env.${name}`, secretId: value.secretId }] : []));
+    listValueRefSavedSecretRefsV1(value).map(reference => {
+      const path = appendSavedSecretReferencePathV1(`definitions[${index}].env`, name);
+      return { path: reference.path ? `${path}.${reference.path}` : path, secretId: reference.secretId };
+    })));
 }
 
 export function rewriteAcpCatalogSavedSecretRefsV1(record: AcpCatalogRecordV1, references: ReadonlyMap<string, string>): AcpCatalogRecordV1;
 export function rewriteAcpCatalogSavedSecretRefsV1(record: AcpCatalogRecordV1, previousId: string, nextId: string): AcpCatalogRecordV1;
 export function rewriteAcpCatalogSavedSecretRefsV1(record: AcpCatalogRecordV1, references: string | ReadonlyMap<string, string>, nextId?: string): AcpCatalogRecordV1 {
+  const mapping = typeof references === 'string' ? nextId === undefined ? {} : { [references]: nextId }
+    : Object.fromEntries(references);
   return AcpCatalogRecordV1Schema.parse({ ...record, definitions: record.definitions.map(definition => ({ ...definition,
-    env: Object.fromEntries(Object.entries(definition.env).map(([name, value]) => {
-      if (value.t !== 'savedSecret') return [name, value];
-      const reference = typeof references === 'string'
-        ? value.secretId === references ? nextId : undefined
-        : references.get(value.secretId);
-      return [name, reference === undefined ? value : { t: 'savedSecret', secretId: reference }];
-    })),
+    env: Object.fromEntries(Object.entries(definition.env).map(([name, value]) =>
+      [name, remapValueRefSavedSecretReferencesV1(value, mapping)])),
   })) });
 }

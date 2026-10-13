@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { AcpBackendDefinitionV1Schema, AcpCatalogSettingsV1Schema, AcpCatalogSettingsV1StoredSchema } from './settingsV1.js';
 import { openAcpCatalogContentV1 } from './catalogRowsV1.js';
+import { RegistryProvenanceV1Schema } from '../../registries/registryItemsV1.js';
+import { RegistryUpstreamV1Schema } from '../../registries/registryUpdatesV1.js';
 
 describe('AcpCatalogSettingsV1Schema', () => {
   // Captured from ../0.2 at cd2bb4d853a259ae00ebc3e5981224e3e4bb5380.
@@ -9,6 +11,27 @@ describe('AcpCatalogSettingsV1Schema', () => {
     id: 'kiro', name: 'kiro', title: 'Kiro', command: 'kiro-cli', args: ['acp'],
     env: {}, createdAt: 1, updatedAt: 2,
   };
+
+  it('retains canonical registry provenance and upstream through the Account-row reader', () => {
+    const { command, args, ...fields } = predecessorDefinition;
+    const origin = { kind: 'registry' as const,
+      provenance: RegistryProvenanceV1Schema.parse({ sourceId: 'builtin:acp-registry', format: 'acp-registry',
+        sourceUrl: 'https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json', itemId: 'kiro',
+        ref: { kind: 'version', version: '1.2.3' }, importedAt: 2 }),
+      iconUrl: 'https://example.com/kiro.svg', publisher: 'Kiro', license: 'Apache-2.0',
+      repository: 'https://example.com/repo', website: 'https://example.com',
+      upstream: RegistryUpstreamV1Schema.parse({ state: 'update_available', latest: { kind: 'version', version: '1.2.4' } }),
+    };
+    const definition = { ...fields, launch: { kind: 'command', command, args }, origin };
+    const parsed = AcpBackendDefinitionV1Schema.parse(definition);
+    expect(parsed.origin).toEqual(origin);
+    expect(openAcpCatalogContentV1({ mode: 'plain', material: null,
+      content: { t: 'plain', v: { v: 1, definitions: [parsed] } },
+    })).toMatchObject({ status: 'opened', record: { definitions: [{ origin }] } });
+    expect(AcpBackendDefinitionV1Schema.safeParse({ ...definition, origin: {
+      ...origin, provenance: { ...origin.provenance, credentialRef: 'hidden' },
+    } }).success).toBe(false);
+  });
 
   it('reads predecessor commands as typed launches without keeping the old writer fields', () => {
     const read = AcpCatalogSettingsV1StoredSchema.parse({ v: 2, backends: [predecessorDefinition] });

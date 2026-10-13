@@ -5,14 +5,15 @@ import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { parseSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
 import { AccountSettingsCleanupV1Schema } from '../../account/settings/accountSettingsStoredContentEnvelope.js';
 import { AcpBackendDefinitionV1Schema, AcpBackendAuthConfigV1Schema, AcpBackendCapabilitiesV1Schema, AcpCatalogCommandV1Schema, AcpEnvKeyV1Schema, foldStoredAcpBackendLaunchV1 } from './settingsV1.js';
-import { ValueRefV1Schema } from '../../valueRefs/valueRefV1.js';
+import { ValueRefV1Schema, listValueRefSecretIdsV1 } from '../../valueRefs/valueRefV1.js';
 
 
+// Private personal resources and shared resources use the same canonical resource ref (IR-97).
+// Opaque predecessor Settings ids remain transfer-only, never current credential authority.
 const activeValueReference = lazyZodSchema(() => ValueRefV1Schema.refine(value => {
-  if (value.t !== 'savedSecret') return true;
-  try { return parseSavedSecretRefV1(value.secretId).kind === 'shared_resource'; }
+  try { return listValueRefSecretIdsV1(value).every(reference => parseSavedSecretRefV1(reference).kind === 'shared_resource'); }
   catch { return false; }
-}, 'Active ACP credentials require a shared SavedSecret resource'));
+}, 'Active ACP credentials require a canonical SavedSecret resource'));
 
 const AcpCatalogDefinitionV1Schema = lazyZodSchema(() => AcpBackendDefinitionV1Schema.extend({
     auth: AcpBackendAuthConfigV1Schema.extend({ loginCommand: AcpCatalogCommandV1Schema.strict().optional() }).strict().optional(),
