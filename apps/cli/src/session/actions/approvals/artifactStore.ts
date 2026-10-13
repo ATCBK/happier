@@ -21,6 +21,7 @@ import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accoun
 import type { ArtifactFolderActionPortV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import type { SkillRulesActionPortV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
 import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
 import { targetActionApprovalRequestsEqual, targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject';
 import {
@@ -31,7 +32,8 @@ import {
 /** One adaptation of an already-readable Account Artifact for the Prompt owner. */
 export function projectAccountArtifactToPromptLibraryStoredArtifact(artifact: AccountArtifact | null): PromptLibraryStoredArtifact | null {
   if (!artifact || typeof artifact.body !== 'string') return null;
-  return { id: artifact.artifactId, revision: artifact.revision, header: artifact.header, body: artifact.body };
+  return { id: artifact.artifactId, revision: artifact.revision, header: artifact.header, body: artifact.body,
+    owned: artifact.access === 'owner', access: artifact.access };
 }
 
 function parseApprovalStatus(value: unknown): ApprovalRequest['status'] | null {
@@ -86,6 +88,7 @@ function readExecutionRunHostActionApprovalArtifact(header: Record<string, unkno
 export function createCliApprovalsArtifactStore(params: Readonly<{
   credentials: StoredCredentials;
   serverId?: string;
+  operationContext?: SavedSecretOperationContextV1;
   getAccountEncryptionMode?: () => Promise<ConnectedServiceAccountEncryptionMode>;
 }>): Readonly<{
   approvalsList: NonNullable<import('@happier-dev/protocol').ActionExecutorDeps['approvalsList']>;
@@ -110,16 +113,16 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
     credentials: params.credentials,
     getAccountEncryptionMode,
   });
-  const folderBaseUrl = resolveServerHttpBaseUrl();
-  const folderStore = createCliPromptLibraryStore({ credentials: params.credentials });
-  const folderScopeKey = resolveAccountSettingsScopeKey(params.credentials);
+  const folderBaseUrl = params.operationContext?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
+  const folderStore = createCliPromptLibraryStore({ credentials: params.credentials, operationContext: params.operationContext });
+  const folderScopeKey = runWithServerHttpBaseUrl(folderBaseUrl,()=>resolveAccountSettingsScopeKey(params.credentials));
   const folderLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const organization: ArtifactFolderActionPortV1 = {
     serverId: params.serverId ?? configuration.activeServerId,
     assertCurrent: folderStore.assertCurrent,
     readCatalog: async (signal, key = 'folders') => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
       folderStore.assertCurrent(); signal?.throwIfAborted();
-      const transport = createCliPromptLibraryStore({ credentials: params.credentials, signal });
+      const transport = createCliPromptLibraryStore({ credentials: params.credentials, signal, operationContext: params.operationContext });
       const catalog = await transport.readPromptLibraryCatalog();
       folderStore.assertCurrent(); signal?.throwIfAborted();
       const occupied = (catalog.status === 'ready' || catalog.status === 'partial') &&
@@ -132,12 +135,14 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
     }),
     writeRecord: async (input, signal) => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
       folderStore.assertCurrent(); signal?.throwIfAborted();
-      const transport = createCliPromptLibraryStore({ credentials: params.credentials, signal });
+      const transport = createCliPromptLibraryStore({ credentials: params.credentials, signal, operationContext: params.operationContext });
       const result = await transport.writeRecord(input);
       if (result.status === 'updated') {
         try {
-          const { refreshActivePromptLibraryCatalogAfterChange } = await import('@/settings/prompts/hydratePromptLibraryCatalog');
-          await refreshActivePromptLibraryCatalogAfterChange({ credentials: params.credentials, scopeKey: folderScopeKey,
+          const { refreshActivePromptLibraryCatalogAfterChange,prepareActivePromptLibraryRecord } = await import('@/settings/prompts/hydratePromptLibraryCatalog');
+          if(params.operationContext)await prepareActivePromptLibraryRecord({credentials:params.credentials,scopeKey:folderScopeKey,
+            lifetimeToken:folderLifetimeToken,key:input.record.key,operationContext:params.operationContext});
+          else await refreshActivePromptLibraryCatalogAfterChange({ credentials: params.credentials, scopeKey: folderScopeKey,
             lifetimeToken: folderLifetimeToken });
         } catch { /* A durable row receipt survives publication failure or caller cancellation. */ }
       }
@@ -184,12 +189,17 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
         const updated = await accountArtifactStore.update({ artifactId,
           expectedRevision, header, body, signal });
         if (!updated.ok) throw Object.assign(new Error(updated.error), { code: updated.errorCode });
+        return { revision: updated.revision };
+      },
+      delete: async ({ artifactId, expectedRevision, signal }) => {
+        const deleted = await accountArtifactStore.delete(artifactId, { expectedRevision, signal });
+        if (!deleted.ok) throw Object.assign(new Error(deleted.error), { code: deleted.errorCode });
       },
     },
     skillRules: { ...organization,
-      listSkills: signal => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
+      listSkills: (signal, skillIds) => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
         folderStore.assertCurrent(); signal?.throwIfAborted();
-        const skills = await readSkillLibraryCatalog(accountArtifactStore, signal);
+        const skills = await readSkillLibraryCatalog(accountArtifactStore, signal, skillIds);
         folderStore.assertCurrent(); signal?.throwIfAborted();
         return skills;
       }),

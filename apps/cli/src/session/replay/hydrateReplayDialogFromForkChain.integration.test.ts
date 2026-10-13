@@ -1,17 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import nacl from 'tweetnacl';
-import { buildHappierReplayPromptFromDialog } from '@happier-dev/agents';
+import { buildHappierReplayPromptFromDialog, HAPPIER_REPLAY_SEED_DISPATCH_RESERVED_CHARS } from '@happier-dev/agents';
 import {
   createPlainSessionOwnerMetadataEnvelopeV1,
   deriveAccountMachineKeyFromRecoverySecret,
   sealEncryptedDataKeyEnvelopeV1,
+  sealSessionOwnerMetadataEnvelopeV1,
   SessionOwnerMetadataV1Schema,
+  TranscriptRawRecordV1Schema,
+  accountSettingsParse,
 } from '@happier-dev/protocol';
+import { SessionMessageV1Schema, SessionMessagesPageV1Schema, type SessionMessageV1 } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
+import { HAPPIER_REPLAY_MIN_SEED_CHARS } from '@happier-dev/protocol/sessions/replay-seed-budget';
+import { sealSessionStoredContent } from '@/session/transport/encryption/sessionEncryptionContext';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { encodeBase64 } from '@/api/encryption';
 import { respondTranscriptMessagesQueryRejection } from '@/testkit/transcript/transcriptMessagesRouteContract';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+import { createReplayMessagesPage } from './replayMessagesFixture.testkit';
 
 /**
  * The hydrator resolves the Account's encryption currentness before walking the
@@ -147,7 +155,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
         if (respondTranscriptMessagesQueryRejection(url.searchParams, res)) return;
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages: messages.get(messagesMatch[1]!) ?? [] }));
+        res.end(JSON.stringify(createReplayMessagesPage({ messages: messages.get(messagesMatch[1]!) ?? [], hasMore: false })));
         return;
       }
 
@@ -196,6 +204,105 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
       { text: 'parent turn', seq: 1, sessionId: parentSessionId },
       { text: 'child turn', seq: 1, sessionId: childSessionId },
     ]);
+  });
+
+  it.each(['stored small budget', 'minimum seed budget'] as const)('builds a replay fork recipe from real sealed layout-v1 records at the %s', async (scenario) => {
+    const sessionId = scenario === 'minimum seed budget' ? 's' : 'sess_layout_v1_replied';
+    const secret = new Uint8Array(32).fill(9);
+    const dataKey = new Uint8Array(32).fill(21);
+    const ownerMetadata = sealSessionOwnerMetadataEnvelopeV1({
+      material: { type: 'legacy', secret },
+      ownerMetadata: SessionOwnerMetadataV1Schema.parse({ v: 1 }),
+      randomBytes: length => new Uint8Array(length).fill(5),
+    });
+    const session = {
+      id: sessionId, seq: 2, createdAt: 100, updatedAt: 200,
+      active: false, activeAt: 0, archivedAt: null,
+      encryptionMode: 'e2ee', metadataLayoutVersion: 1,
+      metadata: JSON.stringify({ v: 1 }), metadataVersion: 0, ownerMetadata,
+      agentState: null, agentStateVersion: 0, pendingCount: 0, pendingVersion: 0,
+      dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({
+        dataKey,
+        recipientPublicKey: nacl.box.keyPair.fromSecretKey(deriveAccountMachineKeyFromRecoverySecret(secret)).publicKey,
+        randomBytes: length => new Uint8Array(length).fill(5),
+      })),
+      share: null,
+    };
+    const records = scenario === 'minimum seed budget' ? [
+      TranscriptRawRecordV1Schema.parse({ role: 'agent', content: { type: 'output', data: {
+        type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'x' }] },
+      } } }),
+    ] : [
+      TranscriptRawRecordV1Schema.parse({ role: 'user', content: { type: 'text', text: 'Explain the completed work' } }),
+      TranscriptRawRecordV1Schema.parse({ role: 'agent', content: { type: 'output', data: {
+        type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'The work is complete' }] },
+      } } }),
+    ];
+    const page = SessionMessagesPageV1Schema.parse({
+      messages: records.map((payload, index) => ({
+        id: `message-${index + 1}`, seq: index + 1, createdAt: 100 + index,
+        content: sealSessionStoredContent({ mode: 'e2ee', ctx: { encryptionVariant: 'dataKey', encryptionKey: dataKey }, payload }),
+      })),
+      hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+    });
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`);
+      res.setHeader('content-type', 'application/json');
+      if (url.pathname === '/v1/account/encryption/currentness') {
+        res.end(JSON.stringify({ mode: 'e2ee', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+      } else if (url.pathname === `/v2/sessions/${sessionId}`) {
+        res.end(JSON.stringify({ session }));
+      } else if (url.pathname === `/v1/sessions/${sessionId}/messages`) {
+        if (respondTranscriptMessagesQueryRejection(url.searchParams, res)) return;
+        res.end(JSON.stringify(page));
+      } else {
+        res.statusCode = 404;
+        res.end();
+      }
+    });
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Failed to resolve server address');
+    envScope.patch({ HAPPIER_SERVER_URL: `http://127.0.0.1:${address.port}`, HAPPIER_WEBAPP_URL: 'http://127.0.0.1:3000', HAPPIER_HOME_DIR: happyHomeDir });
+    (await import('@/configuration')).reloadConfiguration();
+
+    const { buildReplaySeededSpawnRecipe } = await import('./buildReplaySeededSpawnRecipe');
+    const minimumSeedBudget = HAPPIER_REPLAY_SEED_DISPATCH_RESERVED_CHARS + buildHappierReplayPromptFromDialog({
+      previousSessionId: 's', strategy: 'recent_messages', recentMessagesCount: null,
+      dialog: [{ role: 'Assistant', createdAt: 100, text: 'x' }],
+    }).length;
+    expect(minimumSeedBudget).toBe(HAPPIER_REPLAY_MIN_SEED_CHARS);
+    const maxSeedChars = accountSettingsParse({ sessionReplayMaxSeedChars:
+      scenario === 'stored small budget' ? 1024 : minimumSeedBudget }).sessionReplayMaxSeedChars;
+    const result = await buildReplaySeededSpawnRecipe({
+      credentials: { token: 't', encryption: { type: 'legacy', secret } },
+      cwd: happyHomeDir, source: { sourceSessionId: sessionId, forkPoint: { type: 'seq', upToSeqInclusive: 2 } },
+      agentHintAgentId: 'claude', lineageCutoffSeqInclusive: 2,
+      maxSeedChars,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.recipe.seedText.length + HAPPIER_REPLAY_SEED_DISPATCH_RESERVED_CHARS).toBeLessThanOrEqual(maxSeedChars);
+    if (scenario === 'minimum seed budget') {
+      expect(maxSeedChars).toBe(minimumSeedBudget);
+      expect(result.recipe.seedText).toContain('Assistant: x');
+    } else {
+      expect(result.recipe.seedText).toContain('Explain the completed work');
+      expect(result.recipe.seedText).toContain('The work is complete');
+    }
+    expect(result.recipe.cutoffSeqInclusive).toBe(2);
+    expect(result.recipe.metadata.forkV1).toMatchObject({ parentSessionId: sessionId, parentCutoffSeqInclusive: 2, strategy: 'replay' });
+    const consumed = SessionOwnerMetadataV1Schema.parse({ v: 1, history: {
+      forkV1: result.recipe.metadata.forkV1, replaySeedV1: result.recipe.metadata.replaySeedV1,
+    } });
+    expect(consumed.history?.replaySeedV1?.seedText).toBe(result.recipe.seedText);
+    const refused = await buildReplaySeededSpawnRecipe({
+      credentials: { token: 't', encryption: { type: 'legacy', secret } }, cwd: happyHomeDir,
+      source: { sourceSessionId: sessionId, forkPoint: { type: 'seq', upToSeqInclusive: 2 } },
+      agentHintAgentId: 'claude', maxSeedChars: 1024,
+    });
+    expect(refused).toMatchObject({ ok: false, errorCode: 'INVALID_REQUEST' });
+    if (!refused.ok) expect(refused.errorMessage).toContain('budget');
   });
 
   it('does not carry media from rows rejected by the replay window', async () => {
@@ -264,7 +371,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
         if (respondTranscriptMessagesQueryRejection(url.searchParams, res)) return;
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages }));
+        res.end(JSON.stringify(createReplayMessagesPage({ messages, hasMore: false })));
         return;
       }
       res.statusCode = 404;
@@ -382,7 +489,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
         if (respondTranscriptMessagesQueryRejection(url.searchParams, res)) return;
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages: messages.get(messagesMatch[1]!) ?? [] }));
+        res.end(JSON.stringify(createReplayMessagesPage({ messages: messages.get(messagesMatch[1]!) ?? [], hasMore: false })));
         return;
       }
       res.statusCode = 404;
@@ -439,7 +546,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
       share: null,
     };
 
-    const rows: Array<{ seq: number; createdAt: number; content: any }> = [];
+    const rows: Array<Omit<SessionMessageV1, 'id'>> = [];
     for (let i = 1; i <= 400; i += 1) {
       rows.push({
         seq: i,
@@ -490,7 +597,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
 
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages: picked }));
+        res.end(JSON.stringify(createReplayMessagesPage({ messages: picked, hasMore: eligible.length > picked.length })));
         return;
       }
 
@@ -548,7 +655,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
       share: null,
     };
 
-    const rows: Array<{ seq: number; createdAt: number; content: any }> = [];
+    const rows: Array<Omit<SessionMessageV1, 'id'>> = [];
     for (let i = 1; i <= 400; i += 1) {
       rows.push({
         seq: i,
@@ -599,7 +706,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
 
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages: picked }));
+        res.end(JSON.stringify(createReplayMessagesPage({ messages: picked, hasMore: eligible.length > picked.length })));
         return;
       }
 
@@ -662,7 +769,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
       share: null,
     };
 
-    const rows: Array<{ seq: number; createdAt: number; content: any }> = [];
+    const rows: Array<Omit<SessionMessageV1, 'id'>> = [];
     for (let i = 1; i <= 400; i += 1) {
       rows.push({
         seq: i,
@@ -723,7 +830,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
 
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages: picked }));
+        res.end(JSON.stringify(createReplayMessagesPage({ messages: picked, hasMore: eligible.length > picked.length })));
         return;
       }
 
@@ -839,7 +946,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
 
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages: picked }));
+        res.end(JSON.stringify(createReplayMessagesPage({ messages: picked, hasMore: eligible.length > picked.length })));
         return;
       }
 
@@ -958,7 +1065,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
         if (respondTranscriptMessagesQueryRejection(url.searchParams, res)) return;
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages: [] }));
+        res.end(JSON.stringify(createReplayMessagesPage({ messages: [], hasMore: false })));
         return;
       }
       res.statusCode = 404;
@@ -987,12 +1094,13 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
         if (respondTranscriptMessagesQueryRejection(url.searchParams, res)) return;
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({
+        res.end(JSON.stringify(createReplayMessagesPage({
           messages: [
             { seq: 1, createdAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'readable' } } } },
             { seq: 2, createdAt: 2, content: { t: 'encrypted', c: 'bm90LWRlY3J5cHRhYmxl' } },
           ],
-        }));
+          hasMore: false,
+        })));
         return;
       }
       res.statusCode = 404;
@@ -1015,11 +1123,12 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
         if (respondTranscriptMessagesQueryRejection(url.searchParams, res)) return;
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({
+        res.end(JSON.stringify(createReplayMessagesPage({
           messages: [
             { seq: 1, createdAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'readable' } } } },
           ],
-        }));
+          hasMore: false,
+        })));
         return;
       }
       res.statusCode = 404;
@@ -1087,7 +1196,7 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
         if (respondTranscriptMessagesQueryRejection(url.searchParams, res)) return;
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({
+        res.end(JSON.stringify(createReplayMessagesPage({
           messages: [{
             seq: 1,
             createdAt: 1,
@@ -1100,7 +1209,8 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
               )),
             },
           }],
-        }));
+          hasMore: false,
+        })));
         return;
       }
       res.statusCode = 404;
@@ -1183,24 +1293,26 @@ describe('hydrateReplayDialogFromForkChain — character-budget window', () => {
     };
   }
 
-  type Row = { seq: number; createdAt: number; messageRole: 'user' | 'agent' | 'event'; content: unknown };
+  type Row = SessionMessageV1;
 
   function textRow(seq: number, role: 'user' | 'agent', text: string): Row {
-    return {
+    return SessionMessageV1Schema.parse({
+      id: `message-${seq}`,
       seq,
       createdAt: 1_000 + seq,
       messageRole: role,
       content: { t: 'plain', v: { role, content: { type: 'text', text } } },
-    };
+    });
   }
 
   function eventRow(seq: number, text: string): Row {
-    return {
+    return SessionMessageV1Schema.parse({
+      id: `message-${seq}`,
       seq,
       createdAt: 1_000 + seq,
       messageRole: 'event',
       content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text } } },
-    };
+    });
   }
 
   async function run(params: Readonly<{
@@ -1257,16 +1369,15 @@ describe('hydrateReplayDialogFromForkChain — character-budget window', () => {
           // too. This filter therefore only ever runs for a forward query.
           .filter((r) => (afterSeq == null ? true : r.seq > afterSeq))
           .filter((r) => (params.honorRoles === false || !requested ? true : requested.includes(r.messageRole)));
-        const picked = eligible.slice().sort((a, b) => b.seq - a.seq).slice(0, limit);
+        const picked = eligible.slice().sort((a, b) => afterSeq === null ? b.seq - a.seq : a.seq - b.seq).slice(0, limit);
         const hasMore = eligible.length > picked.length;
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({
+        res.end(JSON.stringify(createReplayMessagesPage({
           messages: picked,
           hasMore,
-          nextBeforeSeq: hasMore && picked.length > 0 ? picked[picked.length - 1]!.seq : null,
-          nextAfterSeq: null,
-        }));
+          direction: afterSeq === null ? 'backward' : 'forward',
+        })));
         return;
       }
       res.statusCode = 404;
@@ -1417,18 +1528,9 @@ describe('hydrateReplayDialogFromForkChain — character-budget window', () => {
     // so the null above is the bound working and not the lookup being broken.
     const unbounded = await run({ rows, charBudget: 100_000 });
     expect(unbounded.result?.lastUserDialogItem?.text).toBe('THE ASK THE RETURNING AGENT ALREADY SERVED');
-  });
-
-  it('sends no afterSeq at all when there is no bound', async () => {
-    // The fresh-target path must be byte-identical to the pre-change walk: an
-    // absent bound is never a `0` bound and never a `NaN` query parameter.
-    const { messageRequests } = await run({
-      rows: [textRow(1, 'user', 'hello'), textRow(2, 'agent', 'hi')],
-      charBudget: 100_000,
-    });
-
-    expect(messageRequests.length).toBeGreaterThan(0);
-    for (const request of messageRequests) {
+    // An absent bound never becomes a zero or NaN query on either lookup.
+    expect(unbounded.messageRequests.length).toBeGreaterThan(0);
+    for (const request of unbounded.messageRequests) {
       expect(request.afterSeq).toBeNull();
     }
   });

@@ -118,7 +118,7 @@ export type ReplaySeedDraftResolution =
   /** Retrieval succeeded and the source carries no replayable dialog. */
   | Readonly<{ status: 'no_source_dialog' }>
   /** Bounded retrieval or decryption failed; what the source holds is unknown. */
-  | Readonly<{ status: 'unavailable' }>;
+  | Readonly<{ status: 'unavailable'; reason?: 'seed_budget_too_small' }>;
 
 export async function resolveReplaySeedDraft(params: Readonly<{
   credentials: StoredCredentials;
@@ -306,7 +306,7 @@ export async function resolveReplaySeedDraft(params: Readonly<{
 
   // The source had dialog, but its frame and dispatch reservation could not
   // fit the selected total. That is unavailable context, not an empty source.
-  if (!seedDraft) return { status: 'unavailable' };
+  if (!seedDraft) return { status: 'unavailable', reason: 'seed_budget_too_small' };
 
   return {
     status: 'seeded',

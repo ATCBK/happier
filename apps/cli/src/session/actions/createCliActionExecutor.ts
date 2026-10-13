@@ -28,6 +28,7 @@ import type {
   ExternalSessionPluginAdmissionOwner,
 } from './externalSessions/pluginExternalSessionAdmissionOwner';
 import type { AccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { createCliPersonalSavedSecretActionExecute } from '@/settings/secrets/personalSavedSecretActionHost';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { configuration } from '@/configuration';
@@ -76,6 +77,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     projectWorkerAction?: ActionExecutorDeps['projectWorkerAction'];
     /** The canonical prepared filesystem owner installed by the daemon. */
     filesystemActionExecute?: ActionExecutorDeps['filesystemActionExecute'];
+    skillMachineActionExecute?: ActionExecutorDeps['skillMachineActionExecute'];
     sessionFollowActionDeps?: Pick<ActionExecutorDeps, 'sessionFollowAction'>;
     sessionTrackedTargetCompatibilityDeps?: Pick<ActionExecutorDeps, 'sessionTargetTrackedSet'>;
     sessionReadStateActionDeps?: Pick<ActionExecutorDeps, 'sessionReadStateAction'>;
@@ -105,6 +107,9 @@ export function createCliActionExecutor(
 ): ReturnType<typeof createCliActionExecutorHarness>['executor']
   & Pick<ReturnType<typeof createCliActionExecutorHarness>, 'observeRecordedApprovalExecution'> {
   const { projectWorkerAction: projectWorkerAccountAction, ...accountServerActionPorts } = params.accountServerActionDeps ?? {};
+  const personalSavedSecretActionExecute = params.personalSavedSecretActionExecute ?? (params.credentials && accountServerActionPorts.homeDomainAction
+    ? createCliPersonalSavedSecretActionExecute({ credentials: params.credentials, home: accountServerActionPorts.homeDomainAction,
+      operationContext: params.savedSecretOperationContext, serverHttpBaseUrl: params.serverHttpBaseUrl, isCredentialCurrent: params.isCredentialCurrent }) : undefined);
   const invokeContributedAction: ActionExecutorDeps['invokeContributedAction'] = params.invokeContributedAction
     ?? (params.pluginActionExecutionOwner === 'current_process' ? undefined
       : async (request) => pluginExecutor!.invokeContributedAction(request));
@@ -160,6 +165,7 @@ export function createCliActionExecutor(
   const harness = createCliActionExecutorHarness(
     {
       ...params,
+      ...(personalSavedSecretActionExecute ? { personalSavedSecretActionExecute } : {}),
       ...(projectWorkerAccountAction ? { projectWorkerAccountAction } : {}),
       actionsSettingsProvider: actionSettingsProvider,
       ...(resolveTeamCredentialResourceCatalog ? { resolveTeamCredentialResourceCatalog } : {}),
@@ -192,6 +198,7 @@ export function createCliActionExecutor(
         ? { hostExternalSessionAction: params.hostExternalSessionAction }
         : {}),
       ...accountServerActionPorts,
+      ...(personalSavedSecretActionExecute ? { personalSavedSecretActionExecute } : {}),
       ...(params.projectWorkerAction ? { projectWorkerAction: async (request) =>
         request.actionId === 'projects.worker.status' || request.actionId === 'projects.worker.copy.retire'
           ? await params.projectWorkerAction!(request)
@@ -206,6 +213,7 @@ export function createCliActionExecutor(
         const denied = filesystemRequesterAuthorityFailure(request.actionId, request.context);
         return denied ?? await params.filesystemActionExecute!(request);
       } } : {}),
+      ...(params.skillMachineActionExecute ? { skillMachineActionExecute: params.skillMachineActionExecute } : {}),
       ...(params.sessionFollowActionDeps ?? createSessionFollowActionDeps({
         token: params.token,
         ...exactHome,

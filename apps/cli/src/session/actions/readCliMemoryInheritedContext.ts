@@ -17,7 +17,7 @@ export async function readCliMemoryInheritedContext(input: Readonly<{
   const { credentials, serverId, snapshot, context } = input;
   const machineId = snapshot.machineId
     ?? (typeof snapshot.metadata.machineId === 'string' ? snapshot.metadata.machineId.trim() : '');
-  const projectEntries = await resolveSessionProjectPromptStack({ credentials, serverId,
+  const { entries: projectEntries } = await resolveSessionProjectPromptStack({ credentials, serverId,
     metadata: snapshot.metadata, machineId, signal: context.signal });
   const readAccountContext = createCliMemoryAccountContextReader({ credentials, context });
   return { projectEntries, readAccountContext: async () => {

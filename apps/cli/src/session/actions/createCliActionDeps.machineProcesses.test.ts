@@ -1,12 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders } from 'axios';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { MachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 import { createCliActionDeps } from './createCliActionDeps';
+import { createCliActionExecutor } from './createCliActionExecutor';
+import { ApiMachineClient } from '@/api/apiMachine';
+import { createMachineResourcesPolicyRuntime } from '@/daemon/resources/machineResourcesPolicy';
+import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 import { MachineProcessesGetResultV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import type { RpcHandlerContext, RpcHandlerMap, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { createProcessOwnershipRuntime } from '@/daemon/processes/ownership/processOwnershipRuntime';
@@ -20,6 +28,13 @@ import { createMinuteHistoryStore } from '@/daemon/vitals/history/minuteHistoryS
 import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
 import { processRef } from '@/daemon/processes/view/processRef';
 import { join } from 'node:path';
+import { decodeStoredCredentials, encodeStoredCredentials } from '@/persistence';
+import { createMachineResourceSummary } from '@/daemon/resources/machineResourceSummary';
+import { createActivityLog } from '@/daemon/guard/activityLog';
+import { createGuardRuntime } from '@/daemon/guard/guardRuntime';
+import { createGuardWatch } from '@/daemon/guard/view/guardWatch';
+import { createManagedActivityInventory } from '@/daemon/lifecycle/managedActivity';
+import { createDaemonStorageRoutes } from '@/rpc/handlers/storage';
 
 const io = vi.hoisted(() => vi.fn());
 // HTTP and Socket.IO are genuine boundaries; Action routing, exact targeting and codecs stay real.
@@ -60,6 +75,180 @@ describe('CLI machine Processes Action transport', () => {
   });
   afterEach(() => { releaseHome(); vi.restoreAllMocks(); });
 
+  it.each(['vitals', 'policy', 'guard', 'processes', 'storage'] as const)('admits %s through the real CLI executor and ApiMachine routes despite a local shortcut', async family => {
+    const fixture = await createLinuxVitalsFixture();
+    const sampler = createMachineVitalsSampler({ readers: createLinuxMachineVitalsReader({ root: fixture.root }),
+      historyStore: await createMinuteHistoryStore({ directory: join(fixture.root, 'history') }) });
+    let metadata: Record<string, unknown> = MachinePublishedMetadataV1Schema.parse({ host: 'fixture', platform: 'linux',
+      happyCliVersion: '0.3.0', homeDir: fixture.root, happyHomeDir: fixture.root });
+    let revision = 1;
+    if (family === 'policy') {
+      vi.mocked(axios.get).mockImplementation(async url => {
+        const path = new URL(String(url)).pathname;
+        const data = path === '/v1/account/encryption'
+          ? AccountEncryptionModeResponseSchema.parse({ mode: 'plain', updatedAt: 0 })
+          : path === '/v1/machines/selected' ? { machine: MachinePublishedRowV1Schema.parse({ id: 'selected', storageMode: 'plain',
+            metadata: encodePlainMachineStoredContent(metadata), metadataVersion: revision, daemonState: null, daemonStateVersion: 0,
+            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER }) } : null;
+        if (!data) throw new Error(`Unexpected policy HTTP read: ${path}`);
+        return { status: 200, statusText: 'OK', headers: {}, config: { headers: new AxiosHeaders() }, data };
+      });
+    }
+    // The Account metadata CAS is the persistence/network boundary. Its real policy
+    // normalization, writer, CLI execution and receiving RPC admission stay composed.
+    const policy = createMachineResourcesPolicyRuntime({ port: {
+      read: async () => ({ status: 'ready', metadata, metadataVersion: revision }),
+      compareAndSwap: async input => { metadata = input.metadata; return { status: 'applied', metadata, metadataVersion: ++revision }; },
+    } });
+    const api = new ApiMachineClient(credentials.token, { id: 'selected', encryptionMode: 'plain', metadata: null,
+      metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+    const identity = { serverId: 'home', machineId: 'selected', installationId: 'install', custodianAccountId: 'custodian' };
+    api.registerMachineVitalsRoutes({ sampler, target: () => identity });
+    api.registerMachineResourcesPolicyRoutes({ policy, target: () => identity });
+    await policy.reload();
+    const summary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+    const activity = await createActivityLog({ activeServerDir: fixture.root, resourceSummary: summary });
+    // The native census is an OS boundary; run the real census parser and ownership beneath it.
+    const ownership = createProcessOwnershipRuntime({ daemonScopeKey: '123456789abc', platform: 'darwin',
+      listRoots: snapshot => snapshot.rows.map(row => ({ owner: { kind: 'happier' as const }, pid: row.pid, start: row.start,
+        live: true, ownerCreatedAtMs: 0 })),
+      censusDependencies: { platform: 'darwin', helperExecutablePath: '/fixture-helper',
+        execFile: async () => ({ stdout: JSON.stringify({ v: 1, capturedAtMs: 1000, logicalCpus: 4,
+          rows: [{ pid: process.pid, ppid: 1, pgid: process.pid, name: 'daemon',
+            start: { startTimeMs: 1, native: 'darwin-proc:1:0:1' }, principal: { kind: 'uid', value: '501' },
+            memory: { bytes: 1024, kind: 'rss' }, cpuTimeUs: 0 }] }) }) } });
+    const inventory = createManagedActivityInventory({ producers: [] });
+    const readFacts = async () => ({ ownership: await ownership.readOwners({ freshness: 'fresh' }),
+      inventory: await inventory.read(), targets: [] });
+    const readPolicy = () => {
+      const current = policy.read();
+      if (current.status !== 'ready') throw new Error('Policy unavailable');
+      return current.policy.guard;
+    };
+    const runtime = createGuardRuntime({ vitals: sampler, readPolicy, subscribePolicy: policy.subscribe, subscribe: inventory.subscribe,
+      readFacts, activity, stop: async () => { throw new Error('No stop target in this fixture'); }, notice: async () => false,
+      notifyEpisode: async () => {}, onError: error => { throw error; } });
+    const guard = createGuardWatch({ policy, sampler, ownership, readFacts, readTarget: () => identity, activityLog: activity,
+      sessionState: runtime, readState: () => ({ v: 1, capabilities: { memoryPressure: { status: 'available' },
+        ceiling: { status: 'unavailable', reason: 'no_user_manager' }, keepAwake: { modes: ['off', 'on', 'on_power'] } },
+        keepAwakeHolding: false }), readLeftBehind: () => ({ count: 0, footprintBytes: 0 }), subscribe: runtime.subscribe });
+    api.registerMachineGuardRoutes({ target: () => identity, guard, activity,
+      keepRunning: async input => ({ status: await runtime.keepRunning(input.sessionId ?? '') }) });
+    const leftBehind = createLeftBehindPass({ processOwnershipRuntime: ownership });
+    const processes = createMachineProcessesView({ processOwnershipRuntime: ownership, leftBehind, machineVitals: sampler,
+      platform: 'darwin', allProcessesVisible: () => false,
+      requesterForOwner: () => ({ accountId: identity.custodianAccountId, displayName: 'Custodian' }) });
+    api.registerMachineProcessesRoutes({ view: processes, target: () => identity });
+    const storage = createDaemonStorageRoutes({ target: () => identity,
+      deps: () => ({ catalog: { happyHomeDir: fixture.root, activeServerDir: fixture.root }, readVolumes: () => [] }),
+      readOwnSessionIds: () => new Set() });
+    api.registerStorageRoutes(storage);
+    // The canonical heterogeneous transport registry represents authenticated ingress.
+    // Use the registrations installed by ApiMachine, not a test-owned method map.
+    const handlers: RpcHandlerMap = Reflect.get(Reflect.get(api, 'rpcHandlerManager'), 'handlers');
+    let admitted: RpcHandlerContext = { signal: new AbortController().signal,
+      machineAdmission: { ...identity, actorAccountId: 'custodian', role: 'manage', encryptionMode: 'plain' },
+      verifyMachineAdmissionCurrent: async () => true };
+    receive = async (method, input) => {
+      const handler = handlers.get(method);
+      if (!handler) throw new Error(`Missing installed machine resource route: ${method}`);
+      return handler(input, admitted);
+    };
+    const executor = createCliActionExecutor({ ...params,
+      // The actual local ingress carries no Machine admission, exactly as in D1.
+      machineActionDirectTargetTransport: { machineId: 'selected', invoke: (method, input, options) =>
+        api.invokeLocalMachineAction(method, input, options) } });
+    try {
+      await sampler.start();
+      if (family === 'vitals') {
+        const vitals = await executor.execute('machines.vitals.get', { machineId: 'selected', view: 'summary' }, context);
+        expect(vitals, JSON.stringify(vitals)).toMatchObject({ ok: true });
+        if (!vitals.ok) throw new Error(vitals.error);
+        assertActionOutputContract('machines.vitals.get', vitals.result);
+        expect(vitals.result).toMatchObject({ state: 'reporting', sample: { memory: { totalBytes: 102_400_000, availableBytes: 40_960_000 } } });
+        const history = await executor.execute('machines.vitals.history.get', { machineId: 'selected', range: '1h' }, context);
+        expect(history.ok).toBe(true);
+        if (!history.ok) throw new Error(history.error);
+        assertActionOutputContract('machines.vitals.history.get', history.result);
+        expect(history.result).toMatchObject({ range: '1h', today: { rxBytes: 0, txBytes: 0 } });
+        expect(requests.map(request => request.method)).toEqual([
+          `selected:${RPC_METHODS.MACHINES_VITALS_GET}`, `selected:${RPC_METHODS.MACHINES_VITALS_HISTORY_GET}`,
+        ]);
+      }
+      if (family === 'policy') {
+        const initial = await executor.execute('machines.resources.policy.get', { machineId: 'selected' }, context);
+        expect(initial, JSON.stringify(initial)).toMatchObject({ ok: true, result: { status: 'ready', revision: 1 } });
+        if (!initial.ok) throw new Error(initial.error);
+        assertActionOutputContract('machines.resources.policy.get', initial.result);
+        const saved = await executor.execute('machines.resources.policy.set', { machineId: 'selected', expectedRevision: 1,
+          patch: { processes: { allProcessesVisible: true }, guard: { keepAwake: 'off' } } }, context);
+        expect(saved, JSON.stringify(saved)).toMatchObject({ ok: true });
+        if (!saved.ok) throw new Error(saved.error);
+        assertActionOutputContract('machines.resources.policy.set', saved.result);
+        expect(saved.result).toMatchObject({ status: 'applied', revision: 2,
+          policy: { processes: { allProcessesVisible: true }, guard: { keepAwake: 'off' } } });
+        const acknowledged = policy.read();
+        expect(acknowledged.status).toBe('ready');
+        if (acknowledged.status !== 'ready') throw new Error('Acknowledged policy unavailable');
+        expect(MachineResourcesPolicyV1Schema.parse(metadata.resourcesPolicyV1)).toEqual(acknowledged.policy);
+        const reread = await executor.execute('machines.resources.policy.get', { machineId: 'selected' }, context);
+        expect(reread).toMatchObject({ ok: true, result: { status: 'ready', revision: 2,
+          policy: { processes: { allProcessesVisible: true }, guard: { keepAwake: 'off' } } } });
+        if (!reread.ok) throw new Error(reread.error);
+        assertActionOutputContract('machines.resources.policy.get', reread.result);
+        admitted = { ...admitted, machineAdmission: { ...identity, actorAccountId: 'recipient', role: 'use', encryptionMode: 'plain' } };
+        const denied = await executor.execute('machines.resources.policy.set', { machineId: 'selected', expectedRevision: 2,
+          patch: { guard: { keepAwake: 'on' } } }, context);
+        expect(denied).toMatchObject({ ok: false });
+        expect(revision).toBe(2);
+        expect(MachineResourcesPolicyV1Schema.parse(metadata.resourcesPolicyV1).guard.keepAwake).toBe('off');
+        expect(requests.map(request => request.method)).toEqual([
+          `selected:${RPC_METHODS.MACHINES_RESOURCES_POLICY_SET}`, `selected:${RPC_METHODS.MACHINES_RESOURCES_POLICY_SET}`,
+        ]);
+      }
+      if (family === 'guard') {
+        const view = await executor.execute('machines.guard.get', { machineId: 'selected' }, context);
+        expect(view, JSON.stringify(view)).toMatchObject({ ok: true });
+        if (!view.ok) throw new Error(view.error);
+        assertActionOutputContract('machines.guard.get', view.result);
+        expect(view.result).toMatchObject({ policy: { keepAwake: 'on' }, leftBehind: { count: 0 } });
+        const listed = await executor.execute('machines.guard.activity.list', { machineId: 'selected', range: 'today' }, context);
+        expect(listed, JSON.stringify(listed)).toMatchObject({ ok: true });
+        if (!listed.ok) throw new Error(listed.error);
+        assertActionOutputContract('machines.guard.activity.list', listed.result);
+        const kept = await executor.execute('machines.guard.idleStop.keepRunning', { machineId: 'selected', sessionId: 'no-warning' }, context);
+        expect(kept).toEqual({ ok: true, result: { status: 'not_pending' } });
+        assertActionOutputContract('machines.guard.idleStop.keepRunning', kept.ok ? kept.result : null);
+        const agentView = await executor.execute('machines.guard.get', { machineId: 'selected' },
+          { ...context, surface: 'agent', authority: 'account_automation' });
+        expect(agentView, JSON.stringify(agentView)).toMatchObject({ ok: true, result: { policy: { keepAwake: 'on' } } });
+        if (!agentView.ok) throw new Error(agentView.error);
+        assertActionOutputContract('machines.guard.get', agentView.result);
+        admitted = { ...admitted, verifyMachineAdmissionCurrent: async () => false };
+        expect(await executor.execute('machines.guard.get', { machineId: 'selected' }, context)).toMatchObject({ ok: false });
+        expect(requests.map(request => request.method)).toEqual([
+          `selected:${RPC_METHODS.MACHINES_GUARD_GET}`, `selected:${RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST}`,
+          `selected:${RPC_METHODS.MACHINES_GUARD_IDLE_STOP_KEEP_RUNNING}`, `selected:${RPC_METHODS.MACHINES_GUARD_GET}`,
+          `selected:${RPC_METHODS.MACHINES_GUARD_GET}`,
+        ]);
+      }
+      if (family === 'processes' || family === 'storage') {
+        const actionId = family === 'processes' ? 'machines.processes.get' : 'machines.storage.scan.get';
+        const result = await executor.execute(actionId, { machineId: 'selected', ...(family === 'processes'
+          ? { ref: processRef(42, { startTimeMs: 42, native: 'darwin-proc:42:0:42' }) } : {}) }, context);
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+        if (!result.ok) throw new Error(result.error);
+        assertActionOutputContract(actionId, result.result);
+        expect(result.result).toEqual(family === 'processes' ? { row: null } : { state: null, nodes: [], coverage: [] });
+        expect(requests.map(request => request.method)).toEqual([`selected:${family === 'processes'
+          ? RPC_METHODS.MACHINES_PROCESSES_GET : RPC_METHODS.DAEMON_STORAGE_SCAN_GET}`]);
+      }
+    } finally {
+      storage.dispose(); processes.dispose(); leftBehind.dispose(); guard.dispose(); inventory.dispose(); summary.stop(); policy.stop();
+      await api.shutdown(); await sampler.stop(); await fixture.cleanup();
+    }
+  });
+
   it('reads a guest process, requires Action confirmation and ends only that reviewed native target', async () => {
     const fixture = await createLinuxVitalsFixture();
     const sampler = createMachineVitalsSampler({ readers: createLinuxMachineVitalsReader({ root: fixture.root }),
@@ -94,7 +283,11 @@ describe('CLI machine Processes Action transport', () => {
       machineAdmission: { machineId: 'selected', installationId: 'install', custodianAccountId: 'custodian',
         actorAccountId: 'custodian', role: 'manage', encryptionMode: 'plain' }, verifyMachineAdmissionCurrent: async () => true };
     receive = (method, input) => Promise.resolve(handlers.get(method.slice('selected:'.length))!(input, admitted));
-    const executor = createActionExecutor(createCliActionDeps(params));
+    // Real CLI ingress treats unproven credentials as automation. Decode the
+    // canonical stored representation, just as interactive credential ingress does.
+    const terminalCredentials = decodeStoredCredentials(encodeStoredCredentials(credentials));
+    if (!terminalCredentials) throw new Error('Stored terminal credentials unavailable');
+    const executor = createCliActionExecutor({ ...params, credentials: terminalCredentials });
     try {
       const ref = processRef(21, rows.get(21)!.start);
       const read = await executor.execute('machines.processes.get', { machineId: 'selected', ref }, context);
@@ -111,9 +304,10 @@ describe('CLI machine Processes Action transport', () => {
         .toMatchObject({ ok: false, errorCode: 'approval_origin_unavailable' });
       expect(signals).toEqual([]);
       expect(requests).toHaveLength(1);
-      expect(await executor.execute('machines.processes.kill', input,
-        { ...context, presentUserConfirmation: { actionId: 'machines.processes.kill' } }))
-        .toMatchObject({ ok: true, result: { status: 'ended', outcomes: [{ ref, outcome: 'ended' }] } });
+      const killed = await executor.execute('machines.processes.kill', input,
+        { ...context, presentUserConfirmation: { actionId: 'machines.processes.kill' } });
+      if (!killed.ok) throw new Error(JSON.stringify(killed));
+      expect(killed).toMatchObject({ ok: true, result: { status: 'ended', outcomes: [{ ref, outcome: 'ended' }] } });
       expect(signals).toEqual([21]);
       expect(rows.has(21)).toBe(false);
       expect(rows.has(30)).toBe(true);

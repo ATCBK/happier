@@ -5870,6 +5870,8 @@ describe('createCliActionDeps session lifecycle bindings', () => {
   });
 
   it('routes fork and replay continuation through the canonical machine lifecycle RPC owner', async () => {
+    const realApprovals = await vi.importActual<typeof import('@/session/actions/approvals/artifactStore')>('@/session/actions/approvals/artifactStore');
+    createCliApprovalsArtifactStore.mockImplementation(realApprovals.createCliApprovalsArtifactStore);
     resolveSession(true);
     callMachineRpc
       .mockResolvedValueOnce({ ok: true, childSessionId: 'session-child' })
@@ -5907,6 +5909,7 @@ describe('createCliActionDeps session lifecycle bindings', () => {
         credentials,
         machineId: 'machine-source',
         method: RPC_METHODS.SESSION_FORK,
+        authorization: { kind: 'session.write', sessionId: 'session-1' },
         request: {
           v: 1,
           parentSessionId: 'session-1',
@@ -5927,6 +5930,7 @@ describe('createCliActionDeps session lifecycle bindings', () => {
         credentials,
         machineId: 'machine-current',
         method: RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY,
+        authorization: { kind: 'session.write', sessionId: 'session-1' },
         request: expect.not.objectContaining({ signal: expect.anything() }),
         signal,
       })],

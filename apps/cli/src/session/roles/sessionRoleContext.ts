@@ -51,7 +51,7 @@ export function createSessionRoleContext(params: Readonly<{
     return resolvedRoles;
   };
   const resolveRoles = async (signal?: AbortSignal): Promise<ResolvedRolesSnapshotV1> => (await resolveCurrentRoles(signal)).roles;
-  const resolvePromptContext = async (signal?: AbortSignal, options?: Readonly<{ modality?: 'coding' | 'voice' }>): Promise<SessionRolePromptContextV1 | null> => {
+  const resolvePromptContext = async (signal?: AbortSignal, _options?: Readonly<{ modality?: 'coding' | 'voice' }>): Promise<SessionRolePromptContextV1 | null> => {
     const organization = await params.readOrganization(signal);
     signal?.throwIfAborted();
     const before = params.readMetadata();
@@ -60,8 +60,8 @@ export function createSessionRoleContext(params: Readonly<{
     const inherited = beforeRoles?.roleId ? beforeRoles.sessionRoles[beforeRoles.roleId] : undefined;
     let roles: ResolvedRolesSnapshotV1;
     let selectedRefusal: RoleSelectionRefusalV1 | undefined;
-    if (options?.modality === 'voice' && !beforeRoles?.roleId) {
-      // Voice renders Notes, not the coding-only available Role inventory.
+    if (!beforeRoles?.roleId) {
+      // Notes and worker boundaries do not consume the available Role inventory.
       roles = {};
     } else if (inherited) {
       roles = {};

@@ -8,6 +8,20 @@ import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1, PluginInstallationMan
   createPluginInstallationManifestPublisherSigningInputV1, stringifyPluginInstallationManifestCanonicalJsonV1 } from '@happier-dev/protocol/plugins/installations/manifests';
 import { createMachineInstallationIdentityFixture } from '../../../../../packages/tests/src/testkit/machineIdentity';
 import * as installation from '@/daemon/identity/currentMachineInstallation';
+import { createSessionAccountActionExecutor } from '@/mcp/runtime/createSessionAccountActionExecutor';
+import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
+import { configuration } from '@/configuration';
+import { hashProcessCommand } from '@/daemon/sessionRegistry';
+import { hashPrivateBearer } from '@/daemon/privateBearerFile';
+import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
+import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemonServiceAuthority,
+  removeAgentRuntimeDaemonServiceAuthorityIfOwned } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
+import { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
+import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/actionsV1';
+
+const processIdentity = vi.hoisted(() => vi.fn());
+// The runner's OS process identity and daemon HTTP are external boundaries.
+vi.mock('@/daemon/processIdentity', () => ({ readProcessIdentityByPid: processIdentity }));
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }));
 const signedRootAction = vi.hoisted(() => vi.fn());
@@ -33,10 +47,31 @@ vi.mock('@/daemon/controlClient', async (importOriginal) => ({
 import { createCliActionDeps } from './createCliActionDeps';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { logger } from '@/ui/logger';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('createCliActionDeps workflow boundary', () => {
+  it('retains the original storage cause in one content-free daemon diagnostic', async () => {
+    const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    http.post.mockRejectedValue(Object.assign(new Error('private SQL, token and prompt'), {
+      code: 'ERR_BAD_RESPONSE', response: { status: 503, data: { error: 'private database body' } },
+      config: { headers: { Authorization: 'private-token' } },
+    }));
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      resolveServerFeaturesSnapshot: () => enabledFeatures as never, sessionId: 'cli-global', mode: 'plain', ctx: null });
+    const result = await deps.workflowAction!({ actionId: 'workflow.run.cancel',
+      input: { runId: '11111111-1111-4111-8111-111111111111', expectedRevision: 0 }, context: { surface: 'cli' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'storage_unavailable' });
+    const events = diagnostic.mock.calls.flatMap(([message]) => {
+      try { const parsed = JSON.parse(message); return parsed.event === 'workflow_action_failure' ? [parsed] : []; }
+      catch { return []; }
+    });
+    expect(events).toEqual([{ event: 'workflow_action_failure', errorCode: 'storage_unavailable',
+      originalCode: 'ERR_BAD_RESPONSE', httpStatus: 503, operation: 'cancel', durationMs: expect.any(Number) }]);
+    expect(events[0].durationMs).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(events)).not.toMatch(/private/);
+  });
   const enabledFeatures = {
     status: 'ready' as const,
     provenance: 'authenticated' as const,
@@ -71,7 +106,11 @@ describe('createCliActionDeps workflow boundary', () => {
     });
   });
 
-  it.each([true, false])('rejoins a Session-started Workflow only with its exact installed signer (%s)', async (hasSigner) => {
+  it.each([
+    { hasSigner: true, viaSession: false },
+    { hasSigner: false, viaSession: false },
+    { hasSigner: true, viaSession: true },
+  ])('rejoins a Session-started Workflow only with its exact installed signer ($hasSigner, Session channel: $viaSession)', async ({ hasSigner, viaSession }) => {
     const runId = '11111111-1111-4111-8111-111111111111';
     const identity = createMachineInstallationIdentityFixture();
     vi.spyOn(installation, 'readCurrentMachineInstallation').mockResolvedValue({ machineId: 'machine-1', identity: {
@@ -117,6 +156,8 @@ describe('createCliActionDeps workflow boundary', () => {
     const authenticatedReads: string[] = [];
     const get = http.get.getMockImplementation()!;
     http.get.mockImplementation(async (url: string, options: { headers: Record<string, string> }) => {
+      if (url.includes('/v2/sessions/session-1')) return { status: 200,
+        data: { session: createSessionRecordFixture({ id: 'session-1', share: null }) } };
       if (url.endsWith('/v1/account/encryption/currentness')) {
         expect(url).toBe('https://session-home.test/v1/account/encryption/currentness');
         const authorization = context.externalActionExecutionAuthorization!;
@@ -173,9 +214,59 @@ describe('createCliActionDeps workflow boundary', () => {
       ...(hasSigner ? { externalActionMachineRequestPrivateKey: identity.privateKeyBase64,
         externalActionMachineInstallationId: identity.installationId } : {}),
     });
-    const result = await deps.workflowAction!({ actionId: 'workflow.run.start', input: {
+    const input = {
       runId, source: { kind: 'inline', definition }, executionTarget: { kind: 'session' }, onComplete: { kind: 'originating_session' },
-    }, context });
+    } as const;
+    const result = await (async () => {
+      if (!viaSession) return await deps.workflowAction!({ actionId: 'workflow.run.start', input, context });
+      const command = 'node /runtime/.runner-snapshots/workflow-start/dist/index.mjs';
+      const runner = { pid: process.pid, processStartTimeMs: 23_346,
+        processCommandHash: hashProcessCommand(command), snapshotIdentity: 'snapshot:workflow-start' };
+      processIdentity.mockResolvedValue({ pid: process.pid, processStartTimeMs: runner.processStartTimeMs, command });
+      const path = await createAgentRuntimeDaemonServiceAuthorityPath(configuration);
+      const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+        path, sessionId: 'session-1', runner,
+        retainedAgent: createAgentSessionRunnerFactoryBinding({ v: 1, pluginId: 'acme.plugin', pluginVersion: '1.2.3',
+          agentId: 'acme-agent', localAgentId: 'acme-agent', sourceCustody: { kind: 'managed',
+            immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
+          locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+          normalizedModulePath: '/immutable/acme/runtime.mjs', loadMode: 'immutable-js' }) };
+      const capability = 'A'.repeat(43);
+      await publishAgentRuntimeDaemonServiceAuthority({ ...authority, httpPort: 31_001, capability });
+      vi.stubEnv('HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE', path);
+      const daemon = createDaemonSessionAccountActionExecutor({ serverId: 'profile', serverHttpBaseUrl: 'https://session-home.test',
+        token: 'daemon-account-token', machineId: 'machine-1',
+        prepareExternalActionAuthorization: async ({ sessionActionOrigin }) => ({ target, authorization: {
+          ...context.externalActionExecutionAuthorization!, binding: {
+            ...context.externalActionExecutionAuthorization!.binding, sessionActionOrigin,
+          } } }),
+        createExecutor: () => createActionExecutor(deps),
+      });
+      vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+        const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
+        expect(request.context).toEqual({ token: capability, sessionId: 'session-1' });
+        if (request.operation.kind !== 'action.execute') throw new Error('unexpected daemon operation');
+        const outcome = await daemon(request.operation, { sessionId: request.context.sessionId, isCurrent: async () => true });
+        return Response.json(AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: true,
+          result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } }));
+      });
+      try {
+        const session = createSessionAccountActionExecutor({
+          base: createActionExecutor(createCliActionDeps({ token: '', sessionId: 'session-1', mode: 'plain', ctx: null })),
+          client: { sessionId: 'session-1', getServerBinding: () => ({ serverId: 'profile', serverUrl: 'https://session-home.test' }),
+            rpcHandlerManager: { invokeLocal: async () => null, registerHandler() {} }, updateMetadata() {},
+            getActiveTurnAdmissionWitness: () => ({ turnId: 'turn-1', inputId: 'input-1', userMessageSeq: 1, userMessageSeqs: [1],
+              agentStartCaller: { kind: 'session', sessionId: 'session-1', starterDepth: 0, turnDepth: 0 }, callerPermissionMode: 'default' }),
+          },
+        });
+        const response = await session.execute('workflow.run.start', input, { surface: 'agent', actionRequestId: 'request-1' });
+        expect(response.ok).toBe(true);
+        if (!response.ok) return response;
+        return WorkflowActionOutputSchemasV1['workflow.run.start'].parse(response.result);
+      } finally {
+        await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ ...authority, capabilityDigest: hashPrivateBearer(capability) });
+      }
+    })();
     if (!hasSigner) {
       expect(result).toMatchObject({ ok: false, errorCode: 'not_authenticated' });
       expect(http.post).not.toHaveBeenCalled();

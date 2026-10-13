@@ -1,0 +1,132 @@
+import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import { resolveSessionCapabilityItemIdentityV1 } from '@happier-dev/protocol/actions/executor/sessionCapabilities';
+import { SpawnCapabilitiesPreviewSuccessV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
+import { readCapabilityLaunchRestartFromMetadataV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
+import { readPendingCapabilityApplyV1, readCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import type { SkillRulesActionPortV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import type { StoredCredentials } from '@/persistence';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import { updateSessionMetadataForTarget } from '@/session/services/updateSessionMetadataForTarget';
+import { tryDecryptSessionOwnerMetadataView, readSessionOwnerLocality } from '@/session/transport/encryption/sessionEncryptionContext';
+import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
+import { findCatalogEntry } from '@/agent/catalog/registry';
+import { resolveCapabilityApplyAgentFacts } from '@/session/runtime/capabilityApplyFacts';
+import { readPluginMcpServerMetadata } from '@/mcp/runtime/pluginMcpServerItems';
+import { createCliMcpServerStore, createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
+
+type CapabilityDeps = Pick<ActionExecutorDeps, 'sessionCapabilities' | 'sessionCapabilitiesGet' | 'spawnCapabilitiesPreview'>;
+
+/** Account selection writes and exact-machine previews retain the invocation's captured Home. */
+export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
+  credentials: StoredCredentials; serverId: string; serverHttpBaseUrl: string;
+  operationContext?: SavedSecretOperationContextV1; skillRules: SkillRulesActionPortV1;
+  resolveAuthorizationHeaders: (actionId: 'session.capabilities.set' | 'session.capabilities.get', context: ActionExecutorContext, request: Readonly<{
+    method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown;
+  }>) => Readonly<Record<string, string>> | null;
+  callMachineAction: (input: Readonly<{ machineId: string; serverId?: string; method: string; request: unknown;
+    context?: ActionExecutorContext; effectActionId?: string; exactMachine?: true; signal?: AbortSignal }>) => Promise<unknown>;
+}>): CapabilityDeps {
+  const withinHome = <T>(run: () => Promise<T>) => runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run);
+  const read = async (sessionId: string, context: ActionExecutorContext, actionId: 'session.capabilities.set' | 'session.capabilities.get' = 'session.capabilities.set') => {
+    context.signal?.throwIfAborted();
+    if (context.serverId && context.serverId !== params.serverId) return null;
+    const transport = await withinHome(() => resolveSessionTransportContext({ credentials: params.credentials, idOrPrefix: sessionId,
+      resolveAuthorizationHeaders: request => params.resolveAuthorizationHeaders(actionId, context, request), signal: context.signal }));
+    if (!transport.ok) {
+      if (transport.code === 'session_not_found') return null;
+      throw Object.assign(new Error(transport.code), { code: 'session_unavailable' });
+    }
+    if (transport.sessionId !== sessionId || transport.rawSession.id !== sessionId) return null;
+    const metadata = tryDecryptSessionOwnerMetadataView({ credentials: params.credentials,
+      accountEncryptionMode: transport.accountEncryptionCurrentness.mode, rawSession: transport.rawSession });
+    if (!metadata) throw Object.assign(new Error('Session metadata is unavailable'), { code: 'session_unavailable' });
+    return { transport, metadata };
+  };
+  const preview = async (input: Parameters<NonNullable<ActionExecutorDeps['spawnCapabilitiesPreview']>>[0], context: ActionExecutorContext) => {
+    context.signal?.throwIfAborted();
+    try {
+      const result = await params.callMachineAction({ machineId: input.machineId, serverId: context.serverId ?? params.serverId,
+        method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, request: input, context,
+        effectActionId: 'sessions.spawn.capabilities.preview', exactMachine: true, signal: context.signal });
+      const wire = result !== null && typeof result === 'object' ? result as Record<string, unknown> : {};
+      // A machine reply proves reachability; producer/preparation failures are not transport failures.
+      if (wire.ok !== true) return { ok: false, reason: 'invalid_input' } as const;
+      const output = SpawnCapabilitiesPreviewSuccessV1Schema.safeParse({ ok: true, machinePlatform: wire.machinePlatform,
+        mcp: wire.mcp, skills: wire.skills, applyTiming: wire.applyTiming });
+      return output.success ? output.data : { ok: false, reason: 'invalid_input' } as const;
+    } catch (error) { context.signal?.throwIfAborted();
+      return { ok: false, reason: isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error) ? 'invalid_input' : 'machine_unreachable' } as const;
+    }
+  };
+  return {
+    spawnCapabilitiesPreview: preview,
+    sessionCapabilitiesGet: async (input, context) => {
+      try {
+        const session = await read(input.sessionId, context, 'session.capabilities.get');
+        if (!session) return { ok: false, code: 'not_found' };
+        const machineId = readSessionOwnerLocality({ metadata: session.metadata, rawSession: session.transport.rawSession })?.machineId;
+        const agent = resolveBackendTargetFromSessionMetadata(session.metadata);
+        if (!machineId || agent?.kind !== 'backend') return { ok: false, code: 'session_unavailable' };
+        const wire = await params.callMachineAction({ machineId, serverId: context.serverId ?? params.serverId,
+          method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, request: { machineId, agentId: agent.backendId, sessionId: input.sessionId },
+          context, effectActionId: 'session.capabilities.get', exactMachine: true, signal: context.signal });
+        const result = wire !== null && typeof wire === 'object' ? wire as Record<string, unknown> : {};
+        if (result.ok !== true) return { ok: false, code: 'session_unavailable' };
+        const generic = SpawnCapabilitiesPreviewSuccessV1Schema.parse({ ok: true, machinePlatform: result.machinePlatform,
+          mcp: result.mcp, skills: result.skills, applyTiming: result.applyTiming });
+        const apply = readCapabilitySelectionApplyV1(session.metadata);
+        return { ok: true, mcp: { items: generic.mcp.items }, skills: generic.skills,
+          pendingApply: { ...readPendingCapabilityApplyV1(session.metadata), ...(apply.mcp ?? apply.skills ?? {}) }, applyTiming: generic.applyTiming };
+      } catch { context.signal?.throwIfAborted(); return { ok: false, code: 'session_unavailable' }; }
+    },
+    sessionCapabilities: {
+      readSession: async (input, context) => {
+        const session = await read(input.sessionId, context);
+        if (!session) return null;
+        const target = resolveBackendTargetFromSessionMetadata(session.metadata);
+        if (target?.kind !== 'backend') throw Object.assign(new Error('Session Agent is unavailable'), { code: 'session_unavailable' });
+        const entry = findCatalogEntry(target.backendId);
+        if (!entry) throw Object.assign(new Error('Session Agent is unavailable'), { code: 'session_unavailable' });
+        return { metadata: session.metadata, revision: session.transport.rawSession.metadataVersion,
+          sessionRunning: session.transport.rawSession.active === true,
+          agent: await resolveCapabilityApplyAgentFacts({ agentId: target.backendId, metadata: session.metadata,
+            sessionRunning: session.transport.rawSession.active === true }),
+          launchRestart: readCapabilityLaunchRestartFromMetadataV1(session.metadata) };
+      },
+      resolveItem: async (input, context) => withinHome(async () => {
+        context.signal?.throwIfAborted();
+        // Native overlay ids are desired exact names, so saving Off stays Account-only while the Machine is offline.
+        if (input.kind === 'native_skill') return input.id;
+        if (input.kind === 'skill') {
+          return resolveSessionCapabilityItemIdentityV1(await params.skillRules.listSkills(context.signal), input.id);
+        }
+        if (!params.operationContext) await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking' });
+        const store = params.operationContext ? createCliMcpServerStoreForOperation({ operationContext: params.operationContext,
+          serverId: params.serverId, signal: context.signal }) : createCliMcpServerStore({ credentials: params.credentials,
+          serverId: params.serverId, signal: context.signal });
+        const catalog = await store.readCatalogForOperation();
+        if (catalog.status !== 'ready') throw new Error('mcp_catalog_unavailable');
+        return resolveSessionCapabilityItemIdentityV1([...catalog.catalog.servers, ...await readPluginMcpServerMetadata()], input.id);
+      }),
+      writeMetadata: async (input, context) => withinHome(async () => {
+        let result;
+        try { result = await updateSessionMetadataForTarget({ credentials: params.credentials, idOrPrefix: input.sessionId,
+          expectedSessionId: input.sessionId, expectedMetadataRevision: input.expectedRevision,
+          currentness: { signal: context.signal },
+          resolveAuthorizationHeaders: request => params.resolveAuthorizationHeaders('session.capabilities.set', context, request),
+          updater: () => ({ ...input.metadata }) }); }
+        catch (error) { context.signal?.throwIfAborted();
+          if (error && typeof error === 'object' && Reflect.get(error, 'code') === 'conflict') return 'conflict';
+          throw error;
+        }
+        if (!result.ok) { if (result.code === 'conflict') return 'conflict'; throw new Error(result.code); }
+        return 'updated';
+      }),
+    },
+  };
+}

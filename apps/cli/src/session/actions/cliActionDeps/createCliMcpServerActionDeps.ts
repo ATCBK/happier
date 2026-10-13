@@ -9,15 +9,18 @@ import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/act
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { createCliMcpServerStore, createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { resolveCurrentAccountAdministrationMachine } from '@/api/machine/resolveCurrentAccountMachineTarget';
+import { listCurrentAccountMachines, resolveCurrentAccountAdministrationMachine } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, ConnectedAccountControlCommandRequestSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
-import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
+import { readCatalogEntriesSnapshot } from '@/agent/catalog/registry';
+import { readPluginMcpServerMetadata } from '@/mcp/runtime/pluginMcpServerItems';
 
 /** Catalog and Machine operations retain the exact CLI invocation's Home and Account. */
 export function createCliMcpServerActionExecuteV1(params: Readonly<{
   credentials: StoredCredentials; serverId: string; serverHttpBaseUrl: string;
   operationContext?: SavedSecretOperationContextV1;
   connectedServiceAction?: ActionExecutorDeps['connectedServiceAction'];
+  registryActionExecute?: ActionExecutorDeps['registryActionExecute'];
+  personalSavedSecretActionExecute?: ActionExecutorDeps['personalSavedSecretActionExecute'];
   preferredMachineId?: string | null;
   callMachineAction(input: Readonly<{
     machineId: string; serverId?: string; method: string; request: unknown; signal?: AbortSignal;
@@ -55,6 +58,16 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
         return snapshot;
       };
       return await createMcpServerActionExecuteV1({
+        registryActionExecute: params.registryActionExecute,
+        personalSavedSecretActionExecute: params.personalSavedSecretActionExecute,
+        readImportLink: async url => {
+          await assertCurrent();
+          const target = new URL(url);
+          if (target.protocol !== 'https:' || target.username || target.password) throw Object.assign(new Error('Invalid config URL'), { code: 'invalid_registry_input' });
+          const response = await fetch(target, { signal: context.signal, redirect: 'error' });
+          if (!response.ok) throw Object.assign(new Error('Config link unavailable'), { code: 'registry_unavailable' });
+          const text = await response.text(); await assertCurrent(); return text;
+        },
         connectedServiceAction: params.connectedServiceAction,
         resolveAdministrationMachine: async () => {
           await assertCurrent();
@@ -64,16 +77,37 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
           await assertCurrent();
           return machineId;
         },
-        describeConnectedService: async machineId => {
+        describeConnectedService: async (machineId, command) => {
           await assertCurrent();
           return params.callMachineAction({ machineId, serverId: params.serverId,
             method: CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD,
             request: ConnectedAccountControlCommandRequestSchema.parse({ v: 1, machineId,
-              command: { operation: 'describeService', service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } }),
+              command }),
             context, signal: context.signal, authority: context.authority,
             authorization: context.rpcSessionAuthorization, effectActionId: request.actionId, exactMachine: true });
         },
         readCatalog,
+        readPluginItems: async () => { const items = await readPluginMcpServerMetadata(); await assertCurrent(); return items; },
+        readToolAgentFacts: async () => {
+          await assertCurrent();
+          const machines = await listCurrentAccountMachines({ token: params.credentials.token, credentials: params.credentials,
+            authorization: context.rpcSessionAuthorization, effectActionId: request.actionId,
+            serverHttpBaseUrl: params.serverHttpBaseUrl, signal: context.signal }).catch((cause: unknown) => {
+              context.signal?.throwIfAborted();
+              if (cause && typeof cause === 'object' && 'code' in cause && cause.code === 'machine_inventory_unavailable') return null;
+              throw cause;
+            });
+          await assertCurrent();
+          if (machines === null) return null;
+          const installed = new Set(machines.filter(machine => machine.kind === 'persistent' && !machine.revokedAt)
+            .flatMap(machine => machine.agentInventory?.installedAgentIds ?? []));
+          const agents = Object.values(readCatalogEntriesSnapshot()).filter(entry => installed.has(entry.id)).map(entry => ({ agentId: entry.id,
+            ...(entry.mcpToolControl === undefined ? {} : { mcpToolControl: entry.mcpToolControl }),
+            ...(entry.mcpToolLoading === undefined ? {} : { mcpToolLoading: entry.mcpToolLoading }),
+          }));
+          await assertCurrent();
+          return { agents };
+        },
         mutate: async (change, expectedRevision) => store.mutate(change, expectedRevision, await readCatalog()),
         machine: async ({ actionId, input, machineId }) => {
           await assertCurrent();
@@ -96,7 +130,7 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
           const parsed = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1[actionId].safeParse(response);
           if (!parsed.success) throw Object.assign(new Error('Invalid MCP Machine receipt'), {
             code: actionId === 'mcp.servers.test' ? 'outcome_unknown' : 'invalid_action_output' });
-          if (actionId === 'mcp.servers.probe') {
+          if (actionId === 'mcp.found.list') {
             await assertCurrent();
           }
           return parsed.data;

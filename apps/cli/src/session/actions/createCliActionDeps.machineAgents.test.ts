@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { ActionIdSchema, createActionExecutor } from '@happier-dev/protocol';
 
 import { createCliActionDeps } from './createCliActionDeps';
+import { createCapabilitiesService } from '@/capabilities/service';
+import { createAcpAgentInventoryCapability } from '@/capabilities/registry/machineAgentsInventory';
+import type { CapabilitiesDetectRequest } from '@happier-dev/protocol/capabilities';
 
 const facts = {
   installed: false, version: null, latestVersion: null,
@@ -13,6 +16,22 @@ const facts = {
 } as const;
 
 describe('CLI machine Agent inventory Action transport', () => {
+  it('observes a normalized draft through the registered remote capability without an Account catalog read', async () => {
+    const service = createCapabilitiesService({ capabilities: [createAcpAgentInventoryCapability({ accountId: 'alice' })],
+      checklists: {}, buildContext: async () => ({ cliSnapshot: null }) });
+    const deps = createCliActionDeps({ token: 'admitted-token', sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'home-1', serverHttpBaseUrl: 'http://home-1.test', machineActionDirectTargetTransport: {
+        machineId: 'machine-1', invoke: async (method, request) => {
+          if (method !== 'capabilities.detect') throw new Error('Draft detection must not enumerate the Account or roster');
+          // The untyped transport body is parsed by the real registered capability.
+          return service.detect(request as CapabilitiesDetectRequest);
+        },
+      } });
+    const observed = await deps.machinesAgentsList?.({ machineId: 'machine-1', serverId: 'home-1',
+      draftDefinitions: [{ definitionId: 'draft', title: 'Draft', launch: { kind: 'command', command: process.execPath, args: [] } }],
+    }, { surface: 'cli', authority: 'account_automation' });
+    expect(observed).toMatchObject({ items: [{ definitionId: 'draft', installed: true, managed: false, version: null }] });
+  });
   it('reads daemon facts through the complete capability request on the admitted machine', async () => {
     const calls: Array<{ method: string; request: unknown; signal?: AbortSignal }> = [];
     const signal = new AbortController().signal;

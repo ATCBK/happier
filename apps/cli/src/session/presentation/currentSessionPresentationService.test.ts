@@ -16,8 +16,10 @@ import {
   CurrentSessionPresentationIntentV1Schema,
 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createSwapAwareRpcHandlerRegistrar } from '@/agent/runtime/session/loop/createSwapAwareRpcHandlerRegistrar';
 
-import { createCurrentSessionPresentationService } from './currentSessionPresentationService';
+import { createCurrentSessionPresentationHost, createCurrentSessionPresentationService } from './currentSessionPresentationService';
 
 function createHarness(options?: Readonly<{
   recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
@@ -101,6 +103,122 @@ const defaultOwner = {
   generationId: 'immutable-generation-default',
   invocationId: 'invocation-default',
 } as const;
+
+function createLogicalSessionHarness() {
+  let sessionId = 'session-1';
+  let manager = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' });
+  const registrar = createSwapAwareRpcHandlerRegistrar(() => manager);
+  const states = new Map<string, AgentState>();
+  let nextWrite: Readonly<{ entered: () => void; released: Promise<void> }> | null = null;
+  const controller = new AbortController();
+  // Only the persistence/transport boundary is in memory; RPC admission,
+  // Session registration and presentation lifecycle remain real.
+  const session: Pick<SessionClientPort, 'sessionId' | 'rpcHandlerManager' | 'updateAgentState'> = {
+    get sessionId() { return sessionId; },
+    rpcHandlerManager: {
+      ...registrar.registrar,
+      invokeLocal: (method, input) => manager.invokeLocal(method, input),
+    },
+    updateAgentState: async updater => {
+      const heldWrite = nextWrite;
+      nextWrite = null;
+      if (heldWrite) {
+        heldWrite.entered();
+        await heldWrite.released;
+      }
+      states.set(sessionId, updater(states.get(sessionId) ?? {}));
+    },
+  };
+  const host = createCurrentSessionPresentationHost({ session, signal: controller.signal });
+  const call = (method: string, params: unknown, target = { sessionId, manager }) => target.manager.handleRequest({
+    method: `${target.sessionId}:${method}`, params,
+    authorization: { ...presentationContext('viewer-connection').authorization, sessionId: target.sessionId },
+  });
+  return {
+    host, controller, call,
+    captureTransport: () => ({ sessionId, manager }),
+    swapTransport: (nextSessionId: string) => {
+      sessionId = nextSessionId;
+      manager = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' });
+      registrar.rebindTo(manager);
+    },
+    readState: () => CurrentSessionPresentationStateV1Schema.parse(states.get(sessionId)?.[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]),
+    holdNextWrite: () => {
+      let entered!: () => void;
+      let release!: () => void;
+      const staged = new Promise<void>(resolve => { entered = resolve; });
+      const released = new Promise<void>(resolve => { release = resolve; });
+      nextWrite = { entered, released };
+      return { staged, release };
+    },
+  };
+}
+
+describe('logical Session presentation host', () => {
+  it('keeps a focused client and nonce when the same Session changes transport', async () => {
+    const harness = createLogicalSessionHarness();
+    try {
+      harness.host.bindCurrentSession();
+      const bound = await harness.call(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, {
+        clientId: 'viewer-client', focused: true, draftRevision: 0,
+      });
+      harness.swapTransport('session-1');
+      const presentation = harness.host.bindCurrentSession();
+      const pending = presentation.present({ operationId: 'same-session', intent: { kind: 'viewer.open', source: 'computer' } });
+      await vi.waitFor(() => expect(harness.readState().command?.id).toBe('same-session'));
+      const state = harness.readState();
+      expect(state.hostNonce).toBe(bound.hostNonce);
+      await harness.call(CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD, {
+        hostNonce: bound.hostNonce, clientId: 'viewer-client', commandId: 'same-session', result: { status: 'applied' },
+      });
+      await expect(pending).resolves.toEqual({ status: 'applied', revision: `${bound.hostNonce}:${state.revision}` });
+    } finally {
+      harness.controller.abort();
+    }
+  });
+
+  it('fences queued old-owner purges, command cleanup and late ACKs from a different Session', async () => {
+    const harness = createLogicalSessionHarness();
+    try {
+      const previous = harness.host.bindCurrentSession();
+      const previousTransport = harness.captureTransport();
+      const previousBound = await harness.call(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, {
+        clientId: 'viewer-client', focused: true, draftRevision: 0,
+      });
+      await previous.setStatus({ operationId: 'old-status', key: 'build', text: 'Old Session', owner: defaultOwner });
+      const pending = previous.present({ operationId: 'old-command', intent: { kind: 'viewer.open', source: 'computer' } });
+      await vi.waitFor(() => expect(harness.readState().command?.id).toBe('old-command'));
+      const heldWrite = harness.holdNextWrite();
+      const purge = previous.purgeOwner({ operationId: 'old-purge', owner: defaultOwner });
+      await heldWrite.staged;
+      harness.host.retire();
+      harness.swapTransport('session-2');
+      const successor = harness.host.bindCurrentSession();
+      const successorBound = await harness.call(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, {
+        clientId: 'successor-client', focused: true, draftRevision: 0,
+      });
+      await successor.setStatus({ operationId: 'new-status', key: 'build', text: 'Successor Session', owner: defaultOwner });
+      const successorState = harness.readState();
+      expect(successorBound.hostNonce).not.toBe(previousBound.hostNonce);
+      heldWrite.release();
+      await purge;
+      await expect(pending).resolves.toMatchObject({ status: 'outcomeUnknown' });
+      await expect(harness.call(CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD, {
+        hostNonce: previousBound.hostNonce, clientId: 'viewer-client', commandId: 'old-command', result: { status: 'applied' },
+      }, previousTransport)).resolves.toEqual({ status: 'ignored' });
+      expect(harness.readState()).toEqual(successorState);
+    } finally {
+      harness.controller.abort();
+    }
+  });
+
+  it('does not reopen a presentation after its parent Session lifetime retires', () => {
+    const harness = createLogicalSessionHarness();
+    harness.host.bindCurrentSession();
+    harness.controller.abort();
+    expect(() => harness.host.bindCurrentSession()).toThrow();
+  });
+});
 
 describe('current-session presentation service', () => {
   it('admits UI semantic input only from the focused bound origin and waits for its acknowledgement', async () => {

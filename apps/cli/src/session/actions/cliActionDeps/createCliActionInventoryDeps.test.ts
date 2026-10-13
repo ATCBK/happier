@@ -1,29 +1,18 @@
-import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
-import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
-  isActiveAccountSettingsSnapshotLifetimeCurrent, resetActiveAccountSettingsSnapshotForTests,
-  setActiveAccountSettingsSnapshot, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import type { DetectProviderMcpServersResult } from '@/mcp/providerDetection/detectProviderMcpServers';
-import { createDeferred } from '@/testkit/async/deferred';
 
 const {
   fetchSessionById,
   probeAgentConfigOptionsBestEffort,
   probeAgentModesBestEffort,
   probeAgentModelsBestEffort,
-  detectProviderMcpServers,
   resolveAvailableAccountSettings,
 } = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
   probeAgentConfigOptionsBestEffort: vi.fn(),
   probeAgentModesBestEffort: vi.fn(),
   probeAgentModelsBestEffort: vi.fn(),
-  detectProviderMcpServers: vi.fn(),
   resolveAvailableAccountSettings: vi.fn(),
 }));
 
@@ -36,6 +25,7 @@ vi.mock('@/settings/accountSettings/resolveAvailableAccountSettings', () => ({
 }));
 
 import { createCliActionInventoryDeps } from './createCliActionInventoryDeps';
+import { resolveSessionMcpPreview } from '@/mcp/preview/resolveSessionMcpPreview';
 
 describe('createCliActionInventoryDeps', () => {
   afterEach(() => { vi.restoreAllMocks(); });
@@ -44,7 +34,6 @@ describe('createCliActionInventoryDeps', () => {
     probeAgentConfigOptionsBestEffort.mockReset();
     probeAgentModesBestEffort.mockReset();
     probeAgentModelsBestEffort.mockReset();
-    detectProviderMcpServers.mockReset();
     resolveAvailableAccountSettings.mockReset();
     resolveAvailableAccountSettings.mockResolvedValue(null);
   });
@@ -385,50 +374,20 @@ describe('createCliActionInventoryDeps', () => {
 
   it('previews MCP spawn options through the existing MCP preview owner without returning secret env', async () => {
     const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'mcp-preview-account' })).toString('base64url')}.signature`, encryption: null };
-    const serverHttpBaseUrl = 'https://mcp-preview-home.test';
     const catalog = McpServerCatalogV1Schema.parse({ v: 1,
       servers: [{ id: 'srv-1', name: 'repo-tools', title: 'Repo Tools', transport: 'stdio',
         stdio: { command: 'echo', args: [] }, env: { SECRET_TOKEN: { t: 'literal', v: 'must-not-return' } }, createdAt: 1, updatedAt: 1 }],
       bindings: [{ id: 'binding', serverId: 'srv-1', enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }],
-    });
-    const scopeKey = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => resolveAccountSettingsScopeKey(credentials));
-    const snapshot: ActiveAccountSettingsSnapshot = { source: 'network', scopeKey,
-      settings: accountSettingsParse({ mcpServersStrictMode: true }), rawSettings: { mcpServersStrictMode: true },
-      settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [] };
-    setActiveAccountSettingsSnapshot(snapshot);
-    const captured = { scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
-    const operationContext = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => createInvocationSavedSecretOperationContextV1({
-      credentials, serverHttpBaseUrl, snapshot, isCurrent: async () => isActiveAccountSettingsSnapshotLifetimeCurrent(captured),
-    }));
-    // Only Home HTTP and provider OS detection are replaced; catalog admission
-    // and the preview projection both exercise their real canonical owners.
-    vi.spyOn(axios, 'get').mockImplementation(async input => {
-      const url = new URL(String(input));
-      if (url.origin !== serverHttpBaseUrl) throw new Error('Preview escaped its captured Home');
-      if (url.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
-        mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
-      if (url.pathname === '/v1/account/entity-rows/mcp') return { status: 200, data: { status: 'present', revision: 1,
-        content: { t: 'plain', v: catalog } } };
-      if (url.pathname === '/v2/account/settings') return { status: 200, data: { version: 7,
-        content: { t: 'plain', v: { mcpServersStrictMode: true } } } };
-      if (url.pathname === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
-      if (url.pathname === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
-      if (url.pathname.startsWith('/v1/account/entity-rows/')) return { status: 404, data: {} };
-      throw new Error(`Unexpected preview Home request: ${url.pathname}`);
     });
     const detected: DetectProviderMcpServersResult = {
       servers: [{ provider: 'codex', name: 'detected-codex', transport: 'stdio', stdio: { command: 'codex', args: [] },
         envKeys: ['TOKEN'], source: { kind: 'user', path: '/config/codex' }, enabled: true }],
       warnings: [],
     };
-    detectProviderMcpServers.mockResolvedValue(detected);
-    const detectIssued = createDeferred<void>();
-    const detectReleased = createDeferred<DetectProviderMcpServersResult>();
 
     const deps = createCliActionInventoryDeps({
       token: credentials.token,
       credentials,
-      savedSecretOperationContext: operationContext,
       sessionId: 'sess-1',
       probeDeps: createProbeDeps(),
       mode: 'plain',
@@ -439,14 +398,16 @@ describe('createCliActionInventoryDeps', () => {
         path: '/repo',
         metadata: {},
       },
-      mcpPreviewDeps: {
-        detectProviderMcpServers,
+      // Machine transport is the boundary; its payload comes from the actual producer.
+      callMachineAction: async request => {
+        expect(request.machineId).toBe('machine-1');
+        return resolveSessionMcpPreview({ settings: { ...catalog, strictMode: true }, machineId: request.machineId,
+          directory: '/repo', agentId: 'codex', detectedServers: detected.servers });
       },
     });
     const spawnPreview = deps.spawnMcpServersPreview;
     if (!spawnPreview) throw new Error('MCP preview is not installed');
 
-    try {
       const result = await spawnPreview({
         agentId: 'codex',
         machineId: 'machine-1',
@@ -470,7 +431,7 @@ describe('createCliActionInventoryDeps', () => {
           ok: true,
           builtIn: [expect.objectContaining({ key: 'built-in:happier' })],
           managed: [
-            {
+            expect.objectContaining({
               key: 'managed:srv-1',
               serverId: 'srv-1',
               name: 'repo-tools',
@@ -483,28 +444,12 @@ describe('createCliActionInventoryDeps', () => {
               availability: 'active',
               sourceKind: 'managed',
               scopeKind: 'allMachines',
-            },
+            }),
           ],
           detected: [expect.objectContaining({ key: 'detected:codex:detected-codex', envKeyCount: 1 })],
         },
       });
       expect(JSON.stringify(result)).not.toContain('must-not-return');
-      expect(operationContext.readSnapshot()?.scopeKey).toBe(snapshot.scopeKey);
-      detectProviderMcpServers.mockImplementationOnce(async () => { detectIssued.resolve(); return detectReleased.promise; });
-      const pendingPreview = spawnPreview({ agentId: 'codex', machineId: 'machine-1', directory: '/repo' });
-      await Promise.race([detectIssued.promise, pendingPreview.then(() => {
-        throw new Error('Preview returned before its held provider detection completed');
-      })]);
-      clearActiveAccountSettingsSnapshot();
-      setActiveAccountSettingsSnapshot(snapshot);
-      detectReleased.resolve(detected);
-      await expect(pendingPreview).rejects.toMatchObject({ code: 'mcp_catalog_unavailable', reason: 'scope-retired' });
-    } finally {
-      // Retire finite maintenance before restoring the Home boundary.
-      detectReleased.resolve(detected);
-      resetActiveAccountSettingsSnapshotForTests();
-      await operationContext.isCurrent();
-    }
   });
 
   it('reports opaque profile rows instead of calling the visible prefix complete', async () => {

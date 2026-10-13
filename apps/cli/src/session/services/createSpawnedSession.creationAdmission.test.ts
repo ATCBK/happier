@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { createServer } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import axios from 'axios';
 
@@ -13,7 +21,14 @@ import {
   SessionSpawnNewInputV2Schema,
   accountSettingsParse,
   FeaturesResponseSchema,
+  McpServersSettingsV1Schema,
+  projectMcpServerMaterializationV1,
+  resolveSessionCapabilitiesV1,
 } from '@happier-dev/protocol';
+import { SessionOwnerMetadataEnvelopeV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
+import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 import { getWorkflowStarterExamplesV1 } from '@happier-dev/protocol/workflows/builtins/examples';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -117,7 +132,7 @@ describe('canonical Session creation admission', () => {
     expect(spawn.mock.calls[0]![0]).toMatchObject({ initialTriggers });
   });
 
-  it('commits attested facts privately before dispatch and never puts them in raw spawn RPC', async () => {
+  it('composes plugin spawn private birth and rejoin with real attested HTTP MCP calls', async () => {
     const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
     fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
@@ -137,6 +152,8 @@ describe('canonical Session creation admission', () => {
       if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: createdRow ? [createdRow] : [] } };
       if (String(url).endsWith('/v1/sessions')) {
         const input = raw as ReturnType<typeof buildSessionMetadataEnvelopeCreateFields>;
+        const owner = SessionOwnerMetadataEnvelopeV1Schema.parse(input.ownerMetadata);
+        expect(owner.t).toBe('plain');
         expect(input.ownerMetadata).toMatchObject({ t: 'plain', v: { system: { attestedContext } } });
         expect(input.sharedMetadata.ciphertext).not.toContain('sales@batiplus.ch');
         committed = true;
@@ -154,15 +171,120 @@ describe('canonical Session creation admission', () => {
       expect(request).toMatchObject({ existingSessionId: 'session-created' });
       return { type: 'success', sessionId: 'session-created' };
     });
-    await expect(createSpawnedSession({ ...params, accountSettings: {}, attestedContext })).resolves.toMatchObject({
-      sessionId: 'session-created', disposition: 'created', attestedContext,
+    const executor = createActionExecutor(createCliActionDeps({
+      token: params.credentials.token, credentials: params.credentials,
+      sessionId: 'cli-global', mode: 'plain', ctx: null, rawSession: {},
+      serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test',
+      actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}) }),
+      sessionSpawnDirectTargetTransport: {
+        machineId: 'machine-1',
+        prepare: async () => ({ ok: true, directory: '/repo', directoryKind: 'path', directoryCreationRequired: false, checkout: null }),
+        spawnedSession: { spawn, resolveSpawnSessionByNonce },
+      },
+    }));
+    const input = SessionSpawnNewInputV2Schema.parse({
+      creationKey: 'attested-http-mcp', executionTarget: { serverId: 'home-a', machineId: 'machine-1' },
+      directory: { kind: 'path', path: '/repo' }, agentTarget: params.agentTarget,
+      connectedServices: { v: 2, bindingsByServiceId: {} }, memoryEnabled: false, attestedContext,
     });
+    for (const surface of ['ui', 'agent', 'mcp', 'cli', 'api', 'plugin'] as const) {
+      expect(await executor.execute('session.spawn_new', input, {
+        surface, authority: 'present_user', actionCaller: { kind: 'host' },
+      })).toMatchObject({ ok: false, errorCode: 'session_attested_context_forbidden' });
+    }
+    expect(committed).toBe(false);
+    const result = await executor.execute('session.spawn_new', input, {
+      surface: 'plugin', authority: 'account_automation', serverId: 'home-a',
+      actionCaller: { kind: 'plugin', pluginId: 'happier.channels' },
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('Plugin spawn failed');
+    const birth = SessionSpawnNewResultV1Schema.parse(result.result);
+    expect(birth).toMatchObject({ type: 'success', sessionId: 'session-created', disposition: 'created', attestedContext });
+    if (birth.type !== 'success') throw new Error('Spawn did not settle');
     // A new message can recreate a deleted thread binding with the same birth
     // key. It must recover the original assertion rather than change it.
-    await expect(createSpawnedSession({ ...params, accountSettings: {}, attestedContext: {
+    expect(await executor.execute('session.spawn_new', { ...input, attestedContext: {
       externalPrincipalId: 'other@batiplus.ch', sourceMessageId: '<followup@example.test>',
-    } })).resolves.toMatchObject({ sessionId: 'session-created', disposition: 'rejoined', attestedContext });
-  });
+    } }, { surface: 'plugin', authority: 'account_automation', serverId: 'home-a',
+      actionCaller: { kind: 'plugin', pluginId: 'happier.channels' },
+    })).toMatchObject({ ok: true, result: { sessionId: birth.sessionId, disposition: 'rejoined', attestedContext } });
+
+    const root = await mkdtemp(join(tmpdir(), 'happier-attested-spawn-mcp-'));
+    const received: Record<string, string | string[] | undefined>[] = [];
+    const http = createServer(async (request, response) => {
+      if (request.url !== '/mcp') { response.writeHead(404); response.end(); return; }
+      const mcp = new McpServer({ name: 'attested-birth', version: '1' });
+      mcp.registerTool('identity', {}, async () => {
+        received.push(request.headers);
+        return { content: [{ type: 'text', text: JSON.stringify(request.headers) }] };
+      });
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      response.once('close', () => { void transport.close(); void mcp.close(); });
+      await mcp.connect(transport);
+      await transport.handleRequest(request, response);
+    });
+    await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('HTTP MCP fixture unavailable');
+    try {
+      for (const variant of ['attested', 'missing', 'wrong-route'] as const) {
+        const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{
+          id: 'wilson', name: 'wilson', transport: 'http', remote: {
+            url: `http://127.0.0.1:${address.port}/${variant === 'wrong-route' ? 'unbound' : 'mcp'}`,
+            headers: {
+              'X-Wilson-On-Behalf-Of': { t: 'sessionAttested', field: 'externalPrincipalId' },
+              'X-Wilson-Source-Message': { t: 'sessionAttested', field: 'sourceMessageId' },
+              'X-Happier-Session': { t: 'sessionAttested', field: 'sessionId' },
+            },
+          }, env: {}, createdAt: 0, updatedAt: 0,
+        }], bindings: [{ id: 'bound', serverId: 'wilson', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }] });
+        const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesV1({
+          context: { machineId: 'machine-1', directory: '/repo', machinePlatform: null, projectKey: null, agentId: null },
+          mcp: settings, skills: null, selection: {}, agentAcceptsUserMcp: true,
+        }), '/repo');
+        const materialized = await materializeMcpServerConfigRecord({ resolved, tmpDir: root, processEnv: {
+          externalPrincipalId: 'forged', sourceMessageId: '<forged>',
+        }, session: { sessionId: birth.sessionId, ...(variant === 'missing' ? {} : { attestedContext: birth.attestedContext }) },
+          deps: { resolveRemoteBridgeCommand: async () => {
+            const invocation = await resolveNodeBackedMcpServerCommand({
+              distEntrypointSegments: ['mcp', 'bridges', 'remoteMcpStdioBridge.mjs'],
+              sourceEntrypointSegments: ['mcp', 'bridges', 'remoteMcpStdioBridge.ts'], preferSourceEntrypoint: true,
+            });
+            return { ...invocation, args: ['--conditions=happier-source', ...invocation.args] };
+          } },
+        });
+        expect(materialized.warnings).toEqual([]);
+        const config = materialized.mcpServers.wilson!;
+        const transport = new StdioClientTransport({ command: config.command, args: config.args,
+          env: Object.fromEntries(Object.entries({ ...process.env, ...config.env }).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+          stderr: 'pipe' });
+        const client = new Client({ name: 'spawn-attestation-seam', version: '1' }, { capabilities: {} });
+        try {
+          if (variant === 'wrong-route') {
+            await expect(client.connect(transport)).rejects.toThrow();
+            expect(received).toHaveLength(2);
+            continue;
+          }
+          await client.connect(transport);
+          const reply = await client.callTool({ name: 'identity', arguments: {} });
+          expect(reply.isError).not.toBe(true);
+          expect(received.at(-1)).toMatchObject({ 'x-happier-session': birth.sessionId });
+          if (variant === 'attested') {
+            expect(received.at(-1)).toMatchObject({ 'x-wilson-on-behalf-of': attestedContext.externalPrincipalId,
+              'x-wilson-source-message': attestedContext.sourceMessageId });
+          } else {
+            expect(received.at(-1)).not.toHaveProperty('x-wilson-on-behalf-of');
+            expect(received.at(-1)).not.toHaveProperty('x-wilson-source-message');
+          }
+          expect(received.at(-1)).not.toHaveProperty('origin');
+        } finally { await client.close(); await transport.close(); materialized.cleanup(); }
+      }
+    } finally {
+      await new Promise<void>(resolve => http.close(() => resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   it.each([
     { bot: true, upkeep: undefined, installed: true },

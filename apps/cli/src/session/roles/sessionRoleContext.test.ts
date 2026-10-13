@@ -171,11 +171,21 @@ describe('session role prompt-plan context', () => {
   });
 
   it('renders a live worker boundary without a selected role and leaves frozen step roles to step input', async () => {
+    const scopeKey = 'notes-worker-account';
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+      settingsVersion: 4, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey });
+    const bound = { scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
+    commitActivePromptLibraryCatalog({ ...bound, catalog: { status: 'unavailable', reason: 'unreachable' } });
+    expect(readActiveAccountRoleOverrides(bound)).toMatchObject({ status: 'unavailable' });
     let metadata: SessionMetadata = {};
     let organization: Pick<V2SessionByIdResponse['session'], 'reportsTo' | 'origin'> = { reportsTo: { sessionId: 'lead' } };
     const owner = createSessionRoleContext({ readMetadata: () => metadata, readOrganization: async () => organization,
-      readRoleSources: async () => ({ status: 'ready', entries: [], diagnostics: [] }), readAccountRoleOverrides: () => ({ status: 'ready', overrides: {} }), readDefaultEngine: () => defaultEngine });
-    expect(renderSessionRoleBlockV1((await owner.resolvePromptContext())!)).toContain('lead_session_id="lead"');
+      readRoleSources: createRoleSourceReaderV1({}), readAccountRoleOverrides: () => readActiveAccountRoleOverrides(bound),
+      readDefaultEngine: () => defaultEngine });
+    const workerContext = await owner.resolvePromptContext();
+    expect(workerContext).toMatchObject({ availableRoles: [], worker: { leadSessionId: 'lead' } });
+    expect(workerContext?.role).toBeUndefined();
+    expect(renderSessionRoleBlockV1(workerContext!)).toContain('lead_session_id="lead"');
     metadata = { work: { sessionRolesV1: { inheritedFrom: 'lead', overrides: {}, sessionRoles: {}, notes: 'TASK_BOUNDARY' } } };
     expect(renderSessionRoleBlockV1((await owner.resolvePromptContext())!)).toContain('TASK_BOUNDARY');
     expect(renderSessionRoleBlockV1((await owner.resolvePromptContext())!)).not.toContain('prompt_doc.update');

@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import nacl from 'tweetnacl';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
-import { createActionExecutor, deriveSessionCreationTagV1 } from '@happier-dev/protocol';
+import { API_TOKEN_FULL_GRANT_V1, ApiTokenGrantV1Schema, createActionExecutor, deriveSessionCreationTagV1, deriveAccountMachineKeyFromRecoverySecret,
+  sealEncryptedDataKeyEnvelopeV1, SessionPendingEnqueueByMachineRequestV1Schema, SessionMessageSendResultV1Schema } from '@happier-dev/protocol';
+import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1, verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { executeExternalAction } from '@/daemon/externalActions/executeExternalAction';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { sendSessionMessage } from './sendSessionMessage';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { ApiMachineClient } from '@/api/apiMachine';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { sealSessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { encodeBase64 } from '@/api/encryption';
+import { encryptSessionPayload, decryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
+import * as installationIdentity from '@/daemon/identity/store';
 
 // HTTP and fetch are the real process boundaries; authoring, crypto envelopes,
 // Session resolution, capability parsing and Pending transport stay real.
@@ -57,6 +65,121 @@ function mockRunReads(inputTurns: readonly unknown[]) {
 }
 
 describe('target Session input authoring through HTTP', () => {
+  it('admits a signed external CLI Send through the current E2EE layout-one owner and Machine socket', async () => {
+    const secret = credentials.encryption.secret;
+    const machineKey = deriveAccountMachineKeyFromRecoverySecret(secret);
+    const dek = new Uint8Array(32).fill(19);
+    const ctx = { encryptionKey: dek, encryptionVariant: 'dataKey' as const };
+    const publicKey = nacl.box.keyPair.fromSecretKey(machineKey).publicKey;
+    const dataEncryptionKey = encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: dek, recipientPublicKey: publicKey,
+      randomBytes: length => new Uint8Array(length).fill(11) }));
+    const ownerMetadata = sealSessionOwnerMetadataEnvelopeV1({ material: { type: 'legacy', secret },
+      ownerMetadata: SessionOwnerMetadataV1Schema.parse({ v: 1, workspace: { machineId: 'machine-a', path: '/workspace' },
+        system: { sessionCreationCorrespondenceV1: correspondence } }),
+      randomBytes: length => new Uint8Array(length).fill(24) });
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: { mode: 'e2ee', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (url.includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: createSessionRecordFixture({
+        id: sessionId, active: true, encryptionMode: 'e2ee', dataEncryptionKey, metadataLayoutVersion: 1, ownerMetadata, share: null,
+        metadata: encryptSessionPayload({ ctx, payload: { v: 1 } }),
+      }) } };
+      throw new Error(`Unexpected read: ${url}`);
+    });
+    const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23));
+    // Installation identity is an OS/file boundary; signing and socket admission remain real.
+    const identity = vi.spyOn(installationIdentity, 'readInstallationIdentityIfExistsSync').mockReturnValue({
+      version: 1, installationId: 'installation', createdAt: 1,
+      publicKey: encodeBase64(keys.publicKey, 'base64url'), privateKey: encodeBase64(keys.secretKey, 'base64url') });
+    const client = new ApiMachineClient('token', { id: 'machine-a', encryptionMode: 'plain',
+      metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+    const admitted: unknown[] = [];
+    Reflect.set(client, 'socket', createApiSessionSocketStub({ connected: true, emitWithAck: (event, raw) => {
+      const request = SessionPendingEnqueueByMachineRequestV1Schema.parse(raw);
+      expect(request.externalAction?.authorization.binding.requestId).toBe('signed-cli-send');
+      if (!request.externalAction) throw new Error('Expected original caller authorization');
+      const { externalAction, ...unsignedRequest } = request;
+      expect(verifyExternalActionMachineRpcRequestV1({ authorizationToken: externalAction.authorization.token,
+        effectActionId: 'session.message.send', target: externalAction.target, installationId: externalAction.installationId,
+        event, method: event, requestId: 'signed-cli-send', params: unsignedRequest, publicKey: keys.publicKey,
+        signature: externalAction.machineSignature })).toBe(true);
+      expect(request.targetMachineId).toBe('machine-a');
+      expect(decryptSessionPayload({ ctx, ciphertextBase64: request.content.t === 'encrypted' ? request.content.c : '' }))
+        .toMatchObject({ content: { text: 'Continue the replied session' }, meta: { permissionMode: 'default',
+          happierInputRequestV1: { producer: 'cli' } } });
+      admitted.push(request);
+      return Promise.resolve({ v: 1, result: { status: 'accepted', localId: request.localId } });
+    } }));
+    const target = { kind: 'session' as const, sessionId };
+    const input = { sessionId, message: 'Continue the replied session', localId: 'signed-cli-input', wait: false };
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'terminal-proof', binding: {
+      accountId: 'requester', authentication: { kind: 'terminal', tokenEpoch: 1 },
+      serverIdentityId: 'home', machineId: 'machine-a', custodianAccountId: 'requester', installationId: 'installation',
+      actionId: 'session.message.send', requestId: 'signed-cli-send', target,
+      requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: 'signed-cli-send', target, input }),
+      accountEncryptionMode: 'e2ee',
+    } });
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
+      externalActionMachineRequestPrivateKey: keys.secretKey, externalActionMachineInstallationId: 'installation',
+      serverIdentityId: 'home', machineAdmissionTransport: (request, options) => client.enqueueSessionPendingByMachine(request, options) });
+    try {
+      const result = await createActionExecutor({ ...deps, isActionApprovalRequired: () => false }).execute('session.message.send', input,
+        { surface: 'cli', authority: 'present_user', externalActionTarget: target, externalActionExecutionAuthorization: authorization });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'accepted', localId: 'signed-cli-input' } });
+      expect(admitted).toHaveLength(1);
+      expect(http.post).not.toHaveBeenCalled();
+    } finally { identity.mockRestore(); }
+  });
+
+  it('admits a granted permission alias on exactly its Send and inherits defaults on the next Send', async () => {
+    const read = http.get.getMockImplementation()!;
+    http.get.mockImplementation(async (...args: unknown[]) => {
+      const result = await read(...args);
+      if (String(args[0]).includes(`/v2/sessions/${sessionId}`)) {
+        result.data.session.active = true;
+        result.data.session.metadata = JSON.stringify({ sessionCreationCorrespondenceV1: correspondence,
+          permissionMode: 'default', permissionModeUpdatedAt: 1 });
+      }
+      return result;
+    });
+    const grant = ApiTokenGrantV1Schema.parse({ ...API_TOKEN_FULL_GRANT_V1, permissionModes: ['read-only'] });
+    const target = { kind: 'session' as const, sessionId };
+    const input = { sessionId, message: 'Read this turn', localId: 'alias-input', permissionModeOverride: 'read_only',
+      requestedAction: { v: 1 as const, kind: 'enqueue' as const }, wait: false, timeoutSeconds: 1 };
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'requester-proof', binding: {
+      accountId: 'requester', principalId: 'principal', credentialId: 'credential', grant,
+      serverIdentityId: 'home', machineId: 'machine-a', custodianAccountId: 'requester', installationId: 'installation',
+      actionId: 'session.message.send', requestId: 'alias-send', target,
+      requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: 'alias-send', target, input }),
+      accountEncryptionMode: 'plain',
+    } });
+    const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23));
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
+      externalActionMachineRequestPrivateKey: keys.secretKey, externalActionMachineInstallationId: 'installation', serverIdentityId: 'home' });
+    const executor = createActionExecutor({ ...deps, isActionApprovalRequired: () => false });
+    const result = await executor.execute('session.message.send', input, { surface: 'api', authority: 'account_automation',
+      externalActionTarget: target, externalActionExecutionAuthorization: authorization,
+      externalActionCredential: { accountId: 'requester', principalId: 'principal', credentialId: 'credential', grant } });
+    expect(result).toMatchObject({ ok: true, result: { status: 'accepted', localId: 'alias-input' } });
+    if (!result.ok) throw new Error('Expected successful Send');
+    expect(SessionMessageSendResultV1Schema.parse(result.result)).toEqual({ status: 'accepted', localId: 'alias-input' });
+    const writesBeforeMiswiring = http.post.mock.calls.length;
+    const miswiredDeps = { ...deps, isActionApprovalRequired: () => false };
+    Reflect.deleteProperty(miswiredDeps, 'sessionSendMessage');
+    const miswiredResult = await createActionExecutor(miswiredDeps).execute('session.message.send', input, {
+      surface: 'api', authority: 'account_automation', externalActionTarget: target,
+      externalActionExecutionAuthorization: authorization,
+      externalActionCredential: { accountId: 'requester', principalId: 'principal', credentialId: 'credential', grant },
+    });
+    // The same deciding assertion must fail when the Action's Send port is removed.
+    expect(miswiredResult).toMatchObject({ ok: false });
+    expect(() => expect(miswiredResult).toMatchObject({ ok: true, result: { status: 'accepted', localId: 'alias-input' } })).toThrow();
+    expect(http.post.mock.calls).toHaveLength(writesBeforeMiswiring);
+    await deps.sessionSendMessage({ context: cliActionContext, sessionId, message: 'Use defaults',
+      localId: 'ordinary-after-alias', requestedAction: { v: 1, kind: 'enqueue' }, wait: false, timeoutSeconds: 1 });
+    expect(http.post.mock.calls.map(([, body]) => body.content.v.meta.permissionMode)).toEqual(['read-only', 'default']);
+  });
+
   it('suppresses a recovery continuation superseded during Session lookup before Pending admission', async () => {
     let current = true;
     const read = http.get.getMockImplementation()!;

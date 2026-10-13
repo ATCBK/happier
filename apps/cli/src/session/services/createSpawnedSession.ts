@@ -1044,7 +1044,8 @@ export async function createSpawnedSession(
   const isProviderBound = spawnRequest.modelSelection?.ref.providerConnectionId != null;
   await assertStoredAuthTokenValidForSpawn(params.credentials.token);
   params.signal?.throwIfAborted();
-  if (params.sessionCreationTag && params.sessionCreationCorrespondence) {
+  const rejoinExistingCreation = async (afterSpawnFailure = false): Promise<Awaited<ReturnType<typeof createSpawnedSession>> | null> => {
+    if (!params.sessionCreationTag || !params.sessionCreationCorrespondence) return null;
     const lookup = await lookupSessionsByTags({
       token: params.credentials.token,
       tags: [params.sessionCreationTag],
@@ -1063,6 +1064,10 @@ export async function createSpawnedSession(
       );
     }
     const existing = lookup.sessions[0];
+    // An archived row left by failed launch cleanup is not evidence that the
+    // runner survived its refusal. Preserve that refusal and do not attach
+    // initial input. Ordinary same-key preflight retains its identity contract.
+    if (afterSpawnFailure && existing?.archivedAt !== null && existing?.archivedAt !== undefined) return null;
     if (existing) {
       const accountEncryptionCurrentness = await readKnownSessionAccountEncryptionCurrentness({
         token: params.credentials.token,
@@ -1154,7 +1159,10 @@ export async function createSpawnedSession(
         }),
       };
     }
-  }
+    return null;
+  };
+  const existingCreation = await rejoinExistingCreation();
+  if (existingCreation) return existingCreation;
   // Rejoined and nonce-resumed Sessions retain their birth context. Only a
   // genuinely fresh worker captures its lead's current memory attachments.
   let inheritedMemory: Awaited<ReturnType<typeof prepareSessionMemoryInheritance>> | undefined;
@@ -1357,6 +1365,10 @@ export async function createSpawnedSession(
   const hasDirectSessionId = (spawnResponseRecord?.success === true || spawnResponseRecord?.type === 'success')
     && directSessionId.length > 0;
   if (!acceptedWithoutSessionId && !hasDirectSessionId) {
+    // Runtime readiness can fail after the Home committed the Session. Reuse
+    // the authenticated creation proof; row existence does not admit a runner.
+    const existingCreation = await rejoinExistingCreation(true);
+    if (existingCreation) return existingCreation;
     const responseError = typeof spawnResponseRecord?.errorMessage === 'string' && spawnResponseRecord.errorMessage.trim().length > 0
       ? spawnResponseRecord.errorMessage
       : typeof spawnResponseRecord?.error === 'string' && spawnResponseRecord.error.trim().length > 0
@@ -1381,6 +1393,8 @@ export async function createSpawnedSession(
     ...(params.signal ? { signal: params.signal } : {}),
   });
   if (settledSpawn.type === 'error') {
+    const existingCreation = await rejoinExistingCreation(true);
+    if (existingCreation) return existingCreation;
     if (
       acceptedWithoutSessionId
       && !hasRetryableSpawnNonce

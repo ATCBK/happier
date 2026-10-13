@@ -1,7 +1,6 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { AccountProfileResponseSchema } from '@happier-dev/protocol/account/profile';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
 import { convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { isLegacyConfiguredAcpFlavorCarrier } from '@happier-dev/protocol/backends/targets/compat/customAcp';
 import type { AccountProfile, ActionExecutorContext, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
@@ -38,14 +37,11 @@ import { refreshActiveConnectedMetadataCatalog } from '@/settings/connected/hydr
 import { connectedEntitySubjectKeyV1, projectConnectedPresentationLabelsV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { fetchAccountProfile } from '@/api/accountProfile';
 import { resolveCatalogAgentConnectedAccountServiceIds } from '@/agent/catalog/registry';
-import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
-import { prepareActiveMcpServerCatalog } from '@/settings/mcp/hydrateMcpServerCatalog';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
-  type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import type { SpawnMcpPreviewInventoryDeps } from './resolveSpawnMcpServersPreviewInventory';
+import { projectSpawnMcpServersPreviewInventory } from './resolveSpawnMcpServersPreviewInventory';
 import {
   type SessionStoredContentCryptoContext,
 } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -403,7 +399,6 @@ export function createCliActionInventoryDeps(params: Readonly<{
   resolveTransportForSession?: Parameters<typeof createCliBoundSessionMetadataReader>[0]['resolveTransportForSession'];
   accountProfile?: AccountProfile | null;
   probeDeps?: AgentProbeInventoryDeps;
-  mcpPreviewDeps?: SpawnMcpPreviewInventoryDeps;
   /** Existing exact-Machine transport, backed by the daemon's retained Provider services. */
   callMachineAction?: (input: Readonly<{
     machineId: string;
@@ -566,9 +561,14 @@ export function createCliActionInventoryDeps(params: Readonly<{
     },
     machinesList: async (args) => {
       const serverId = args.serverId ?? params.serverId ?? configuration.activeServerId;
-      const items = (await listCurrentAccountMachines({ token: params.token })).map((machine) => ({
+      const items = (await listCurrentAccountMachines({ token: params.token, credentials: params.credentials,
+        serverHttpBaseUrl: params.serverHttpBaseUrl })).map((machine) => ({
         serverId, id: machine.id, value: machine.id, label: machine.label, machineId: machine.id,
-        active: machine.active, revokedAt: machine.revokedAt, replacedByMachineId: machine.replacedByMachineId,
+        kind: machine.kind, active: machine.active,
+        ...(machine.activeAt === undefined ? {} : { activeAt: machine.activeAt }),
+        revokedAt: machine.revokedAt, replacedByMachineId: machine.replacedByMachineId,
+        ...(machine.platform === undefined ? {} : { platform: machine.platform }),
+        ...(machine.arch === undefined ? {} : { arch: machine.arch }),
         ...(machine.access ? { access: machine.access } : {}),
       }));
       return {
@@ -906,41 +906,10 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const directory = normalizeStringValue((args as { directory?: unknown }).directory)
         || await readCurrentSessionValue('path')
         || process.cwd();
-      const context = params.savedSecretOperationContext;
-      let snapshot: ActiveAccountSettingsSnapshot | null;
-      let isCurrent: () => Promise<boolean>;
-      if (context) {
-        isCurrent = () => context.isCurrent();
-        const catalog = await createCliMcpServerStoreForOperation({ operationContext: context }).readCatalogForOperation();
-        const captured = context.readSnapshot();
-        snapshot = captured ? { ...captured, mcpServerCatalog: catalog } : null;
-      } else {
-        await readAccountSettings();
-        if (!params.credentials) throw Object.assign(new Error('MCP Account is unavailable'), { code: 'mcp_catalog_unavailable' });
-        const scopeKey = resolveAccountSettingsScopeKey(params.credentials);
-        const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
-        isCurrent = async () => getActiveAccountSettingsSnapshot()?.scopeKey === scopeKey
-          && getActiveAccountSettingsSnapshotLifetimeToken() === lifetimeToken;
-        await prepareActiveMcpServerCatalog({ credentials: params.credentials, scopeKey, lifetimeToken, refresh: true });
-        snapshot = getActiveAccountSettingsSnapshot();
-        if (snapshot?.scopeKey !== scopeKey || getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) {
-          throw Object.assign(new Error('Captured MCP Account retired'), { code: 'scope-retired' });
-        }
-      }
-      const settings = readMcpServersSettingsFromAccountSettings(snapshot);
-      const selectionParsed = SessionMcpSelectionV1Schema.safeParse((args as { selection?: unknown }).selection);
-      const { resolveSpawnMcpServersPreviewInventory } = await import('./resolveSpawnMcpServersPreviewInventory');
-      const preview = await resolveSpawnMcpServersPreviewInventory({
-        settings,
-        machineId,
-        directory,
-        agentId,
-        ...(selectionParsed.success ? { selection: selectionParsed.data } : {}),
-        limit: (args as { limit?: number }).limit,
-        ...(params.mcpPreviewDeps ? { deps: params.mcpPreviewDeps } : {}),
-      });
-      if (!await isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
-      return preview;
+      if (!params.callMachineAction || !machineId || !agentId) return { ok: false, items: [], preview: null };
+      return projectSpawnMcpServersPreviewInventory(await params.callMachineAction({ machineId, serverId: params.serverId,
+        method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, request: { machineId, directory, agentId,
+          ...((args as { selection?: unknown }).selection !== undefined ? { selection: args.selection } : {}) } }), args.limit);
     },
     sessionModesList: async ({ sessionId }) => {
       const sessionModes = readSessionModesState(await readSessionMetadataForId(sessionId));

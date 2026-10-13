@@ -5,6 +5,7 @@ import nacl from 'tweetnacl';
 import { deriveAccountMachineKeyFromRecoverySecret, deriveBoxPublicKeyFromSeed, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+import { createReplayMessagesPage } from './replayMessagesFixture.testkit';
 
 describe('hydrateReplayDialogFromTranscript (integration)', () => {
   let server: Server | null = null;
@@ -68,7 +69,7 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
         res.end(
-          JSON.stringify({
+          JSON.stringify(createReplayMessagesPage({
             messages: [
               {
                 seq: 1,
@@ -76,7 +77,8 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
                 content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello' } } },
               },
             ],
-          }),
+            hasMore: false,
+          })),
         );
         return;
       }
@@ -164,7 +166,7 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
         res.end(
-          JSON.stringify({
+          JSON.stringify(createReplayMessagesPage({
             messages: [
               {
                 seq: 1,
@@ -172,7 +174,8 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
                 content: { t: 'encrypted', c: msgCiphertext },
               },
             ],
-          }),
+            hasMore: false,
+          })),
         );
         return;
       }
@@ -250,7 +253,7 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
         res.end(
-          JSON.stringify({
+          JSON.stringify(createReplayMessagesPage({
             messages: [
               {
                 seq: 1,
@@ -275,7 +278,8 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
                 content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'reply' } } },
               },
             ],
-          }),
+            hasMore: false,
+          })),
         );
         return;
       }
@@ -307,7 +311,7 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
     });
 
     expect(res).not.toBeNull();
-    expect((res as any)?.synopsisText).toBe('SYNOPSIS_OK');
+    expect(res?.synopsisText).toBe('SYNOPSIS_OK');
     expect(res?.dialog.map((v) => v.text)).toEqual(['hello', 'reply']);
   });
 
@@ -355,7 +359,7 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
       if (req.method === 'GET' && url.pathname === `/v1/sessions/${sessionId}/messages`) {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages }));
+        res.end(JSON.stringify(createReplayMessagesPage({ messages, hasMore: false })));
         return;
       }
 

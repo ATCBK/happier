@@ -28,6 +28,67 @@ type PresentationSessionPort = Pick<
   'sessionId' | 'rpcHandlerManager' | 'updateAgentState'
 >;
 
+export type CurrentSessionPresentationHost = Readonly<{
+  bindCurrentSession: () => HostCurrentSessionPresentationService;
+  retire: () => void;
+}>;
+
+/** Presentation belongs to the logical Session, not a native Agent incarnation. */
+export function createCurrentSessionPresentationHost(params: Readonly<{
+  session: PresentationSessionPort;
+  signal: AbortSignal;
+  recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
+}>): CurrentSessionPresentationHost {
+  let current: Readonly<{
+    sessionId: string;
+    controller: AbortController;
+    presentation: HostCurrentSessionPresentationService;
+  }> | null = null;
+  const retire = () => {
+    current?.controller.abort();
+    current = null;
+  };
+  params.signal.addEventListener('abort', retire, { once: true });
+  return Object.freeze({
+    retire,
+    bindCurrentSession: () => {
+      params.signal.throwIfAborted();
+      const sessionId = params.session.sessionId;
+      if (current?.sessionId === sessionId) return current.presentation;
+      retire();
+      const controller = new AbortController();
+      const assertSessionCurrent = () => {
+        if (params.session.sessionId !== sessionId) {
+          throw Object.assign(new Error('Presentation Session changed'), { code: 'session_closed' });
+        }
+      };
+      // The transport may swap under the same Session. A retired Session's
+      // asynchronous command cleanup or owner purge must never write its successor.
+      const session: PresentationSessionPort = {
+        sessionId,
+        rpcHandlerManager: params.session.rpcHandlerManager,
+        updateAgentState: async updater => {
+          assertSessionCurrent();
+          await params.session.updateAgentState(state => {
+            assertSessionCurrent();
+            return updater(state);
+          });
+        },
+      };
+      const presentation = createCurrentSessionPresentationService({
+        session,
+        signal: AbortSignal.any([params.signal, controller.signal]),
+        isCurrent: () => params.session.sessionId === sessionId,
+        ...(params.recordRuntimeLimitMeasurement
+          ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
+          : {}),
+      });
+      current = { sessionId, controller, presentation };
+      return presentation;
+    },
+  });
+}
+
 type BoundClient = Readonly<{
   binding: CurrentSessionPresentationBindV1;
   origin: SocketRpcCurrentSessionPresentationOriginAuthorizationContext;

@@ -7,6 +7,7 @@ import { buildLaunchProfileArtifactHeaderV1, LaunchProfileArtifactV1Schema, read
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { DEFAULT_BUILT_IN_BACKEND_PROFILES } from '@happier-dev/protocol/profiles/builtInBackendProfiles';
 import { createProfileActionExecuteV1 } from '@happier-dev/protocol/profiles/profileActionsV1';
+import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
 import { createProfileOperations, setBuiltinProfileEnabledPreferenceV1, setProfileFavoritePreferenceV1,
   type ProfileOperationResult, type ProfileOperations } from '@happier-dev/protocol/profiles/profileOperations';
 import { isLaunchProfileV2 } from '@happier-dev/protocol/profiles/read';
@@ -187,6 +188,12 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
     })();
     const execute = createProfileActionExecuteV1({
       operations: resolveOperations,
+      readSkillLibrary: async signal => {
+        assertCurrent();
+        const items = await readSkillLibraryCatalog(createCredentialedAccountArtifactStore(params.credentials), signal);
+        assertCurrent();
+        return items;
+      },
       favorite: async ({ id, favorite }) => {
         assertCurrent();
         const result = await updateAccountSettingsV2WithRetry({ credentials: params.credentials,

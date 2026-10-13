@@ -8,6 +8,9 @@ import type { PromptExternalLinkEntryV1 } from '@happier-dev/protocol/prompts/li
 import type { PromptAssetWriteDocRequest } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
 import { AccountSettingsV2UpdateRequestSchema, type AccountSettingsV2UpdateRequest } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { computeGitBlobShaV1, computeGitTreeShaV1, type RegistrySourceV1 } from '@happier-dev/protocol/registries';
+import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { removeTempDir } from '@/testkit/fs/tempDir';
 import { readSettings, updateSettings } from '@/persistence';
 import { getServerProfile } from '@/server/serverProfiles';
@@ -79,6 +82,8 @@ describe('CLI Action prompt catalog admission', () => {
     let retireDuringBody: boolean;
     let retirementObserved: boolean;
     let artifactCreationFails: boolean;
+    let registrySources: Readonly<{ v: 2; disabledSourceIds: string[]; sources: RegistrySourceV1[] }> | null;
+    const createdArtifacts = new Map<string, Readonly<Record<string, unknown>>>();
     const requests: string[] = [];
     const externalLinkWrites: PromptLibraryRowMutationV1[] = [];
     const stackWrites: PromptLibraryRowMutationV1[] = [];
@@ -103,7 +108,8 @@ describe('CLI Action prompt catalog admission', () => {
                     revision: key === 'external-links' ? externalLinkRevision : key === 'coding' ? codingRevision : 1,
                     content: key === 'external-links' && externalLinks !== null
                         ? { t: 'plain', v: { key, value: { v: 1, links: externalLinks } } }
-                        : key === 'coding' && codingStack !== null ? { t: 'plain', v: { key, value: codingStack } } : null }))] };
+                        : key === 'coding' && codingStack !== null ? { t: 'plain', v: { key, value: codingStack } }
+                        : key === 'registry-sources' && registrySources !== null ? { t: 'plain', v: { key, value: registrySources } } : null }))] };
             else if (path === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/coding` && request.method === 'POST') {
                 const mutation = PromptLibraryRowMutationV1Schema.parse(JSON.parse(body));
                 stackWrites.push(mutation);
@@ -133,6 +139,15 @@ describe('CLI Action prompt catalog admission', () => {
             else if (path === '/v1/artifacts' && request.method === 'POST' && artifactCreationFails) {
                 status = 503; data = { error: 'unavailable' };
             }
+            else if (path === '/v1/artifacts' && request.method === 'POST') {
+                const written: unknown = JSON.parse(body);
+                if (!written || typeof written !== 'object' || !('id' in written) || typeof written.id !== 'string') throw new Error('Invalid Artifact fixture write');
+                createdArtifacts.set(written.id, { ...written, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
+                    headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+                data = { id: written.id, headerVersion: 1, bodyVersion: 1 };
+            }
+            else if (path === '/v1/artifacts' && request.method === 'GET') data = [...createdArtifacts.values()];
+            else if (path.startsWith('/v1/artifacts/') && createdArtifacts.has(path.split('/').at(-1)!)) data = createdArtifacts.get(path.split('/').at(-1)!);
             else if (path === '/v1/artifacts/body') {
                 if (retireDuringBody) {
                     publication.clearActiveAccountSettingsSnapshot();
@@ -159,6 +174,8 @@ describe('CLI Action prompt catalog admission', () => {
         retireDuringBody = false;
         retirementObserved = false;
         artifactCreationFails = false;
+        registrySources = null;
+        createdArtifacts.clear();
         gitFixture.enabled = false;
         requests.length = 0;
         externalLinkWrites.length = 0;
@@ -197,6 +214,54 @@ describe('CLI Action prompt catalog admission', () => {
     };
     const exportRequest = { artifactId: 'body', machineId: 'local-machine', assetTypeId: 'external.prompt', scope: 'user' as const,
         targetPath: 'exported.md' };
+
+    it('installs and persists external links in the captured originating Account while the daemon Account differs', async () => {
+        externalLinks = [];
+        registrySources = { v: 2, disabledSourceIds: [], sources: [{ id: 'origin-source', title: 'Origin', format: 'git', kinds: ['skill'],
+            url: 'https://github.com/origin/skills', enabled: true, addedAt: 0 }] };
+        publish();
+        const snapshot = publication.getActiveAccountSettingsSnapshot();
+        if (!snapshot) throw new Error('Expected originating Account snapshot');
+        const operation = createInvocationSavedSecretOperationContextV1({ credentials, snapshot, serverHttpBaseUrl: url, isCurrent: async () => true });
+        const ambient = { ...snapshot, scopeKey: 'other-daemon-account' };
+        publication.setActiveAccountSettingsSnapshot(ambient);
+        const installs: unknown[] = [];
+        const adapter: PromptAssetAdapter = {
+            descriptor: { id: 'external.skill', providerId: 'external', title: 'External skill', description: 'External service',
+                libraryKind: 'bundle', supportsScope: { user: true, project: false }, supportsFiles: true,
+                formatId: 'skills.skill_md_v1', defaultRoots: [], capabilities: { supportsCatalogInstall: true } },
+            discover: async () => [], read: async () => { throw new Error('Unused external read'); },
+            writeDoc: async () => { throw new Error('Unused external document'); }, delete: async () => { throw new Error('Unused external delete'); },
+            writeBundle: async request => { installs.push(request); return { ok: true, externalRef: { id: 'origin-installed' }, digest: 'observed-install-digest' }; },
+        };
+        const skillBytes = new TextEncoder().encode('---\nname: origin-skill\n---\nOrigin instructions\n');
+        const treeSha = computeGitTreeShaV1([{ path: 'SKILL.md', unixMode: 0o644, bytes: skillBytes }]);
+        const fetchBoundary = vi.spyOn(globalThis, 'fetch').mockImplementation(async remote => {
+            if (String(remote).startsWith('https://raw.githubusercontent.com/')) return new Response(skillBytes);
+            return Response.json(String(remote).includes('/commits/') ? { sha: '1'.repeat(40) } : { sha: '2'.repeat(40), tree: [
+                { path: 'review', mode: '040000', type: 'tree', sha: treeSha },
+                { path: 'review/SKILL.md', mode: '100644', type: 'blob', sha: computeGitBlobShaV1(skillBytes), size: skillBytes.length },
+            ] });
+        });
+        try {
+            const deps = factory.createCliActionDeps({ token, credentials, sessionId: 'plugin-global', serverId: 'alpha', serverHttpBaseUrl: url,
+                serverIdentityId: 'srv_library_a', savedSecretOperationContext: operation,
+                actionsSettingsProvider: createActionSettingsProvider({ scopeKey: snapshot.scopeKey, getAccountSettings: () => operation.readSnapshot()?.settings ?? null }),
+                readRegisteredPromptAssetAdapters: () => new Map([[adapter.descriptor.id, adapter]]) });
+            const result = await createActionExecutor(deps).execute('prompt_registry.install', { machineId: 'local-machine', sourceId: 'origin-source', itemId: 'review',
+                installTarget: { assetTypeId: 'external.skill', scope: 'user', targetName: 'installed-origin' } },
+            { surface: 'api', authority: 'account_automation', actionCaller: { kind: 'host' }, bypassApprovals: true });
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { exported: true, externalLinkPersistence: { status: 'applied', version: 8 } } });
+            expect(installs).toHaveLength(1);
+            expect(externalLinkWrites).toMatchObject([{ expectedRevision: 7, content: { t: 'plain', v: { key: 'external-links', value: {
+                links: [expect.objectContaining({ machineId: 'local-machine', serverIdentityId: 'srv_library_a', externalRef: { id: 'origin-installed' } })],
+            } } } }]);
+            expect(publication.getActiveAccountSettingsSnapshot()).toBe(ambient);
+            expect(operation.readSnapshot()?.promptLibraryCatalog).toMatchObject({ rows: expect.arrayContaining([
+                expect.objectContaining({ revision: 8, record: expect.objectContaining({ key: 'external-links' }) }),
+            ]) });
+        } finally { fetchBoundary.mockRestore(); }
+    });
 
     it('F8 routes Account stack Actions through the real captured keyless catalog transport and refuses stale edits', async () => {
         const retained = { id: 'skill', ref: { kind: 'bundle' as const, artifactId: 'body' }, enabled: true,

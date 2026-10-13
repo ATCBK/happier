@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { SessionIdSchema, TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { SessionOrganizationPlacementV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
-import { SessionCreationTerminalSpawnErrorDetailSchema, SpawnSessionErrorCodeSchema, isSessionCreationTerminalSpawnErrorDetail } from '@happier-dev/protocol/spawnSession';
+import { SessionSpawnLaunchErrorV1Schema } from '@happier-dev/protocol/spawnSession';
+import { SessionCreationTerminalSpawnErrorDetailSchema, SessionLaunchRetiredV1Schema, SpawnSessionErrorCodeSchema, isSessionCreationTerminalSpawnErrorDetail } from '@happier-dev/protocol/spawnSession';
 import { SessionTurnProviderCheckpointV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 import type { AcpConfigOptionOverridesV1, AgentExecutionTargetV1, AgentSessionStartupInstructionsV1, BackendTargetRefV2, CallerInputConstraintsV1, MachinePoolSelectionOriginV1, ConnectedServiceMaterializationIdentityV1, RuntimeDescriptorV1, SessionAttachMetadataIdentityPolicy, SessionCapabilitySelectionV1, SessionInitialAccessDraftV1, SessionReportsToV1, SessionRolesV1, SessionInitialGoalRequestV1, SessionCreateOriginFieldsV1, SessionModelSelectionV1, SessionProviderBindingMetadataV1, SessionProviderBindingSecurityChangeConfirmationV1, SecretReferenceOverlayV1, SpawnSessionExecutionAuthorization, SpawnSessionErrorCode, SpawnSessionErrorDetail } from '@happier-dev/protocol';
 
@@ -267,7 +268,7 @@ export const SpawnSessionControlBadRequestSchema = z.object({
   error: z.string(),
   errorCode: z.string().optional(),
   agentId: z.string().optional(),
-  errorDetail: z.union([SessionCreationTerminalSpawnErrorDetailSchema, SpawnFailureSpawnErrorDetailSchema]).optional(),
+  errorDetail: z.union([SessionCreationTerminalSpawnErrorDetailSchema, SpawnFailureSpawnErrorDetailSchema, SessionLaunchRetiredV1Schema, SessionSpawnLaunchErrorV1Schema]).optional(),
 });
 
 export const SpawnSessionControlErrorResponseSchema = z.object({
@@ -275,7 +276,7 @@ export const SpawnSessionControlErrorResponseSchema = z.object({
   error: z.string().optional(),
   errorCode: z.string().optional(),
   agentId: z.string().optional(),
-  errorDetail: z.union([SessionCreationTerminalSpawnErrorDetailSchema, SpawnFailureSpawnErrorDetailSchema]).optional(),
+  errorDetail: z.union([SessionCreationTerminalSpawnErrorDetailSchema, SpawnFailureSpawnErrorDetailSchema, SessionLaunchRetiredV1Schema, SessionSpawnLaunchErrorV1Schema]).optional(),
 });
 
 export const SpawnSessionNonceControlResponseSchema = z.object({
@@ -298,6 +299,8 @@ export function projectSpawnSessionControlErrorResponse(
     errorCode: error.errorCode,
     ...(error.agentId !== undefined ? { agentId: error.agentId } : {}),
     ...(isSessionCreationTerminalSpawnErrorDetail(error.errorDetail) || SpawnFailureSpawnErrorDetailSchema.safeParse(error.errorDetail).success
+      || SessionLaunchRetiredV1Schema.safeParse(error.errorDetail).success
+      || SessionSpawnLaunchErrorV1Schema.safeParse(error.errorDetail).success
       ? { errorDetail: error.errorDetail }
       : {}),
   };

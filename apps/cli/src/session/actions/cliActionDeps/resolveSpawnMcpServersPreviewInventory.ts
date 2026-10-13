@@ -1,83 +1,13 @@
-import type { McpServersSettingsV1, SessionMcpSelectionV1 } from '@happier-dev/protocol';
-import type { SessionProjectPromptStackInput } from '@/workspaces/resolveSessionProjectKey';
+import { DaemonMcpServersPreviewResponseSchema } from '@happier-dev/protocol/mcp/servers/previewV1';
 
-export type SpawnMcpPreviewInventoryDeps = Readonly<{
-  detectProviderMcpServers: typeof import('@/mcp/providerDetection/detectProviderMcpServers')['detectProviderMcpServers'];
-}>;
-
-type McpPreviewOptionItem = Readonly<{
-  value: string;
-  label: string;
-  selected?: boolean;
-  selectable?: boolean;
-  sourceKind?: string;
-  authMode?: string;
-  availability?: string;
-}>;
-
-function normalizeLimit(value: unknown): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  const normalized = Math.floor(value);
-  return normalized > 0 ? Math.min(normalized, 200) : null;
-}
-
-function limitItems<T>(items: readonly T[], limit: unknown): readonly T[] {
-  const bounded = normalizeLimit(limit);
-  return bounded ? items.slice(0, bounded) : items;
-}
-
-export async function resolveSpawnMcpServersPreviewInventory(params: Readonly<{
-  settings: McpServersSettingsV1;
-  machineId: string;
-  directory: string;
-  agentId: string;
-  projectKey?: string | null;
-  sessionProject?: Omit<SessionProjectPromptStackInput, 'machineId' | 'directory'>;
-  selection?: SessionMcpSelectionV1;
-  limit?: number;
-  deps?: SpawnMcpPreviewInventoryDeps;
-}>): Promise<Readonly<{
-  ok: boolean;
-  items: readonly McpPreviewOptionItem[];
-  preview: unknown;
-}>> {
-  const detectProviderMcpServers = params.deps?.detectProviderMcpServers
-    ?? (await import('@/mcp/providerDetection/detectProviderMcpServers')).detectProviderMcpServers;
-  const { resolveSessionMcpPreview } = await import('@/mcp/preview/resolveSessionMcpPreview');
-  const detected = await detectProviderMcpServers({
-    directory: params.directory,
-    providers: params.agentId ? [params.agentId] : null,
-  });
-  const preview = await resolveSessionMcpPreview({
-    settings: params.settings,
-    machineId: params.machineId,
-    directory: params.directory,
-    agentId: params.agentId,
-    ...(params.projectKey !== undefined ? { projectKey: params.projectKey } : {}),
-    ...(params.sessionProject ? { sessionProject: params.sessionProject } : {}),
-    ...(params.selection ? { capabilitySelection: { mcp: params.selection } } : {}),
-    detectedServers: detected.servers,
-    detectedWarnings: detected.warnings,
-  });
-  const items = preview.ok
-    ? [
-        ...preview.builtIn,
-        ...preview.managed,
-        ...preview.detected,
-      ].map((entry): McpPreviewOptionItem => ({
-        value: entry.key,
-        label: entry.title ?? entry.name ?? entry.key,
-        selected: entry.selected,
-        selectable: entry.selectable,
-        sourceKind: entry.sourceKind,
-        authMode: entry.authMode,
-        availability: entry.availability,
-      }))
-    : [];
-
-  return {
-    ok: preview.ok,
-    items: limitItems(items, params.limit),
-    preview,
-  };
+/** Released Action presentation is a projection of the canonical machine producer. */
+export function projectSpawnMcpServersPreviewInventory(raw: unknown, limit?: number) {
+  const preview = DaemonMcpServersPreviewResponseSchema.parse(raw);
+  const entries = preview.ok ? [...preview.builtIn, ...preview.managed, ...preview.detected] : [];
+  const items = entries.map(entry => ({ value: entry.key, label: entry.title ?? entry.name,
+    selected: entry.selected, selectable: entry.selectable, sourceKind: entry.sourceKind,
+    authMode: entry.authMode, availability: entry.availability }));
+  // This is the released options-list bound, not a limit on generic capabilities.
+  const bounded = typeof limit === 'number' && Number.isFinite(limit) && Math.floor(limit) > 0 ? Math.min(Math.floor(limit), 200) : null;
+  return { ok: preview.ok, items: bounded ? items.slice(0, bounded) : items, preview };
 }

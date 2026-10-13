@@ -22,7 +22,6 @@ import { SessionRequesterBootstrapRpcRequestV1Schema, sealSessionRequesterBootst
 import { projectRequesterSessionCredentialDisclosure } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
-import { encodeStoredCredentials } from '@/persistence';
 import { fetchAccountProfile } from '@/api/accountProfile';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions';
@@ -32,6 +31,7 @@ import {
   createExternalActionMachineRpcExecution,
   createExternalActionSourceMachineRpcExecution,
   readExternalActionSourceMachineRpcSigner,
+  dispatchOriginalAccountAction,
   type ExternalActionMachineRequestSigningKey,
 } from '@/api/externalActionExecutionAuthorization';
 import {
@@ -60,7 +60,7 @@ export class MachineRpcEncryptionModeMismatchError extends Error {
 
 /** The public caller retains V2 creation identity; the existing exact target reader selects private custody. */
 export async function dispatchRequesterSessionSpawnNewRpc(params: Readonly<{
-  credentials: StoredCredentials; input: unknown; serverId: string; serverUrl: string;
+  credentials: StoredCredentials; input: unknown; serverId: string; serverUrl: string; serverIdentityId?: string;
   context?: ActionExecutorContext;
   onRequesterSessionCredentialDisclosure?: (disclosure: ReturnType<typeof projectRequesterSessionCredentialDisclosure>) => boolean | void | Promise<boolean | void>;
 }>): Promise<ActionExecuteResult | null> {
@@ -83,31 +83,14 @@ export async function dispatchRequesterSessionSpawnNewRpc(params: Readonly<{
     || params.context?.causalPermissionAuthority) {
     return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
   }
-  const mode = await readAccountEncryptionModeOnce({ request: () => axios.get(`${params.serverUrl}/v1/account/encryption`, {
-    headers: { Authorization: `Bearer ${params.credentials.token}` }, ...(signal ? { signal } : {}),
-  }) });
-  if (mode.kind !== 'resolved' || mode.mode === 'e2ee' && !params.credentials.encryption) {
-    return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
-  }
-  const credentials = mode.mode === 'plain' ? { ...params.credentials, encryption: null } : params.credentials;
-  if (!params.onRequesterSessionCredentialDisclosure) {
-    return { ok: false, errorCode: 'target_unavailable', error: 'requester_credential_disclosure_required' };
-  }
-  const confirmed = await params.onRequesterSessionCredentialDisclosure(projectRequesterSessionCredentialDisclosure({
-    disposition: 'ordinary_requester', accountId: profile.id, machineId,
-  }));
-  if (confirmed !== true || signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
-  const result = await callExactMachineRpc({ credentials: params.credentials, machineId, serverUrl: params.serverUrl,
-    method: RPC_METHODS.SESSION_SPAWN_NEW, request: { kind: 'requester_session_bootstrap_v1', input: parsed.data,
-      requesterBootstrap: { v: 1, disposition: 'ordinary_requester', credentials: encodeStoredCredentials(credentials) } },
-    requireCurrentMachine: true, requiredMachineKind: 'persistent',
-    ...(params.context?.actionRequestId ? { requestId: params.context.actionRequestId } : {}),
+  const execution = await dispatchOriginalAccountAction({ credentials: params.credentials, actionId: 'session.spawn_new',
+    input: parsed.data, target: { kind: 'machine', machineId }, serverHttpBaseUrl: params.serverUrl,
+    serverIdentityId: params.serverIdentityId, requestId: params.context?.actionRequestId ?? randomUUID(),
+    ...(params.context?.authority ? { authority: params.context.authority } : {}),
+    ...(params.onRequesterSessionCredentialDisclosure ? { onRequesterSessionCredentialDisclosure: params.onRequesterSessionCredentialDisclosure } : {}),
     ...(signal ? { signal } : {}) });
-  if (result && typeof result === 'object' && 'ok' in result && result.ok === false
-    && 'errorCode' in result && typeof result.errorCode === 'string') {
-    return { ok: false, errorCode: result.errorCode, error: result.errorCode };
-  }
-  const output = SessionSpawnNewResultV1Schema.safeParse(result);
+  if (!execution.ok) return execution;
+  const output = SessionSpawnNewResultV1Schema.safeParse(execution.result);
   return output.success ? { ok: true, result: output.data }
     : { ok: false, errorCode: 'invalid_action_transport_output', error: 'invalid_action_transport_output' };
 }
@@ -276,6 +259,8 @@ export async function callExactMachineRpc(params: Readonly<{
     installationId: string;
     privateKey: ExternalActionMachineRequestSigningKey;
   }>;
+  /** Only the installed Project root owner lends its socket; this adapter does not own its lifetime. */
+  projectOpenInstalledSocket?: Parameters<Parameters<typeof withUserScopedRpcSocket>[1]>[0];
 }> & (
   | Readonly<{ request: unknown; prepareRequest?: never }>
   | Readonly<{ request?: never; prepareRequest: () => unknown }>
@@ -294,15 +279,12 @@ export async function callExactMachineRpc(params: Readonly<{
       ? setupTimeoutMs : resolveSessionControlSocketConnectTimeoutMs();
     const deadlineAtMs = timeoutMs === null ? null : Date.now() + timeoutMs;
     const remainingTimeoutMs = () => deadlineAtMs === null ? null : Math.max(1, deadlineAtMs - Date.now());
-    const operation = withUserScopedRpcSocket({
-      token: params.credentials.token,
-      ...(params.authorityCeiling ? { authorityCeiling: params.authorityCeiling } : {}),
-      ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
-      connectTimeoutMs,
-      signal,
-      ...(params.reattachOnReconnect ? { reattachOnReconnect: true } : {}),
-      disconnectMessage: 'Machine RPC socket disconnected before acknowledgement',
-    }, async (socket, connect, attemptSignal) => {
+    if (params.projectOpenInstalledSocket && (params.method !== RPC_METHODS.PROJECTS_OPEN
+      || !params.externalAction?.context.originalActionEnvelope
+      || params.externalAction.effectActionId !== 'projects.open')) {
+      throw new Error('Installed Project root transport is unavailable');
+    }
+    const executeOnSocket: Parameters<typeof withUserScopedRpcSocket>[1] = async (socket, connect, attemptSignal) => {
       const machineTarget = await resolveMachineRpcContentCodec({
         credentials: params.credentials,
         machineId,
@@ -421,7 +403,21 @@ export async function callExactMachineRpc(params: Readonly<{
           });
         },
       });
-    });
+    };
+    const operation = params.projectOpenInstalledSocket
+      ? executeOnSocket(params.projectOpenInstalledSocket, async () => {
+        signal.throwIfAborted();
+        if (!params.projectOpenInstalledSocket?.connected) throw new Error('Installed Project socket disconnected');
+      }, signal)
+      : withUserScopedRpcSocket({
+        token: params.credentials.token,
+        ...(params.authorityCeiling ? { authorityCeiling: params.authorityCeiling } : {}),
+        ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
+        connectTimeoutMs,
+        signal,
+        ...(params.reattachOnReconnect ? { reattachOnReconnect: true } : {}),
+        disconnectMessage: 'Machine RPC socket disconnected before acknowledgement',
+      }, executeOnSocket);
     return await raceSocketIoAckTimeout(operation, timeoutMs ?? undefined, signal);
   } catch (error) {
     if (isSocketIoAckTimeoutError(error)) {

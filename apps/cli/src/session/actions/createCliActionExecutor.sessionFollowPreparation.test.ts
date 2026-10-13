@@ -209,6 +209,13 @@ describe('credentialed CLI relation source-key preparation composition', () => {
           sourceKeyPreparation: prepares ? { kind: 'prepared' } : plain || persistent ? { kind: 'not_needed' }
             : { kind: 'waiting', reason: standaloneSourceKey ? 'runner_unreachable' : 'source_key_unavailable' },
         } });
+      } else if (relation === 'reports_to') {
+        expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: true, result: {
+          ...reportsTo,
+          ...(!prepares && !plain && !persistent ? { sourceKeyPreparation: {
+            kind: 'waiting', reason: standaloneSourceKey ? 'runner_unreachable' : 'source_key_unavailable',
+          } } : {}),
+        } });
       } else if (prepares || plain || persistent) {
         expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: true, result: relation === 'follow' ? { changed: true, source }
           : relation === 'reports_to' ? reportsTo : { type: 'success', sessionId: sourceSessionId } });

@@ -43,11 +43,13 @@ const socket = {
   })),
 };
 const axiosGet = vi.hoisted(() => vi.fn());
+const axiosPost = vi.hoisted(() => vi.fn());
 
 vi.mock('socket.io-client', () => ({ io: vi.fn(() => socket) }));
 vi.mock('axios', () => ({
   default: {
     get: (...args: unknown[]) => axiosGet(...args),
+    post: (...args: unknown[]) => axiosPost(...args),
   },
 }));
 vi.mock('@/configuration', async () => {
@@ -551,30 +553,48 @@ describe('callMachineRpc', () => {
     const disclosures: unknown[] = [];
     const effects: string[] = [];
     const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3));
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 7,
+      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
     const input = { executionTarget: { serverId: 'home', machineId: 'machine-session' },
       creationKey: 'caller-creation-key', directory: { kind: 'path', path: '/workspace' },
       agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } } as const;
     axiosGet.mockImplementation(async (url) => {
+      if (String(url).endsWith('/v1/machines')) return { status: 200, data: [{ id: 'machine-session',
+        kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
+        access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'plain', accessState: 'ready' } }] };
       if (String(url).endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob',
         timestamp: 1, firstName: null, lastName: null, avatar: null, github: null } };
       if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      return { status: 200, data: { machine: { storageMode: 'plain', id: 'machine-session',
+      return { status: 200, data: { machine: { storageMode: 'plain', id: 'machine-session', kind: 'persistent',
+        active: true, revokedAt: null, replacedByMachineId: null,
         installationId: 'installed-current', installationPublicKey: encodeBase64(installation.publicKey),
         access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'plain', accessState: 'ready' },
         dataEncryptionKey: encodeBase64(new TextEncoder().encode(JSON.stringify({ t: 'plain', v: null }))),
       } } };
     });
-    socket.emit.mockImplementation((_event, payload, ack) => {
-      effects.push('rpc');
-      expect(payload.method).toBe(`machine-session:${RPC_METHODS.SESSION_SPAWN_NEW}`);
-      expect(payload.params).toEqual({ kind: 'requester_session_bootstrap_v1', input,
-        requesterBootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: 'bob-token' } } });
-      ack({ ok: true, result: { type: 'success', disposition: 'created', sessionId: 'bob-session',
-        executionTarget: input.executionTarget, organizationPlacement: { folderId: null, tagIds: [] },
-        initialInput: { status: 'notRequested' } } });
+    axiosPost.mockImplementation(async (url, body) => {
+      const { ExternalActionExecutionAuthorizationRequestV1Schema, computeExternalActionRequestEnvelopeDigestV1 } = await import('@happier-dev/protocol/actions');
+      const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      if (String(url).endsWith('/execution-authorization')) return { status: 200, data: { v: 1, token: 'home-proof', binding: {
+        accountId: 'bob', authentication: { kind: 'account', tokenEpoch: 7 }, custodianAccountId: 'alice',
+        serverIdentityId: 'srv_home', machineId: 'machine-session', installationId: 'installed-current', accountEncryptionMode: 'plain',
+        actionId: 'session.spawn_new', requestId: request.envelope.requestId, target: request.envelope.target,
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
+      } } };
+      effects.push('action');
+      expect(String(url)).toBe('https://api.example.test/v1/actions/session.spawn_new');
+      expect(request.envelope).toMatchObject({ v: 1, input });
+      const { openExternalActionRequesterAccountContextV1 } = await import('@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1');
+      expect(openExternalActionRequesterAccountContextV1({ authorization: request.executionAuthorization, purpose: { kind: 'external_action' },
+        machineId: 'machine-session', installationId: 'installed-current', serverIdentityId: 'srv_home', installationPrivateKey: installation.secretKey })).toEqual({ token });
+      expect(JSON.stringify(request)).not.toContain(token);
+      return { status: 200, data: { v: 1, actionId: 'session.spawn_new', requestId: request.envelope.requestId,
+        execution: { ok: true, result: { type: 'success', disposition: 'created', sessionId: 'bob-session',
+          executionTarget: input.executionTarget, organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } } } } };
     });
-    const executor = createCliActionExecutorFromCredentials({ credentials: { token: 'bob-token', encryption: null },
-      serverId: 'home', serverApiUrl: 'https://api.example.test',
+    socket.emit.mockImplementation(() => { throw new Error('Raw shared Machine spawn is forbidden'); });
+    const executor = createCliActionExecutorFromCredentials({ credentials: { token, encryption: null },
+      serverId: 'home', serverIdentityId: 'srv_home', serverApiUrl: 'https://api.example.test',
       ...(callerKind === 'undisclosed' ? {} : { onRequesterSessionCredentialDisclosure: (disclosure: unknown) => {
         disclosures.push(disclosure); effects.push('disclosure'); return callerKind === 'notification-only' ? undefined : callerKind !== 'declined';
       } }),
@@ -585,10 +605,10 @@ describe('callMachineRpc', () => {
         actionCaller: { kind: 'host' } });
     if (callerKind === 'human') {
       expect(result).toMatchObject({ ok: true, result: { type: 'success', disposition: 'created', sessionId: 'bob-session' } });
-      expect(socket.emit).toHaveBeenCalled();
+      expect(socket.emit).not.toHaveBeenCalled();
       expect(disclosures).toEqual([{ disposition: 'ordinary_requester', accountId: 'bob', machineId: 'machine-session',
-        fullSignIn: true, selectedPurposeRuntimeAuth: true, hostCanInspectLocalProcess: true }]);
-      expect(effects).toEqual(['disclosure', 'rpc']);
+        custodian: { accountId: 'alice', displayName: 'Alice' }, fullSignIn: true, selectedPurposeRuntimeAuth: true, hostCanInspectLocalProcess: true }]);
+      expect(effects).toEqual(['disclosure', 'action']);
     } else if (callerKind === 'unbound-agent') {
       expect(result).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
       expect(socket.emit).not.toHaveBeenCalled();
@@ -1662,7 +1682,7 @@ describe('callMachineRpc', () => {
     function mockServerReads(machines: ReadonlyArray<Record<string, unknown>>): void {
       axiosGet.mockImplementation(async (url: unknown) => {
         const href = String(url);
-        if (/\/v1\/machines$/.test(href)) return { data: machines };
+        if (/\/v1\/machines\?includeRevoked=true$/.test(href)) return { data: machines };
         const machineId = href.slice(href.lastIndexOf('/') + 1);
         return { data: { machine: { storageMode: 'plain', id: machineId, dataEncryptionKey: PLAIN_MARKER } } };
       });
@@ -1707,7 +1727,7 @@ describe('callMachineRpc', () => {
       expect(socket.emit.mock.calls[1]?.[1]?.method).toBe('machine-new:status');
       expect(axiosGet.mock.calls.map((call) => String(call[0]))).toEqual([
         expect.stringMatching(/\/v1\/machines\/machine-old$/),
-        expect.stringMatching(/\/v1\/machines$/),
+        expect.stringMatching(/\/v1\/machines\?includeRevoked=true$/),
         expect.stringMatching(/\/v1\/machines\/machine-new$/),
       ]);
     });

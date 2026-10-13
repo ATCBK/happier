@@ -122,7 +122,9 @@ export async function buildReplaySeededSpawnRecipe(
     return {
       ok: false,
       errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
-      errorMessage: 'Unable to hydrate replay dialog from transcript.',
+      errorMessage: resolvedSeed.reason === 'seed_budget_too_small'
+        ? 'Replay seed budget is too small to carry the transcript. Increase the replay seed budget.'
+        : 'Unable to hydrate replay dialog from transcript.',
     };
   }
   // A Replay-seeded SPAWN exists to carry context into a new Session, so an

@@ -373,29 +373,49 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
     && params.activeOnly === false
     && params.query === undefined
     && allowedSessionIds === null;
-  const seenCursors = new Set(params.cursor ? [params.cursor] : []);
+  const seekingProjectMatch = params.project !== undefined && allowedSessionIds === null;
+  const seenCursors = new Set([params.cursor, query?.cursor].filter((cursor): cursor is string => Boolean(cursor)));
+  const seenAttentionCursors = new Set(query?.attentionCursor ? [query.attentionCursor] : []);
   while (
-    resultLimit !== null
-    && shouldFillVisibleLimit
-    && filteredRows().length < resultLimit
+    (seekingProjectMatch && filteredRows().length === 0)
+    || (resultLimit !== null && shouldFillVisibleLimit && filteredRows().length < resultLimit)
   ) {
-    if (!page.hasNext || page.nextCursor === null || seenCursors.has(page.nextCursor)) break;
-    const cursor = page.nextCursor;
-    seenCursors.add(cursor);
-    page = await fetchSessionsPage({
-      token: params.credentials.token,
-      ...(params.resolveAuthorizationHeaders
-        ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
-        : {}),
-      cursor,
-      // The server cursor is after the whole raw page, so do not fetch more
-      // raw rows than can still be returned after client-side filtering.
-      limit: resultLimit - filteredRows().length,
-      // The visible-limit fill only runs for a non-active, unfiltered listing.
-      activeOnly: false,
-      archivedOnly: params.archivedOnly === true,
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
+    const attention = readSessionListAttentionContinuation(page);
+    const cursor = page.hasNext ? page.nextCursor : null;
+    const attentionCursor = !cursor && seekingProjectMatch && query && attention?.attentionHasNext
+      ? attention.attentionNextCursor : null;
+    const continuationCursor = cursor ?? attentionCursor;
+    if (!continuationCursor) break;
+    const seen = cursor ? seenCursors : seenAttentionCursors;
+    if (seen.has(continuationCursor)) break;
+    seen.add(continuationCursor);
+    const authorization = params.resolveAuthorizationHeaders
+      ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {};
+    const cancellation = params.signal ? { signal: params.signal } : {};
+    if (query) {
+      const { cursor: _cursor, attentionCursor: _attentionCursor, ...selection } = query;
+      const nextPage = await fetchSessionsQueryPage({
+        token: params.credentials.token, ...authorization, ...cancellation,
+        query: { ...selection, ...(cursor ? { cursor: continuationCursor } : { attentionCursor: continuationCursor }) },
+      });
+      // Each continuation advances only its own family, as in the UI controller.
+      page = attentionCursor
+        ? { ...nextPage, nextCursor: page.nextCursor, hasNext: page.hasNext }
+        : { ...nextPage, attentionNextCursor: attention?.attentionNextCursor ?? null,
+          attentionHasNext: attention?.attentionHasNext ?? false };
+    } else {
+      page = await fetchSessionsPage({
+        token: params.credentials.token,
+        ...authorization,
+        cursor: continuationCursor,
+        // The server cursor is after the whole raw page, so do not fetch more
+        // raw rows than can still be returned after client-side filtering.
+        ...(resultLimit !== null ? { limit: resultLimit - filteredRows().length } : {}),
+        activeOnly: params.activeOnly === true,
+        archivedOnly: params.archivedOnly === true,
+        ...cancellation,
+      });
+    }
     metadataUpgradeRequiredCount += page.metadataUpgradeRequiredCount ?? 0;
     appendPageRows(page.sessions);
   }

@@ -4,6 +4,7 @@ import { encodeBase64, encryptLegacy } from '@/api/encryption';
 import { createSessionListResponseFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import {
   SessionAwarenessListResultV1Schema,
+  encodeV2SessionListCursorV1,
   parseSessionListQueryActionResultV1,
   type SessionListQueryV1,
 } from '@happier-dev/protocol';
@@ -81,6 +82,36 @@ describe('listSessions', () => {
       workspaceRefs: [{ id: 'accepted', serverId: 'home-a', projectKey: 'anchor', machineId: 'machine', rootPath: '/repo', createdAtMs: 1 }] });
     expect(result.sessions.map(row => 'sessionId' in row ? row.sessionId : row.id)).toEqual(['own', 'checkout']);
     expect(result).toMatchObject({ project, projectFilterUnavailableCount: 1, hasNext: true, nextCursor: 'next' });
+  });
+
+  it.each([
+    { strict: false, match: true, attention: false }, { strict: false, match: false, attention: false },
+    { strict: true, match: true, attention: false }, { strict: true, match: false, attention: false },
+    { strict: true, match: true, attention: true }, { strict: true, match: false, attention: true },
+  ])('advances empty Project pages to a match or exhaustion ($strict, $match, $attention)', async ({ strict, match, attention }) => {
+    const project = { serverId: 'home-a', projectKey: 'anchor' };
+    const query: SessionListQueryV1 = {
+      v: 1, storage: 'active', includeInactive: true, scope: 'my_work', attention: 'any', audiences: [], tagIds: [],
+    };
+    const fetchPage = strict ? fetchSessionsQueryPage : fetchSessionsPage;
+    const nextCursor = encodeV2SessionListCursorV1('other');
+    const nextAttentionCursor = encodeV2SessionListCursorV1('attention-other');
+    const continuation = strict ? { attentionNextCursor: null, attentionHasNext: false } : {};
+    fetchPage.mockResolvedValueOnce({ sessions: [createSessionRecordFixture({ id: 'other',
+      metadata: encryptedMetadata({ path: '/repo', projectId: 'other' }) })],
+      nextCursor: attention ? null : nextCursor, hasNext: !attention, ...continuation,
+      ...(attention ? { attentionNextCursor: nextAttentionCursor, attentionHasNext: true } : {}) });
+    fetchPage.mockResolvedValueOnce({ sessions: [createSessionRecordFixture({ id: 'later',
+      metadata: encryptedMetadata({ path: '/repo', projectId: match ? 'anchor' : 'other' }) })],
+      nextCursor: null, hasNext: false, ...continuation });
+    const { listSessions } = await import('./listSessions');
+    const result = await listSessions({ credentials, accountSettings: null, project, view: 'awareness',
+      ...(strict ? { query } : {}), includeSystem: true, resumableOnly: false });
+    expect(SessionAwarenessListResultV1Schema.parse(result)).toMatchObject({
+      project, sessions: match ? [{ sessionId: 'later' }] : [], nextCursor: null, hasNext: false,
+      ...(strict ? { attentionNextCursor: null, attentionHasNext: false } : {}),
+    });
+    expect(result.sessions).toHaveLength(match ? 1 : 0);
   });
 
   it.each(['summary', 'awareness'] as const)('filters %s using authorized Bot metadata and preserves incomplete page coverage', async (view) => {

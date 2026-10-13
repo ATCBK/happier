@@ -35,7 +35,7 @@ function readNonEmptyString(value: unknown): string | null {
  * preview's whole claim is that it shows what the target Agent was sent, and a
  * rebuild against a different budget would quietly break that.
  *
- * Parsed through the shared positive-integer budget owner. The Replay builder
+ * Parsed through the shared usable preference-budget owner. The Replay builder
  * decides whether its actual frame and dispatch reservation can fit that total.
  */
 function readAccountReplayMaxSeedChars(): number | null {

@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
+import { describe, expect, it } from 'vitest';
 
 import { createCliActionDeps } from './createCliActionDeps';
 
@@ -23,40 +22,4 @@ describe('createCliActionDeps prompt library bindings', () => {
     expect(deps.promptRegistryInstall).toEqual(expect.any(Function));
   });
 
-  it('routes discover to the live registered adapter and preserves caller cancellation', async () => {
-    const signal = new AbortController().signal;
-    const discover = vi.fn(async () => [{
-      assetTypeId: 'external.prompt',
-      scope: 'user' as const,
-      externalRef: { id: 'prompt-1' },
-    }]);
-    const adapter = {
-      descriptor: { id: 'external.prompt' },
-      discover,
-    } as unknown as PromptAssetAdapter;
-    const registered = new Map([['external.prompt', adapter]]);
-    const deps = createCliActionDeps({
-      token: 'token',
-      sessionId: 'plugin-global',
-      mode: 'plain',
-      ctx: null,
-      readRegisteredPromptAssetAdapters: () => registered,
-    });
-
-    await expect(deps.daemonPromptAssetsDiscover?.({
-      request: { assetTypeId: 'external.prompt', scope: 'user' },
-      signal,
-    })).resolves.toEqual({
-      ok: true,
-      items: [{
-        assetTypeId: 'external.prompt',
-        scope: 'user',
-        externalRef: { id: 'prompt-1' },
-      }],
-    });
-    expect(discover).toHaveBeenCalledWith(
-      { assetTypeId: 'external.prompt', scope: 'user' },
-      { signal },
-    );
-  });
 });

@@ -12,7 +12,7 @@ import {
   CurrentSessionPresentationStateV1Schema,
 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import { createTestApiSessionClient } from '@/testkit/backends/createTestApiSessionClient';
-import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createApiSessionSocketStub, createSessionRuntimeActivityHomeStub, createSessionTranscriptHomeStub, createSessionTurnMutationAppliedSocketAck } from '@/testkit/backends/apiSessionSocketHarness';
 import { createAccountEncryptionCurrentnessFixture, createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
 import { ApiSessionClient } from '@/api/session/sessionClient';
 import { encrypt, encodeBase64 } from '@/api/encryption';
@@ -21,10 +21,23 @@ import { SessionEncryption } from '../../../../ui/sources/sync/encryption/sessio
 import { SecretBoxEncryption } from '../../../../ui/sources/sync/encryption/encryptor';
 import { EncryptionCache } from '../../../../ui/sources/sync/encryption/encryptionCache';
 import { applyCurrentSessionPresentationCommand } from '../../../../ui/sources/components/sessions/presentation/applyCurrentSessionPresentationCommand';
-import { createCurrentSessionPresentationService } from './currentSessionPresentationService';
-import { registerCurrentSessionUiBinding } from './currentSessionUiBindings';
-import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createNativeAgentRuntimeSessionPlan } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { createNativeAgentSessionHostServiceOwners } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionHostServiceOwners';
+import { createExternalContributionFixtures, createLease } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
+import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { MessageBuffer } from '@/ui/ink/messageBuffer';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { createCustomAcpAgentRuntime } from '../../../../../packages/plugins/custom-acp/src/agent/runtime/factory';
+import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { resolveEffectiveCodingPromptPlan } from '@/agent/prompting/coding/resolveEffectiveCodingPrompt';
+import { AgentSessionStartupInstructionsV1Schema, FeaturesResponseSchema, PluginAgentContributionV2Schema, SessionTurnMutationV1Schema, type AgentSessionRuntimeEvent } from '@happier-dev/protocol';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { AgentRuntimeDaemonSessionOpenRequestV1Schema } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { createCurrentSessionPresentationHost } from './currentSessionPresentationService';
 
 const boundary = vi.hoisted(() => ({ io: vi.fn(), fetch: vi.fn(), patch: vi.fn() }));
 vi.mock('socket.io-client', () => ({ io: boundary.io }));
@@ -40,23 +53,56 @@ vi.mock('@/session/transport/http/sessionsHttp', async (importOriginal) => ({
 describe('current-session presentation publication composition', () => {
   const clients = new Set<ApiSessionClient>();
   const controllers = new Set<AbortController>();
+  const runtimeDisposals = new Set<() => Promise<void>>();
   beforeEach(() => {
-    boundary.io.mockReset().mockImplementation(() => createApiSessionSocketStub({ connected: true }));
+    const activity = createSessionRuntimeActivityHomeStub({ machineId: 'presentation-machine' });
+    const transcript = createSessionTranscriptHomeStub();
+    const answer = (event: string, payload: unknown) => {
+      return activity.answer(event, payload)
+      ?? transcript.answer(event, payload)
+      ?? (event === 'session-turn-mutation'
+        ? createSessionTurnMutationAppliedSocketAck(SessionTurnMutationV1Schema.parse(payload))
+        : { ok: true, result: 'success', version: 1 });
+    };
+    boundary.io.mockReset().mockImplementation(() => createApiSessionSocketStub({ connected: true,
+      emitWithAck: answer,
+      emit: (event, args) => {
+        const callback = args.at(-1);
+        if (typeof callback === 'function') callback(answer(event, args[0]));
+      },
+    }));
+    const features = FeaturesResponseSchema.parse({ features: {}, capabilities: {
+      session: { runtimeActivity: { protocolVersion: 2 }, pendingInput: { protocolVersion: 1 },
+        publisherAuthority: { protocolVersion: 1 } },
+    } });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async input => {
+      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+      if (path.startsWith('/v1/features')) return Response.json(features);
+      throw new Error(`Unexpected Home fetch ${path}`);
+    }));
     boundary.fetch.mockReset();
     boundary.patch.mockReset();
   });
   afterEach(async () => {
     for (const controller of controllers) controller.abort();
-    await Promise.allSettled([...clients].map((client) => client.close()));
+    // Stop the real transport before disposing its native provider process.
+    const closeResults = await Promise.allSettled([...clients].map((client) => client.close()));
+    const disposeResults = await Promise.allSettled([...runtimeDisposals].map((dispose) => dispose()));
+    runtimeDisposals.clear();
     clients.clear();
     controllers.clear();
+    vi.unstubAllGlobals();
+    const errors = [...closeResults, ...disposeResults]
+      .flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (errors.length > 0) throw new AggregateError(errors, 'Composed native Session cleanup failed');
   });
 
-  it('carries a real bound apply through owner publication, both UI readers and a matching ACK', async () => {
+  it('keeps the focused client binding through native conversation replacement and real Action publication/ACK', async () => {
+    await withTempDir('happier-presentation-composed-', async (directory) => {
     const session = createPlainSessionFixture({ id: 'presentation-composed', metadataLayoutVersion: 1 });
     let stored = {
       ...session,
-      metadata: JSON.stringify({ v: 1 }),
+      metadata: JSON.stringify({ v: 1, machineId: 'presentation-machine' }),
       ownerMetadata: { t: 'plain' as const, v: { v: 1 as const } },
       agentState: null as string | null,
       dataEncryptionKey: null,
@@ -85,23 +131,99 @@ describe('current-session presentation publication composition', () => {
       getAccountEncryptionCurrentness: async () => createAccountEncryptionCurrentnessFixture(),
     });
     clients.add(client);
+    const metadata = client.getMetadataSnapshot();
+    if (!metadata) throw new Error('Composed native Session metadata unavailable');
     const controller = new AbortController();
     controllers.add(controller);
-    const presentation = createCurrentSessionPresentationService({ session: client, signal: controller.signal, isCurrent: () => true });
-    registerCurrentSessionUiBinding({
-      sessionId: session.id,
-      service: {
-        interactions: { request: async () => { throw new Error('This presentation recipe does not request an interaction'); } },
-        presentation,
+    const presentationHost = createCurrentSessionPresentationHost({ session: client, signal: controller.signal });
+    const agentId = 'acme-presentation-composed';
+    const contributionFixtures = createExternalContributionFixtures(agentId);
+    const contributions = {
+      ...contributionFixtures,
+      agent: { ...contributionFixtures.agent, richDefinition: {
+        ...contributionFixtures.agent.richDefinition,
+        definition: PluginAgentContributionV2Schema.parse({ ...contributionFixtures.agent.richDefinition.definition, capabilities: {
+          ...contributionFixtures.agent.richDefinition.definition.capabilities,
+          sessions: { ...contributionFixtures.agent.richDefinition.definition.capabilities.sessions,
+            startupInstructions: { versions: [1], revisionChanges: 'resume' },
+          },
+        } }),
+      } },
+    };
+    const identity = createLease(agentId);
+    const credentials = { token: 'owner-token', encryption: null };
+    const admittedOpenRequests: unknown[] = [];
+    // Only the vendor executable is a fixture. The production ACP runtime,
+    // native host, conversation replacement, Session services and registrations remain real.
+    const processRecord = join(directory, 'vendor-methods.jsonl');
+    const executable = writeAcpTestAgentScript({ dir: directory, fileName: 'presentation-agent.mjs', source: `
+      import { appendFileSync } from 'node:fs';
+      let buffer = '';
+      const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+      process.stdin.on('data', chunk => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\\n'); buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const message = JSON.parse(line);
+          if (message.id === undefined) continue;
+          appendFileSync(${JSON.stringify(processRecord)}, JSON.stringify({ method: message.method, pid: process.pid }) + '\\n');
+          let result = {};
+          if (message.method === 'initialize') result = { protocolVersion: 1,
+            agentInfo: { name: 'presentation-fixture', version: '1.0.0' },
+            agentCapabilities: { loadSession: true } };
+          if (message.method === 'session/new') result = { sessionId: 'native-presentation-conversation' };
+          if (message.method === 'session/prompt') {
+            send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params.sessionId,
+              update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Ready' } } } });
+            result = { stopReason: 'end_turn' };
+          }
+          send({ jsonrpc: '2.0', id: message.id, result });
+        }
+      });
+    ` });
+    const permissionHandler = new ProviderEnforcedPermissionHandler(client, { logPrefix: '[PresentationTest]' });
+    const plan = await createNativeAgentRuntimeSessionPlan({
+      runtime: createCustomAcpAgentRuntime(),
+      identity,
+      ...contributions,
+      generationSignal: controller.signal,
+      sessionInput: buildPluginSessionBindingInput({
+        credentials, directory,
+        backendTarget: { kind: 'backend', backendId: agentId },
+      }),
+      resolveAcpHostLaunch: async () => ({ command: process.execPath, args: [executable], env: {}, unsetEnv: [], timeouts: {} }),
+      attestSessionOpen: async ({ phase, request }) => {
+        const admitted = AgentRuntimeDaemonSessionOpenRequestV1Schema.parse(request);
+        if (phase === 'commit') admittedOpenRequests.push(admitted);
       },
-      signal: controller.signal,
-      isCurrent: () => true,
+      createSessionHostServiceOwners: ({ hostRuntimeParams, ...scope }) => createNativeAgentSessionHostServiceOwners({
+        runtimeRegistry: null, identity, ...contributions, ...scope,
+        hostSession: hostRuntimeParams,
+      }),
     });
-    const deps = createCliActionDeps({ token: 'owner-token', sessionId: session.id, mode: 'plain', ctx: null });
-    const apply = (operationId: string) => deps.currentSessionPresentationApply!({
-      input: { intent: { kind: 'viewer.open', source: 'computer' } },
-      context: { surface: 'agent', defaultSessionId: session.id, actionRequestId: operationId },
+    if (!plan.config.createSessionRuntime) throw new Error('Native Session factory unavailable');
+    const created = await plan.config.createSessionRuntime({
+      directory, metadata,
+      machineId: 'presentation-machine', agentTargetKey: agentId,
+      session: client, transcriptSession: client, messageBuffer: new MessageBuffer(),
+      currentSessionPresentation: presentationHost.bindCurrentSession,
+      mcpServers: {}, permissionHandler,
+      getPermissionMode: () => 'default', memoryRecallGuidanceEnabled: false,
+      runnerProcessIdentity: null, startupModelSelection: null,
+      runWithTerminalModelSelection: async (effect) => ({ status: 'completed', value: await effect(null,
+        async (localEffect) => ({ status: 'completed', value: await localEffect() })) }),
     });
+    runtimeDisposals.add(async () => { await created.operations.resetOrDisposeRuntime(); });
+    const nativeEvents: AgentSessionRuntimeEvent[] = [];
+    const unsubscribeRuntimeEvents = created.operations.subscribeRuntimeEvents(event => {
+      nativeEvents.push(event);
+    });
+    runtimeDisposals.add(async () => { unsubscribeRuntimeEvents(); });
+    const { executor } = createCliActionExecutorHarness({ token: 'owner-token', sessionId: session.id, mode: 'plain', ctx: null });
+    const apply = (operationId: string) => executor.execute('session.presentation.apply',
+      { intent: { kind: 'viewer.open', source: 'computer' } },
+      { surface: 'agent', authority: 'account_automation', defaultSessionId: session.id, actionRequestId: operationId });
     expect(ActionExecuteFailureSchema.parse(await apply('unbound-agent-call'))).toMatchObject({
       ok: false,
       errorCode: 'current_session_presentation_not_current',
@@ -121,11 +243,46 @@ describe('current-session presentation publication composition', () => {
     if (bound.status !== 'bound') throw new Error('Viewer did not bind');
     expect(parsePlainSessionAgentState(stored.agentState)).toHaveProperty(CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY);
 
+    // This is the production replacement primitive used by the first-turn
+    // prompt-plan path. Replace the native incarnation, not the logical Session.
+    const preparedPlan = await resolveEffectiveCodingPromptPlan({
+      toolDelivery: 'unsupported', settings: {}, profileId: null,
+      baseOverride: 'Prepared native Session instructions', memoryRecallGuidanceEnabled: false,
+      sessionTitleToolAvailable: false,
+    });
+    await vi.waitFor(() => expect(created.operations.readSessionIdentity().sessionId).toBeTypeOf('string'));
+    const providerSessionId = created.operations.readSessionIdentity().sessionId;
+    if (!providerSessionId) throw new Error('Native conversation identity unavailable');
+    await created.operations.resetOrDisposeRuntime('session_closed', {
+      kind: 'resume', providerSessionId, importHistory: false,
+      startupInstructions: AgentSessionStartupInstructionsV1Schema.parse({
+        v: 1, id: 'happier.coding_session_plan', revision: 1, instructions: preparedPlan.text,
+      }),
+    });
+    expect(created.operations.readSessionStartupInstructions?.()?.instructions).toBe(preparedPlan.text);
+    expect(admittedOpenRequests).toMatchObject([
+      { kind: 'create' },
+      { kind: 'resume', startupInstructions: { instructions: preparedPlan.text } },
+    ]);
+    const vendorMethods = (await readFile(processRecord, 'utf8')).trim().split('\n').map(line => {
+      const record: unknown = JSON.parse(line);
+      return record && typeof record === 'object' && 'method' in record ? record.method : null;
+    });
+    expect(vendorMethods.filter(method => method === 'session/new' || method === 'session/load'))
+      .toEqual(['session/new', 'session/load']);
+    expect(nativeEvents).toContainEqual(expect.objectContaining({ kind: 'provider-session-id' }));
+
     const pending = apply('agent-computer-open');
-    await vi.waitFor(() => expect(JSON.parse(stored.agentState ?? '{}')[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]?.command)
-      .toMatchObject({ id: 'agent-computer-open', kind: 'presentation.apply', clientId: 'viewer-client', intent: { kind: 'viewer.open', source: 'computer' } }));
+    let settledAction: Awaited<typeof pending> | undefined;
+    void pending.then(result => { settledAction = result; });
+    await vi.waitFor(() => {
+      if (settledAction && !settledAction.ok) expect(settledAction, JSON.stringify(settledAction)).toMatchObject({ ok: true });
+      expect(JSON.parse(stored.agentState ?? '{}')[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]?.command)
+        .toMatchObject({ id: 'agent-computer-open', kind: 'presentation.apply', clientId: 'viewer-client', intent: { kind: 'viewer.open', source: 'computer' } });
+    });
     const hydrated = parsePlainSessionAgentState(stored.agentState);
     const state = CurrentSessionPresentationStateV1Schema.parse(hydrated[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]);
+    expect(state.hostNonce).toBe(bound.hostNonce);
     const { [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: omittedPresentation, ...withoutPresentation } = hydrated;
     expect(omittedPresentation).toBeDefined();
     expect(CurrentSessionPresentationStateV1Schema.safeParse(
@@ -155,7 +312,7 @@ describe('current-session presentation publication composition', () => {
     expect(appliedIntents).toEqual([{ kind: 'viewer.open', source: 'computer' }]);
     expect(application?.ack).toBeDefined();
     expect(await call(CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD, application!.ack)).toEqual({ status: 'accepted' });
-    expect(await pending).toEqual({ status: 'applied', revision: `${bound.hostNonce}:${state.revision}` });
+    expect(await pending).toEqual({ ok: true, result: { status: 'applied', revision: `${bound.hostNonce}:${state.revision}` } });
     expect(CurrentSessionPresentationStateV1Schema.parse(
       parsePlainSessionAgentState(stored.agentState)[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
     ).command).toBeUndefined();
@@ -190,6 +347,7 @@ describe('current-session presentation publication composition', () => {
         stage: 'client_acknowledgement', reason: 'client_not_current', hostNonce: bound.hostNonce,
         revision: rejectedState.revision, clientId: 'viewer-client', commandId: 'agent-no-longer-current',
       },
+    });
     });
   });
 });
