@@ -1,15 +1,28 @@
 import { expect, it } from 'vitest';
-import { assertMcpToolPolicyInvocation, runAgentMcpToolPolicyContract } from '@happier-dev/plugin-sdk/testing';
+import { assertMcpToolPolicyInvocation, runAgentMcpToolPolicyContract } from '../../../../../../../packages/plugin-sdk/src/testing/mcpToolPolicyContract';
 import { createDeclarativeAcpMcpPolicyFixtures, createGeminiMcpPolicyFixture, createPluginAcpMcpPolicyFixtures } from '@/agent/acp/testkit/mcpToolPolicyHarness';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { createGeminiAgentRuntime } from '../../../../../../../packages/plugins/gemini/src/agent/runtime/factory';
 
 runAgentMcpToolPolicyContract(createGeminiMcpPolicyFixture());
 for (const fixture of await createDeclarativeAcpMcpPolicyFixtures()) runAgentMcpToolPolicyContract(fixture);
 for (const fixture of await createPluginAcpMcpPolicyFixtures()) runAgentMcpToolPolicyContract(fixture);
 
-it('detects the real composer miswire that lets a native session grant bypass live Off', async () => {
+it('detects a missing native identity codec at the real Gemini factory/composer seam', async () => {
   await withTempDir('happier-acp-mcp-policy-miswire-', async cwd => {
-    const input = createGeminiMcpPolicyFixture();
+    const input = createGeminiMcpPolicyFixture(undefined, async context => {
+      const leaf = await createGeminiAgentRuntime(context);
+      if (!leaf.sessions) throw new Error('Missing real Gemini session factory');
+      const sessions = leaf.sessions;
+      return { ...leaf, sessions: { ...sessions, open(request, host) {
+        return sessions.open(request, { ...host, protocols: { ...host.protocols, acp: { ...host.protocols.acp,
+          open(prepared, options) {
+            return host.protocols.acp.open(prepared, { ...options,
+              definition: { ...options.definition, toolNameResolver: undefined } });
+          },
+        } } });
+      } } };
+    });
     const configuration = { mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
       permissionIntent: { value: 'default' as const, updatedAtMs: 0 }, options: {} };
     const fixture = await input.fixtureServer.prepare({ cwd });
@@ -21,18 +34,17 @@ it('detects the real composer miswire that lets a native session grant bypass li
         permissionMode: 'default', settings: Object.fromEntries(fixture.servers.map(server => [server.key, setting])),
         projection, configuration });
       await apply('ask');
-      // Deliberately omit only the host control projection at the actual leaf/composer
-      // boundary. The real host catalog and permission owner remain intact.
+      // Drop only the leaf codec at the actual factory/composer boundary. The
+      // production launch, real catalog, policy and permission handler stay intact.
       runtime = await input.openSession({ kind: 'create', sessionId: 'miswired-control-projection', cwd,
-        configuration, mcpServers: Object.fromEntries(fixture.servers.map(server => [server.key, server.config])) });
+        configuration, mcpToolPolicy: projection,
+        mcpServers: Object.fromEntries(fixture.servers.map(server => [server.key, server.config])) });
       const server = fixture.servers[0];
-      await input.invokeTool(runtime, { server: server.key, tool: server.tool, arguments: {}, approvalScope: 'session' });
-      await apply('off');
       const before = input.fixtureServer.observeCalls().length;
       const invocation = await input.invokeTool(runtime, { server: server.key, tool: server.tool, arguments: {}, approvalScope: 'once' });
-      expect(() => assertMcpToolPolicyInvocation({ expected: 'off', control: { off: 'blocked', approval: 'host' },
+      expect(() => assertMcpToolPolicyInvocation({ expected: 'ask', control: { off: 'blocked', approval: 'host' },
         server: server.key, serverId: server.serverId, tool: server.tool, invocation,
-        calls: input.fixtureServer.observeCalls().slice(before) })).toThrow('denied tool cannot complete');
+        calls: input.fixtureServer.observeCalls().slice(before) })).toThrow('real call reaches the host permission handler');
     } finally {
       try { await runtime?.dispose(); } finally { await input.fixtureServer.dispose(); }
     }

@@ -5,6 +5,16 @@ import { buildAcpToolNameResolverInput } from '@/agent/acp/toolCalls';
 import { createAcpTransportHandlerFromDefinition } from './transport';
 
 describe('ACP definition transport tool-name inference', () => {
+  it('keeps a typed native correlation ahead of a canonical-looking display title', () => {
+    const transport = createAcpTransportHandlerFromDefinition({
+      backendId: 'acme.provider', mcpServerKeys: new Set(['docs', 'archive']),
+      callbacks: { toolNameResolver: ({ toolCallId }) => toolCallId === 'native-docs-read' ? 'mcp__docs__read' : null },
+    });
+    expect(transport.determineToolName?.('other', 'native-docs-read',
+      buildAcpToolNameResolverInput({}, 'mcp__archive__delete'),
+      { recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 1 })).toBe('mcp__docs__read');
+  });
+
   it('keeps a known MCP identity ahead of native tool-name heuristics', () => {
     const transport = createAcpTransportHandlerFromDefinition({
       backendId: 'acme.provider',

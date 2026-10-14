@@ -78,7 +78,7 @@ function writeVendorObserver(dir: string, executablePath: string) {
 /** The third-party Agent/process is the boundary. It discovers the actual MCP transport,
  * sends standard ACP permission requests, and dispatches only the selected allow_once.
  * This fixture characterizes the real leaf/composer; it is not a vendor admission probe. */
-function writeAgent(dir: string, toolWireFormat: 'canonical' | 'underscore', tool: string, nativeConfig?: PluginAgentAcpNativeSessionMcpConfigV2, authMethodIds: readonly string[] = []) {
+function writeAgent(dir: string, toolWireFormat: 'canonical' | 'underscore' | 'gemini', tool: string, nativeConfig?: PluginAgentAcpNativeSessionMcpConfigV2, authMethodIds: readonly string[] = []) {
   return writeAcpTestAgentScript({ dir, fileName: 'mcp-policy-agent.mjs', source: `
     import { createInterface } from 'node:readline';
     import { spawnSync } from 'node:child_process';
@@ -149,14 +149,18 @@ function writeAgent(dir: string, toolWireFormat: 'canonical' | 'underscore', too
             send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params.sessionId,
               update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Shell observed for prompt ' + message.id } } } });
           } else {
-            const subject = ${toolWireFormat === 'underscore'
+            const subject = ${toolWireFormat === 'gemini'
+              ? "('mcp_' + input.server + '_' + input.tool).replace(/[^a-zA-Z0-9_\\-.:]/g, '_')"
+              : toolWireFormat === 'underscore'
               ? "input.server.replace(/[^a-zA-Z0-9_-]/g, '_') + '_' + input.tool.replace(/[^a-zA-Z0-9_-]/g, '_')"
               : "'mcp__' + input.server + '__' + input.tool"};
-            const toolCallId = 'call-' + message.id;
+            // Gemini 0.63.0 Turn.handlePendingFunctionCall carries the native
+            // function name in its correlation id; ACP sends a human title only.
+            const toolCallId = ${toolWireFormat === 'gemini' ? "subject + '__call-' + message.id" : "'call-' + message.id"};
             const updateTool = update => send({ jsonrpc: '2.0', method: 'session/update', params: {
               sessionId: message.params.sessionId, update: { toolCallId, ...update } } });
             const permission = nativeGrants.has(subject) ? { outcome: { optionId: 'allow' } } : await request('session/request_permission', { sessionId: message.params.sessionId,
-              toolCall: { toolCallId, kind: 'other', title: subject, rawInput: input.arguments },
+              toolCall: { toolCallId, kind: 'other', title: ${toolWireFormat === 'gemini' ? "'Read the team documentation'" : 'subject'}, rawInput: input.arguments },
               options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
                 { optionId: 'always', name: 'Allow always', kind: 'allow_always' },
                 { optionId: 'deny', name: 'Deny', kind: 'reject_once' }] });
@@ -192,7 +196,7 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
   agent: AgentContribution;
   pluginId: string;
   factory: AgentRuntimeFactory;
-  toolWireFormat?: 'canonical' | 'underscore';
+  toolWireFormat?: 'canonical' | 'underscore' | 'gemini';
   nativeConfig?: PluginAgentAcpNativeSessionMcpConfigV2;
   /** Auth methods advertised by the third-party boundary, not an auth-selector mock. */
   authMethods?: readonly string[];
@@ -229,6 +233,12 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
     const turnId = `mcp-turn-${++invocation}`;
     const subscription = runtime.watch(event => {
       (launchObserver.boundaries as AgentLaunchObserverBoundaries).recordRuntimeEvent(event);
+      if ((event.kind === 'input-rejected' || event.kind === 'input-custody-unknown')
+        && event.inputIds.includes(`input-${invocation}`)) {
+        events.push(event);
+        settle();
+        return;
+      }
       if (event.kind !== 'runtime-ended' && (!('turnId' in event) || event.turnId !== turnId)) return;
       events.push(event);
       if (['turn-complete', 'turn-failed', 'turn-cancelled', 'runtime-ended'].includes(event.kind)) settle();
@@ -239,7 +249,7 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
       assert.equal(admission.status, 'admitted', JSON.stringify(admission));
       await completed;
       return { text: events.filter(event => event.kind === 'message-delta').map(event => event.text).join(''),
-        terminal: events.find(event => ['turn-complete', 'turn-failed', 'turn-cancelled', 'runtime-ended'].includes(event.kind))! };
+        terminal: events.find(event => ['turn-complete', 'turn-failed', 'turn-cancelled', 'runtime-ended', 'input-rejected', 'input-custody-unknown'].includes(event.kind))! };
     } finally { subscription.dispose(); }
   };
   const read = () => loadMcpServerCatalogV1({ mode: 'plain', material: null,
@@ -488,12 +498,14 @@ export async function createDeclarativeAcpMcpPolicyFixtures(vendorForAgent?: (ag
   });
 }
 
-export function createGeminiMcpPolicyFixture(vendor?: AcpMcpPolicyVendorBoundary): AgentMcpToolPolicyContractInput {
+export function createGeminiMcpPolicyFixture(vendor?: AcpMcpPolicyVendorBoundary,
+  factory: AgentRuntimeFactory = createGeminiAgentRuntime): AgentMcpToolPolicyContractInput {
   const parsed = parsePluginManifest(PLUGIN_MANIFEST);
   if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
   const agent = parsed.manifest.contributes.agents?.find(agent => agent.id === 'gemini');
   if (!agent) throw new Error('Missing authored Gemini Agent');
-  return createAcpMcpPolicyFixture({ agent, pluginId: parsed.manifest.id, factory: createGeminiAgentRuntime, ...(vendor ? { vendor } : {}) });
+  return createAcpMcpPolicyFixture({ agent, pluginId: parsed.manifest.id, factory,
+    toolWireFormat: 'gemini', ...(vendor ? { vendor } : {}) });
 }
 
 /** The custom first-party leaves consume their own real factories, including native
