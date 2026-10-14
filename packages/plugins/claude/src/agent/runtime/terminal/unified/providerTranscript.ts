@@ -559,7 +559,10 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
       row,
       suppressPriorEraTurnClosure: false,
     });
-    if (!payload || !isOrderedLifecyclePayload(payload)) return;
+    if (!payload || !isOrderedLifecyclePayload(payload)) {
+      activeBinding.observedSourceIds.add(input.sourceId);
+      return;
+    }
     await emitPayload(payload);
     activeBinding.observedSourceIds.add(input.sourceId);
   }
