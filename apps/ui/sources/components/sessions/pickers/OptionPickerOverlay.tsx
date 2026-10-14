@@ -429,18 +429,29 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
         && !optionKeys.has(selectedValueKey)
         ? selectedString
         : '';
-    const [customValue, setCustomValue] = React.useState(selectedCustomValue);
-    const [customEditorVisible, setCustomEditorVisible] = React.useState(selectedCustomValue.length > 0);
+    const customValueScopeKey = `${selectedValueKey}\u0000${selectedCustomValue.length > 0 ? 'custom' : 'listed'}`;
+    const [customDraft, setCustomDraft] = React.useState<Readonly<{
+        scopeKey: string;
+        value: string;
+    }>>({ scopeKey: customValueScopeKey, value: selectedCustomValue });
+    const [customEditorIntent, setCustomEditorIntent] = React.useState<Readonly<{
+        scopeKey: string;
+        kind: 'manual' | 'dismissed';
+    }> | null>(null);
+    const customValue = customDraft.scopeKey === customValueScopeKey
+        ? customDraft.value
+        : selectedCustomValue;
+    const customEditorVisible = selectedCustomValue.length > 0
+        ? !(customEditorIntent?.scopeKey === customValueScopeKey && customEditorIntent.kind === 'dismissed')
+        : customEditorIntent?.scopeKey === customValueScopeKey && customEditorIntent.kind === 'manual';
     const customTriggerRef = React.useRef<React.ElementRef<typeof Pressable>>(null);
     const customInputRef = React.useRef<React.ElementRef<typeof TextInput>>(null);
     const focusCustomInputOnOpenRef = React.useRef(false);
     const returnFocusToCustomTriggerRef = React.useRef(false);
-    const customEditorOpenReasonRef = React.useRef<'selected-custom' | 'manual' | null>(
-        selectedCustomValue.length > 0 ? 'selected-custom' : null,
-    );
-    const dismissedSelectedCustomValueKeyRef = React.useRef<string | null>(null);
-    const lastCommittedCustomValueRef = React.useRef(selectedCustomValue);
-    const previousSelectedValueKeyRef = React.useRef(selectedValueKey);
+    const lastCommittedCustomValueRef = React.useRef({
+        scopeKey: customValueScopeKey,
+        value: selectedCustomValue,
+    });
     const selectionPressPendingRef = React.useRef(false);
     // A focused TextInput does not emit blur when its enclosing picker unmounts,
     // so cleanup needs the latest local draft and commit callback.
@@ -457,39 +468,9 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
             visible: false,
             value: '',
         };
-        lastCommittedCustomValueRef.current = '';
-        setCustomValue('');
-    }, []);
-
-    React.useEffect(() => {
-        const previousSelectedValueKey = previousSelectedValueKeyRef.current;
-        previousSelectedValueKeyRef.current = selectedValueKey;
-        if (selectedCustomValue.length > 0) {
-            setCustomValue(selectedCustomValue);
-            if (dismissedSelectedCustomValueKeyRef.current === selectedValueKey) {
-                customEditorOpenReasonRef.current = null;
-                lastCommittedCustomValueRef.current = selectedCustomValue;
-                return;
-            }
-            dismissedSelectedCustomValueKeyRef.current = null;
-            setCustomEditorVisible(true);
-            customEditorOpenReasonRef.current = 'selected-custom';
-            lastCommittedCustomValueRef.current = selectedCustomValue;
-            return;
-        }
-        if (!optionKeys.has(selectedValueKey)) return;
-        dismissedSelectedCustomValueKeyRef.current = null;
-        if (customEditorOpenReasonRef.current === 'selected-custom') {
-            customEditorOpenReasonRef.current = null;
-            setCustomEditorVisible(false);
-            abandonCustomDraft();
-            return;
-        }
-        if (customEditorVisible && previousSelectedValueKey === selectedValueKey) return;
-        customEditorOpenReasonRef.current = null;
-        setCustomEditorVisible(false);
-        abandonCustomDraft();
-    }, [abandonCustomDraft, customEditorVisible, optionKeys, selectedCustomValue, selectedValueKey]);
+        lastCommittedCustomValueRef.current = { scopeKey: customValueScopeKey, value: '' };
+        setCustomDraft({ scopeKey: customValueScopeKey, value: '' });
+    }, [customValueScopeKey]);
 
     React.useEffect(() => {
         if (customEditorVisible && focusCustomInputOnOpenRef.current) {
@@ -504,13 +485,17 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
     }, [customEditorVisible]);
 
     const dismissCustomEditor = React.useCallback(() => {
-        customEditorOpenReasonRef.current = null;
-        dismissedSelectedCustomValueKeyRef.current = selectedCustomValue.length > 0
-            ? selectedValueKey
-            : null;
         returnFocusToCustomTriggerRef.current = true;
-        setCustomEditorVisible(false);
-    }, [selectedCustomValue, selectedValueKey]);
+        pendingCustomCommitRef.current = {
+            ...pendingCustomCommitRef.current,
+            visible: false,
+            value: '',
+        };
+        setCustomDraft({ scopeKey: customValueScopeKey, value: selectedCustomValue });
+        setCustomEditorIntent(selectedCustomValue.length > 0
+            ? { scopeKey: customValueScopeKey, kind: 'dismissed' }
+            : null);
+    }, [customValueScopeKey, selectedCustomValue]);
     useEscapeLayer({
         enabled: Platform.OS === 'web' && customEditorVisible,
         // The input editor is nested inside popovers and can also appear inside
@@ -654,10 +639,12 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
 
     const commitCustomValue = React.useCallback((raw: string) => {
         const normalized = raw.trim();
-        if (!normalized || lastCommittedCustomValueRef.current === normalized) return;
-        lastCommittedCustomValueRef.current = normalized;
+        if (!normalized || normalized === selectedCustomValue) return;
+        if (lastCommittedCustomValueRef.current.scopeKey === customValueScopeKey
+            && lastCommittedCustomValueRef.current.value === normalized) return;
+        lastCommittedCustomValueRef.current = { scopeKey: customValueScopeKey, value: normalized };
         props.onSubmitCustomValue?.(normalized);
-    }, [props.onSubmitCustomValue]);
+    }, [customValueScopeKey, props.onSubmitCustomValue, selectedCustomValue]);
     React.useEffect(() => {
         pendingCustomCommitRef.current = {
             visible: customEditorVisible,
@@ -766,7 +753,7 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                                 testID="model-picker-overlay-custom-input"
                                 accessibilityLabel={t('modelPickerOverlay.customInputA11y')}
                                 value={customValue}
-                                onChangeText={setCustomValue}
+                                onChangeText={(value) => setCustomDraft({ scopeKey: customValueScopeKey, value })}
                                 placeholder={t('agentInput.model.customPlaceholder')}
                                 placeholderTextColor={theme.colors.input.placeholder}
                                 autoCorrect={false}
@@ -792,11 +779,9 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                         accessibilityLabel={props.customLabel ?? t('modelPickerOverlay.customTitle')}
                         onPress={() => {
                             selectionPressPendingRef.current = false;
-                            dismissedSelectedCustomValueKeyRef.current = null;
-                            customEditorOpenReasonRef.current = selectedCustomValue.length > 0 ? 'selected-custom' : 'manual';
                             focusCustomInputOnOpenRef.current = true;
-                            setCustomEditorVisible(true);
-                            if (selectedCustomValue.length > 0) setCustomValue(selectedCustomValue);
+                            setCustomDraft({ scopeKey: customValueScopeKey, value: selectedCustomValue });
+                            setCustomEditorIntent({ scopeKey: customValueScopeKey, kind: 'manual' });
                         }}
                         style={(state) => [
                             styles.customEntryRow,
@@ -838,12 +823,12 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                     onSelect={(id) => {
                         const option = optionByKey.get(id);
                         if (!option || option.disabled) return;
-                        customEditorOpenReasonRef.current = null;
-                        dismissedSelectedCustomValueKeyRef.current = null;
                         // Clear synchronously before the callback: the owner may unmount
                         // this picker inside onSelect, before passive effects can refresh.
                         abandonCustomDraft();
-                        setCustomEditorVisible(false);
+                        setCustomEditorIntent(selectedCustomValue.length > 0
+                            ? { scopeKey: customValueScopeKey, kind: 'dismissed' }
+                            : null);
                         if (option.onActivate) {
                             option.onActivate();
                             return;
