@@ -38,8 +38,9 @@ import {
   pluginSettingsHelpRows,
   type PluginsSettingsCommandDeps,
 } from './pluginsSettings';
-import { controlDaemonPluginDevelopment, readDaemonPluginCatalog } from '@/daemon/controlClient';
+import { controlDaemonPluginDevelopment, listDaemonPluginChanges, readDaemonPluginCatalog } from '@/daemon/controlClient';
 import type { DaemonPluginDevelopmentStatus } from '@/plugins/daemon/developmentRoots';
+import type { PluginPendingChangeEntry } from '@/plugins/daemon/changeContract';
 import { ensureDaemonRunningForSessionCommand } from '@/daemon/ensureDaemon';
 import type { PluginInvocationLogQuery } from '@/ui/logger';
 import {
@@ -132,7 +133,7 @@ function usage(): string {
     title: pluginCommand,
     subtitle: 'Plugin discovery, local authoring, and machine-local installs',
     usage: [
-      { label: `${pluginCommand} list [--json]`, description: 'List installed plugins and their descriptors' },
+      { label: `${pluginCommand} list [--json]`, description: 'List installed plugins and daemon-owned pending changes' },
       { label: `${pluginCommand} show <pluginId> [--json]`, description: 'Show one installed plugin in detail' },
       { label: `${pluginCommand} actions <pluginId> [--json]`, description: 'List invocable actions and tools declared by one installed plugin' },
       { label: `${pluginCommand} install <path|archive|package> [--kind path|archive|npm] [--selector <version>] [--integrity <sha256-SRI>] [--dev] [--dry-run] [--json]`, description: 'Install through the active daemon; an explicit local path is the code-trust action' },
@@ -225,23 +226,37 @@ function readPluginActionCatalog(entry: PluginCatalogEntry): readonly PluginActi
   )));
 }
 
-function printHumanList(entries: readonly PluginCatalogEntryIntrospectionSnapshot[]): void {
+function printHumanList(
+  entries: readonly PluginCatalogEntryIntrospectionSnapshot[],
+  pendingChanges: readonly PluginPendingChangeEntry[],
+): void {
   const out = createOutputBuilder();
   if (entries.length === 0) {
     out.line(neutral('(no plugins installed)'));
-    console.log(out.render());
-    return;
+  } else {
+    for (const entry of entries) {
+      const status = entry.enabled ? ok('enabled') : neutral('disabled');
+      const source = dim(`(${entry.source.kind})`);
+      out.line(`${entry.title} ${dim(entry.pluginId)} ${source} ${status}`);
+      out.line(`  ${dim('Version:')} ${entry.version}`);
+      out.line(`  ${dim('Manifest:')} ${entry.manifestPath}`);
+      out.line(`  ${dim('Contributions:')} ${formatInstalledContributionSummary(entry)}`);
+      if (entry.diagnostics.length > 0) {
+        out.line(`  ${fail('Diagnostics:')} ${entry.diagnostics.map(readPluginDiagnosticDisplayMessage).join('; ')}`);
+      }
+    }
   }
-
-  for (const entry of entries) {
-    const status = entry.enabled ? ok('enabled') : neutral('disabled');
-    const source = dim(`(${entry.source.kind})`);
-    out.line(`${entry.title} ${dim(entry.pluginId)} ${source} ${status}`);
-    out.line(`  ${dim('Version:')} ${entry.version}`);
-    out.line(`  ${dim('Manifest:')} ${entry.manifestPath}`);
-    out.line(`  ${dim('Contributions:')} ${formatInstalledContributionSummary(entry)}`);
-    if (entry.diagnostics.length > 0) {
-      out.line(`  ${fail('Diagnostics:')} ${entry.diagnostics.map(readPluginDiagnosticDisplayMessage).join('; ')}`);
+  if (pendingChanges.length > 0) {
+    out.blank();
+    out.line(sectionTitle('Pending changes'));
+    for (const change of pendingChanges) {
+      if (change.kind === 'applying') {
+        out.line(`${change.pendingChangeId} ${neutral('applying')}`);
+      } else if (change.reviewKind === 'projectTrust') {
+        out.line(`${change.pendingChangeId} ${neutral('project trust')} ${dim(change.review.source.locator)}`);
+      } else {
+        out.line(`${change.pendingChangeId} ${neutral('install and trust')} ${change.review.displayName} ${dim(change.review.pluginId)}`);
+      }
     }
   }
   console.log(out.render());
@@ -279,7 +294,10 @@ function printHumanShow(entry: PluginCatalogEntryIntrospectionSnapshot): void {
 }
 
 async function runPluginsListCommand(args: readonly string[]): Promise<void> {
-  const catalog = await readDaemonPluginCatalog();
+  const [catalog, pendingChanges] = await Promise.all([
+    readDaemonPluginCatalog(),
+    listDaemonPluginChanges(),
+  ]);
   if (catalog.kind === 'unavailable') {
     await printPluginCatalogUnavailable(args, 'plugins_list', catalog.code);
     return;
@@ -292,12 +310,13 @@ async function runPluginsListCommand(args: readonly string[]): Promise<void> {
       kind: 'plugins_list',
       data: {
         plugins: entries.map((entry) => projectPluginCatalogEntrySnapshot(entry)),
+        pendingChanges: pendingChanges.changes,
       },
     });
     return;
   }
 
-  printHumanList(entries.map((entry) => projectPluginCatalogEntrySnapshot(entry)));
+  printHumanList(entries.map((entry) => projectPluginCatalogEntrySnapshot(entry)), pendingChanges.changes);
 }
 
 async function runPluginsShowCommand(args: readonly string[]): Promise<void> {

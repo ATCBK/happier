@@ -51,6 +51,7 @@ import {
 } from '@/plugins/runtime/reload/controller';
 import { writeExecutableShim } from '@/testkit/fs/executableShim';
 import { createPluginCliActionHost } from '@/plugins/testkit/pluginCliActionHost';
+import { createDaemonControlAuthGuard } from '@/daemon/controlAuth';
 import { PluginChangePendingReviewResultSchema } from '@happier-dev/protocol/marketplace/internal';
 import { PLUGIN_CHANGE_REQUEST_PATH, PLUGIN_CHANGE_DECISION_PATH, registerDaemonPluginChangeRoutes } from '@/plugins/daemon/controlRoutes';
 
@@ -2555,7 +2556,9 @@ describe('handlePluginsCommand', () => {
       const source = accountMarketplaceUserSourceFixture({ sourceUrl: 'https://catalog.example/team.json' });
       const unrelated = accountMarketplaceUserSourceFixture({ sourceUrl: 'https://catalog.example/unrelated.json' });
       publishAccountRegistrySourcesFixture([source, unrelated]);
-      const catalog = { ...listing.snapshot, source: { id: source.id, title: source.title,
+      const catalog = { ...listing.snapshot, picks: [], entries: listing.snapshot.entries.map(entry => ({
+        ...entry, review: { status: 'unreviewed' as const, reviewedAt: null },
+      })), source: { id: source.id, title: source.title,
         kind: 'user' as const, sourceUrl: source.url } };
       const urls: string[] = [];
       vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
@@ -2584,7 +2587,9 @@ describe('handlePluginsCommand', () => {
       const listing = await seedExactCuratedMarketplaceListing({ happyHomeDir: home, contributions });
       const source = accountMarketplaceUserSourceFixture({ sourceUrl: 'https://catalog.example/team.json' });
       publishAccountRegistrySourcesFixture([source]);
-      const catalog = { ...listing.snapshot, source: { id: source.id, title: source.title,
+      const catalog = { ...listing.snapshot, picks: [], entries: listing.snapshot.entries.map(entry => ({
+        ...entry, review: { status: 'unreviewed' as const, reviewedAt: null },
+      })), source: { id: source.id, title: source.title,
         kind: 'user' as const, sourceUrl: source.url } };
       vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(catalog), { status: 200 }));
 
@@ -2596,9 +2601,18 @@ describe('handlePluginsCommand', () => {
             summary: { contributions },
           } },
         } } });
-      // A user catalog cannot obtain curated trust by publishing a curated source kind.
+      // Neither user-published approved reviews nor a schema-valid forged
+      // curated source may borrow the configured Account source's authority.
+      const approvedEntries = catalog.entries.map(entry => ({ ...entry,
+        review: { status: 'approved' as const, reviewedAt: '2026-07-22T00:00:00.000Z' },
+      }));
       vi.mocked(globalThis.fetch).mockImplementation(async () => new Response(JSON.stringify({
-        ...catalog, source: { ...catalog.source, kind: 'curated' },
+        ...catalog, entries: approvedEntries,
+      }), { status: 200 }));
+      expect(await executeMarketplaceRegistryAlias(['list'], ['--source', source.id]))
+        .toMatchObject({ ok: true, result: { pages: [{ sourceId: source.id, status: { state: 'invalid_source' }, items: [] }] } });
+      vi.mocked(globalThis.fetch).mockImplementation(async () => new Response(JSON.stringify({
+        ...catalog, entries: approvedEntries, source: { ...catalog.source, kind: 'curated' },
       }), { status: 200 }));
       expect(await executeMarketplaceRegistryAlias(['list'], ['--source', source.id]))
         .toMatchObject({ ok: true, result: { pages: [{ sourceId: source.id, status: { state: 'invalid_source' }, items: [] }] } });
@@ -2682,7 +2696,7 @@ describe('handlePluginsCommand', () => {
     }
   });
 
-  it('requires the selected Community npm package name for exact install when it differs from the plugin id', async () => {
+  it('uses the exact Community npm source package and refuses a conflicting selected package name', async () => {
     const home = await createTempDir('happier-plugin-marketplace-community-install-');
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
     envScope.patch({
@@ -2713,7 +2727,7 @@ describe('handlePluginsCommand', () => {
       })),
     };
     installMarketplaceHttpFixture(communitySnapshot);
-    daemonBoundary.requestChange.mockResolvedValueOnce({
+    daemonBoundary.requestChange.mockResolvedValue({
       kind: 'committed',
       pluginId: SAMPLE_PLUGIN_ID,
       desiredGeneration: 'generation-community-1',
@@ -2722,7 +2736,7 @@ describe('handlePluginsCommand', () => {
     });
 
     try {
-      const missingPackageOutput = captureConsoleJsonOutput();
+      const discoveredPackageOutput = captureConsoleJsonOutput();
       try {
         await runCompiledPluginCommand([
           'marketplace',
@@ -2732,15 +2746,27 @@ describe('handlePluginsCommand', () => {
           '--version', '1.0.0', '--machine', 'machine-1',
           '--json',
         ]);
-        expect(missingPackageOutput.json()).toMatchObject({
-          ok: false,
+        expect(discoveredPackageOutput.json()).toMatchObject({
+          ok: true,
           kind: 'plugins_marketplace_install',
-          error: { code: 'install_unavailable', message: expect.stringMatching(/--package/) },
+          data: { change: { pluginId: SAMPLE_PLUGIN_ID } },
         });
       } finally {
-        missingPackageOutput.restore();
+        discoveredPackageOutput.restore();
       }
-      expect(undici.fetch).not.toHaveBeenCalled();
+      expect(daemonBoundary.requestChange).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'installNpm', packageName, selector: '1.0.0',
+      }));
+
+      const requestsBeforeConflict = daemonBoundary.requestChange.mock.calls.length;
+      const conflictingPackageOutput = captureConsoleJsonOutput();
+      try {
+        await runCompiledPluginCommand(['marketplace', 'install', communitySource.id, SAMPLE_PLUGIN_ID,
+          '--package', '@acme/conflicting-selected-package', '--version', '1.0.0', '--machine', 'machine-1', '--json']);
+        expect(conflictingPackageOutput.json()).toMatchObject({ ok: false,
+          kind: 'plugins_marketplace_install', error: { code: 'install_unavailable' } });
+      } finally { conflictingPackageOutput.restore(); }
+      expect(daemonBoundary.requestChange).toHaveBeenCalledTimes(requestsBeforeConflict);
 
       process.exitCode = undefined;
       const output = captureConsoleJsonOutput();
@@ -2764,11 +2790,11 @@ describe('handlePluginsCommand', () => {
         output.restore();
       }
 
-      expect(undici.fetch).toHaveBeenCalled();
       expect(daemonBoundary.requestChange).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'installNpm',
         packageName,
       }));
+      expect(daemonBoundary.decideChange).not.toHaveBeenCalled();
     } finally {
       process.exitCode = previousExitCode;
       envScope.restore();
@@ -2853,23 +2879,22 @@ describe('handlePluginsCommand', () => {
       activePluginChangeService = await createPluginChangeService();
       registerDaemonPluginChangeRoutes(control, {
         service: activePluginChangeService,
-        requireAuth: (request, reply) => {
-          if (request.headers.authorization !== `Bearer ${controlToken}`) void reply.code(401).send({ error: 'unauthorized' });
-        },
+        requireAuth: createDaemonControlAuthGuard(controlToken),
       });
       await control.ready();
       // HTTP/control-token custody is the boundary; registration, request parsing,
       // candidate preparation, trust and durable installation stay real.
       daemonBoundary.requestChange.mockImplementation(async request => {
         const response = await control.inject({ method: 'POST', url: PLUGIN_CHANGE_REQUEST_PATH,
-          headers: { authorization: `Bearer ${controlToken}` }, payload: request });
+          headers: { 'x-happier-daemon-token': controlToken }, payload: request });
         expect(response.statusCode).toBe(200);
         return response.json();
       });
       const output = captureConsoleJsonOutput();
       try {
         await runCompiledPluginCommand(['install', sourceRoot, '--json']);
-        expect(output.json()).toMatchObject({ ok: false, kind: 'plugins_install', error: { code: 'review_required' } });
+        const envelope = output.json<{ error?: { code?: string; message?: string } }>();
+        expect(envelope, JSON.stringify(envelope.error)).toMatchObject({ ok: false, kind: 'plugins_install', error: { code: 'review_required' } });
         expect(daemonBoundary.requestChange).toHaveBeenCalledWith({ kind: 'installPath', locator: sourceRoot });
         expect(daemonBoundary.decideChange).not.toHaveBeenCalled();
         expect((await createPluginStateStore({ happyHomeDir: home }).read()).plugins[SAMPLE_PLUGIN_ID]).toBeUndefined();
@@ -2880,7 +2905,7 @@ describe('handlePluginsCommand', () => {
         expect((await control.inject({ method: 'POST', url: PLUGIN_CHANGE_DECISION_PATH, payload: decision })).statusCode).toBe(401);
         expect((await createPluginStateStore({ happyHomeDir: home }).read()).plugins[SAMPLE_PLUGIN_ID]).toBeUndefined();
         const committed = await control.inject({ method: 'POST', url: PLUGIN_CHANGE_DECISION_PATH,
-          headers: { authorization: `Bearer ${controlToken}` }, payload: decision });
+          headers: { 'x-happier-daemon-token': controlToken }, payload: decision });
         expect(committed.statusCode).toBe(200);
         expect(committed.json()).toMatchObject({ kind: 'committed', pluginId: SAMPLE_PLUGIN_ID });
         expect((await createPluginStateStore({ happyHomeDir: home }).read()).plugins[SAMPLE_PLUGIN_ID]).toBeDefined();

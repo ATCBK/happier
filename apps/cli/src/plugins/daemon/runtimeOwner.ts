@@ -1,4 +1,5 @@
 import { createDaemonArchivePluginChangePreparer } from '@/plugins/daemon/archiveChangePreparer';
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import {
   createDaemonPluginChangeService,
   type DaemonPluginChangeOwner,
@@ -568,9 +569,17 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     },
   });
   const reportAvailabilityFailure = (error: unknown, revision: number): void => {
+    const failures = error instanceof AggregateError
+      ? error.errors.flatMap((failure: unknown) => {
+        if (!isPluginError(failure) || !failure.details || typeof failure.details !== 'object'
+          || Array.isArray(failure.details) || typeof failure.details.pluginId !== 'string') return [];
+        return [{ pluginId: failure.details.pluginId, code: failure.code }];
+      })
+      : [];
     logger.debug('[PLUGIN RUNTIME] Plugin availability report failed (non-fatal)', {
       revision,
       error: projectPluginFailureText(error),
+      ...(failures.length > 0 ? { failures } : {}),
     });
   };
   /**

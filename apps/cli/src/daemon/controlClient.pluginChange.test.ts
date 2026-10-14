@@ -321,6 +321,56 @@ describe('daemon control client plugin changes', () => {
     }
   });
 
+  it('projects outstanding daemon changes through plugins.list so an Agent can rejoin them', async () => {
+    const review = createPluginInstallationReviewFixture({ pluginId: 'acme.agent-authored' });
+    const pendingChanges = [
+      {
+        kind: 'reviewRequired', reviewKind: 'projectTrust', pendingChangeId: 'pending-project-trust',
+        review: { source: { kind: 'path', locator: '/tmp/agent-authored' } },
+      },
+      {
+        kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null,
+        authorityExpansion: [], pendingChangeId: 'pending-install', review,
+      },
+      { kind: 'applying', pendingChangeId: 'pending-applying' },
+    ];
+    const server = http.createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify(request.url === '/plugins/catalog/read'
+          ? { kind: 'available', plugins: [], tools: [] }
+          : request.url === '/plugins/change/list'
+            ? { changes: pendingChanges }
+            : { kind: 'unavailable', code: 'unexpected_test_route' }));
+      });
+    });
+    try {
+      const { port } = await listen(server);
+      home = await createTempDir('happier-plugin-change-action-list-');
+      envScope.patch({ HAPPIER_HOME_DIR: home });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid,
+        httpPort: port,
+        startedAt: Date.now(),
+        startedWithCliVersion: 'test',
+        controlToken: 'control-token',
+      });
+      const { executePluginDevLoopAction } = await import('@/plugins/devLoop/actions');
+
+      await expect(executePluginDevLoopAction({ actionId: 'plugins.list', input: {} }))
+        .resolves.toMatchObject({
+          ok: true,
+          kind: 'plugins_list',
+          plugins: [],
+          pendingChanges,
+        });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('reads additive tool projections while accepting an older catalog response without tools', async () => {
     let reads = 0;
     const server = http.createServer((request, response) => {
