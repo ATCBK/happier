@@ -1,3 +1,4 @@
+import '@/boot/configureZodLocale';
 import './vitestDomTextEncoding';
 import * as React from 'react';
 import { afterAll, afterEach, beforeEach, vi } from 'vitest';
