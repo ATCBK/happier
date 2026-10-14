@@ -1,4 +1,4 @@
-import type { AgentInstallJob, AgentInstallJobConsent, AgentInstallJobEvent, AgentInstallJobIntent, DaemonAgentInstallStartRequest } from '@happier-dev/protocol/daemon/agent-install-jobs';
+import type { AgentInstallJob, AgentInstallJobConsent, AgentInstallJobEvent, AgentInstallJobIntent, DaemonAgentInstallCancelResponse, DaemonAgentInstallStartRequest } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
 
 import { MACHINE_RPC_POLL_INTERVAL_MS } from '@/sync/ops/machineRpcPollInterval';
@@ -13,7 +13,7 @@ export type AgentInstallJobTarget = MachineAgentInstallJobTarget & Readonly<{ ag
 export type AgentInstallJobStartOptions = Readonly<{ consent: AgentInstallJobConsent; force?: boolean;
     expectedDefinitionVersion?: DaemonAgentInstallStartRequest['expectedDefinitionVersion'] }>;
 
-type JobRecord = { job: MachineAgentJob; cursor: number; hydrated: boolean; polling: boolean; timer?: ReturnType<typeof setTimeout> };
+type JobRecord = { target: AgentInstallJobTarget; job: MachineAgentJob; cursor: number; hydrated: boolean; polling: boolean; timer?: ReturnType<typeof setTimeout> };
 type MachineJobs = { target: MachineAgentInstallJobTarget; controller: AbortController; jobs: ReadonlyMap<string, MachineAgentJob>; records: Map<string, JobRecord>; listeners: Set<() => void>; agentListeners: Map<string, Set<() => void>>; loading?: Promise<void>; starts: Map<string, Promise<MachineAgentJob>> };
 const machines = new Map<string, MachineJobs>();
 const machineKey = (target: MachineAgentInstallJobTarget) => serverAccountScopedResourceKey(target, 'agent-install-jobs', target.machineId);
@@ -213,9 +213,9 @@ export function ensureMachineAgentInstallJobs(target: MachineAgentInstallJobTarg
             if (previous?.job.jobId === wire.jobId && previous.hydrated) continue;
             if (wire.done && previous && previous.job.jobId !== wire.jobId && previous.job.startedAtMs > wire.startedAt) continue;
             if (previous?.timer) clearTimeout(previous.timer);
-            const record: JobRecord = { job: fromWire(wire), cursor: 0, hydrated: true, polling: false };
-            state.records.set(targetKey, record);
             const agentTarget = { ...target, agentId: wire.agentId, definitionId: wire.definitionId };
+            const record: JobRecord = { target: agentTarget, job: fromWire(wire), cursor: 0, hydrated: true, polling: false };
+            state.records.set(targetKey, record);
             publish(agentTarget, record.job);
             if (!wire.done) void poll(agentTarget, record);
         }
@@ -239,7 +239,7 @@ export function startAgentInstallJob(target: AgentInstallJobTarget, intent: Agen
         if (state.records.get(targetKey)?.job.jobId !== response.jobId) {
             const previous = state.records.get(targetKey);
             if (previous?.timer) clearTimeout(previous.timer);
-            const record: JobRecord = { job: { jobId: response.jobId, intent, startedAtMs: Date.now(), steps: [], logLine: null, outcome: null }, cursor: 0, hydrated: false, polling: false };
+            const record: JobRecord = { target, job: { jobId: response.jobId, intent, startedAtMs: Date.now(), steps: [], logLine: null, outcome: null }, cursor: 0, hydrated: false, polling: false };
             state.records.set(targetKey, record);
             publish(target, record.job);
         }
@@ -269,11 +269,22 @@ export async function cancelAgentInstallJob(target: AgentInstallJobTarget): Prom
         return;
     }
     if (record.job.outcome) return;
-    const response = await cancelAgentInstallJobRpc({ ...target, signal: state.controller.signal }, { jobId: record.job.jobId });
-    requireCurrent(state);
+    const response = await cancelMachineAgentInstallJob(target, record.job.jobId);
     if (!response.ok) throw new AgentInstallJobRpcError(response.errorCode, response.error);
-    if (record.timer) clearTimeout(record.timer);
-    void poll(target, record);
+}
+
+/** Action cancellation addresses the exact admitted job, including one discovered after remount. */
+export async function cancelMachineAgentInstallJob(target: MachineAgentInstallJobTarget, jobId: string): Promise<DaemonAgentInstallCancelResponse> {
+    const state = machine(target);
+    const response = await cancelAgentInstallJobRpc({ ...target, signal: state.controller.signal }, { jobId });
+    requireCurrent(state);
+    if (!response.ok) return response;
+    const record = [...state.records.values()].find((candidate) => candidate.job.jobId === jobId);
+    if (record) {
+        if (record.timer) clearTimeout(record.timer);
+        void poll(record.target, record);
+    }
+    return response;
 }
 
 /** Queue and update adapters wait on this owner, with no installer-sized UI deadline. */

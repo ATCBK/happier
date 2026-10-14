@@ -1,10 +1,9 @@
 import * as React from 'react';
 
-import { cancelAgentInstallJob, startAgentInstallJob } from '@/agents/machineAgents/installJobs/installJobStore';
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
-import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 import type { MachineAgentRowAction } from './machineAgentPresentation';
 import { showAgentSignInTerminalSheet } from './AgentSignInTerminalSheet';
@@ -24,23 +23,26 @@ export function useMachineAgentRowActions(input: Readonly<{
 }>): (agent: MachineAgent, action: MachineAgentRowAction) => void {
     const terminalHost = useAgentSignInTerminalHost();
     const { serverId, machineId, machineName, onOpenForm } = input;
-    const { binding } = useServerCredentialAccountScopeBinding(serverId);
+    const { binding, execute } = useMountedActionExecution(serverId);
     return React.useCallback((agent, action) => {
-        const target = { serverId, machineId, agentId: agent.agentId };
+        const target = { serverId, machineId, agentId: agent.agentId, definitionId: agent.definitionId };
         switch (action.kind) {
             case 'install':
             case 'retry':
-            case 'update':
+            case 'update': {
                 if (!binding?.isCurrent()) return;
-                fireAndForget(startAgentInstallJob({ ...target, ...binding.scope }, action.kind === 'update' || agent.job?.intent === 'update' ? 'update' : 'install', {
-                    // The row said what it installs and whose installer runs; pressing it is the consent.
-                    consent: { vendorRecipe: agent.install.requiresVendorConsent },
+                const intent = action.kind === 'retry' ? agent.job?.intent ?? 'install' : action.kind;
+                fireAndForget(execute(intent === 'uninstall' ? 'machines.agents.uninstall' : 'machines.agents.install', {
+                    machineId, agentId: agent.agentId, ...(agent.definitionId === undefined ? {} : { definitionId: agent.definitionId }),
+                    // Consent is reviewed by the shared Action confirmation before execution.
+                    ...(intent === 'uninstall' ? {} : { intent, consent: { vendorRecipe: agent.install.requiresVendorConsent } }),
                 }), { tag: 'machineAgentRowAction.install' });
                 onOpenForm(agent);
                 return;
+            }
             case 'cancel':
-                if (!binding?.isCurrent()) return;
-                fireAndForget(cancelAgentInstallJob({ ...target, ...binding.scope }), { tag: 'machineAgentRowAction.cancel' });
+                if (!binding?.isCurrent() || !agent.job || agent.job.outcome) return;
+                fireAndForget(execute('machines.agents.install.cancel', { machineId, jobId: agent.job.jobId }), { tag: 'machineAgentRowAction.cancel' });
                 return;
             case 'signIn':
                 onOpenForm(agent);
@@ -55,5 +57,5 @@ export function useMachineAgentRowActions(input: Readonly<{
                 fireAndForget(openExternalUrl(action.url), { tag: 'machineAgentRowAction.guide' });
                 return;
         }
-    }, [binding, machineId, machineName, onOpenForm, serverId, terminalHost]);
+    }, [binding, execute, machineId, machineName, onOpenForm, serverId, terminalHost]);
 }

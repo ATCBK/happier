@@ -1,12 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import type { DaemonTerminalEnsureResponse } from '@happier-dev/protocol';
 import { createServerScopedMachineRpcBoundaryMock } from '@/dev/testkit/mocks/serverScopedRpc';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-const boundary = vi.hoisted(() => ({ rpc: vi.fn(), signedIn: false, cursor: 0 }));
+const boundary = vi.hoisted(() => ({ rpc: vi.fn(), confirm: vi.fn(), signedIn: false, cursor: 0 }));
+vi.mock('@/modal', async () => {
+  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+  return createModalModuleMock({ spies: { confirm: boundary.confirm } });
+});
 // Unused HTTP boundary: fail loudly if sign-in ever invokes recipient-envelope work.
 vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
   const unused = () => { throw new Error('Sign-in unexpectedly reached the recipient-envelope API'); };
@@ -17,24 +22,21 @@ vi.mock('react-native-unistyles', async () => {
   const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
   return createUnistylesMock();
 });
-vi.mock('@/sync/domains/server/serverProfiles', async (original) => {
-  const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-  return createPartialServerProfilesModuleMock(original, { profiles: [{ id: 'fixture-server', serverUrl: 'https://fixture.invalid' }] });
-});
-vi.mock('@/auth/storage/tokenStorage', async (original) => {
-  const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-  return createTokenStorageModuleMock({ importOriginal: original, tokenStorage: {
-    getCredentialsForServerUrl: async () => ({ token: `header.${Buffer.from(JSON.stringify({ sub: 'fixture-account' })).toString('base64')}.signature`,
-      encryption: { type: 'legacy', secret: new Uint8Array(32) } }),
-  } });
-});
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () =>
   createServerScopedMachineRpcBoundaryMock(boundary.rpc));
 vi.mock('@/utils/platform/desktopHost', () => ({ isDesktopHost: () => false }));
-import { useAgentSignIn, executeAgentSignInLifecycle } from './useAgentSignIn';
-import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { useAgentSignIn, executeAgentSignInLifecycle } = await import('./useAgentSignIn');
+const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+let serverId: string;
 
 describe('shared Agent sign-in', () => {
+  beforeEach(async () => {
+    await home.reset();
+    boundary.confirm.mockReset(); boundary.confirm.mockResolvedValue(true);
+    serverId = await home.addHome({ name: 'Sign-in', serverUrl: 'https://fixture.invalid', accountId: 'fixture-account' });
+  });
   afterEach(() => { standardCleanup(); vi.useRealTimers(); boundary.rpc.mockReset(); });
   it('uses the daemon terminal on web, shares auth URLs across presenters and keeps state across remounts', async () => {
     vi.useFakeTimers(); boundary.signedIn = false; boundary.cursor = 0;
@@ -47,7 +49,7 @@ describe('shared Agent sign-in', () => {
       if (method === 'daemon.terminal.list') return { ok: true, terminals: [{ terminalId: 'fixture-terminal', terminalKey: 'provider-login:fixture-machine:codex', cwd: '/fixture', ended: false, exit: null }] };
       throw new Error(`Unexpected fixture RPC ${method}`);
     });
-    const target = { serverId: 'fixture-server', machineId: 'fixture-machine', agentId: 'codex' };
+    const target = { serverId, machineId: 'fixture-machine', agentId: 'codex' };
     const first = await renderHook(() => useAgentSignIn(target));
     const second = await renderHook(() => useAgentSignIn(target));
     await act(async () => { await first.getCurrent().start(); });
@@ -84,10 +86,10 @@ describe('shared Agent sign-in', () => {
       if (method === 'daemon.terminal.close') { closed.push(payload.terminalId!); process = 'second-login'; return { ok: true }; }
       throw new Error(method);
     });
-    const target = { serverId: 'fixture-server', machineId: 'action-lifecycle', agentId: 'codex' };
+    const target = { serverId, machineId: 'action-lifecycle', agentId: 'codex' };
     const presenter = await renderHook(() => useAgentSignIn(target));
     await act(async () => { await presenter.getCurrent().start(); });
-    const account = await renderHook(() => useServerCredentialAccountScopeBinding('fixture-server'));
+    const account = await renderHook(() => useServerCredentialAccountScopeBinding(serverId));
     const lifetime = account.getCurrent().binding!;
     await act(async () => { expect(await executeAgentSignInLifecycle({ ...target, lifetime }, 'restart', 'first-login')).toMatchObject({ terminalId: 'second-login' }); });
     expect(presenter.getCurrent()).toMatchObject({ phase: 'waiting', terminalId: 'second-login' });
@@ -112,7 +114,7 @@ describe('shared Agent sign-in', () => {
       if (method === 'daemon.terminal.close') { if (disconnected) throw new Error('transport_disconnected'); return { ok: true }; }
       throw new Error(method);
     });
-    const presenter = await renderHook(() => useAgentSignIn({ serverId: 'fixture-server', machineId: 'cleanup-retry', agentId: 'codex' }));
+    const presenter = await renderHook(() => useAgentSignIn({ serverId, machineId: 'cleanup-retry', agentId: 'codex' }));
     await act(async () => { await presenter.getCurrent().start(); });
     await act(async () => { await expect(presenter.getCurrent().cancel()).resolves.toMatchObject({ ok: false }); });
     expect(presenter.getCurrent()).toMatchObject({ phase: 'failed', terminalId: 'retained-login', failure: 'transport_disconnected' });
@@ -133,7 +135,7 @@ describe('shared Agent sign-in', () => {
       if (method === 'daemon.terminal.close') { if (disconnected) throw new Error('late_cleanup_disconnected'); return { ok: true }; }
       throw new Error(method);
     });
-    const presenter = await renderHook(() => useAgentSignIn({ serverId: 'fixture-server', machineId: 'late-cleanup-retry', agentId: 'codex' }));
+    const presenter = await renderHook(() => useAgentSignIn({ serverId, machineId: 'late-cleanup-retry', agentId: 'codex' }));
     let started!: Promise<unknown>;
     await act(async () => { started = presenter.getCurrent().start().catch((error: unknown) => error); });
     await act(async () => {
