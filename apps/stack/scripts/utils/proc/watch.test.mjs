@@ -4,6 +4,46 @@ import { EventEmitter } from 'node:events';
 
 import { watchDebounced } from './watch.mjs';
 
+test('watchDebounced retains queued burst evidence across a process pause before timer delivery', (t) => {
+  let clock = 0;
+  t.mock.method(Date, 'now', () => clock);
+  let notify;
+  const timers = new Map();
+  const changes = [];
+  const watcher = watchDebounced({
+    paths: ['/repo/src'], debounceMs: 20,
+    // A four-entry OS queue and two delivered ignored events represent the
+    // existing half-capacity recovery boundary; no source event is delivered.
+    queueCapacity: 4, ignorePath: () => true,
+    logger: { warn() {} },
+    onChange: (event) => changes.push(event.eventType),
+    watchImpl: (_path, _options, handler) => { notify = handler; return { close() {} }; },
+    setTimeoutImpl(callback) { const timer = {}; timers.set(timer, callback); return timer; },
+    clearTimeoutImpl(timer) { timers.delete(timer); },
+  });
+  const drainTimers = () => {
+    while (timers.size) {
+      const [timer, callback] = timers.entries().next().value;
+      timers.delete(timer);
+      callback();
+    }
+  };
+  try {
+    notify('change', 'a.test.ts');
+    // CPU/VM suspension advances wall time without giving the event loop an
+    // idle turn. The next callback still belongs to the queued native burst.
+    clock += 21;
+    notify('change', 'b.test.ts');
+    drainTimers();
+    assert.deepEqual(changes, ['recrawl']);
+    notify('change', 'a.test.ts');
+    drainTimers();
+    notify('change', 'b.test.ts');
+    drainTimers();
+    assert.deepEqual(changes, ['recrawl'], 'actual quiet turns must not accumulate unrelated bursts');
+  } finally { watcher.close(); }
+});
+
 test('watchDebounced skips inaccessible or vanished descendants and still observes healthy changes', async () => {
   for (const code of ['EACCES', 'ENOENT', 'EPERM']) {
     const nativeWatcher = new EventEmitter();

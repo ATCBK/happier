@@ -483,7 +483,12 @@ test('a pending build suspends recovery scans and revalidates missed edits befor
 
 test('native queue loss in an ignored event burst recovers a missed source edit without periodic recrawl',
   { skip: process.platform !== 'linux', timeout: 60_000 }, async t => {
-    const fixture = await createTempFixture(t, { prefix: 'hstack-source-overflow-' });
+    const fixture = await createTempFixture(t, { prefix: 'hstack-source-overflow-', registerCleanup: false });
+    let coordinator;
+    t.after(async () => {
+      await coordinator?.close();
+      await fixture.cleanup();
+    });
     const source = fixture.path('source.ts');
     const noise = [fixture.path('a.test.ts'), fixture.path('b.test.ts')];
     await fs.writeFile(source, 'export const value = 1;');
@@ -492,29 +497,52 @@ test('native queue loss in an ignored event burst recovers a missed source edit 
     const recovered = new Promise(resolve => { ready = resolve; });
     let activated = 0;
     let sourceEvents = 0;
-    const coordinator = startDevReloadCoordinator({
+    let nativeEvents = 0;
+    let lastNativeEventAt = null;
+    let maxNativeEventGapMs = 0;
+    let nativeBurstEvents = 0;
+    let maxNativeBurstEvents = 0;
+    let queueSize = null;
+    let burstWriteMs = null;
+    let recoveryWarnings = 0;
+    const failures = [];
+    coordinator = startDevReloadCoordinator({
       descriptors: [{ id: 'server:source', target: 'server', paths: [fixture.root] }],
       executors: [{ target: 'server', build() {}, restart() { if (++activated === 2) ready(); } }],
       debounceMs: 20, pollIntervalMs: 0,
-      logger: { log() {}, warn() {}, error() {} },
+      logger: { log() {}, warn() { recoveryWarnings++; }, error(message) { failures.push(String(message)); } },
     }, { watchDebouncedImpl(options) {
       return watchDebounced({ ...options,
         // Count events that the reload policy ignores at the OS boundary.
         // Production avoids watching these leaves; an overflow from another
         // watched input has the same raw-queue loss semantics.
         watchImpl: (path, _options, callback) => watch(path, { recursive: true }, (kind, filename) => {
+          const observedAt = Date.now();
+          if (lastNativeEventAt !== null) {
+            const gap = observedAt - lastNativeEventAt;
+            maxNativeEventGapMs = Math.max(maxNativeEventGapMs, gap);
+            if (gap > 20) nativeBurstEvents = 0;
+          }
+          lastNativeEventAt = observedAt;
+          nativeEvents++;
+          maxNativeBurstEvents = Math.max(maxNativeBurstEvents, ++nativeBurstEvents);
           if (filename === 'source.ts') sourceEvents++;
           callback(kind, filename);
         }),
       });
     } });
-    t.after(() => coordinator.close());
+    t.after(() => t.diagnostic(JSON.stringify({
+      nodeVersion: process.version, queueSize, burstWriteMs, nativeEvents, sourceEvents,
+      maxNativeEventGapMs, maxNativeBurstEvents, recoveryWarnings, activated, failures,
+    })));
     await coordinator.requestReload('server');
-    const queueSize = Number(readFileSync('/proc/sys/fs/inotify/max_queued_events', 'utf8'));
+    queueSize = Number(readFileSync('/proc/sys/fs/inotify/max_queued_events', 'utf8'));
     // Block delivery until the real kernel queue is saturated. Alternating files
     // prevents inotify's adjacent-event coalescing; the final source event is lost.
+    const burstStartedAt = Date.now();
     for (let n = 0; n < queueSize + 128; n++) writeFileSync(noise[n % 2], String(n % 10));
     writeFileSync(source, 'export const value = 2;');
+    burstWriteMs = Date.now() - burstStartedAt;
     await recovered;
     assert.equal(activated, 2);
     assert.equal(sourceEvents, 0, 'the source event must actually be lost in this overflow probe');
@@ -719,9 +747,13 @@ async function observeComposedFilesystemThenPoll({ laterPollSignature = null } =
   await poll();
   app.set('1');
   emitFilesystemEvent('change', 'app.ts');
-  const filesystemDebounce = debounceTimers.shift();
-  assert.ok(filesystemDebounce && !filesystemDebounce.canceled);
-  filesystemDebounce.callback();
+  // Deliver the due timer turn, not an implementation-selected first timer:
+  // native burst quieting and reload debounce share this OS clock boundary.
+  const filesystemDebounces = debounceTimers.splice(0);
+  assert.ok(filesystemDebounces.some(timer => !timer.canceled));
+  for (const timer of filesystemDebounces) {
+    if (!timer.canceled) timer.callback();
+  }
   await firstRestartStarted;
 
   if (laterPollSignature !== null) app.set(laterPollSignature);
