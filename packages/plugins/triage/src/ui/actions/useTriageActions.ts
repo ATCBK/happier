@@ -3,7 +3,7 @@ import { usePluginHostApi, usePluginTranslation } from '@happier-dev/plugin-ui';
 
 import type { TriageAdministerActionInputV1 } from '../../actions/actionsCatalogProtocol.js';
 import type { TriageActionV1, TriageActionsReadV1 } from '../../settings/actions.js';
-import { planTriageOfferedActionsV1 } from '../../settings/actions.js';
+import { planTriageOfferableActionsV1, planTriageOfferedActionsV1 } from '../../settings/actions.js';
 import type { TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
 import { useTriageDurableAccount } from '../durable/accountDurableState.js';
 import {
@@ -25,8 +25,9 @@ import {
  * before.
  *
  * `read` is an empty unreadable projection until the first read answers. The
- * shipped seed becomes executable only when the Account owner authoritatively
- * answers `absent`; a read failure exposes no stale controls and offers Retry.
+ * built-ins become executable only when the Account owner authoritatively
+ * answers with a readable catalog; a read failure exposes no stale controls
+ * and offers Retry.
  *
  * A conflict is a settled answer rather than a failure: another writer won, so
  * this mount keeps what it is showing, says nothing here changed, and re-reads
@@ -52,7 +53,7 @@ export type TriageMountedActionsV1 = Readonly<{
    * is refused rather than overwritten.
    */
   revision: string | null;
-  /** The offered order, which is the stored order. */
+  /** Configured order followed by missing built-ins in default order. */
   actions: readonly TriageActionV1[];
   /** The first read has answered, so the set on screen is the Account's. */
   loaded: boolean;
@@ -163,7 +164,7 @@ export function useTriageActions(): TriageMountedActionsV1 {
       }
       setUnavailableReason(null);
       const action = (workflowSubjects.length === 0
-        ? authoritative.value.actions
+        ? planTriageOfferableActionsV1(authoritative.value.actions)
         : workflowSubjects.flatMap((workflowSubject) => planTriageOfferedActionsV1(
           authoritative.value.actions,
           workflowSubject,

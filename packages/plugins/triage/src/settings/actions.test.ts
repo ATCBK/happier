@@ -72,11 +72,35 @@ describe('the Triage action record', () => {
             .toEqual(['Ask', 'Fix', 'Review', 'Explain this PR in chat']);
     });
 
-    it('keeps an explicitly emptied catalog empty rather than restoring the seed', () => {
+    it('reads an empty stored catalog as no custom actions with all built-ins offered', () => {
         const read = parseTriageActions({ v: 1, actions: [] });
 
         expect(read.kind).toBe('parsed');
-        expect(read.value.actions).toEqual([]);
+        expect(read.value.actions).toEqual(TRIAGE_DEFAULT_ACTIONS_V1);
+    });
+
+    it('appends missing built-ins in default order while preserving configured rows and disabled choices', () => {
+        const custom = { ...ASK, actionId: 'custom', label: 'My action' };
+        const configuredReview = { ...REVIEW, label: 'Inspect', enabled: false };
+        const read = parseTriageActions(storedFrom([custom, configuredReview]));
+
+        expect(read.kind).toBe('parsed');
+        expect(read.value.actions).toEqual([custom, configuredReview, ASK, FIX, EXPLAIN]);
+    });
+
+    it('persists deletion of a built-in as disabled through the real writer and reader', async () => {
+        const testkit = createTestkitAccountKv();
+        const catalog = testkit.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1);
+        const removed = await mutateTriageAction({ catalog, mintActionId: () => 'unused' }, {
+            kind: 'delete',
+            actionId: EXPLAIN.actionId,
+            expectedRevision: 'absent',
+        });
+
+        expect(removed.status).toBe('applied');
+        const expected = [ASK, FIX, REVIEW, { ...EXPLAIN, enabled: false }];
+        expect(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toEqual(storedFrom(expected));
+        expect((await readTriageActions({ catalog })).value.actions).toEqual(expected);
     });
 
     it('answers the five configured questions and states both Review arms explicitly', () => {
@@ -156,7 +180,7 @@ describe('the Triage action record', () => {
             }],
         });
         const catalog = testkit.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1);
-        expect((await readTriageActions({ catalog })).value.actions).toEqual([ASK]);
+        expect((await readTriageActions({ catalog })).value.actions).toEqual(TRIAGE_DEFAULT_ACTIONS_V1);
         const updated = await mutateTriageAction({ catalog, mintActionId: () => 'unused' }, {
             kind: 'update',
             expectedRevision: testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
@@ -164,7 +188,9 @@ describe('the Triage action record', () => {
             label: 'Discuss',
         });
         expect(updated.status).toBe('applied');
-        expect(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toEqual({ v: 1, actions: [{ ...ASK, label: 'Discuss' }] });
+        expect(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toEqual(storedFrom([
+            { ...ASK, label: 'Discuss' }, FIX, REVIEW, EXPLAIN,
+        ]));
     });
 
     it('refuses incoherent subjects and formal-review materialization at the one writer', async () => {
@@ -354,9 +380,11 @@ describe('the Triage action record', () => {
         if (deleted.status !== 'applied') return;
         expect(deleted.value.actions.map((action) => action.actionId)).toEqual([
             REVIEW.actionId,
+            FIX.actionId,
             ASK.actionId,
             EXPLAIN.actionId,
         ]);
+        expect(deleted.value.actions.find((action) => action.actionId === FIX.actionId)?.enabled).toBe(false);
     });
 
     it('preserves a shipped fallback internally when a caller updates the seeded action', async () => {
@@ -458,7 +486,7 @@ describe('the Triage action record', () => {
             target: { kind: 'agent', promptInvocationId: null, delivery: 'compose' },
         })).toMatchObject({ status: 'applied', actionId: 'thirty-third' });
         expect((await readTriageActions({ catalog: testkit.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1) })).value.actions)
-            .toHaveLength(33);
+            .toHaveLength(33 + TRIAGE_DEFAULT_ACTIONS_V1.length);
     });
 
     it('refuses growth only when the complete serialized Account KV value exceeds its byte bound', async () => {
@@ -474,7 +502,7 @@ describe('the Triage action record', () => {
         });
         const encodedBytes = (actions: readonly TriageActionV1[]) =>
             new TextEncoder().encode(JSON.stringify(storedFrom(actions))).byteLength;
-        const actions: TriageActionV1[] = [];
+        const actions: TriageActionV1[] = [...TRIAGE_DEFAULT_ACTIONS_V1];
         let next = wideAction(0);
         // Construct the boundary fixture directly; repeated catalog mutations
         // would test quadratic setup work, not the whole-value admission rule.

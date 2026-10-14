@@ -1,4 +1,7 @@
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
+import type { TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
+import { TriageReadActionsResultV1Schema, TRIAGE_READ_ACTIONS_ACTION_LOCAL_ID_V1 } from '../actions/actionsCatalogProtocol.js';
+import { planTriageOfferableActionsV1, planTriageOfferedActionsV1, type TriageActionV1 } from '../settings/actions.js';
 
 import type {
     TriageActionProfilePreferencesV1,
@@ -36,6 +39,33 @@ export type TriageActionResolutionHostV1 = Readonly<{
         options?: PluginCancellationOptions,
     ): Promise<unknown>;
 }>;
+
+/** Recovery custody never authorizes an effect after its configured row stops being offered. */
+export async function resolveTriageConfiguredActionForExecutionV1(
+    host: TriageActionResolutionHostV1,
+    actionId: string,
+    workflowSubject?: TriageSourceWorkflowSubjectV1,
+    options?: PluginCancellationOptions,
+): Promise<
+    | Readonly<{ status: 'resolved'; action: TriageActionV1 }>
+    | Readonly<{ status: 'unavailable'; reason: 'catalogUnavailable' | 'unknownAction' | 'actionInapplicable' }>
+> {
+    try {
+        const read = TriageReadActionsResultV1Schema.parse(await host.executeAction(
+            TRIAGE_READ_ACTIONS_ACTION_LOCAL_ID_V1, { v: 1 }, options,
+        ));
+        if (options?.signal?.aborted || read.availability === 'unavailable') {
+            return { status: 'unavailable', reason: 'catalogUnavailable' };
+        }
+        const action = read.actions.find((candidate) => candidate.actionId === actionId);
+        if (action === undefined) return { status: 'unavailable', reason: 'unknownAction' };
+        const offered = workflowSubject === undefined
+            ? planTriageOfferableActionsV1([action])
+            : planTriageOfferedActionsV1([action], workflowSubject);
+        return offered.length === 0 ? { status: 'unavailable', reason: 'actionInapplicable' }
+            : { status: 'resolved', action };
+    } catch { return { status: 'unavailable', reason: 'catalogUnavailable' }; }
+}
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);

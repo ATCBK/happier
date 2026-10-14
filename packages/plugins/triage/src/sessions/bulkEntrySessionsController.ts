@@ -16,6 +16,7 @@ import {
 import {
     resolveTriageActionInstructionV1,
     resolveTriageActionReferencesV1,
+    resolveTriageConfiguredActionForExecutionV1,
     type TriageActionReferencesV1,
     type TriageActionResolutionHostV1,
 } from '../sessions/actionResolution.js';
@@ -26,6 +27,7 @@ import {
 import {
     hasTriageActionInstructionSourceV1,
     requiresTriageActionInstructionV1,
+    planTriageOfferedActionsV1,
     type TriageActionV1,
 } from '../settings/actions.js';
 import {
@@ -591,6 +593,7 @@ export type TriageBulkSessionsOptionsV1 = Readonly<{
 }>;
 
 type TriageBulkRetryContextV1 = Readonly<{
+    entries: TriageBulkSessionsRequestV1['entries'];
     action: TriageActionV1;
     destination: Exclude<TriageBulkSessionDestinationV1, 'attachAllToNewSession'>;
     promptText: string | null;
@@ -884,6 +887,7 @@ export function createTriageBulkEntrySessionsController(
                 const total = plan.units.length;
                 let started = 0;
                 retryContext.current = Object.freeze({
+                    entries: request.entries,
                     action,
                     destination: request.destination as Exclude<
                         TriageBulkSessionDestinationV1,
@@ -952,9 +956,21 @@ export function createTriageBulkEntrySessionsController(
         setPhase(Object.freeze({ kind: 'starting', started, total: units.length }));
         void (async () => {
             try {
+                const resolved = await resolveTriageConfiguredActionForExecutionV1(host, context.action.actionId, undefined, { signal: controller.signal });
+                if (retired.current) return;
+                if (controller.signal.aborted || resolved.status !== 'resolved') {
+                    setPhase(prior);
+                    return;
+                }
+                const subjects = new Map(context.entries.map((entry) => [entry.key, entry.workflowSubject]));
+                const offeredUnits = units.filter((unit) => unit.entries.every((entry) => {
+                    const subject = subjects.get(entry.key);
+                    return subject !== undefined && subject !== null
+                        && planTriageOfferedActionsV1([resolved.action], subject).length > 0;
+                }));
                 const retried = await runTriageBulkEntrySessionStartsV1({
                     host,
-                    units,
+                    units: offeredUnits,
                     action: context.action,
                     destination: context.destination,
                     promptText: context.promptText,
@@ -1032,7 +1048,7 @@ export function createTriageBulkEntrySessionsController(
                 if (reason !== 'workflowSubjectUnavailable' && reason !== 'actionInapplicable') return false;
                 refusals.push({ entry, reason });
             }
-            retryContext.current = { action: recovery.action, destination: recovery.destination, promptText: recovery.promptText,
+            retryContext.current = { entries, action: recovery.action, destination: recovery.destination, promptText: recovery.promptText,
                 inputs: recovery.units.map((unit) => ({ creationKey: unit.result.creationKey, input: unit.input })) };
             setPhase({ kind: 'settled', results, refusals, unavailableKeys: recovery.unavailableKeys,
                 selectionKeys: [...entries.map((entry) => entry.key), ...recovery.unavailableKeys] });

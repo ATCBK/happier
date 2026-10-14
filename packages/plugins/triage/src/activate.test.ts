@@ -38,6 +38,10 @@ import { createTestkitCorpusCollections } from './corpus/testkit/corpusCollectio
 import { createTestkitAccountKv } from './settings/testkit/accountKv.test-support.js';
 import { TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1 } from './settings/savedViews.js';
 import { TRIAGE_LIST_NO_FILTERS_V1 } from './projection/listWindow.js';
+import { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, TRIAGE_DEFAULT_ACTIONS_V1, planTriageOfferedActionsV1 } from './settings/actions.js';
+import { TRIAGE_READ_ACTIONS_ACTION_LOCAL_ID_V1, TRIAGE_ADMINISTER_ACTION_ACTION_LOCAL_ID_V1,
+  TriageReadActionsResultV1Schema, TriageAdministerActionResultV1Schema } from './actions/actionsCatalogProtocol.js';
+import { createDirectTriageActionsTransport, readTriageActionsProjectionV1 } from './ui/actions/actionsCommand.js';
 
 async function withRegisteredPlugin(run: (fixture: Readonly<{
   plugin: PluginTestkit;
@@ -73,6 +77,25 @@ async function withRegisteredPlugin(run: (fixture: Readonly<{
 }
 
 describe('Triage activation', () => {
+  it.each(['agent', 'mcp'] as const)('keeps built-ins and explicit opt-outs identical on registered %s Actions and direct UI reads', async (surface) => {
+    await withRegisteredPlugin(async ({ plugin, kv }) => {
+      kv.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, { v: 1, actions: [] });
+      const read = async () => TriageReadActionsResultV1Schema.parse(await plugin.invokeAction(
+        TRIAGE_READ_ACTIONS_ACTION_LOCAL_ID_V1, { v: 1 }, { surface }));
+      const initial = await read();
+      expect(initial.actions).toEqual(TRIAGE_DEFAULT_ACTIONS_V1);
+      const disabled = TriageAdministerActionResultV1Schema.parse(await plugin.invokeAction(
+        TRIAGE_ADMINISTER_ACTION_ACTION_LOCAL_ID_V1, { v: 1, kind: 'delete', actionId: 'explain-pr', expectedRevision: initial.revision }, { surface }));
+      expect(disabled.status).toBe('applied');
+      const after = await read();
+      expect(after.actions.find(action => action.actionId === 'explain-pr')?.enabled).toBe(false);
+      const ui = await createDirectTriageActionsTransport(kv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).read();
+      expect(ui).toEqual(after);
+      expect(planTriageOfferedActionsV1(readTriageActionsProjectionV1(ui).value.actions, 'pullRequest')
+        .some(action => action.actionId === 'explain-pr')).toBe(false);
+    });
+  });
+
   it('registers exactly the daemon Actions the manifest declares', async () => {
     await withRegisteredPlugin(async ({ plugin }) => {
       const registered = plugin.registrations().filter((entry) => entry.family === 'actions').map((entry) => entry.localId);

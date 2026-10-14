@@ -1,12 +1,12 @@
 import { createTriageBulkEntrySessionsController, projectTriageConfiguredBulkResultV1, type TriageBulkSessionsRequestV1, type TriageBulkHostV1 } from './bulkEntrySessionsController.js';
 import { createTriageEntrySessionStartController, type TriageStartHostV1, type TriagePendingPullRequestReviewV1 } from './entrySessionStartController.js';
-import { TriageReadActionsResultV1Schema, TRIAGE_READ_ACTIONS_ACTION_LOCAL_ID_V1 } from '../actions/actionsCatalogProtocol.js';
 import type { TriageRunConfiguredActionInputV1, TriageRunConfiguredActionResultV1 } from '../actions/configuredActionRunProtocol.js';
 import { planTriageOfferedActionsV1 } from '../settings/actions.js';
 import type { TriagePullRequestReviewChoiceV1, TriageStartEntrySessionResultV1 } from '../actions/entrySessionProtocol.js';
 import { continueTriagePullRequestReviewV1 } from './pullRequestReviewContinuation.js';
 import { openLinkedSession } from './entrySessionOpen.js';
 import { triageEntryRowKey } from '../projection/listWindow.js';
+import { resolveTriageConfiguredActionForExecutionV1 } from './actionResolution.js';
 
 export type TriageConfiguredActionRunHostV1 = TriageBulkHostV1 & TriageStartHostV1;
 export type TriageConfiguredActionRunRequestV1 = Readonly<{
@@ -26,13 +26,25 @@ export async function runTriageConfiguredActionV1(
     options?: Readonly<{ signal?: AbortSignal; mintCreationKey?: () => string }>,
 ): Promise<TriageRunConfiguredActionResultV1> {
     if (options?.signal?.aborted) return { v: 1, status: 'cancelled' };
-    const read = TriageReadActionsResultV1Schema.parse(await host.executeAction(
-        TRIAGE_READ_ACTIONS_ACTION_LOCAL_ID_V1, { v: 1 }, { signal: options?.signal },
-    ));
+    const refuse = (reason: string): TriageRunConfiguredActionResultV1 => ({
+        v: 1, status: 'unavailable', reason,
+        ...(request.resumeStart === undefined ? {} : {
+            recovery: request.resumeStart,
+            ...(request.resumeStart.state.kind === 'bulk' ? {
+                results: request.resumeStart.state.units.map((unit) => unit.result),
+                refusals: request.resumeStart.state.refusals,
+                unavailableKeys: request.resumeStart.state.unavailableKeys,
+            } : {}),
+        }),
+        ...(request.resumeReview === undefined ? {} : {
+            result: request.resumeReview.result, reviewInstructions: request.resumeReview.instructions,
+        }),
+    });
+    const resolved = await resolveTriageConfiguredActionForExecutionV1(host, request.actionId, undefined,
+        options?.signal === undefined ? undefined : { signal: options.signal });
     if (options?.signal?.aborted) return { v: 1, status: 'cancelled' };
-    if (read.availability === 'unavailable') return { v: 1, status: 'unavailable', reason: 'catalogUnavailable' };
-    const action = read.actions.find((candidate) => candidate.actionId === request.actionId);
-    if (action === undefined) return { v: 1, status: 'unavailable', reason: 'unknownAction' };
+    if (resolved.status !== 'resolved') return refuse(resolved.reason);
+    const action = resolved.action;
     const selectedEntries = request.entries.map((entry) => ({ entryRef: entry.entryRef, sourceInstanceId: entry.sourceInstance.sourceInstanceId }));
     const recovery = request.resumeStart;
     if (recovery !== undefined) {
@@ -49,6 +61,13 @@ export async function runTriageConfiguredActionV1(
             : request.destination === state.destination && state.action.actionId === action.actionId;
         if (!matchesEntries || !matchesStart || request.resumeReview !== undefined) {
             return { v: 1, status: 'unavailable', reason: 'startContinuationMismatch' };
+        }
+    }
+    if (request.destination === 'single') {
+        const entry = request.entries.length === 1 ? request.entries[0] : undefined;
+        if (entry === undefined) return refuse('singleEntryRequired');
+        if (entry.workflowSubject === null || planTriageOfferedActionsV1([action], entry.workflowSubject).length === 0) {
+            return refuse('actionInapplicable');
         }
     }
     const finishReview = async (pending: TriagePendingPullRequestReviewV1, result: TriageStartEntrySessionResultV1): Promise<TriageRunConfiguredActionResultV1> => {
@@ -76,14 +95,11 @@ export async function runTriageConfiguredActionV1(
         }
         // Retained facts are input, not authority: the incumbent final Review Action
         // rereads the source/workspace and admits the canonical review.start request.
-        return finishReview({ sessionId: result.sessionId, review: result.review, instructions }, result);
+        return finishReview({ actionId: action.actionId, sessionId: result.sessionId, review: result.review, instructions }, result);
     }
     if (request.destination === 'single') {
         const entry = request.entries.length === 1 ? request.entries[0] : undefined;
         if (entry === undefined) return { v: 1, status: 'unavailable', reason: 'singleEntryRequired' };
-        if (entry.workflowSubject === null || planTriageOfferedActionsV1([action], entry.workflowSubject).length === 0) {
-            return { v: 1, status: 'unavailable', reason: 'actionInapplicable' };
-        }
         const singleHost: TriageStartHostV1 = options?.signal === undefined ? host : {
             ...host,
             executeAction: (id, input, executionOptions) => host.executeAction(id, input, { ...executionOptions, signal: options.signal }),

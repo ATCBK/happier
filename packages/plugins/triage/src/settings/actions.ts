@@ -46,10 +46,10 @@ import type { TriageCatalogStoreV1 } from './accountKvCatalogStore.js';
  * Prompt Library entries, so the record does not become another prompt system.
  *
  * **Ask, Fix, Review and Explain are configuration, not protocol literals.** They ship as
- * `TRIAGE_DEFAULT_ACTIONS_V1`, which is what an *absent* value reads as — the
- * headline controls therefore exist with zero writes, and a person who renames
- * Ask to "Discuss" or deletes Fix gets exactly that, because a parsed empty set
- * is a different answer from an absent one.
+ * `TRIAGE_DEFAULT_ACTIONS_V1`. Both absent and stored catalogs offer any missing
+ * built-ins in default order. Configured rows retain their order and settings;
+ * deleting a built-in stores it disabled so later reads preserve that choice.
+ * An empty stored catalog means no custom actions.
  *
  * **Neither the agent nor the model is a member.** `LaunchProfileV2` already owns
  * `preferredAgentTargetKey`, `preferredModelSelection`, permission and
@@ -874,6 +874,13 @@ function readAction(actionId: string, draft: Readonly<{
     };
 }
 
+/** Complete a readable catalog without reapplying the stored-value byte boundary to its projection. */
+export function appendMissingTriageDefaultActionsV1(actions: readonly TriageActionV1[]): readonly TriageActionV1[] {
+    const ids = new Set(actions.map(action => action.actionId));
+    const missing = TRIAGE_DEFAULT_ACTIONS_V1.filter(action => !ids.has(action.actionId));
+    return missing.length === 0 ? actions : [...actions, ...missing];
+}
+
 /**
  * Parse one stored value.
  *
@@ -942,7 +949,7 @@ export function parseTriageActions(raw: unknown): TriageActionsReadV1 {
         if (!parsed.ok) return unreadable;
         actions.push(parsed.value);
     }
-    return { kind: 'parsed', value: { v: 1, actions } };
+    return { kind: 'parsed', value: { v: 1, actions: appendMissingTriageDefaultActionsV1(actions) } };
 }
 
 /**
@@ -1015,7 +1022,9 @@ function applyCommand(
             actionId: command.actionId,
             value: {
                 v: 1,
-                actions: current.actions.filter((action) => action.actionId !== command.actionId),
+                actions: TRIAGE_DEFAULT_ACTIONS_V1.some((action) => action.actionId === command.actionId)
+                    ? current.actions.map((action) => action.actionId === command.actionId ? { ...action, enabled: false } : action)
+                    : current.actions.filter((action) => action.actionId !== command.actionId),
             },
         };
     }

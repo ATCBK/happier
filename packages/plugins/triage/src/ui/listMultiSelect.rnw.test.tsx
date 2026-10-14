@@ -50,7 +50,7 @@ import {
     testkitSnapshot,
     testkitViewer,
 } from '../corpus/testkit/observations.test-support.js';
-import { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1 } from '../settings/actions.js';
+import { mutateTriageAction, TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, TRIAGE_DEFAULT_ACTIONS_V1 } from '../settings/actions.js';
 import { createTestkitAccountKv } from '../settings/testkit/accountKv.test-support.js';
 import type { TriageSessionActionInvokerV1 } from '../sessions/entrySessionOpen.js';
 import { linkEntryToSession } from '../sessions/entrySessionLinks.js';
@@ -444,6 +444,9 @@ function createHarness(options: Readonly<{
         replaceActions: (actions: JsonValue) => {
             accountKv.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, actions);
         },
+        deleteAction: (actionId: string) => mutateTriageAction({ catalog: accountKv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), mintActionId: () => 'unused' }, {
+            kind: 'delete', actionId, expectedRevision: accountKv.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
+        }),
         get wasRetired() {
             return retired;
         },
@@ -895,7 +898,7 @@ describe('selecting several PRs & Issues rows', () => {
         await chooseRow('Replace the duplicated normalizer');
 
         const offered = offeredBulkActionLabels();
-        expect(offered).toEqual(['Ask', 'Fix', 'Review']);
+        expect(offered).toEqual(['Ask', 'Fix', 'Review', 'Explain this PR in chat']);
     });
 
     it('does not run a bulk action deleted from the authoritative catalog before the press', async () => {
@@ -905,10 +908,10 @@ describe('selecting several PRs & Issues rows', () => {
         expect(offeredBulkActionLabels()).toContain('Fix');
         await chooseBulkAction(shell, 'Fix');
 
-        // Another device replaces the catalog after this mount rendered the
+        // Another device deletes the built-in after this mount rendered the
         // seeded action. The press must re-read Account KV before any profile,
         // prompt, project, Session or Composer work begins.
-        harness.replaceActions({ v: 1, actions: [] });
+        expect(await harness.deleteAction('fix')).toMatchObject({ status: 'applied' });
         await act(async () => {
             await shell.press(await shell.getByRole('button', { name: 'A session each' }));
         });
@@ -918,7 +921,7 @@ describe('selecting several PRs & Issues rows', () => {
         expect(harness.lifecycle).toEqual([]);
         expect(harness.spawnInputs).toEqual([]);
         expect(harness.composerTransactions).toEqual([]);
-        expect(offeredBulkActionLabels()).toEqual([]);
+        expect(offeredBulkActionLabels()).not.toContain('Fix');
     });
 
     it('keeps the count and the clear control when nothing configured applies', async () => {
@@ -940,6 +943,9 @@ describe('selecting several PRs & Issues rows', () => {
                 }],
             },
         });
+        for (const action of TRIAGE_DEFAULT_ACTIONS_V1) {
+            expect(await harness.deleteAction(action.actionId)).toMatchObject({ status: 'applied' });
+        }
         await mountShell(harness);
 
         await chooseRow('Replace the duplicated normalizer');
@@ -1298,7 +1304,10 @@ describe('selecting several PRs & Issues rows', () => {
         expect(document.body.textContent).toContain('2 started, 0 unconfirmed, 0 not started, 0 could not be used');
     });
 
-    it.each(['ui', 'agent'])('lets the %s caller retry only unfinished per-entry units with their original creation key', async (caller) => {
+    it.each([
+        { caller: 'ui', deleted: false }, { caller: 'agent', deleted: false },
+        { caller: 'ui', deleted: true }, { caller: 'agent', deleted: true },
+    ] as const)('lets the $caller caller retry only offered unfinished per-entry units (deleted: $deleted)', async ({ caller, deleted }) => {
         const harness = createHarness({
             failSpawnAttempt: 2,
             actions: {
@@ -1332,11 +1341,19 @@ describe('selecting several PRs & Issues rows', () => {
         const unfinishedCreationKey = (harness.spawnInputs[1] as { creationKey: string }).creationKey;
         const retry = await shell.getByRole('button', { name: 'Try again' });
 
+        if (deleted) expect(await harness.deleteAction('send-each')).toMatchObject({ status: 'applied' });
+
         await act(async () => {
             if (caller === 'ui') await shell.press(retry);
             else expect(await invokeMounted({ kind: 'retryRun' })).toEqual({ status: 'applied' });
         });
         await settle();
+
+        if (deleted) {
+            expect(harness.spawnInputs).toHaveLength(2);
+            expect(harness.wasRetired).toBe(false);
+            return;
+        }
 
         expect(harness.spawnInputs).toHaveLength(3);
         expect((harness.spawnInputs[2] as { creationKey: string }).creationKey).toBe(unfinishedCreationKey);

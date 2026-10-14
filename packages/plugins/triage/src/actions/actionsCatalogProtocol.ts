@@ -51,6 +51,8 @@ export type TriageReadActionsInputV1 = ReturnType<typeof TriageReadActionsInputV
  * build cannot read, which is a different statement from "you configured no
  * actions", and presenting it as the latter is what would invite a write that
  * destroys it.
+ * Readable stored catalogs append missing built-ins; an empty stored array
+ * means no custom actions. Built-in deletion persists its disabled row.
  */
 const TriageActionsAvailabilityV1Schema = defineProtocolUnion([
     defineProtocolLiteral('absent'),

@@ -21,10 +21,14 @@ import { TRIAGE_START_PULL_REQUEST_REVIEW_ACTION_LOCAL_ID_V1, TriageStartPullReq
 import { createTriageStartPullRequestReviewActionHandler } from '../../actions/entrySession.js';
 import type { TriagePendingPullRequestReviewV1 } from './useEntrySessionStart.js';
 import { TriagePullRequestReviewChooser } from './PullRequestReviewChooser.js';
+import { readTriageActionsForSurface } from '../../actions/actionsCatalog.js';
+import { mutateTriageAction, TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1 } from '../../settings/actions.js';
+import { createTestkitAccountKv } from '../../settings/testkit/accountKv.test-support.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const PENDING = Object.freeze({
+  actionId: 'fix',
   sessionId: 'session-review',
   instructions: 'Review the exact selected pull request.',
   comparisonSource: {
@@ -74,6 +78,14 @@ const PENDING = Object.freeze({
 
 const mounted: PluginUiTestkit[] = [];
 
+function createReviewCatalog() {
+  return createTestkitAccountKv({ [TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1]: { v: 1, actions: [{
+    actionId: PENDING.actionId, label: 'Review', enabled: true, appliesTo: ['pullRequest'],
+    profileId: null, workspaceMode: 'pull_request',
+    target: { kind: 'reviewStart', promptInvocationId: null, seededFallbackInstruction: PENDING.instructions },
+  }] } });
+}
+
 async function settle(): Promise<void> {
   for (let turn = 0; turn < 8; turn += 1) {
     await act(async () => { await Promise.resolve(); });
@@ -85,7 +97,8 @@ async function mountChooser(executeAction: (
   input: unknown,
 ) => Promise<unknown>, selectActionInput: (
   request: SelectActionInputRequest,
-) => Promise<SelectActionInputResult> = async () => ({ kind: 'executionRunLaunch', input: {} })): Promise<Readonly<{
+) => Promise<SelectActionInputResult> = async () => ({ kind: 'executionRunLaunch', input: {} }),
+catalog = createReviewCatalog()): Promise<Readonly<{
   fixture: PluginUiTestkit;
   focusedLabels: readonly string[];
 }>> {
@@ -123,7 +136,9 @@ async function mountChooser(executeAction: (
       },
     }),
     handlers: {
-      executeAction: async ({ action, input }) => await executeAction(String(action), input),
+      executeAction: async ({ action, input }) => action === 'actions/read-v1'
+        ? await readTriageActionsForSurface({ v: 1 }, { catalog: catalog.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1) })
+        : await executeAction(String(action), input),
       selectActionInput: async ({ request }) => await selectActionInput(request),
     },
   });
@@ -346,9 +361,10 @@ describe('the mounted selected-PR review chooser', () => {
    * refused half; repeating the whole selection would start the successful half
    * twice.
    */
-  it('keeps a partly started review visible and retries only the engines that did not start', async () => {
+  it.each([false, true])('keeps a partly started review visible and retries only offered engines (disabled: %s)', async (disabled) => {
     const startRequests: unknown[] = [];
     const calls: string[] = [];
+    const catalog = createReviewCatalog();
     const { fixture } = await mountChooser(async (action, input) => {
       calls.push(action);
       if (action === 'review.engines.list') {
@@ -368,7 +384,7 @@ describe('the mounted selected-PR review chooser', () => {
       }
       if (action === 'session.open') return null;
       throw new Error(`Unexpected action ${action}`);
-    });
+    }, undefined, catalog);
 
     await fixture.press(await fixture.getByRole('checkbox', { name: 'Codex' }));
     await fixture.press(await fixture.getByRole('checkbox', { name: 'Claude' }));
@@ -379,8 +395,20 @@ describe('the mounted selected-PR review chooser', () => {
     expect(calls).not.toContain('session.open');
     await expect(fixture.getByRole('button', { name: 'Try again' })).resolves.toBeDefined();
 
+    if (disabled) {
+      expect(await mutateTriageAction({ catalog: catalog.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), mintActionId: () => 'unused' }, {
+        kind: 'delete', actionId: PENDING.actionId, expectedRevision: catalog.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
+      })).toMatchObject({ status: 'applied' });
+    }
+
     await fixture.press(await fixture.getByRole('button', { name: 'Try again' }));
     await settle();
+
+    if (disabled) {
+      expect(startRequests).toHaveLength(1);
+      expect(calls).not.toContain('session.open');
+      return;
+    }
 
     expect(startRequests).toHaveLength(2);
     expect(startRequests[0]).toMatchObject({ engineIds: ['codex', 'claude'] });
