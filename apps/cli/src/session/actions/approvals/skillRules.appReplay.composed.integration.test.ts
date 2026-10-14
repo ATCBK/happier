@@ -23,6 +23,7 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { describeApprovalRequestFields } from '@happier-dev/protocol/actions';
+import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema, McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { skillFileFromBytesV1 } from '@happier-dev/protocol/prompts/library/skills/skillZipV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
@@ -156,6 +157,61 @@ describe('CLI skill-rule approval replayed by the app', () => {
           const content = openPromptLibraryContentV1({ key: 'skill-rules', content: restored.content, mode: 'plain', material: null });
           if (content.status !== 'opened' || content.record.key !== 'skill-rules') throw new Error('Restored rules row unreadable');
           expect(content.record.value.rules.filter(rule => rule.skillId === skill.skillId)).toEqual([]);
+        }
+        // The same production CLI/app wiring owns MCP approval replay. Only the
+        // authenticated HTTP boundary is forwarded; catalog policy/CAS stays real.
+        const mcpId = `review-mcp-${miswired}`;
+        await expect(createActionExecutor({ ...deps, isActionApprovalRequired: () => false }).execute('mcp.servers.create', {
+          expectedRevision: 'absent', entry: { id: mcpId, name: `review_${miswired}`, title: 'Issue tracker', transport: 'stdio',
+            stdio: { command: 'issue-mcp', args: ['--workspace', 'team'] }, env: {}, createdAt: 1, updatedAt: 1 },
+          where: { kind: 'replace', rules: [] },
+        }, { surface: 'cli', authority: 'account_automation' })).resolves.toMatchObject({ ok: true, result: { status: 'updated' } });
+        const mcpInput = getActionSpec('mcp.servers.tools.set').inputSchema.parse({ serverId: mcpId, tools: { delete_issue: 'allow' } });
+        const mcpProposed = await cli.execute('mcp.servers.tools.set', mcpInput, { surface: 'cli', authority: 'account_automation',
+          serverId: profileId, runtimeAccountId: account.id, defaultSessionMachineId: machineId,
+          actionCaller: { kind: 'host' }, actionRequestId: `cli-mcp-${miswired}` });
+        expect(mcpProposed).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        if (!mcpProposed.ok || !mcpProposed.result || typeof mcpProposed.result !== 'object' || !('artifactId' in mcpProposed.result)
+          || typeof mcpProposed.result.artifactId !== 'string') throw new Error('Missing MCP approval');
+        const mcpArtifactId = mcpProposed.result.artifactId;
+        const mcpStored = ApprovalRequestV2Schema.parse(await deps.approvalsGet!({ artifactId: mcpArtifactId }));
+        const pendingMcp = describeApprovalRequestFields(mcpStored);
+        expect(pendingMcp.rows).toContainEqual(expect.objectContaining({ title: 'MCP server', reference: { kind: 'mcpServer', id: mcpId } }));
+        expect(JSON.stringify(pendingMcp)).toContain('delete_issue');
+        expect(JSON.stringify(pendingMcp)).toContain('Allow');
+        for (const path of [`/v1/artifacts/${mcpArtifactId}`, `/v1/artifacts/${mcpArtifactId}/recipients`, `/v1/artifacts/${mcpArtifactId}/content`]) {
+          homes.answer(profileId!, path, { select: async input => {
+            const response = await request(path, input === null ? undefined : { method: 'POST', body: JSON.stringify(input) });
+            return { status: response.status, body: await response.json() };
+          } });
+        }
+        const mcpWriteStatuses: number[] = [];
+        homes.answer(profileId!, MCP_SERVER_CATALOG_ROWS_ROUTE_V1, { select: async input => {
+          const response = await request(MCP_SERVER_CATALOG_ROWS_ROUTE_V1, input === null ? undefined
+            : { method: 'POST', body: JSON.stringify(miswired ? {} : input) });
+          if (input !== null) mcpWriteStatuses.push(response.status);
+          return { status: response.status, body: await response.json() };
+        } });
+        const mcpDecided = await appExecutor.execute('approval.request.decide', { artifactId: mcpArtifactId, decision: 'approve' }, { surface: 'ui', serverId: profileId });
+        const readMcp = async () => {
+          const row = McpServerCatalogRowReadResponseV1Schema.parse(await (await request(MCP_SERVER_CATALOG_ROWS_ROUTE_V1)).json());
+          if (row.status !== 'present' || row.content.t !== 'plain') throw new Error('MCP catalog unavailable');
+          return McpServerCatalogV1Schema.parse(row.content.v).servers.find(server => server.id === mcpId);
+        };
+        if (miswired) {
+          expect(mcpDecided).toMatchObject({ ok: true, result: { execution: { result: { ok: false } } } });
+          expect(mcpWriteStatuses).toContain(400);
+          expect((await readMcp())?.tools?.overrides?.delete_issue).toBeUndefined();
+        } else {
+          expect(mcpDecided, JSON.stringify(mcpDecided)).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+          expect((await readMcp())?.tools?.overrides.delete_issue).toBe('allow');
+          const settledMcp = ApprovalRequestV2Schema.parse(await deps.approvalsGet!({ artifactId: mcpArtifactId }));
+          expect(describeApprovalRequestFields(settledMcp)).toEqual(pendingMcp);
+          await expect(appExecutor.execute('approval.request.decide', { artifactId: mcpArtifactId, decision: 'approve' }, { surface: 'ui', serverId: profileId }))
+            .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+          await expect(appExecutor.execute('mcp.servers.tools.set', { serverId: mcpId, tools: { delete_issue: 'inherit' } }, { surface: 'ui', serverId: profileId }))
+            .resolves.toMatchObject({ ok: true });
+          expect((await readMcp())?.tools?.overrides.delete_issue).toBeUndefined();
         }
       });
     } finally {
