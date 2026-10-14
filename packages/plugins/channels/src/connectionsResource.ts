@@ -10,7 +10,7 @@ import {
   CHANNEL_STATE_INDEX_ID,
   CHANNEL_STATE_RECORD_KIND,
 } from './collections.js';
-import { readConversationConnectionManagementRows } from './accountLocalBindingPolicy.js';
+import { readConversationConnectionManagementRows, type ConversationConnectionManagementRow } from './accountLocalBindingPolicy.js';
 import {
   readConversationOutwardDeliveryConnectionAttention,
 } from './outwardDelivery.js';
@@ -24,10 +24,22 @@ async function readConnectionsResource(
     collection: accountStorage.collection(CHANNEL_STATE_COLLECTION),
     signal: options.signal,
   });
+  return JSON.stringify({ connections: await projectConversationConnectionDeliveryAttention({
+    connections: connectionRows.connections,
+    deliveriesCollection: accountStorage.collection(CHANNEL_DELIVERIES_COLLECTION), signal: options.signal,
+  }) });
+}
+
+/** Resource snapshots and management pages share the same custody-status projection. */
+export async function projectConversationConnectionDeliveryAttention(input: Readonly<{
+  connections: readonly ConversationConnectionManagementRow[];
+  deliveriesCollection: Parameters<typeof readConversationOutwardDeliveryConnectionAttention>[0]['deliveriesCollection'];
+  signal: AbortSignal;
+}>) {
   const deliveryAttention = await readConversationOutwardDeliveryConnectionAttention({
-    deliveriesCollection: accountStorage.collection(CHANNEL_DELIVERIES_COLLECTION),
-    signal: options.signal,
-    connectionIds: connectionRows.connections.map((row) => row.connectionId),
+    deliveriesCollection: input.deliveriesCollection,
+    signal: input.signal,
+    connectionIds: input.connections.map((row) => row.connectionId),
   });
   if (deliveryAttention.kind === 'unavailable') {
     throw new PluginError({
@@ -36,8 +48,7 @@ async function readConnectionsResource(
     });
   }
 
-  return JSON.stringify({
-    connections: connectionRows.connections.map((connection) => {
+  return input.connections.map((connection) => {
       const outwardDelivery = deliveryAttention.attentionByConnection.get(connection.connectionId);
       if (outwardDelivery === undefined) {
         throw new PluginError({
@@ -52,8 +63,7 @@ async function readConnectionsResource(
           outwardDelivery,
         },
       };
-    }),
-  });
+    });
 }
 
 /**

@@ -9,6 +9,9 @@ import {
 } from './collections.js';
 import { CONNECTIONS_RESOURCE_RUNTIME } from './connectionsResource.js';
 import { resourceText } from './testkit/resourceContract.js';
+import { PLUGIN_MANIFEST } from './manifest.js';
+import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
+import { parseConnection } from './ui/conversationRows.js';
 import {
   createConversationOutwardDeliveryCollectionStore,
   type ConversationOutwardDeliveryObligation,
@@ -147,7 +150,7 @@ describe('Channels connections Resource invalidation', () => {
       providerSetupInput: { source: 'connections-resource' },
       credentialRef: null,
       transportOrigin: {
-        serverIdentityId: 'server-1',
+        serverIdentityId: 'srv_connections_resource',
         materializationRef: {
           pluginId: 'example.channel.provider',
           machineId: 'machine-1',
@@ -253,6 +256,33 @@ describe('Channels connections Resource invalidation', () => {
       })],
     });
     expect(serialized).not.toContain('must-not-project');
+
+    // Real retained rows -> paged reader -> Resource -> UI reader, above the
+    // former aggregate budget and thirty-day freshness ceiling.
+    const validates = compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema);
+    for (let index = 0; index < 512; index += 1) {
+      const connectionId = `long-lived-connection-${index}`;
+      const value = { ...connection, id: connectionId, 'connection-id': connectionId,
+        payload: { ...connection.payload, maximumObservationAgeMs: 31 * 86_400_000,
+          recommendedMaximumObservationAgeMs: 31 * 86_400_000 } };
+      expect(isValidPluginJsonSchemaValue(validates, value)).toBe(true);
+      await state.put(value, { expectedRevision: 'absent' });
+    }
+    const largeProjection = resourceText(await CONNECTIONS_RESOURCE_RUNTIME.read({
+      signal, context: { kind: 'global' }, accountStorage,
+    }));
+    expect(new TextEncoder().encode(largeProjection).byteLength).toBeGreaterThan(196_608);
+    const parsed: unknown = JSON.parse(largeProjection);
+    if (parsed === null || typeof parsed !== 'object' || !('connections' in parsed) || !Array.isArray(parsed.connections)) {
+      throw new Error('Expected a connection Resource projection.');
+    }
+    expect(parsed.connections).toHaveLength(513);
+    expect(parsed.connections.map(parseConnection).every(value => value !== undefined)).toBe(true);
+    for (const id of ['connections-v1', 'pairing-v1']) {
+      const declared = PLUGIN_MANIFEST.contributes?.resources?.find(resource => resource.id === id);
+      expect(declared).toBeDefined();
+      expect(declared?.maxBytes).toBeUndefined();
+    }
   });
 
   it('invalidates its current snapshot when retained outward custody settles without introducing an event broker', () => {

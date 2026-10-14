@@ -391,19 +391,41 @@ type ChannelDeliveriesCollection = Pick<
 
 /**
  * The privacy-safe projection used by mounted management UI. It deliberately
- * keeps endpoint, content, provider evidence, and delivery identity inside the
- * Account envelope while exposing only the exact CAS facts for a resolution.
+ * keeps content, provider evidence, and delivery identity inside the Account
+ * envelope, exposing CAS facts and the parent required to confirm a new thread.
  */
 export type ConversationOutwardDeliveryResolutionRow = Readonly<{
   custodyId: string;
   revision: number;
   state: 'partial' | 'outcomeUnknown' | 'archiveRecoverable';
+  createdThreadEndpointRequired?: Readonly<{ parentId: string }>;
 }>;
 
 export type ConversationOutwardDeliveryResolutionPage = Readonly<{
   rows: readonly ConversationOutwardDeliveryResolutionRow[];
   nextCursor?: string;
 }>;
+
+export type ConversationOutwardDeliveryDetailResult =
+  | Readonly<{ kind: 'notFound' }>
+  | Readonly<{ kind: 'ready'; delivery: Readonly<{
+    custodyId: string;
+    revision: number;
+    connectionId: string;
+    bindingId?: string;
+    state: ConversationDeliveryCustody['state'];
+    projection: ReturnType<typeof deriveConversationDeliveryProjection>;
+    lastOutcome: ReturnType<typeof deriveConversationDeliveryLastOutcome>;
+    createdThreadEndpointRequired?: Readonly<{ parentId: string }>;
+  }> }>;
+
+function createdThreadEndpointRequirement(record: ConversationOutwardDeliveryRecord): Readonly<{
+  createdThreadEndpointRequired?: Readonly<{ parentId: string }>;
+}> {
+  return record.obligation.newThread !== undefined && record.custody.endpoint === undefined
+    ? { createdThreadEndpointRequired: { parentId: record.obligation.endpoint.id } }
+    : {};
+}
 
 function resolutionError(code: string, message: string, retryable = false): PluginError {
   return new PluginError({ code, message, retryable });
@@ -1020,12 +1042,50 @@ export async function readConversationOutwardDeliveryResolutionPage(input: Reado
       custodyId: record.custodyId,
       revision: record.revision,
       state,
+      ...createdThreadEndpointRequirement(record),
     });
   }
   return {
     rows,
     ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
   };
+}
+
+/** Reads current delivery status and recovery facts through the same custody parser. */
+export async function readConversationOutwardDeliveryDetail(input: Readonly<{
+  deliveriesCollection: Pick<ChannelDeliveriesCollection, 'get'>;
+  custodyId: string;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+}>): Promise<ConversationOutwardDeliveryDetailResult> {
+  assertDeliveryResolutionCurrent(input);
+  let collections: ConversationCollectionsModule;
+  let row: StoredCollectionRow | null;
+  try {
+    collections = await loadConversationCollectionsModule();
+    assertDeliveryResolutionCurrent(input);
+    row = await input.deliveriesCollection.get(input.custodyId,
+      input.signal === undefined ? undefined : { signal: input.signal }) as unknown as StoredCollectionRow | null;
+  } catch {
+    assertDeliveryResolutionCurrent(input);
+    throw resolutionError('channels_delivery_read_unavailable', 'Delivery details are temporarily unavailable.', true);
+  }
+  assertDeliveryResolutionCurrent(input);
+  if (row === null) return { kind: 'notFound' };
+  const record = readConversationOutwardDeliveryRecord({ collections, row });
+  if (record === null || record.custodyId !== input.custodyId) {
+    throw resolutionError('channels_delivery_read_foreign', 'Delivery details did not match the current Account custody.');
+  }
+  return { kind: 'ready', delivery: {
+    custodyId: record.custodyId,
+    revision: record.revision,
+    connectionId: record.obligation.connectionId,
+    ...(record.obligation.bindingId === undefined ? {} : { bindingId: record.obligation.bindingId }),
+    state: record.custody.state,
+    projection: deriveConversationDeliveryProjection(record.custody),
+    lastOutcome: deriveConversationDeliveryLastOutcome(record.custody),
+    ...createdThreadEndpointRequirement(record),
+  } };
 }
 
 /**

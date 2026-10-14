@@ -129,6 +129,11 @@ async function listPluginSourceUrls(directory: URL): Promise<readonly URL[]> {
 describe('Channels core manifest', () => {
   it('makes every management Action requestable by agents and MCP without changing confirmation policy', () => {
     const observational = new Set<string>([
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionList,
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingList,
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.ingressAttention,
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.deliveryAttention,
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.deliveryRead,
       CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
       CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionRetest,
       CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead,
@@ -530,7 +535,6 @@ describe('Channels core manifest', () => {
         // artifact already carried.
         scope: 'global',
         contentType: 'application/json',
-        maxBytes: 196_608,
         hostAccess: ['account-storage'],
       },
       {
@@ -553,7 +557,6 @@ describe('Channels core manifest', () => {
         // artifact already carried.
         scope: 'global',
         contentType: 'application/json',
-        maxBytes: 524_288,
         hostAccess: ['account-storage'],
       },
       {

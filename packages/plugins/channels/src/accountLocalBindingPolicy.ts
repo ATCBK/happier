@@ -755,13 +755,29 @@ export async function readConversationConnectionManagementRows(input: Readonly<{
   const connections: ConversationConnectionManagementRow[] = [];
   let cursor: string | undefined;
   do {
+    const page = await readConversationConnectionManagementPage({ ...input, cursor });
+    connections.push(...page.connections);
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
+  assertCurrent(input, 'channels_connection_update');
+  return { connections };
+}
+
+/** Paged access to the same privacy-safe connection projection. */
+export async function readConversationConnectionManagementPage(input: Readonly<{
+  collection: Pick<ChannelStateBindingCollection, 'query'>;
+  cursor?: string;
+  limit?: number;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+}>): Promise<Readonly<{ connections: readonly ConversationConnectionManagementRow[]; nextCursor?: string }>> {
     assertCurrent(input, 'channels_connection_update');
     const page = await input.collection.query({
       index: CHANNEL_STATE_INDEX_ID.byKind,
       prefix: [CHANNEL_STATE_RECORD_KIND.connection],
       order: 'asc',
-      limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
-      ...(cursor === undefined ? {} : { cursor }),
+      limit: input.limit ?? PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
+      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
     }, input.signal === undefined ? undefined : { signal: input.signal });
     assertCurrent(input, 'channels_connection_update');
     const projected = await Promise.all(page.rows.map(async (row) => {
@@ -780,11 +796,7 @@ export async function readConversationConnectionManagementRows(input: Readonly<{
         },
       };
     }));
-    connections.push(...projected);
-    cursor = page.nextCursor;
-  } while (cursor !== undefined);
-  assertCurrent(input, 'channels_connection_update');
-  return { connections };
+    return { connections: projected, ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) };
 }
 
 /**
@@ -1031,17 +1043,39 @@ export async function readConversationBindingManagementRows(input: Readonly<{
   const bindings: ConversationBindingManagementRow[] = [];
   let cursor: string | undefined;
   do {
+    const page = await readConversationBindingManagementPage({ ...input, cursor });
+    bindings.push(...page.bindings);
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
+  return { bindings };
+}
+
+/** Filtering never consumes a continuation cursor or creates a second read model. */
+export async function readConversationBindingManagementPage(input: Readonly<{
+  collection: ChannelStateBindingCollection;
+  cursor?: string;
+  limit?: number;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+  sessionId?: string;
+  automationId?: string;
+  connectionId?: string;
+  parentBindingId?: string;
+}>): Promise<Readonly<{ bindings: readonly ConversationBindingManagementRow[]; nextCursor?: string }>> {
+    const bindings: ConversationBindingManagementRow[] = [];
     assertCurrent(input);
     const page = await input.collection.query({
       index: CHANNEL_STATE_INDEX_ID.byKind,
       prefix: [CHANNEL_STATE_RECORD_KIND.binding],
       order: 'asc',
-      limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
-      ...(cursor === undefined ? {} : { cursor }),
+      limit: input.limit ?? PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
+      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
     }, input.signal === undefined ? undefined : { signal: input.signal });
     assertCurrent(input);
     for (const row of page.rows) {
       const current = readConversationBindingManagementCurrentRow(row);
+      if (input.connectionId !== undefined && current.binding.connectionId !== input.connectionId) continue;
+      if (input.parentBindingId !== undefined && current.binding.parentBindingId !== input.parentBindingId) continue;
       if (input.sessionId !== undefined
         && (current.binding.target.kind !== 'session'
           || current.binding.target.sessionId !== input.sessionId)) {
@@ -1054,9 +1088,7 @@ export async function readConversationBindingManagementRows(input: Readonly<{
       }
       bindings.push(projectConversationBindingManagementRow(row, current));
     }
-    if (page.nextCursor === undefined) return { bindings };
-    cursor = page.nextCursor;
-  } while (true);
+    return { bindings, ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) };
 }
 
 /**
