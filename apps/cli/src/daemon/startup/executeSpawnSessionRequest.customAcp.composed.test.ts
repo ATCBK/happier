@@ -203,6 +203,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
     const lifetime = new AbortController();
     try {
       const invocation = await createServices({ binding, sessionId: 'cdf41resources000000000001',
+        runnerSnapshotIdentity: `path:${process.cwd()}`,
         correlationId: 'df41-retained-resource', cwd: storage.home, environment: {},
         providerBindingActive: false, signal: lifetime.signal, isOccurrenceCurrent: () => true });
       const resource = await invocation.services.resources.read('brand-icon');
