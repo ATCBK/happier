@@ -1,6 +1,8 @@
 import * as React from 'react';
 import type { FrameRect } from '@happier-dev/plugin-ui/presentation';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { readSessionComposerPresentationTargetAtAddress } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 
 import {
   createSessionViewerPresenceStore,
@@ -49,7 +51,7 @@ export function SessionViewerControllerProvider(
   const inputRef = React.useRef(props);
   inputRef.current = props;
 
-  const executeAction = React.useMemo(() => createFrontDoorActionExecute(), []);
+  const { binding: accountBinding } = useServerCredentialAccountScopeBinding(props.serverId);
   const semanticScope = React.useMemo(() => ({ lifetime: new AbortController() }), [props.sessionId, props.serverId]);
   React.useEffect(() => {
     // Strict-effects replay restarts this mounted lifecycle, not a retired scope's callbacks.
@@ -57,16 +59,6 @@ export function SessionViewerControllerProvider(
     const lifetime = semanticScope.lifetime;
     return () => lifetime.abort();
   }, [semanticScope]);
-  const requestSemantic = React.useCallback<SessionViewerController['requestSemantic']>((intent) => {
-    const signal = semanticScope.lifetime.signal;
-    if (!props.serverId || signal.aborted) {
-      return Promise.resolve({ ok: false, errorCode: 'current_session_presentation_not_current', error: 'current_session_presentation_not_current' });
-    }
-    return executeAction('session.presentation.apply', { intent }, {
-      surface: 'ui', serverId: props.serverId, defaultSessionId: props.sessionId, signal,
-    });
-  }, [executeAction, props.serverId, props.sessionId, semanticScope]);
-
   const applyPresentation = React.useCallback((intent: SessionViewerLocalIntent) => {
     const { phone, canPresentSource, openDocked } = inputRef.current;
     const next = resolveSessionViewerPresentation(stateRef.current, intent, {
@@ -89,6 +81,39 @@ export function SessionViewerControllerProvider(
     }
     return next.result;
   }, []);
+  const executeAction = React.useMemo(() => createFrontDoorActionExecute(undefined, accountBinding ? {
+    currentSessionPresentationApply: {
+      serverId: accountBinding.serverId,
+      accountId: accountBinding.accountId,
+      sessionId: props.sessionId,
+      isCurrent: () => accountBinding.isCurrent() && !semanticScope.lifetime.signal.aborted,
+      apply: async ({ input, signal }) => {
+        signal?.throwIfAborted();
+        switch (input.intent.kind) {
+          case 'viewer.open': case 'viewer.close': case 'viewer.source.select': case 'viewer.expand': case 'viewer.restore': {
+            const outcome = applyPresentation(input.intent);
+            if (outcome.status === 'applied' || outcome.status === 'unchanged') {
+              const target = readSessionComposerPresentationTargetAtAddress({ serverId: accountBinding.serverId, sessionId: props.sessionId });
+              return { status: outcome.status, revision: String(target?.revision ?? 0) };
+            }
+            const errorCode = outcome.status === 'invalidTarget' ? 'current_session_presentation_invalid_target'
+              : outcome.status === 'notCurrent' ? 'current_session_presentation_not_current' : 'target_unavailable';
+            return { ok: false, errorCode, error: errorCode };
+          }
+          default: return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+        }
+      },
+    },
+  } : undefined), [accountBinding, applyPresentation, props.sessionId, semanticScope]);
+  const requestSemantic = React.useCallback<SessionViewerController['requestSemantic']>((intent) => {
+    const signal = semanticScope.lifetime.signal;
+    if (!props.serverId || !accountBinding?.isCurrent() || signal.aborted) {
+      return Promise.resolve({ ok: false, errorCode: 'current_session_presentation_not_current', error: 'current_session_presentation_not_current' });
+    }
+    return executeAction('session.presentation.apply', { intent }, {
+      surface: 'ui', serverId: props.serverId, defaultSessionId: props.sessionId, signal,
+    });
+  }, [accountBinding, executeAction, props.serverId, props.sessionId, semanticScope]);
   const apply: SessionViewerController['apply'] = applyPresentation;
   const setRect = React.useCallback((rect: FrameRect | null) => {
     const current = stateRef.current;

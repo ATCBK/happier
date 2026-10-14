@@ -20,20 +20,10 @@ import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/pr
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
-const actionModuleLoader = vi.hoisted(() => ({
-  createDefaultExecutor: null as typeof import('@/sync/ops/actions/defaultActionExecutor').createDefaultActionExecutor | null,
-}));
-// Metro's call-time require is a module-loading boundary absent in Vitest.
-// Supply the actual loaded executor through the original factory's supported
-// injection port; no executor, policy, replay or mounted runtime is replaced.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-  return { ...actual, createFrontDoorActionExecute: (
-    executor?: Parameters<typeof actual.createFrontDoorActionExecute>[0],
-    options?: Parameters<typeof actual.createFrontDoorActionExecute>[1],
-  ) => actual.createFrontDoorActionExecute(executor ?? actionModuleLoader.createDefaultExecutor?.(options), options) };
-});
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('@/utils/platform/responsive', () => ({ useDeviceType: () => 'desktop' }));
 
 const home = createHomeGovernanceHarness();
 // The device's transactional record store is an external browser boundary;
@@ -45,6 +35,7 @@ let boundClientId = '';
 let revision = 0;
 let publish: (state: CurrentSessionPresentationStateV1) => void;
 let settle: ((value: unknown) => void) | null = null;
+let sessionRpcAvailable = true;
 
 // The Home/daemon network is the boundary. Its bounded command and ACK use
 // the real mounted UI runtime, exact-address target and viewer reducer below.
@@ -62,6 +53,7 @@ installDisconnectedServerSocketBoundary((socket) => {
       }) };
     }
     if (method === 'session.presentation.apply') {
+      if (!sessionRpcAvailable) return { ok: false, error: 'session_rpc_unavailable', errorCode: 'session_rpc_unavailable' };
       const { intent } = CurrentSessionPresentationActionInputV1Schema.parse(payload.params);
       return await new Promise((resolve) => {
         settle = resolve;
@@ -83,25 +75,28 @@ installDisconnectedServerSocketBoundary((socket) => {
 });
 
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-actionModuleLoader.createDefaultExecutor = createDefaultActionExecutor;
 const { storage } = await import('@/sync/domains/state/storage');
+const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
 const { profileDefaults } = await import('@/sync/domains/profiles/profile');
 const { FeedResponseSchema } = await import('@/sync/domains/social/feedTypes');
 const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
 const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
 const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
+const { flushHookEffects } = await import('@/dev/testkit/hooks/flushHookEffects');
 const { standardCleanup } = await import('@/dev/testkit/cleanup/standardCleanup');
 const { CurrentSessionPresentationRuntime } = await import('../presentation/CurrentSessionPresentationRuntime');
 const { registerSessionPresentationOnlyTarget } = await import('../presentation/sessionComposerPresentationTargets');
 const { setFocusedSessionId, resetSessionSurfaceVisibilityForTests } = await import('@/sync/domains/session/sessionSurfaceVisibility');
 const { useOptionalSessionViewerController } = await import('./SessionViewerController');
 const { SessionViewerControllerProvider } = await import('./SessionViewerControllerProvider');
+const { SessionHeaderComputerButton } = await import('../actions/SessionHeaderComputerButton');
 const initialState = storage.getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let boundarySnapshot: unknown;
 
 describe('Session viewer semantic Action ingress', () => {
-  beforeEach(async () => { await home.reset(); outgoing.length = 0; boundClientId = ''; revision = 0; settle = null; });
+  beforeEach(async () => { await home.reset(); outgoing.length = 0; boundClientId = ''; revision = 0; settle = null; sessionRpcAvailable = true; });
   afterEach(async () => {
     // Failure hooks run after teardown; retain the observed live owner first.
     boundarySnapshot = {
@@ -169,7 +164,9 @@ describe('Session viewer semantic Action ingress', () => {
     setFocusedSessionId('session-a', serverId);
     function Wrapper(props: React.PropsWithChildren) {
       return <SessionViewerControllerProvider sessionId="session-a" serverId={serverId} phone={false} canPresentSource={() => true} openDocked={() => undefined}>
-        <CurrentSessionPresentationRuntime />{props.children}
+        <CurrentSessionPresentationRuntime />
+        <SessionHeaderComputerButton sessionId="session-a" serverId={serverId} />
+        {props.children}
       </SessionViewerControllerProvider>;
     }
     stage = 'mounted owner';
@@ -184,9 +181,30 @@ describe('Session viewer semantic Action ingress', () => {
       },
     });
     let unmounted = false;
+    const pressHeader = async () => {
+      await act(async () => hook.tree.root.findByProps({ testID: 'session-header-computer-button' }).props.onPress());
+      await flushHookEffects();
+    };
+    const setPresentationPolicy = async (enabled: boolean) => {
+      const current = storage.getState();
+      const scope = current.settingsScope;
+      if (!scope) throw new Error('Expected mounted Account settings scope');
+      const settings = { ...current.settings,
+        actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: { 'session.presentation.apply': { enabled } } }),
+      };
+      const version = (loadAccountSettings(scope).version ?? 0) + 1;
+      home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version } });
+      await act(async () => current.applySettingsForScope(scope, settings, version));
+    };
     try {
       stage = 'exact binding';
       await waitForHomeGovernance(() => expect(boundClientId).not.toBe(''));
+      stage = 'offline header disabled policy';
+      await setPresentationPolicy(false);
+      await pressHeader();
+      expect(hook.getCurrent().state.mode).toBe('closed');
+      expect(await hook.getCurrent().requestSemantic({ kind: 'viewer.open', source: 'computer' })).toMatchObject({ ok: false });
+      await setPresentationPolicy(true);
       const execute = createDefaultActionExecutor();
       stage = 'literal Action command/ACK';
       const admitted = await act(async () => execute.execute('session.presentation.apply', {
@@ -206,21 +224,28 @@ describe('Session viewer semantic Action ingress', () => {
       ] as const) {
         stage = intent.kind;
         const result = await act(async () => hook.getCurrent().requestSemantic(intent));
-        expect(result).toMatchObject({ ok: true, result: { status: 'applied' } });
+        expect(result.ok && CurrentSessionPresentationActionResultV1Schema.parse(result.result), JSON.stringify(result)).toMatchObject({ status: 'applied' });
         expect(hook.getCurrent().state).toMatchObject(expected);
       }
       const count = outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply').length;
       stage = 'repeated semantic open';
       await act(async () => hook.getCurrent().requestSemantic({ kind: 'viewer.open', source: 'browser' }));
       expect(hook.getCurrent().state).toMatchObject({ mode: 'floating', source: 'browser' });
-      const afterUiOpen = count + 1;
+      stage = 'reachable Machine header';
+      const onlineMachine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
+      await act(async () => storage.setState({
+        machines: { 'machine-1': onlineMachine }, machineListByServerId: { [serverId]: [onlineMachine] },
+      }));
+      await pressHeader();
+      await waitForHomeGovernance(() => expect(hook.getCurrent().state).toMatchObject({ mode: 'floating', source: 'computer' }));
+      const afterUiOpen = count;
       await act(async () => hook.getCurrent().apply({ kind: 'viewer.dock' }));
       expect(hook.getCurrent().state.mode).toBe('docked');
       expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterUiOpen);
       stage = 'Ask policy';
       await home.requireUiApproval(serverId, 'session.presentation.apply');
       const deferred = await hook.getCurrent().requestSemantic({ kind: 'viewer.close' });
-      expect(deferred).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      expect(deferred, JSON.stringify(deferred)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
       expect(hook.getCurrent().state.mode).toBe('docked');
       expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterUiOpen);
       if (!deferred.ok || !deferred.result || typeof deferred.result !== 'object'
@@ -243,6 +268,27 @@ describe('Session viewer semantic Action ingress', () => {
       expect(approved).toMatchObject({ ok: true, result: { status: 'executed' } });
       expect(hook.getCurrent().state.mode).toBe('closed');
       const afterApproval = afterUiOpen + 1;
+      expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterApproval);
+
+      stage = 'offline header Ask policy';
+      sessionRpcAvailable = false;
+      const offlineMachine = createMachineFixture({ id: 'machine-1', active: false });
+      await act(async () => storage.setState({
+        machines: { 'machine-1': offlineMachine }, machineListByServerId: { [serverId]: [offlineMachine] },
+      }));
+      const artifactsBefore = home.requestsFor('/v1/artifacts').length;
+      await pressHeader();
+      expect(hook.getCurrent().state.mode).toBe('closed');
+      await waitForHomeGovernance(() => expect(home.requestsFor('/v1/artifacts').length).toBeGreaterThan(artifactsBefore));
+      expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterApproval);
+
+      stage = 'offline header open and Close without Session RPC';
+      await setPresentationPolicy(true);
+      await pressHeader();
+      await waitForHomeGovernance(() => expect(hook.getCurrent().state).toMatchObject({ mode: 'floating', source: 'computer' }));
+      const closed = await act(async () => hook.getCurrent().requestSemantic({ kind: 'viewer.close' }));
+      expect(closed.ok && CurrentSessionPresentationActionResultV1Schema.parse(closed.result)).toMatchObject({ status: 'applied' });
+      expect(hook.getCurrent().state.mode).toBe('closed');
       expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterApproval);
       const retiredRequest = hook.getCurrent().requestSemantic;
       unregister(); await hook.unmount(); unmounted = true;
