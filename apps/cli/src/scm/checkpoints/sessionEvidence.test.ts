@@ -51,9 +51,11 @@ describe('checkpoint/commit correspondence', () => {
       writeFileSync(join(cwd, 'a'), 'before\n'); git(['add', 'a']); git(['commit', '-m', 'initial']);
       const baseSha = git(['rev-parse', 'HEAD']);
       const scopeId = `session:${cwd}`;
-      const refs = buildRepositoryCheckpointRefs({ scopeId, turnId: 'turn' });
+      const refs = buildRepositoryCheckpointRefs({ scopeId, messageId: 'message', turnId: 'turn' });
       const context = { cwd, projectKey: 'repo', detection: { isRepo: true, rootPath: cwd, mode: '.git' as const } };
-      const before = await gitCheckpointAdapter.capture({ context, checkpointRef: refs.turnStart! });
+      const before = await gitCheckpointAdapter.capture({ context, checkpointRef: refs.messageStart! });
+      const startAlias = await gitCheckpointAdapter.alias({ context, sourceRef: refs.messageStart!, targetRef: refs.turnStart! });
+      if (!startAlias.success) throw new Error('Checkpoint alias failed');
       writeFileSync(join(cwd, 'a'), 'after\n');
       const after = await gitCheckpointAdapter.capture({ context, checkpointRef: refs.turnFinal! });
       if (!before.success || !after.success) throw new Error('Checkpoint capture failed');
@@ -61,7 +63,7 @@ describe('checkpoint/commit correspondence', () => {
         sessionId: 'session', turnId: 'turn', seqRange: { startSeqInclusive: 1, endSeqInclusive: 2 }, status: 'completed',
         files: [], provider: 'agent', derivedAt: 1, repositoryCheckpoint: { version: 1, scopeId,
           startRef: refs.turnStart!.ref, finalRef: refs.turnFinal!.ref, baseRefSource: 'turn_start',
-          contentConfidence: 'exact', attributionScope: 'shared_worktree', receipts: [...before.receipts, ...after.receipts] },
+          contentConfidence: 'exact', attributionScope: 'shared_worktree', receipts: [...before.receipts, ...startAlias.receipts, ...after.receipts] },
       } as const;
       await retainRepositoryCheckpointTurnEvidence({ cwd, scopeId, turnChangeSet });
       const directory = join(cwd, git(['rev-parse', '--git-path', 'happier/checkpoint-evidence']), encodeRepositoryCheckpointScope(scopeId));
@@ -98,6 +100,14 @@ describe('checkpoint/commit correspondence', () => {
         checkpointCommitSha: after.commitSha, commitSha, committedAtMs, attributionScope: 'shared_worktree',
       }]);
       expect(await readRepositoryCheckpointCommitEvidence({ ...input, sessionId: 'another-session' })).toEqual([]);
+      await retainRepositoryCheckpointTurnEvidence({ cwd, scopeId, turnChangeSet: { ...turnChangeSet,
+        repositoryCheckpoint: { ...turnChangeSet.repositoryCheckpoint, receipts: [
+          ...turnChangeSet.repositoryCheckpoint.receipts,
+          { ...startAlias.receipts[0], treeSha: after.treeSha },
+        ] },
+      } });
+      expect(await readRepositoryCheckpointCommitEvidence(input)).toEqual([]);
+      await retainRepositoryCheckpointTurnEvidence({ cwd, scopeId, turnChangeSet });
       const clone = join(cwd, 'other-repository');
       git(['clone', '--shared', cwd, clone]);
       await retainRepositoryCheckpointTurnEvidence({ cwd: clone, scopeId: `session:${clone}`, turnChangeSet });
