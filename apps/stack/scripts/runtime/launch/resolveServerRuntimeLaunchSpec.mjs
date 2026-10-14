@@ -51,7 +51,8 @@ export function resolveServerRuntimeLaunchSpec({ serverComponent, dbProvider, sn
   if (sourceRuntimeLaunch) {
     return { ...sourceRuntimeLaunch, command: process.execPath,
       args: [sourceRuntimeLaunch.entrypoint, ...(sourceRuntimeLaunch.args ?? [])],
-      migration: migrationsEnabled ? sourceRuntimeLaunch.migration ?? { mode: 'in-process' } : { mode: 'disabled' } };
+      migration: migrationsEnabled && !sourceRuntimeLaunch.lastGreen
+        ? sourceRuntimeLaunch.migration ?? { mode: 'in-process' } : { mode: 'disabled' } };
   }
   resolveAdmittedServerComponent({ serverComponent, snapshot });
   const runtimeRoot = snapshot.launchPath ?? snapshot.snapshotPath;

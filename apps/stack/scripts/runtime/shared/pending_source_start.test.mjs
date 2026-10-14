@@ -8,6 +8,31 @@ import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { runNodeCapture } from '../../testkit/core/run_node_capture.mjs';
 import { withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
 
+test('retiring a completed start cancels its queued background producer without cancelling the serving signal', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-source-background-retirement-' });
+  const start = await beginPendingSourceStart({ stackBaseDir: fixture.root });
+  const lockPath = fixture.path('producer.lock');
+  let queued;
+  const waiting = new Promise(resolve => { queued = resolve; });
+  let producerEntered = false;
+  let background;
+  t.after(() => start.dispose());
+  await withJsonOwnerFileLock(async () => {
+    background = start.prepareInBackground(signal => withJsonOwnerFileLock(async () => {
+      producerEntered = true;
+    }, { lockPath, signal, onWait: queued }));
+    void background.catch(() => {});
+    await Promise.race([waiting, background]);
+    await start.publish(async () => {});
+    await start.dispose();
+    await assert.rejects(background, { name: 'AbortError' });
+    assert.equal(producerEntered, false);
+    assert.equal(start.signal.aborted, false);
+    assert.equal(JSON.parse(await readFile(lockPath, 'utf8')).pid, process.pid,
+      'retirement must leave the independent producer owner untouched');
+  }, { lockPath });
+});
+
 test('a delegated process shares its parent start without superseding or retiring it', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-pending-source-delegated-', registerCleanup: false });
   const parent = await beginPendingSourceStart({ stackBaseDir: fixture.root });

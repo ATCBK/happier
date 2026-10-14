@@ -18,6 +18,7 @@ import { isDevStartupSourceDrift, prepareSourceComponent } from '../utils/dev/de
 import { captureBuildInputFiles, mountCapturedWorkspaceDependencies, readBuildInputIdentity, withBuildInputDependencies } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
 import { probeCliDistRuntimeImport } from '../utils/cli/cliDistIntegrity.mjs';
 import { retainPendingSourcePreparation, updatePendingSourcePreparationPhase } from '../runtime/shared/pending_source_start.mjs';
+import { readBundledPluginPackageResourceRelativePaths } from '../../../../packages/cli-common/bundledPluginResources.mjs';
 
 import { SOURCE_CONDITION, sourceExport, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths, packageNameOfSpecifier, readCliSourceEntries, createWorkspaceSourceResolver, bundleCliSourceSidecars, runtimePackageExports } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 export { readWorkspacePackages, resolveWorkspaceSource } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
@@ -185,7 +186,7 @@ async function emitSourceAuthorPackages({ repoDir, sourceRepoDir, projectDir, ru
         '--incremental','--noCheck'], {projectPath:join(bundle.srcDir,'tsconfig.json'),workDir:compilerDir,
         compilerOptions:{rootDir:repoDir,customConditions:[SOURCE_CONDITION],paths:sourcePaths,declaration:true,
           noEmit:false,emitDeclarationOnly:false}});
-      const invocation = resolveTypeScriptCliInvocation({args,workspaceDir:repoDir,admissionClass:'source-bundle'});
+      const invocation = resolveTypeScriptCliInvocation({args,workspaceDir:repoDir,admissionClass:'source-bundle',env});
       await runCapture(invocation.command, [...invocation.argsPrefix,...args], {cwd:repoDir,ownedProcessGroup:true,env,signal});
       const info = JSON.parse(await readFile(buildInfoPath, 'utf8'));
       for (const [index, file] of info.fileNames.entries()) {
@@ -427,40 +428,76 @@ async function adoptReusableSourceRuntimeBundle({ stackBaseDir, bundleRoot, comp
  * request prepares and retains shared candidates; its activation selects them.
  */
 export async function buildSourceRuntimeBundle(options) {
+  // A pending Stack start/reload is runtime-host startup work, just like dev
+  // construction. Select the existing startup admission policy here so every
+  // local/remote role shares it; standalone validation keeps capacity admission.
+  options = { devStartup: Boolean(options.preparation ?? options.pending), ...options };
   if (options.pending && (!options.stackBaseDir || !options.pending.requestId || options.reuseSelected)) {
     throw new Error('[source-bundle] pending preparation requires a Stack request and current-input lookup');
   }
-  if (options.stackBaseDir && options.reuseSelected) {
+  const readLastGreen = Boolean(options.devStartup && options.preparation && !options.pending && !options.reuseSelected);
+  const selection = options.reuseSelected || (readLastGreen ? 'if-available' : false);
+  if (options.stackBaseDir && selection) {
     const stackBaseDir = resolve(options.stackBaseDir);
     // Recovery and CLI commands read the pinned graph without consulting
     // moving source inputs or reserving source-build capacity.
-    const selectedBundle = await withJsonOwnerFileLock(() => readSelectedSourceRuntimeBundle({
-      stackBaseDir, component: options.component, required: options.reuseSelected !== 'if-available',
-    }), { lockPath: join(dirname(stackBaseDir), 'source-bundles/publication.lock'),
-      timeoutMs: Infinity, staleAfterMs: Infinity, signal: options.signal, errorLabel: 'source-bundle publication lock' });
+    const readSelected = () => readSelectedSourceRuntimeBundle({
+      stackBaseDir, component: options.component, required: selection !== 'if-available',
+    });
+    // The atomic selection already pins this immutable graph against reclamation.
+    // Dev starts its refresh only after startup; another Stack's producer must
+    // not hold up this pinned reader. Other selection consumers retain their
+    // existing publication/reclamation transaction.
+    let selectedBundle = options.devStartup ? await readSelected() : await withJsonOwnerFileLock(readSelected, {
+      lockPath: join(dirname(stackBaseDir), 'source-bundles/publication.lock'), timeoutMs: Infinity,
+      staleAfterMs: Infinity, signal: options.signal, errorLabel: 'source-bundle publication lock',
+    });
+    if (selectedBundle && options.component === 'server'
+      && ((options.serverComponent && selectedBundle.serverComponent !== options.serverComponent)
+        || (options.dbProvider && selectedBundle.dbProvider !== options.dbProvider))) {
+      if (selection !== 'if-available') throw new Error('[source-bundle] selected server configuration does not match the requested server');
+      selectedBundle = null;
+    }
     if (selectedBundle) {
       if (options.component === 'daemon') await probeCliDistRuntimeImport(selectedBundle.entrypoint,
         { cwd: selectedBundle.cliDir, env: options.env, signal: options.signal });
-      return selectedBundle;
+      if (readLastGreen) {
+        const { preparation, ...refreshOptions } = options;
+        // Publish a shared candidate while preserving the QA selection. Only
+        // its existing explicit reload owner activates replacement bytes.
+        void preparation.prepareInBackground(async signal => {
+          const preparationSignal = options.signal ? AbortSignal.any([signal, options.signal]) : signal;
+          try {
+            await prepareSourceComponent({ repoDir: resolve(options.repoDir), target: options.component,
+              env: options.env, signal: preparationSignal, logger: options.logger,
+              prepare: () => buildSourceRuntimeBundleOnce({ ...refreshOptions, pending: undefined,
+                reuseSelected: 'if-available', signal: preparationSignal }) });
+          } catch (error) {
+            if (!preparationSignal.aborted) (options.logger ?? console).error(`[source-bundle] background ${options.component} preparation failed:`, error);
+          }
+        });
+      }
+      return options.devStartup ? { ...selectedBundle, lastGreen: true } : selectedBundle;
     }
   }
   if (!options.stackBaseDir) return await buildSourceRuntimeBundleOnce(options);
   const preparation = options.preparation ?? options.pending;
   await preparation?.setPhase({ phase: 'preparing', component: options.component });
-  const built = await prepareSourceComponent({ repoDir: resolve(options.repoDir), target: options.component,
+  const prepare = () => buildSourceRuntimeBundleOnce(options);
+  const built = options.waitForSourceChanges === false ? await prepare() : await prepareSourceComponent({ repoDir: resolve(options.repoDir), target: options.component,
     env: options.env, signal: options.signal, logger: options.logger,
-    prepare: () => buildSourceRuntimeBundleOnce(options) });
+    prepare });
   await preparation?.setPhase({ phase: 'prepared', component: options.component });
   return built;
 }
 
 async function buildSourceRuntimeBundleOnce({ repoDir, outputDir, stackBaseDir, component, reuseSelected = false, serverComponent = 'happier-server-light', dbProvider,
-  pending, preparation = pending, env = process.env, signal = pending?.signal }) {
+  pending, preparation = pending, env = process.env, signal = pending?.signal, devStartup = false }) {
   repoDir = resolve(repoDir);
   if (stackBaseDir) {
     stackBaseDir = resolve(stackBaseDir);
     const bundleRoot = join(dirname(stackBaseDir), 'source-bundles');
-    const inputs = {repoDir, component, serverComponent, dbProvider, reuseSelected, pendingRequestId: pending?.requestId,
+    const inputs = {repoDir, component, serverComponent, dbProvider, reuseSelected, devStartup, pendingRequestId: pending?.requestId,
       preparationRequestId: preparation?.requestId};
     const fingerprint = await sourceBundleFingerprint(inputs);
     const lockPath = sourceBundleBuildLockPath(bundleRoot, fingerprint);
@@ -477,7 +514,7 @@ async function buildSourceRuntimeBundleOnce({ repoDir, outputDir, stackBaseDir, 
       launcherPath:fileURLToPath(new URL('../../bin/hstack-exec', import.meta.url)),
       command:process.execPath, args:[fileURLToPath(import.meta.url), JSON.stringify({...inputs, stackBaseDir, fingerprint})],
       locks:[{path:lockPath, kind:'workspace', timeoutMs:null, errorLabel:'source-bundle build lock'}],
-      cwd:repoDir, env, signal, admissionClass:'source-bundle', stdio:['ignore','pipe','pipe'],
+      cwd:repoDir, env, signal, devStartup, admissionClass:'source-bundle', stdio:['ignore','pipe','pipe'],
       onStderr:chunk => process.stderr.write(chunk) });
     let result = await prepare();
     if (!result.error && !result.signal && result.status === 1
@@ -506,7 +543,7 @@ async function buildSourceRuntimeBundleOnce({ repoDir, outputDir, stackBaseDir, 
   }
   outputDir = resolve(outputDir);
   const stdout = await runSourceBuildCommand({ repoDir, scriptPath: fileURLToPath(import.meta.url),
-    args: [JSON.stringify({ repoDir, outputDir, component, serverComponent, dbProvider })], env, signal, captureStderr: true, admissionClass:'source-bundle' });
+    args: [JSON.stringify({ repoDir, outputDir, component, serverComponent, dbProvider })], env, signal, devStartup, captureStderr: true, admissionClass:'source-bundle' });
   const {sourceInputDigests, inputIdentity, ...built} = JSON.parse(stdout);
   signal?.throwIfAborted();
   if (component === 'daemon') await probeCliDistRuntimeImport(built.entrypoint, { cwd: built.cliDir, env, signal });
@@ -623,7 +660,8 @@ async function consumeSourceRuntimeBuildInputs({ repoDir, outputDir, component, 
       outputDir, component, serverComponent, dbProvider, retainedPluginUiInventoryPath, projectDir, runtimeDir, manifest, requireFromProject, esbuild, env, signal });
     const inputIdentity = await sourceBundleFingerprint({ repoDir, identityRepoDir: sourceRepoDir,
       component, serverComponent, dbProvider, consumedPaths: Object.keys(built.sourceInputDigests) });
-    return { ...built, inputIdentity };
+    return { ...built, inputIdentity, ...(component === 'server'
+      ? { serverComponent, dbProvider: dbProvider ?? (serverComponent === 'happier-server-light' ? 'sqlite' : 'postgres') } : {}) };
   } finally {
     await rm(repoDir, { recursive: true, force: true });
     esbuild.stop();
@@ -771,12 +809,20 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
     ])),
   } : { ...manifest, type: 'module' };
   await writeFile(join(runtimeDir, 'package.json'), JSON.stringify(runtimeManifest));
+  const retainedCodeFiles = Object.keys(result.metafile.outputs).map((file) => resolve(repoDir, file));
   for (const item of pluginMetadata) {
     await mkdir(join(item.dir, '.happier-plugin'), { recursive: true });
     await writeFile(join(item.dir, 'package.json'), JSON.stringify({...item.package,exports:runtimePackageExports(item.package.exports)}));
     await writeFile(join(item.dir, '.happier-plugin/plugin.json'), JSON.stringify(item.manifest));
+    // Use the same manifest-path owner as packaged workspaces. Resources are
+    // retained code inputs, not links back to the moving checkout.
+    for (const relativePath of readBundledPluginPackageResourceRelativePaths(item.dir)) {
+      const destination = join(item.dir, relativePath);
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, await readSourceInput(join(item.sourceDir, relativePath)));
+      retainedCodeFiles.push(destination);
+    }
   }
-  const retainedCodeFiles = Object.keys(result.metafile.outputs).map((file) => resolve(repoDir, file));
   if (pluginMetadata.some(item => item.manifest.contributes !== undefined)) {
     const preparationDir = await mkdtemp(join(runtimeDir, '.source-plugin-ui-'));
     const inventoryPath = join(runtimeDir, 'plugin-ui-inventory.js');

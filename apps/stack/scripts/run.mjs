@@ -66,7 +66,7 @@ import {
 } from './utils/server/listener_ownership.mjs';
 import { findExistingStackCredentialPath } from './utils/auth/credentials_paths.mjs';
 import { createServiceDaemonAutostarter } from './utils/service/daemon_autostart.mjs';
-import { applyRuntimeServerDatabaseEnv, applySharedDatabaseSourceEnv } from './utils/server/apply_runtime_server_database_env.mjs';
+import { applyRuntimeServerDatabaseEnv, applyServerHostDatabaseProviderEnv } from './utils/server/apply_runtime_server_database_env.mjs';
 import { spawnSourceServerScript } from './utils/server/source_server_workspace_deps.mjs';
 import { applyEffectiveDbProviderEnv } from './utils/server/effective_db_provider.mjs';
 import { resolveStackRuntimeLaunchContext } from './runtime/launch/resolveStackRuntimeLaunchContext.mjs';
@@ -253,8 +253,9 @@ async function main() {
     ? resolveCliRuntimeLaunchSpec({ snapshot: runtimeLaunchContext.componentSnapshots?.daemon ?? runtimeSnapshot }) : null;
   // This point runs on the server host, after remote placement. Resolve before
   // choosing a provider-specific bundle, migration path or account probe.
-  if (serverRequested) applySharedDatabaseSourceEnv({ env: process.env });
-  const dbProvider = applyEffectiveDbProviderEnv({ serverComponentName, env: process.env });
+  const dbProvider = serverRequested
+    ? applyServerHostDatabaseProviderEnv({ serverComponentName, env: process.env })
+    : applyEffectiveDbProviderEnv({ serverComponentName, env: process.env });
   let serverLaunchSpec = runtimeSnapshot && serverRequested
     ? resolveServerRuntimeLaunchSpec({
         serverComponent: serverComponentName,
@@ -1101,6 +1102,7 @@ async function main() {
       return;
     }
     shuttingDown = true;
+    await pendingSourceStart?.dispose();
     let shutdownRequest = null;
     let expectedStopState = null;
     if (runtimeStatePath) {

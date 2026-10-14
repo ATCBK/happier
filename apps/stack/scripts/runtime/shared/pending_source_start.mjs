@@ -97,6 +97,8 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
     ownsMarker = true;
   }, { lockPath });
   let closed = false;
+  let backgroundController;
+  const backgroundPreparations = new Set();
   let lastPhase;
   const checkCurrent = async () => {
     if (closed || controller.signal.aborted) return;
@@ -136,6 +138,14 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
       await retainPendingSourcePreparation({ stackBaseDir, requestId, preparationDir, signal: controller.signal });
     },
     abort(reason) { controller.abort(reason); },
+    prepareInBackground(prepare) {
+      backgroundController ??= new AbortController();
+      const signal = AbortSignal.any([controller.signal, backgroundController.signal]);
+      const task = Promise.resolve().then(() => prepare(signal));
+      backgroundPreparations.add(task);
+      task.then(() => backgroundPreparations.delete(task), () => backgroundPreparations.delete(task));
+      return task;
+    },
     // A completed serving path may be admitted before the rest of startup.
     // Keep the same request and its retained preparations until final publish.
     publishPreparation: publishCurrent,
@@ -148,6 +158,8 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
       });
     },
     async dispose() {
+      backgroundController?.abort();
+      await Promise.allSettled([...backgroundPreparations]);
       close();
       await withJsonOwnerFileLock(removeOwnMarker, { lockPath });
     },
