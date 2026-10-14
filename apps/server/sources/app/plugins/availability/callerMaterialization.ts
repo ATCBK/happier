@@ -1,4 +1,4 @@
-import type { MachineOperationProtocolCapabilityNameV1 } from "@happier-dev/protocol";
+import type { MachineOperationProtocolCapabilityNameV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { inTx } from "@/storage/inTx";

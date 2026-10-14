@@ -1,9 +1,6 @@
-import {
-    RunnerBrokerReadinessRequestV1Schema,
-    verifyRunnerBrokerReadinessRequestV1,
-    type RunnerBrokerReadinessRequestV1,
-} from "@happier-dev/protocol/teams";
-import { buildBackendTargetKeyV2, pluginJsonValuesEqual } from "@happier-dev/protocol";
+import { RunnerBrokerReadinessRequestV1Schema, verifyRunnerBrokerReadinessRequestV1, type RunnerBrokerReadinessRequestV1 } from '@happier-dev/protocol/ephemeralRunner/brokerReadinessRequestV1';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { RunnerActivationReviewV1Schema, type RunnerCredentialSelectionBindingV1 } from "@happier-dev/protocol/ephemeralRunner/review";
 import { RunnerClaimV1Schema } from "@happier-dev/protocol/ephemeralRunner/endpoint";
 import { verifyRunnerConsentV1 } from "@happier-dev/protocol/ephemeralRunner/consent";
@@ -11,7 +8,7 @@ import {
     verifyRunnerReadinessV1,
     type RunnerReadinessV1,
 } from "@happier-dev/protocol/ephemeralRunner/readiness";
-import type { AuthTokenAuthenticationEvidenceV1 } from "@happier-dev/protocol";
+import type { AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 
 import type { Tx } from "@/storage/inTx";
 import { readRunnerCreatorCurrentnessInTx, reconcileRunnerActivationCurrentnessInTx } from "./activationCurrentness";

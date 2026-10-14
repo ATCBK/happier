@@ -1,10 +1,6 @@
 import type { FeaturesPayloadDelta } from "./types";
 import { readPetsFeatureEnv } from "./catalog/readFeatureEnv";
-import {
-    BUILT_IN_PET_IDS_V1,
-    PET_PACKAGE_LIMITS_V1,
-    PET_SYNC_SUPPORTED_MEDIA_TYPES_V1,
-} from "@happier-dev/protocol";
+import { BUILT_IN_PET_IDS_V1, PET_PACKAGE_LIMITS_V1, PET_SYNC_SUPPORTED_MEDIA_TYPES_V1 } from '@happier-dev/protocol/pets/constants';
 
 export function resolvePetsFeature(env: NodeJS.ProcessEnv): FeaturesPayloadDelta {
     const config = readPetsFeatureEnv(env);

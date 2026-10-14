@@ -1,17 +1,9 @@
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 
-import {
-    resolveTeamAdmissionProjectionV1,
-    type TeamCapabilitiesV1,
-    type TeamSummaryCountsV1,
-    type TeamPolicyV1,
-    type TeamSummaryV1,
-} from "@happier-dev/protocol/teams";
-import {
-    normalizeTeamAuthenticationPolicyV1,
-    TeamAuthenticationPolicyV1Schema,
-} from "@happier-dev/protocol";
+import { resolveTeamAdmissionProjectionV1, type TeamSummaryCountsV1, type TeamSummaryV1 } from '@happier-dev/protocol/teams/projections';
+import { type TeamCapabilitiesV1, type TeamPolicyV1 } from '@happier-dev/protocol/teams';
+import { normalizeTeamAuthenticationPolicyV1, TeamAuthenticationPolicyV1Schema } from '@happier-dev/protocol/auth/entry';
 
 import type { HomeGovernanceAuthority } from "@/app/home/governance/homeCapabilities";
 import { projectTeamDirectoryMembershipFact, type DirectoryMembershipProjectionRow } from "./directory/directorySourceProjection";

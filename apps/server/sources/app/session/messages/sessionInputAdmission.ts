@@ -1,9 +1,6 @@
 import type { EffectiveSessionAccess } from "@/app/session/access/sessionAccess";
-import {
-    SessionInputAdmissionReceiptV1Schema,
-    createStoredReadSchema,
-    type SessionInputAdmissionReceiptV1,
-} from "@happier-dev/protocol";
+import { SessionInputAdmissionReceiptV1Schema, type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { SessionInputMachineTargetV1Schema, type SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { CallerInputConstraintsV1 } from "@happier-dev/protocol/auth/apiTokenGrant";
 import type { Tx } from '@/storage/inTx';

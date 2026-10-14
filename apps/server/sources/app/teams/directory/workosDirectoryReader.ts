@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { readAccountNameFromLegacyProfileV1 } from "@happier-dev/protocol";
+import { readAccountNameFromLegacyProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 import type {
     DirectoryProjectionCatchUp,
     DirectoryProjectionCatchUpResult,

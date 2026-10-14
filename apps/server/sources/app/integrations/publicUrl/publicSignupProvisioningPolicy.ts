@@ -1,4 +1,4 @@
-import type { FeaturesResponse } from "@happier-dev/protocol";
+import type { FeaturesResponse } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 import { classifyRequestIp, type RequestIpClassification } from "@/app/net/requestOrigin";
 import { deriveLegacySignupMethodsFromAuthMethods } from '@/app/features/authFeature';

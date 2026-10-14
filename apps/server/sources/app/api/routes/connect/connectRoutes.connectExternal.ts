@@ -14,7 +14,7 @@ import { connectPendingSchema } from "./oauthExternal/oauthExternalSchemas";
 import { OAUTH_STATE_UNAVAILABLE_CODE } from "@/app/auth/oauthStateErrors";
 import { OAUTH_NOT_CONFIGURED_ERROR } from "./oauthExternal/oauthExternalErrors";
 import { registerExternalConnectFinalizeRoute } from "./oauthExternal/registerExternalConnectFinalizeRoute";
-import { ExternalOAuthErrorResponseSchema, ExternalOAuthParamsResponseSchema } from "@happier-dev/protocol";
+import { ExternalOAuthErrorResponseSchema, ExternalOAuthParamsResponseSchema } from '@happier-dev/protocol/auth/externalOAuth';
 import { NotFoundSchema } from "../../schemas/notFoundSchema";
 import { resolveWebAppOAuthReturnUrlFromRequestHeaders } from "./oauthExternal/oauthExternalConfig";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";

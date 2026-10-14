@@ -1,11 +1,4 @@
-import {
-    ACCOUNT_API_TOKEN_INTROSPECTION_HTTP_PATH_V1,
-    ACCOUNT_API_TOKEN_INTROSPECTION_MAX_BODY_BYTES_V1,
-    AccountApiTokenIntrospectionRequestV1Schema,
-    AccountApiTokenIntrospectionConnectionFailureV1Schema,
-    AccountApiTokenIntrospectionSubjectFailureV1Schema,
-    AccountApiTokenIntrospectionSuccessV1Schema,
-} from "@happier-dev/protocol";
+import { ACCOUNT_API_TOKEN_INTROSPECTION_HTTP_PATH_V1, ACCOUNT_API_TOKEN_INTROSPECTION_MAX_BODY_BYTES_V1, AccountApiTokenIntrospectionRequestV1Schema, AccountApiTokenIntrospectionConnectionFailureV1Schema, AccountApiTokenIntrospectionSubjectFailureV1Schema, AccountApiTokenIntrospectionSuccessV1Schema } from '@happier-dev/protocol/auth/accountApiTokens';
 import { z } from "zod";
 
 import { auth } from "@/app/auth/auth";

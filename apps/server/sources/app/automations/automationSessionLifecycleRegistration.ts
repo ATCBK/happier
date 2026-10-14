@@ -1,8 +1,4 @@
-import type {
-    AutomationSessionLifecycleRegistrationErrorCode,
-    AutomationSessionLifecycleTrigger,
-    AutomationSessionLifecycleTriggerInput,
-} from "@happier-dev/protocol";
+import type { AutomationSessionLifecycleRegistrationErrorCode, AutomationSessionLifecycleTrigger, AutomationSessionLifecycleTriggerInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
 
 import type { Tx } from "@/storage/inTx";
 

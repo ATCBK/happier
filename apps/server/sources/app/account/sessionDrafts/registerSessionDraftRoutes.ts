@@ -1,25 +1,5 @@
-import {
-    SESSION_DRAFT_ROUTE_LIST,
-    SESSION_DRAFT_ROUTE_MUTATE,
-    SESSION_DRAFT_ROUTE_READ,
-    SESSION_DRAFT_V2_ROUTE_LIST,
-    SESSION_DRAFT_V2_ROUTE_MUTATE,
-    SESSION_DRAFT_V2_ROUTE_READ,
-    SessionDraftListRequestV1Schema,
-    SessionDraftListRequestV2Schema,
-    SessionDraftListResponseV1Schema,
-    SessionDraftListResponseV2Schema,
-    SessionDraftMutateRequestV1Schema,
-    SessionDraftMutateRequestV2Schema,
-    SessionDraftMutateResponseV1Schema,
-    SessionDraftMutateResponseV2Schema,
-    SessionDraftReadRequestV1Schema,
-    SessionDraftReadRequestV2Schema,
-    SessionDraftReadResponseV1Schema,
-    SessionDraftReadResponseV2Schema,
-    SessionDraftRouteErrorResponseV1Schema,
-    SessionDraftEpochUnavailableResponseV2Schema,
-} from "@happier-dev/protocol";
+import { SESSION_DRAFT_ROUTE_LIST, SESSION_DRAFT_ROUTE_MUTATE, SESSION_DRAFT_ROUTE_READ, SessionDraftListRequestV1Schema, SessionDraftListResponseV1Schema, SessionDraftMutateRequestV1Schema, SessionDraftMutateResponseV1Schema, SessionDraftReadRequestV1Schema, SessionDraftReadResponseV1Schema, SessionDraftRouteErrorResponseV1Schema } from '@happier-dev/protocol/drafts/sessionDrafts';
+import { SESSION_DRAFT_V2_ROUTE_LIST, SESSION_DRAFT_V2_ROUTE_MUTATE, SESSION_DRAFT_V2_ROUTE_READ, SessionDraftListRequestV2Schema, SessionDraftListResponseV2Schema, SessionDraftMutateRequestV2Schema, SessionDraftMutateResponseV2Schema, SessionDraftReadRequestV2Schema, SessionDraftReadResponseV2Schema, SessionDraftEpochUnavailableResponseV2Schema } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 
 import { type Fastify } from "@/app/api/types";
 

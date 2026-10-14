@@ -1,9 +1,6 @@
 import type { FeaturesPayloadDelta } from './types';
 import { readPeerMediationFeatureEnv, readTeamsFeatureEnv } from './catalog/readFeatureEnv';
-import {
-    TEAM_CREDENTIAL_EXTERNAL_PROVIDER_API_BASE_PATH_V1,
-    TEAM_CREDENTIAL_EXTERNAL_PROVIDER_PROTOCOLS_V1,
-} from '@happier-dev/protocol/teams';
+import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_API_BASE_PATH_V1, TEAM_CREDENTIAL_EXTERNAL_PROVIDER_PROTOCOLS_V1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 import { resolveConfiguredPublicServerUrl } from '@/app/serverUrls/effectiveServerUrls';
 
 function resolveExternalApiDeploymentAvailability(env: NodeJS.ProcessEnv) {

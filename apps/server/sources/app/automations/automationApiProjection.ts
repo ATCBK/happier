@@ -1,21 +1,14 @@
-import {
-    AutomationDefinitionDetailSchema,
-    AutomationDefinitionListItemSchema,
-    parseAutomationRunResultStoredEnvelopeV1,
-    AutomationV3RunDetailSchema,
-    AutomationV3RunListItemSchema,
-    createCanonicalJsonSigningInput,
-    parseAutomationStoredDefinitionExecutionRecipeV1,
-    parseAutomationStoredWorkflowDefinitionRecipeV2,
-    parseAutomationRunFailureDetailStoredEnvelopeV1,
-    validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1,
-    validateAutomationStoredDefinitionExecutionRecipeOuterV1,
-    validateAutomationRunFailureDetailStoredEnvelopeOuterForModeV1,
-    type AutomationAccountCurrentnessWitnessV1,
-} from "@happier-dev/protocol";
+import { AutomationDefinitionDetailSchema, AutomationDefinitionListItemSchema, AutomationV3RunDetailSchema, AutomationV3RunListItemSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { parseAutomationRunResultStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationReplyHandoffStoredContent';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { parseAutomationStoredDefinitionExecutionRecipeV1, validateAutomationStoredDefinitionExecutionRecipeOuterV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { parseAutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
+import { parseAutomationRunFailureDetailStoredEnvelopeV1, validateAutomationRunFailureDetailStoredEnvelopeOuterForModeV1 } from '@happier-dev/protocol/automations/automationRunFailureDetailStoredContent';
+import { validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1 } from '@happier-dev/protocol/automations/event';
+import { type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 
 import type { AutomationEventStatusProjection } from "./automationEventStatusProjection";
-import type { AutomationSessionLifecycleTriggerStatus } from "@happier-dev/protocol";
+import type { AutomationSessionLifecycleTriggerStatus } from '@happier-dev/protocol/automations/automationTriggerProjectionV1';
 import { classifyAutomationReplyHandoffDispatchability } from "./automationReplyHandoffDispatchability";
 import { decodeAutomationRunCause, retainedV2OriginKindForRun } from "./automationRunCauseCodec";
 import {

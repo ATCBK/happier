@@ -1,5 +1,5 @@
 import { encodeBase64 } from "privacy-kit";
-import { type SessionDataKeyRecipientContentKeyV1 } from "@happier-dev/protocol";
+import { type SessionDataKeyRecipientContentKeyV1 } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
 
 import {
     deriveAccountRecipientEnvelopeReadinessFromRow,

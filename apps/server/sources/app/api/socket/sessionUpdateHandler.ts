@@ -25,13 +25,14 @@ import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeat
 import { AsyncLock, isLockAdmissionDeadlineExceededError } from "@/utils/runtime/lock";
 import { debug, error as logError, log } from "@/utils/logging/log";
 import { readHomeConfigEnv } from '@/app/home/settings/homeSettings';
-import { readServerConfig, SERVER_CONFIG } from '@happier-dev/protocol';
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { Socket } from "socket.io";
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import { admitApiTokenSessionOperation } from "@/app/api/utils/apiTokenRouteAdmission";
-import { API_TOKEN_SOCKET_EVENT_ACTIONS } from "@happier-dev/protocol/rpc";
+import { API_TOKEN_SOCKET_EVENT_ACTIONS } from '@happier-dev/protocol/socketRpc';
 import { hasCurrentSocketCredential } from "./socketCredentialCurrentness";
 import {
     applySessionTurnMutation,
@@ -62,59 +63,24 @@ import { resolveStructuralSessionAccess } from "@/app/session/access/sessionAcce
 import { readSessionAccessAuthenticationFromSocket } from "@/app/session/access/sessionAccessAuthentication";
 import { resolveCurrentSessionRecipientAccountIds } from "@/app/session/access/sessionRecipients";
 import { parseSessionMessageSidechainId } from "@/app/session/parseSessionMessageSidechainId";
-import {
-    SESSION_PENDING_EXECUTION_RUN_MATERIALIZE_NEXT_EVENT_V2,
-    SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2,
-    SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2,
-    SessionPendingExecutionRunMaterializeNextRequestV2Schema,
-    SessionPendingExecutionRunMaterializeNextResponseV2Schema,
-    SessionPendingExecutionRunAcceptedRequestV2Schema,
-    SessionPendingExecutionRunAcceptedResponseV2Schema,
-    SessionPendingExecutionRunBlockRequestV2Schema,
-    SessionPendingExecutionRunBlockResponseV2Schema,
-    ACCEPTED_PENDING_SETTLEMENT_EVENT_V1,
-    AcceptedPendingSettlementRequestV1Schema,
-    AcceptedPendingSettlementResponseV1Schema,
-    ExecutionRunPublicStateSchema,
-    isRecoveredHistoryTranscriptObservationProvenance,
-    PrimaryTurnStatusV1Schema,
-    parseSessionRuntimeActivityProjectionFields,
-    isSessionAgentTransitionDividerLocalId,
-    readPendingLocalId,
-    SessionMessageRoleSchema,
-    SESSION_PUBLISHER_AUTHORITY_CHECK_EVENT,
-    SessionTurnMutationV1Schema,
-    SessionPublisherAuthorityCheckAckSchema,
-    SessionPublisherAuthorityCheckRequestSchema,
-    SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT,
-    SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1,
-    SESSION_RUNTIME_ACTIVITY_CLOSE_EVENT,
-    SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT,
-    SessionRuntimeActivityCloseAckSchema,
-    SessionRuntimeActivityCloseRequestSchema,
-    SessionRuntimeActivitySnapshotAckSchema,
-    SessionRuntimeActivitySnapshotRequestSchema,
-    SessionPendingAdmissionSettlementRequestV1Schema,
-    SessionPendingAdmissionSettlementResponseV1Schema,
-    SessionUserActionRequiredOccurrenceV1Schema,
-    SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1,
-    SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1,
-    SessionFollowObservePendingRequestV1Schema,
-    SessionFollowObservePendingResponseV1Schema,
-    SessionFollowAcknowledgeRequestV1Schema,
-    SessionFollowAcknowledgeResponseV1Schema,
-    ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1,
-    ACCOUNT_VOICE_FOLLOW_ACKNOWLEDGE_EVENT_V1,
-    AccountVoiceFollowObservePendingRequestV1Schema,
-    AccountVoiceFollowObservePendingResponseV1Schema,
-    AccountVoiceFollowAcknowledgeRequestV1Schema,
-    AccountVoiceFollowAcknowledgeResponseV1Schema,
-    supportsMachineSessionFollowContextV1,
-    SESSION_DISCUSSION_AGENT_POST_EVENT_V1,
-    SessionDiscussionAgentPostRequestV1Schema,
-    SessionDiscussionAgentPostResponseV1Schema,
-    isSessionDiscussionRequestWithinTransportBudgetV1,
-} from "@happier-dev/protocol";
+import { SESSION_PENDING_EXECUTION_RUN_MATERIALIZE_NEXT_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2, SessionPendingExecutionRunMaterializeNextRequestV2Schema, SessionPendingExecutionRunMaterializeNextResponseV2Schema, SessionPendingExecutionRunAcceptedRequestV2Schema, SessionPendingExecutionRunAcceptedResponseV2Schema, SessionPendingExecutionRunBlockRequestV2Schema, SessionPendingExecutionRunBlockResponseV2Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
+import { ACCEPTED_PENDING_SETTLEMENT_EVENT_V1, AcceptedPendingSettlementRequestV1Schema, AcceptedPendingSettlementResponseV1Schema } from '@happier-dev/protocol/sessions/pending/acceptedPendingSettlementV1';
+import { ExecutionRunPublicStateSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { isRecoveredHistoryTranscriptObservationProvenance } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { PrimaryTurnStatusV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { parseSessionRuntimeActivityProjectionFields } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { isSessionAgentTransitionDividerLocalId } from '@happier-dev/protocol/sessions/agentTransitionDivider';
+import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
+import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
+import { SESSION_PUBLISHER_AUTHORITY_CHECK_EVENT, SessionPublisherAuthorityCheckAckSchema, SessionPublisherAuthorityCheckRequestSchema, SESSION_RUNTIME_ACTIVITY_CLOSE_EVENT, SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT, SessionRuntimeActivityCloseAckSchema, SessionRuntimeActivityCloseRequestSchema, SessionRuntimeActivitySnapshotAckSchema, SessionRuntimeActivitySnapshotRequestSchema } from '@happier-dev/protocol/sessions/runtime/activity/transport';
+import { SessionTurnMutationV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
+import { SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1, SessionPendingAdmissionSettlementRequestV1Schema, SessionPendingAdmissionSettlementResponseV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
+import { SessionUserActionRequiredOccurrenceV1Schema } from '@happier-dev/protocol/sessions/userActionRequiredOccurrenceV1';
+import { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SessionFollowObservePendingRequestV1Schema, SessionFollowObservePendingResponseV1Schema, SessionFollowAcknowledgeRequestV1Schema, SessionFollowAcknowledgeResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1, ACCOUNT_VOICE_FOLLOW_ACKNOWLEDGE_EVENT_V1, AccountVoiceFollowObservePendingRequestV1Schema, AccountVoiceFollowObservePendingResponseV1Schema, AccountVoiceFollowAcknowledgeRequestV1Schema, AccountVoiceFollowAcknowledgeResponseV1Schema } from '@happier-dev/protocol/sessions/follow/accountVoiceFollowTransportV1';
+import { supportsMachineSessionFollowContextV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { SESSION_DISCUSSION_AGENT_POST_EVENT_V1, SessionDiscussionAgentPostRequestV1Schema, SessionDiscussionAgentPostResponseV1Schema, isSessionDiscussionRequestWithinTransportBudgetV1 } from '@happier-dev/protocol/sessions/discussions/api';
 import { TranscriptStreamSegmentDeltaEphemeralMessageSchema, TranscriptStreamSegmentEphemeralMessageSchema } from "@happier-dev/protocol/updates";
 import type { SessionEndAckResponse } from "@happier-dev/protocol/updates";
 import { refreshTrackedSessionAccountBadgePushes } from "@/app/activity/refreshAccountActivityBadgePushes";

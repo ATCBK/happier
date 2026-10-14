@@ -1,16 +1,8 @@
-import {
-    SessionTeamCredentialBindingIntentsV1Schema,
-    encodeSessionTeamCredentialSlotKeyV1,
-    type SessionTeamCredentialBindingIntentListV1,
-    type SessionTeamCredentialBindingRejectionV1,
-    type SessionTeamCredentialSlotV1,
-    type TeamCredentialRouteV1,
-} from "@happier-dev/protocol/teams";
-import {
-    TeamCredentialSourceBindingV1Schema,
-    type TeamCredentialSourceBindingV1,
-} from "@happier-dev/protocol/teams";
-import type { RequiredSessionTeamCredentialV1, SessionTeamCredentialBindingConsequenceV1 } from "@happier-dev/protocol";
+import { SessionTeamCredentialBindingIntentsV1Schema, encodeSessionTeamCredentialSlotKeyV1, type SessionTeamCredentialBindingIntentListV1, type SessionTeamCredentialSlotV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
+import { type SessionTeamCredentialBindingRejectionV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
+import { type TeamCredentialRouteV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import type { RequiredSessionTeamCredentialV1, SessionTeamCredentialBindingConsequenceV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import type { Tx } from "@/storage/inTx";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { assertSessionTeamReadableGrantInTx } from "@/app/session/access/sessionAccess";

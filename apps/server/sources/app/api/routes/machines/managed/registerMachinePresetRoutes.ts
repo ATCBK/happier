@@ -1,7 +1,4 @@
-import {
-    MachinePresetActionInputSchemasV1, MachinePresetActionOutputSchemasV1,
-    machinePresetActionEndpointPathV1, type MachinePresetActionIdV1,
-} from "@happier-dev/protocol";
+import { MachinePresetActionInputSchemasV1, MachinePresetActionOutputSchemasV1, machinePresetActionEndpointPathV1, type MachinePresetActionIdV1 } from '@happier-dev/protocol/machines/managed/machinePresetActionsV1';
 import type { z } from "zod";
 
 import type { Fastify } from "../../../types";

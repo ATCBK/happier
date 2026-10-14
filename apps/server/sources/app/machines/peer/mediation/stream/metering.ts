@@ -1,9 +1,7 @@
-import {
-    PEER_MEDIATION_RECEIPTS,
-    applyMachineLiveStreamDropPolicy,
-    type MachineLiveStreamWireFrameV1 as MachineLiveStreamFrameV1,
-    type MachineLiveStreamReceiptV1,
-} from '@happier-dev/protocol';
+import { PEER_MEDIATION_RECEIPTS } from '@happier-dev/protocol/machines/peer/mediation/receipts';
+import { applyMachineLiveStreamDropPolicy } from '@happier-dev/protocol/machines/peer/mediation/stream/metering';
+import { type MachineLiveStreamWireFrameV1 as MachineLiveStreamFrameV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { type MachineLiveStreamReceiptV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/receipts';
 
 export function applyMachineLiveStreamRelayBackpressure(input: Readonly<{
     streamId: string;

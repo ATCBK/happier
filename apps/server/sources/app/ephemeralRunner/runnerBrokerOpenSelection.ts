@@ -1,5 +1,5 @@
-import { pluginJsonValuesEqual } from "@happier-dev/protocol";
-import type { ProviderBrokerOpenRequestV1 } from "@happier-dev/protocol";
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import type { ProviderBrokerOpenRequestV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import {
     RunnerActivationReviewV1Schema,
     type RunnerCredentialSelectionBindingV1,

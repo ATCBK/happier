@@ -1,25 +1,7 @@
 import { createHash } from 'node:crypto';
 
-import {
-    MAX_SESSION_SUBAGENT_CUSTODY_RECORDS,
-    MAX_SESSION_SUBAGENT_CUSTODY_RECEIPTS,
-    MAX_SESSION_SUBAGENT_CUSTODY_RETIRED_GENERATIONS,
-    SESSION_SUBAGENT_CUSTODY_RECEIPT_RETENTION_MS,
-    SessionSubagentCustodyListQueryV1Schema,
-    SessionSubagentCustodyMutationRequestV1Schema,
-    SessionSubagentCustodyRecordV1Schema,
-    SessionSubagentCustodyRetirementRequestV1Schema,
-    createSessionSubagentCustodyKeyV1,
-    createSessionSubagentSourceCustodyStorageIdentityV1,
-    createSessionSubagentCustodyPlainContentFingerprintV1,
-    isSessionSubagentStatusTransitionAllowed,
-    isStoredContentKindAllowedForSessionByStoragePolicy,
-    type SessionSubagentCustodyContentV1,
-    type SessionSubagentCustodyMutationRequestV1,
-    type SessionSubagentCustodyRecordV1,
-    type SessionSubagentCustodyListQueryV1,
-    type SessionSubagentCustodyRetirementRequestV1,
-} from '@happier-dev/protocol';
+import { MAX_SESSION_SUBAGENT_CUSTODY_RECORDS, MAX_SESSION_SUBAGENT_CUSTODY_RECEIPTS, MAX_SESSION_SUBAGENT_CUSTODY_RETIRED_GENERATIONS, SESSION_SUBAGENT_CUSTODY_RECEIPT_RETENTION_MS, SessionSubagentCustodyListQueryV1Schema, SessionSubagentCustodyMutationRequestV1Schema, SessionSubagentCustodyRecordV1Schema, SessionSubagentCustodyRetirementRequestV1Schema, createSessionSubagentCustodyKeyV1, createSessionSubagentSourceCustodyStorageIdentityV1, createSessionSubagentCustodyPlainContentFingerprintV1, isSessionSubagentStatusTransitionAllowed, type SessionSubagentCustodyContentV1, type SessionSubagentCustodyMutationRequestV1, type SessionSubagentCustodyRecordV1, type SessionSubagentCustodyListQueryV1, type SessionSubagentCustodyRetirementRequestV1 } from '@happier-dev/protocol/sessions/subagents/durableCustodyV1';
+import { isStoredContentKindAllowedForSessionByStoragePolicy } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
 import { readEncryptionFeatureEnv } from '@/app/features/catalog/readFeatureEnv';
 import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode } from '@/app/session/encryptionRejectionCodes';
 import { assertSessionCapabilityInTx } from "@/app/session/access/sessionAccess";

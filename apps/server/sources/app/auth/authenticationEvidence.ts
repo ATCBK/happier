@@ -1,11 +1,4 @@
-import {
-    AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS,
-    AuthTokenAuthenticationEvidenceSnapshotV1Schema,
-    StoredAuthTokenAuthenticationEvidenceSnapshotV1Schema,
-    authTokenAuthenticationEvidenceIdentityV1,
-    type AuthTokenAuthenticationEvidenceSnapshotV1,
-    type AuthTokenAuthenticationEvidenceV1,
-} from "@happier-dev/protocol";
+import { AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS, AuthTokenAuthenticationEvidenceSnapshotV1Schema, StoredAuthTokenAuthenticationEvidenceSnapshotV1Schema, authTokenAuthenticationEvidenceIdentityV1, type AuthTokenAuthenticationEvidenceSnapshotV1, type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 
 import {
     readAccountLoginViabilityFactsAfterProviderRemovalInTx,

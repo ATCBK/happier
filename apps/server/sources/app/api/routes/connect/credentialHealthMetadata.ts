@@ -1,12 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
-import {
-    CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1,
-    ConnectedServiceCredentialHealthV1Schema,
-    ConnectedServiceCredentialRevisionV1Schema,
-    QualifiedConnectedAccountCredentialMetadataV4Schema,
-    type ConnectedServiceCredentialHealthV1,
-} from "@happier-dev/protocol";
+import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
+import { ConnectedServiceCredentialHealthV1Schema, ConnectedServiceCredentialRevisionV1Schema, type ConnectedServiceCredentialHealthV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { QualifiedConnectedAccountCredentialMetadataV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import { createStoredReadSchema } from "@happier-dev/protocol/json/storedReadSchema";
 
 type MetadataWithHealth = Readonly<{

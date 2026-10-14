@@ -1,17 +1,5 @@
-import {
-    MachinePoolCreateInputV1Schema,
-    MachinePoolDeleteInputV1Schema,
-    MachinePoolDeleteOutputV1Schema,
-    MachinePoolErrorV1Schema,
-    MachinePoolGetInputV1Schema,
-    MachinePoolListInputV1Schema,
-    MachinePoolListOutputV1Schema,
-    MachinePoolResolveInputV1Schema,
-    MachinePoolResolveResultV1Schema,
-    MachinePoolUpdateInputV1Schema,
-    MachinePoolViewV1Schema,
-    machinePoolActionEndpointPathV1,
-} from "@happier-dev/protocol";
+import { MachinePoolCreateInputV1Schema, MachinePoolDeleteInputV1Schema, MachinePoolDeleteOutputV1Schema, MachinePoolErrorV1Schema, MachinePoolGetInputV1Schema, MachinePoolListInputV1Schema, MachinePoolListOutputV1Schema, MachinePoolResolveInputV1Schema, MachinePoolResolveResultV1Schema, MachinePoolUpdateInputV1Schema, MachinePoolViewV1Schema } from '@happier-dev/protocol/machines/pools/v1';
+import { machinePoolActionEndpointPathV1 } from '@happier-dev/protocol/machines/pools/actionsV1';
 import { z } from "zod";
 
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";

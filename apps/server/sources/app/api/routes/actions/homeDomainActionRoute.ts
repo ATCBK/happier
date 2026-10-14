@@ -1,7 +1,4 @@
-import {
-    homeDomainActionTransportV1,
-    type HomeDomainActionIdV1,
-} from "@happier-dev/protocol/actions";
+import { homeDomainActionTransportV1, type HomeDomainActionIdV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 
 type HomeDomainActionHttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
 

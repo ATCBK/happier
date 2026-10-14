@@ -1,23 +1,16 @@
-import {
-    AutomationRunStateV3Schema,
-    decodeKeysetCursorV1,
-    encodeKeysetCursorV1,
-    measureExternalActionResultResponseEnvelopeUtf8BytesV1,
-    projectWorkflowBigIntV1,
-    readKeysetCursorIdV1,
-    readKeysetCursorTextV1,
-    createCanonicalJsonSigningInput,
-    toAutomationRunExecutionInputV1Origin,
-    projectAutomationAccountCurrentnessWitnessV1,
-    sameAutomationAccountContentIdentityV1,
-    type AutomationAccountCurrentnessWitnessV1,
-    type WorkflowInvocationLifecycleV1,
-    type WorkflowRunOriginV1,
-    type WorkflowRunSummaryV1,
-    type WorkflowRunSummariesResultV1,
-} from "@happier-dev/protocol";
+import { AutomationRunStateV3Schema } from '@happier-dev/protocol/automations/automationRunStateV3';
+import { decodeKeysetCursorV1, encodeKeysetCursorV1, readKeysetCursorIdV1, readKeysetCursorTextV1 } from '@happier-dev/protocol/pagination/keysetCursorV1';
+import { measureExternalActionResultResponseEnvelopeUtf8BytesV1 } from '@happier-dev/protocol/actions/externalActionLimits';
+import { projectWorkflowBigIntV1, type WorkflowInvocationLifecycleV1, type WorkflowRunOriginV1, type WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { toAutomationRunExecutionInputV1Origin } from '@happier-dev/protocol/automations/automationApiV3';
+import { projectAutomationAccountCurrentnessWitnessV1, sameAutomationAccountContentIdentityV1, type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { type WorkflowRunSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import type { Prisma } from "@prisma/client";
-import { WorkflowDirectRunAdmissionIdV1Schema, WorkflowInvocationRecordIdSchema, isWorkflowDraftPublicationLifecycleV1, type WorkflowRunRecipientKeyEnvelopeV1, type WorkflowRunWaitConditionV1 } from "@happier-dev/protocol/workflows";
+import { WorkflowDirectRunAdmissionIdV1Schema, WorkflowInvocationRecordIdSchema } from '@happier-dev/protocol/workflows/workflowIdsV1';
+import { isWorkflowDraftPublicationLifecycleV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { type WorkflowRunRecipientKeyEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
+import { type WorkflowRunWaitConditionV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { resolveWorkflowRunAdmissionVisibilityInTx, storeWorkflowRunInitialKeyEnvelopesInTx, resolveWorkflowRunRecipientAccountIdsInTx } from "./workflowRunAccess";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
 
@@ -44,7 +37,7 @@ import {
     WorkflowRunAccessError, resolveWorkflowRunAccessInTx, readWorkflowRunKeyProjectionInTx,
     resolveWorkflowRunVisibilityScopesInTx, type WorkflowRunAccess,
 } from "./workflowRunAccess";
-import type { WorkflowRunRecipientCensusResponseV1 } from "@happier-dev/protocol/workflows";
+import type { WorkflowRunRecipientCensusResponseV1 } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 
 type WorkflowRunState = WorkflowRunSummaryV1["state"];
 type WorkflowCustodyState = "pending" | "settled";

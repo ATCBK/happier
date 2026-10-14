@@ -1,8 +1,4 @@
-import {
-    parseWorkflowStoredContentEnvelopeV1,
-    validateWorkflowStoredEnvelopeOuterForModeV1,
-    type WorkflowStoredContentBindingV1,
-} from "@happier-dev/protocol/workflows";
+import { parseWorkflowStoredContentEnvelopeV1, validateWorkflowStoredEnvelopeOuterForModeV1, type WorkflowStoredContentBindingV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 
 export class WorkflowStoredContentError extends Error {
     readonly code: "content_unavailable" | "invalid_input";

@@ -1,12 +1,7 @@
-import {
-    MachineRemoteAlertV1Schema,
-    resolveAccountRemoteAlertPolicyCurrentness,
-    resolveExpoNotificationSoundName,
-    resolvePushNotificationAndroidChannelId,
-    resolveRemoteAlertPolicyDecision,
-    shouldMuteMobileAlertsForComputerFocus,
-    type MachineRemoteAlertV1,
-} from '@happier-dev/protocol';
+import { MachineRemoteAlertV1Schema, type MachineRemoteAlertV1 } from '@happier-dev/protocol/push/machineRemoteAlert';
+import { resolveAccountRemoteAlertPolicyCurrentness, resolveRemoteAlertPolicyDecision } from '@happier-dev/protocol/account/settings/accountRemoteAlertPolicy';
+import { resolveExpoNotificationSoundName, resolvePushNotificationAndroidChannelId } from '@happier-dev/protocol/push/pushNotificationActions';
+import { shouldMuteMobileAlertsForComputerFocus } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicyDecision';
 import { eventRouter } from '@/app/events/eventRouter';
 import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { db } from '@/storage/db';

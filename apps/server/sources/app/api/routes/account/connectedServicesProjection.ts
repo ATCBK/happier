@@ -1,10 +1,6 @@
-import {
-    type ConnectedServiceCredentialHealthV1,
-    type ConnectedServiceCredentialRevisionV1,
-    type ConnectedServiceId,
-    type QualifiedConnectedAccountGroupV4,
-    type QualifiedConnectedAccountProfileV4,
-} from "@happier-dev/protocol";
+import { type ConnectedServiceCredentialHealthV1, type ConnectedServiceCredentialRevisionV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { type QualifiedConnectedAccountGroupV4, type QualifiedConnectedAccountProfileV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 import type { Tx } from "@/storage/inTx";
 import { collectLegacyConnectedServiceVendorKeysFromRows } from "../connect/legacyConnectedServiceVendors";

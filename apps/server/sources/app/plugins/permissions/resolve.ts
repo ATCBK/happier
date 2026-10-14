@@ -1,9 +1,5 @@
-import type {
-    PluginPermissionCapabilityV1,
-    PluginPermissionGrantTargetScopeV1,
-    PluginPermissionSubjectV1,
-    PluginPermissionGrantV1,
-} from "@happier-dev/protocol";
+import type { PluginPermissionCapabilityV1 } from '@happier-dev/protocol/plugins/permissions/capabilityV1';
+import type { PluginPermissionGrantTargetScopeV1, PluginPermissionSubjectV1, PluginPermissionGrantV1 } from '@happier-dev/protocol/plugins/permissions/grants';
 
 import { resolveDefaultPluginPermissionGrantAuthority } from "./authority";
 import { createSqlPluginPermissionGrantStore } from "./storage";

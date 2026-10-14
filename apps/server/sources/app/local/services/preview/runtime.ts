@@ -9,7 +9,7 @@ import {
     type LocalServicePreviewDirectBindingV1,
 } from "@happier-dev/protocol/local/services/preview/v1";
 import { LocalServicePreviewNativeDirectAccessV1Schema, type LocalServicePreviewNativeDirectAccessRequestV1, type LocalServicePreviewNativeDirectAccessV1 } from '@happier-dev/protocol/local/services/preview/nativeDirect';
-import type { MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol';
+import type { MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { mintDirectRouteGrantV2, resolvePeerMediationGrantSigningConfig } from '@/app/machines/peer/mediation/mintDirectRouteGrantV1';
 
 import {

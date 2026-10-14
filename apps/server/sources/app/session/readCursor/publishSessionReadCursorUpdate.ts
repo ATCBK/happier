@@ -1,4 +1,4 @@
-import type { SessionViewerProjectionV1 } from "@happier-dev/protocol";
+import type { SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 import { scheduleAccountActivityBadgeRefresh } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { buildUpdateSessionUpdate, eventRouter, type ClientConnection } from "@/app/events/eventRouter";
 import { loadSessionViewerProjection } from "@/app/session/personal/projection";

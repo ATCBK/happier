@@ -1,12 +1,5 @@
-import {
-    assertPluginAccountSettingsContentForModeV1,
-    PluginAccountSettingsContentV1Schema,
-    PluginAccountSettingsMutationRequestV1Schema,
-    type PluginAccountSettingsContentV1,
-} from "@happier-dev/protocol";
-import {
-    buildPluginDomainAccountChangeEntityId,
-} from "@happier-dev/protocol/changes";
+import { assertPluginAccountSettingsContentForModeV1, PluginAccountSettingsContentV1Schema, PluginAccountSettingsMutationRequestV1Schema, type PluginAccountSettingsContentV1 } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
+import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { inTx, type Tx } from "@/storage/inTx";

@@ -1,7 +1,5 @@
 import * as privacyKit from "privacy-kit";
-import {
-    parsePublicShareEncryptedDataKeyEnvelopeV0,
-} from "@happier-dev/protocol";
+import { parsePublicShareEncryptedDataKeyEnvelopeV0 } from '@happier-dev/protocol/crypto/publicShareEncryptedDataKeyEnvelopeV0';
 
 export type EncryptedDataKeyV0ParseResult =
     | Readonly<{ type: "ok"; encryptedDataKey: Uint8Array<ArrayBuffer> }>

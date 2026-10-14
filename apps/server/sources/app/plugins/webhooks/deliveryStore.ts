@@ -1,15 +1,9 @@
 import type { Prisma } from "@prisma/client";
-import type {
-    ContentPublicKeyFingerprint,
-    PluginMachineMaterializationRefV1,
-    PluginWebhookDeliveryMovePendingResultV1,
-} from "@happier-dev/protocol";
-import {
-    decodeBase64,
-    encodeBase64,
-    PLUGIN_WEBHOOK_MAX_STORED_ENVELOPE_BYTES_V1,
-    StoredPluginWebhookDeliveryContentV1Schema,
-} from "@happier-dev/protocol";
+import type { ContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
+import type { PluginMachineMaterializationRefV1 } from '@happier-dev/protocol/plugins/availability/materializationRefV1';
+import type { PluginWebhookDeliveryMovePendingResultV1 } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { PLUGIN_WEBHOOK_MAX_STORED_ENVELOPE_BYTES_V1, StoredPluginWebhookDeliveryContentV1Schema } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
 
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { resolveCurrentClaimablePluginMachineMaterializationTx } from "@/app/plugins/availability/operations";

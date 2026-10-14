@@ -1,4 +1,5 @@
-import { BUG_REPORT_DEFAULT_ACCEPTED_ARTIFACT_KINDS, normalizeBugReportProviderUrl } from "@happier-dev/protocol";
+import { BUG_REPORT_DEFAULT_ACCEPTED_ARTIFACT_KINDS } from '@happier-dev/protocol/features/payload/capabilities/bugReportsCapabilities';
+import { normalizeBugReportProviderUrl } from '@happier-dev/protocol/bugs/reports/sanitize';
 import type { FeaturesPayloadDelta } from "./types";
 import { readBugReportsFeatureEnv } from "./catalog/readFeatureEnv";
 

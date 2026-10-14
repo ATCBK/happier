@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import type { SessionDiscussionAttentionFactsV1 } from "@happier-dev/protocol";
+import type { SessionDiscussionAttentionFactsV1 } from '@happier-dev/protocol/sessions/discussions/models';
 
 import { getActivePrismaRuntime } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";

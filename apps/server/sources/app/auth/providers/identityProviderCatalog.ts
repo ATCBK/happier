@@ -1,4 +1,4 @@
-import type { AuthProviderId } from "@happier-dev/protocol";
+import type { AuthProviderId } from '@happier-dev/protocol/auth/providers';
 import { normalizeOidcAllowRules } from "@/app/auth/providers/oidc/oidcProviderConfig";
 import { managedGitHubAppUserAuthorizationCallbackUrl } from "@/app/integrations/github/githubManagedAppManifest";
 import type {

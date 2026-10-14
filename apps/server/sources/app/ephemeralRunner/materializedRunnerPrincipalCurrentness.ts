@@ -1,4 +1,4 @@
-import { encodeBase64 } from "@happier-dev/protocol";
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 import { RunnerClaimV1Schema } from "@happier-dev/protocol/ephemeralRunner/endpoint";
 

@@ -30,7 +30,7 @@ import {
 } from "@/app/auth/methods/effectiveAccountLoginMethods";
 import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
 import { resolveTeamAuthenticationPolicy, resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
-import { normalizeAuthMethodId } from "@happier-dev/protocol";
+import { normalizeAuthMethodId } from '@happier-dev/protocol/auth/providers';
 import { findIdentityProviderBlockers } from "@/app/auth/providers/accountIdentityLifecycle";
 import {
     readIdentityProviderInstanceInTx,

@@ -1,20 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import {
-    SESSION_SERVER_START_DAEMON_RPC_METHOD_V1,
-    SessionServerStartIngressRequestV1Schema,
-    SessionServerStartDispatchRequestV1Schema,
-    SessionServerStartDispatchResultV1Schema,
-    parseAutomationRunExecutionRecipeV1,
-    sameAutomationAccountCurrentnessWitnessV1,
-    supportsMachineOperationProtocolCapabilityV1,
-    validateAutomationSessionStartRequestEnvelopeOuterForModeV1,
-    validateAutomationRunExecutionRecipeOuterV1,
-    type SessionServerStartDispatchRequestV1,
-    type SessionServerStartDispatchResultV1,
-    type SessionServerStartIngressResponseV1,
-} from "@happier-dev/protocol";
-import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from "@happier-dev/protocol/rpc";
+import { SESSION_SERVER_START_DAEMON_RPC_METHOD_V1, SessionServerStartIngressRequestV1Schema, SessionServerStartDispatchRequestV1Schema, SessionServerStartDispatchResultV1Schema, type SessionServerStartDispatchRequestV1, type SessionServerStartDispatchResultV1, type SessionServerStartIngressResponseV1 } from '@happier-dev/protocol/sessions/creation/sessionServerStartV1';
+import { parseAutomationRunExecutionRecipeV1, validateAutomationRunExecutionRecipeOuterV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { sameAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { supportsMachineOperationProtocolCapabilityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { validateAutomationSessionStartRequestEnvelopeOuterForModeV1 } from '@happier-dev/protocol/automations/automationSessionStartRequestEnvelopeV1';
+import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/socketRpc';
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
 import type { Server } from "socket.io";
 

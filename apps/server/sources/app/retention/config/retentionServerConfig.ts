@@ -1,4 +1,4 @@
-import { defineServerConfigRegistry, type ServerConfigEntry } from '@happier-dev/protocol';
+import { defineServerConfigRegistry, type ServerConfigEntry } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 
 import type { RetentionDomainPolicies } from '@/app/retention/config/retentionPolicyTypes';
 import { readRetentionDomainDefinitions } from '@/app/retention/config/retentionDomains';

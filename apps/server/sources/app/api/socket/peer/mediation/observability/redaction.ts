@@ -1,10 +1,4 @@
-import {
-    redactPeerMediationObservabilityHeaders as redactSharedPeerMediationObservabilityHeaders,
-    redactPeerMediationObservabilityMetadata as redactSharedPeerMediationObservabilityMetadata,
-    redactPeerMediationObservabilityUrl as redactSharedPeerMediationObservabilityUrl,
-    redactedPeerMediationObservabilityReference,
-    type PeerMediationObservabilityHeaders as SharedPeerMediationObservabilityHeaders,
-} from "@happier-dev/protocol";
+import { redactPeerMediationObservabilityHeaders as redactSharedPeerMediationObservabilityHeaders, redactPeerMediationObservabilityMetadata as redactSharedPeerMediationObservabilityMetadata, redactPeerMediationObservabilityUrl as redactSharedPeerMediationObservabilityUrl, redactedPeerMediationObservabilityReference, type PeerMediationObservabilityHeaders as SharedPeerMediationObservabilityHeaders } from '@happier-dev/protocol/machines/peer/mediation/observability/metadataRedaction';
 
 // Server-side peer-mediation observability redaction. The redaction logic itself lives in the single
 // shared protocol owner (`@happier-dev/protocol`); this module only binds the server-specific URL

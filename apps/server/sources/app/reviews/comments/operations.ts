@@ -1,38 +1,9 @@
 import { createHash } from "node:crypto";
-import {
-    reviewCommentMutationInputWithoutEventEnvelopeV1,
-    stringifyReviewCommentPrincipalCanonicalJsonV1,
-    ReviewCommentPublicationTransportRequestV1Schema,
-    type ReviewCommentActorRefV1,
-    type ReviewCommentAttachEvidenceRequestV1,
-    type ReviewCommentAttachEvidenceResponseV1,
-    type ReviewCommentBulkTransitionRequestV1,
-    type ReviewCommentBulkTransitionResponseV1,
-    type ReviewCommentPublicationTransportRequestV1,
-    type ReviewCommentPublicationTransportResponseV1,
-    type ReviewCommentCreateRequestV1,
-    type ReviewCommentCreateResponseV1,
-    type ReviewCommentEditRequestV1,
-    type ReviewCommentEditResponseV1,
-    type ReviewCommentGetRequestV1,
-    type ReviewCommentGetResponseV1,
-    type ReviewCommentListRequestV1,
-    type ReviewCommentListResponseV1,
-    type ReviewCommentRedactRequestV1,
-    type ReviewCommentRedactResponseV1,
-    type ReviewCommentReplyRequestV1,
-    type ReviewCommentReplyResponseV1,
-    type ReviewCommentSetDispositionRequestV1,
-    type ReviewCommentSetDispositionResponseV1,
-    type ReviewCommentTransitionRequestV1,
-    type ReviewCommentTransitionResponseV1,
-    type ReviewCommentV1,
-    projectReviewCommentStructuralMutationV1,
-    type ReviewCommentStructuralMutationV1,
-    type ReviewCommentPrepareMutationRequestV1, type ReviewCommentPrepareMutationResponseV1,
-    type ReviewCommentCommitMutationRequestV1, type ReviewCommentCommitMutationResponseV1,
-    type ReviewCommentStoredSourceV1,
-} from "@happier-dev/protocol";
+import { reviewCommentMutationInputWithoutEventEnvelopeV1 } from '@happier-dev/protocol/reviews/comments/content';
+import { stringifyReviewCommentPrincipalCanonicalJsonV1, type ReviewCommentAttachEvidenceResponseV1, type ReviewCommentBulkTransitionRequestV1, type ReviewCommentBulkTransitionResponseV1, type ReviewCommentCreateResponseV1, type ReviewCommentEditResponseV1, type ReviewCommentGetRequestV1, type ReviewCommentGetResponseV1, type ReviewCommentListRequestV1, type ReviewCommentListResponseV1, type ReviewCommentRedactResponseV1, type ReviewCommentReplyResponseV1, type ReviewCommentSetDispositionResponseV1, type ReviewCommentTransitionResponseV1 } from '@happier-dev/protocol/reviews/comments/actions';
+import { ReviewCommentPublicationTransportRequestV1Schema, type ReviewCommentPublicationTransportRequestV1, type ReviewCommentPublicationTransportResponseV1 } from '@happier-dev/protocol/reviews/comments/publicationTransport';
+import { type ReviewCommentActorRefV1, type ReviewCommentAttachEvidenceRequestV1, type ReviewCommentCreateRequestV1, type ReviewCommentEditRequestV1, type ReviewCommentRedactRequestV1, type ReviewCommentReplyRequestV1, type ReviewCommentSetDispositionRequestV1, type ReviewCommentTransitionRequestV1, type ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
+import { projectReviewCommentStructuralMutationV1, type ReviewCommentStructuralMutationV1, type ReviewCommentPrepareMutationRequestV1, type ReviewCommentPrepareMutationResponseV1, type ReviewCommentCommitMutationRequestV1, type ReviewCommentCommitMutationResponseV1, type ReviewCommentStoredSourceV1 } from '@happier-dev/protocol/reviews/comments/mutation';
 import { createReviewCommentCanonicalMutations } from "./mutations";
 
 import { ReviewCommentOperationError } from "./errors";

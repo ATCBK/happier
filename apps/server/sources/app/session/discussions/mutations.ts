@@ -1,18 +1,8 @@
-import {
-    SessionDiscussionMessageContentV1Schema,
-    SessionDiscussionProducerV1Schema,
-    SessionDiscussionTitleV1Schema,
-    computeSessionMutationEqualityPlainDigestV1,
-    serializeSessionDiscussionMutationEqualityIntentV1,
-    type SessionDiscussionCreateRequestV1,
-    type SessionDiscussionCreateResponseV1,
-    type SessionDiscussionDetailsResponseV1,
-    type SessionDiscussionPostRequestV1,
-    type SessionDiscussionPostResponseV1,
-    type SessionDiscussionProducerV1,
-    type SessionMutationEqualityEvidenceV1,
-    type StrictSessionStoredMessageContentEnvelope,
-} from "@happier-dev/protocol";
+import { SessionDiscussionMessageContentV1Schema, SessionDiscussionProducerV1Schema, SessionDiscussionTitleV1Schema, type SessionDiscussionProducerV1 } from '@happier-dev/protocol/sessions/discussions/content';
+import { computeSessionMutationEqualityPlainDigestV1, type SessionMutationEqualityEvidenceV1 } from '@happier-dev/protocol/sessions/mutations/sessionMutationEqualityV1';
+import { serializeSessionDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/sessions/discussions/equality';
+import { type SessionDiscussionCreateRequestV1, type SessionDiscussionCreateResponseV1, type SessionDiscussionDetailsResponseV1, type SessionDiscussionPostRequestV1, type SessionDiscussionPostResponseV1 } from '@happier-dev/protocol/sessions/discussions/api';
+import { type StrictSessionStoredMessageContentEnvelope } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 
 import { scheduleSessionActivityRemoteAlerts } from "@/app/activity/remoteAlerts/submitSessionActivityRemoteAlerts";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";

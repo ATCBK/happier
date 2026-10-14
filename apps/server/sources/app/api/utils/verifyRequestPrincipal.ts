@@ -1,11 +1,4 @@
-import {
-    AuthTokenProvenanceSchema,
-    AuthTokenProvenanceV2Schema,
-    AuthTokenAuthoritySchema,
-    type AuthTokenKind,
-    type AuthTokenProvenanceAny,
-    type AuthTokenAuthenticationEvidenceV1,
-} from "@happier-dev/protocol";
+import { AuthTokenProvenanceSchema, AuthTokenProvenanceV2Schema, AuthTokenAuthoritySchema, type AuthTokenKind, type AuthTokenProvenanceAny, type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 
 import { auth, type VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";

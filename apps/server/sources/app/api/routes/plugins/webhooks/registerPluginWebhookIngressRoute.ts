@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { PLUGIN_WEBHOOK_MAX_RAW_BODY_BYTES_V1 } from "@happier-dev/protocol";
+import { PLUGIN_WEBHOOK_MAX_RAW_BODY_BYTES_V1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
 import { z } from "zod";
 
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";

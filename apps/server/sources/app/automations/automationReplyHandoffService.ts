@@ -1,14 +1,8 @@
-import {
-    AutomationAccountCurrentnessWitnessV1Schema,
-    AutomationReplyHandoffSettlementV1Schema,
-    MAX_AUTOMATION_SOURCE_RETRY_AFTER_MS,
-    sameAutomationAccountContentIdentityV1,
-    sameAutomationAccountCurrentnessWitnessV1,
-    nextAutomationReplyHandoffIdForRunV1,
-    type AutomationAccountCurrentnessWitnessV1,
-    type AutomationReplyHandoffSettlementV1,
-    type AutomationRunCause,
-} from "@happier-dev/protocol";
+import { AutomationAccountCurrentnessWitnessV1Schema, sameAutomationAccountContentIdentityV1, sameAutomationAccountCurrentnessWitnessV1, type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { AutomationReplyHandoffSettlementV1Schema, type AutomationReplyHandoffSettlementV1 } from '@happier-dev/protocol/automations/event';
+import { MAX_AUTOMATION_SOURCE_RETRY_AFTER_MS } from '@happier-dev/protocol/automations/result-delivery';
+import { nextAutomationReplyHandoffIdForRunV1 } from '@happier-dev/protocol/automations/automationReplyHandoffIdentityV1';
+import { type AutomationRunCause } from '@happier-dev/protocol/automations/run-cause';
 import type { Prisma } from "@prisma/client";
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";

@@ -1,6 +1,4 @@
-import {
-    AccountStoredContentUpgradeRequiredV1Schema,
-} from "@happier-dev/protocol";
+import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
 import * as privacyKit from "privacy-kit";
 import { z } from "zod";
 import { Fastify } from "../../types";

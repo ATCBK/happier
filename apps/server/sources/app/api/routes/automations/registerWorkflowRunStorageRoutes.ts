@@ -1,19 +1,11 @@
 import { z } from "zod";
-import { AutomationAccountCurrentnessWitnessV1Schema, EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from "@happier-dev/protocol";
-import {
-    isWorkflowRunExecutorStorageOperationV1,
-    WorkflowInvocationLifecycleV1Schema,
-    WorkflowRunListRequestV1Schema,
-    WorkflowRunSummariesRequestV1Schema,
-    WorkflowDefinitionIdV1Schema,
-    WorkflowInvocationRecordIdSchema,
-    WorkflowRunDirectOriginV1Schema,
-    WorkflowRunStateV1Schema,
-    WorkflowRunRecipientCensusInputV1Schema,
-    WorkflowRunRecipientKeyEnvelopeCommitInputV1Schema,
-    WorkflowRunRecipientKeyEnvelopesV1Schema,
-    WorkflowRunWaitConditionsV1Schema,
-} from "@happier-dev/protocol/workflows";
+import { AutomationAccountCurrentnessWitnessV1Schema } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol/actions/externalActionLimits';
+import { isWorkflowRunExecutorStorageOperationV1 } from '@happier-dev/protocol/workflows/workflowRunStorageV1';
+import { WorkflowInvocationLifecycleV1Schema, WorkflowRunDirectOriginV1Schema, WorkflowRunStateV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { WorkflowRunListRequestV1Schema, WorkflowRunSummariesRequestV1Schema, WorkflowRunWaitConditionsV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import { WorkflowDefinitionIdV1Schema, WorkflowInvocationRecordIdSchema } from '@happier-dev/protocol/workflows/workflowIdsV1';
+import { WorkflowRunRecipientCensusInputV1Schema, WorkflowRunRecipientKeyEnvelopeCommitInputV1Schema, WorkflowRunRecipientKeyEnvelopesV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 
 import {
     admitWorkflowRun,

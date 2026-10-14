@@ -1,13 +1,6 @@
-import {
-    computeTeamCredentialSourceMemberKeyV1,
-    matchesTeamCredentialSourceVersionBasisV1,
-    parseTeamCredentialDirectMaterialStoredV1,
-    parseTeamCredentialSourceVersionV1,
-    TeamCredentialSourceBindingV1Schema,
-    type TeamCredentialDirectMaterialUseV1,
-    type TeamCredentialDirectMaterialStoredV1,
-    type TeamCredentialPreparationOutputV1,
-} from "@happier-dev/protocol/teams";
+import { computeTeamCredentialSourceMemberKeyV1, matchesTeamCredentialSourceVersionBasisV1, parseTeamCredentialDirectMaterialStoredV1, parseTeamCredentialSourceVersionV1, type TeamCredentialDirectMaterialUseV1, type TeamCredentialDirectMaterialStoredV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { type TeamCredentialPreparationOutputV1 } from '@happier-dev/protocol/teams/credentials/actionsV1';
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import type { Tx } from "@/storage/inTx";

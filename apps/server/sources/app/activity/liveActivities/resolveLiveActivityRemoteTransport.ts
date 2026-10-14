@@ -1,14 +1,7 @@
 import { createPrivateKey } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-import {
-    buildLiveActivityRemoteUpdateCapabilityDiagnostics,
-    resolveLiveActivityRemoteUpdateMode,
-    type LiveActivityDirectApnsConfigurationDiagnostic,
-    type LiveActivityRemoteUpdateCapabilityDiagnostics,
-    type LiveActivityRemoteUpdateMode,
-    type LiveActivityRemoteUpdateModeResolution,
-} from "@happier-dev/protocol";
+import { buildLiveActivityRemoteUpdateCapabilityDiagnostics, resolveLiveActivityRemoteUpdateMode, type LiveActivityDirectApnsConfigurationDiagnostic, type LiveActivityRemoteUpdateCapabilityDiagnostics, type LiveActivityRemoteUpdateMode, type LiveActivityRemoteUpdateModeResolution } from '@happier-dev/protocol/activity/live/remoteUpdateCapabilities';
 
 import { parseBooleanEnv } from "@/config/env";
 

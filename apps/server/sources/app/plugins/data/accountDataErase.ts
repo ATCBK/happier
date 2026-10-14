@@ -1,7 +1,8 @@
 import { recordHomeAdministrationEventInTx } from "@/app/home/audit/homeAdministrationEvents";
-import { PluginIdSchema, type ManagedResourceDependencyV1, type ManagedResourceDispositionV1 } from "@happier-dev/protocol";
+import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
+import { type ManagedResourceDependencyV1, type ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from "@/app/machines/managed/managedRead";
-import { buildPluginDomainAccountChangeEntityId } from "@happier-dev/protocol/changes";
+import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";

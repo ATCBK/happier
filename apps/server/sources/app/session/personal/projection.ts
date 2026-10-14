@@ -1,12 +1,9 @@
 import type { Prisma } from "@prisma/client";
-import {
-    isSessionPersonallyTrackedV1,
-    projectViewerReadStateV1,
-    resolveSessionEffectiveNotificationV1,
-    resolveSessionPersonalAttentionV1,
-    resolveSessionPersonalRelevanceV1,
-    type SessionViewerProjectionV1,
-} from "@happier-dev/protocol";
+import { isSessionPersonallyTrackedV1 } from '@happier-dev/protocol/sessions/personal/tracking';
+import { projectViewerReadStateV1, resolveSessionPersonalRelevanceV1 } from '@happier-dev/protocol/sessions';
+import { resolveSessionEffectiveNotificationV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
+import { resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/sessions/personal/attention';
+import { type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 
 import { inTx } from "@/storage/inTx";
 import {

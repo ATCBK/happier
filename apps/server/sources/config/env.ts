@@ -1,4 +1,4 @@
-export { parseBooleanEnv, parseOptionalBooleanEnv } from "@happier-dev/protocol";
+export { parseBooleanEnv, parseOptionalBooleanEnv } from '@happier-dev/protocol/env/parseBooleanEnv';
 
 export function parseIntEnv(raw: string | undefined, fallback: number, opts?: { min?: number; max?: number }): number {
     if (typeof raw !== "string") return fallback;

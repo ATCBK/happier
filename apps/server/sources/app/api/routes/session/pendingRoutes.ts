@@ -29,18 +29,15 @@ import { publishSessionReadyProjectionUpdate } from "@/app/session/ready/publish
 import { db } from "@/storage/db";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { log } from "@/utils/logging/log";
-import {
-    isSessionAgentTransitionDividerLocalId,
-    ExecutionRunIdSchema,
-    SessionExecutionRunPendingEnqueueRequestV1Schema,
-    PendingDeliveryBlockedReasonSchema,
-    PendingLocalIdSchema,
-    PendingMessageMutationFingerprintV1Schema,
-    PendingRequestedActionV1Schema,
-    PendingActivationFailureRequestV1Schema,
-    SessionStoredMessageContentSchema,
-    StrictSessionStoredMessageContentEnvelopeSchema,
-} from "@happier-dev/protocol";
+import { isSessionAgentTransitionDividerLocalId } from '@happier-dev/protocol/sessions/agentTransitionDivider';
+import { ExecutionRunIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { SessionExecutionRunPendingEnqueueRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
+import { PendingDeliveryBlockedReasonSchema } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
+import { PendingLocalIdSchema } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
+import { PendingMessageMutationFingerprintV1Schema } from '@happier-dev/protocol/sessions/pending/pendingMessageMutationFingerprintV1';
+import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { PendingActivationFailureRequestV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import { SessionStoredMessageContentSchema, StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { PendingActivationFailureQueryV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';

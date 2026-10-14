@@ -1,5 +1,6 @@
-import { RPC_METHODS } from "@happier-dev/protocol/rpc";
-import { readServerConfig, SERVER_CONFIG } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { readStartupHomeEnv } from '@/app/home/settings/startupHomeEnv';
 
 const LONG_STARTUP_GRACE_SCOPED_DAEMON_RPC_METHOD_PREFIXES = [

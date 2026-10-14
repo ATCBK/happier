@@ -1,4 +1,4 @@
-import { MemorySearchQueryV1Schema, MemorySearchResultV1Schema, type MemorySearchQueryV1, type MemorySearchResultV1 } from '@happier-dev/protocol';
+import { MemorySearchQueryV1Schema, MemorySearchResultV1Schema, type MemorySearchQueryV1, type MemorySearchResultV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { z } from 'zod';
 import type { Fastify } from '@/app/api/types';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';

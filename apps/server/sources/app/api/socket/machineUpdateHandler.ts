@@ -10,37 +10,17 @@ import { afterTx, inTx } from "@/storage/inTx";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { recordMachineAlive } from "@/app/presence/presenceRecorder";
 import { submitMachineRemoteAlerts } from '@/app/activity/remoteAlerts/submitMachineRemoteAlerts';
-import {
-    EXTERNAL_SESSION_OPERATION_SOCKET_EVENT_V1,
-    ACTION_OPERATION_REVISION_EPHEMERAL_EVENT_V1,
-    ACTION_OPERATION_SNAPSHOT_PUSH_EVENT_V1,
-    EXTERNAL_SESSION_TRANSCRIPT_INVALIDATION_EVENT_V1,
-    EXTERNAL_SESSION_SOURCE_UNAVAILABLE_OCCURRENCE_EVENT_V1,
-    ExternalSessionTranscriptInvalidationV1Schema,
-    ExternalSessionSourceUnavailableOccurrenceV1Schema,
-    MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1,
-    MACHINE_SESSION_TERMINAL_FINALIZE_EVENT_V1,
-    MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1,
-    SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1,
-    SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2,
-    SessionPendingExecutionRunEnqueueByMachineRequestV2Schema,
-    SESSION_SERVER_START_INGRESS_EVENT_V1,
-    MachineSessionTerminalCaptureRequestV1Schema,
-    MachineSessionTerminalFinalizeRequestV1Schema,
-    MachineUpdateMetadataRequestSchema,
-    MachineUpdateOperationProtocolCapabilitiesRequestV1Schema,
-    SessionPendingEnqueueByMachineRequestV1Schema,
-    isPlainMachineDataKeyMarker,
-    machineStoredContentMatchesAccountMode,
-    machineUpdateMatchesStoredMode,
-    decodePlainMachineStoredContent,
-    isMachinePublishedContentSafeV1,
-    type ExternalSessionOperationSocketBatchLimitResolutionV1,
-    type MachineUpdateMetadataResponse,
-    type MachineSessionTerminalCaptureResponseV1,
-    type MachineSessionTerminalFinalizeResponseV1,
-    type SessionServerStartIngressResponseV1,
-} from "@happier-dev/protocol";
+import { EXTERNAL_SESSION_OPERATION_SOCKET_EVENT_V1, type ExternalSessionOperationSocketBatchLimitResolutionV1 } from '@happier-dev/protocol/sessions/external/operationActionsV1';
+import { ACTION_OPERATION_REVISION_EPHEMERAL_EVENT_V1, ACTION_OPERATION_SNAPSHOT_PUSH_EVENT_V1 } from '@happier-dev/protocol/actions/operations/v1';
+import { EXTERNAL_SESSION_TRANSCRIPT_INVALIDATION_EVENT_V1, EXTERNAL_SESSION_SOURCE_UNAVAILABLE_OCCURRENCE_EVENT_V1, ExternalSessionTranscriptInvalidationV1Schema, ExternalSessionSourceUnavailableOccurrenceV1Schema } from '@happier-dev/protocol/sessions/external/secureRefreshV1';
+import { MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1, MACHINE_SESSION_TERMINAL_FINALIZE_EVENT_V1, MachineSessionTerminalCaptureRequestV1Schema, MachineSessionTerminalFinalizeRequestV1Schema, type MachineSessionTerminalCaptureResponseV1, type MachineSessionTerminalFinalizeResponseV1 } from '@happier-dev/protocol/sessions/control/machineSessionTerminalV1';
+import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1, MachineUpdateOperationProtocolCapabilitiesRequestV1Schema } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, SessionPendingEnqueueByMachineRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
+import { SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2, SessionPendingExecutionRunEnqueueByMachineRequestV2Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
+import { SESSION_SERVER_START_INGRESS_EVENT_V1, type SessionServerStartIngressResponseV1 } from '@happier-dev/protocol/sessions/creation/sessionServerStartV1';
+import { MachineUpdateMetadataRequestSchema, type MachineUpdateMetadataResponse } from '@happier-dev/protocol/machines/metadataUpdate';
+import { isPlainMachineDataKeyMarker, machineStoredContentMatchesAccountMode, machineUpdateMatchesStoredMode, decodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { isMachinePublishedContentSafeV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { projectActionOperationSnapshotPush } from './actionOperationSnapshotPush';
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
 import { enqueuePendingMessageByAuthenticatedMachine, updatePendingRequestedAction } from "@/app/session/pending/pendingMessageService";
@@ -64,10 +44,7 @@ import {
 } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { hasCurrentSocketCredential } from "./socketCredentialCurrentness";
 import { readVerifiedMachineSocketInstallationIdFromSocketData } from "./machineSocketInstallationProof";
-import {
-    TEAM_CREDENTIAL_EXTERNAL_PROVIDER_OPERATION_RETIRE_EVENT_V1,
-    TeamCredentialExternalProviderOperationRetireV1Schema,
-} from "@happier-dev/protocol/teams";
+import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_OPERATION_RETIRE_EVENT_V1, TeamCredentialExternalProviderOperationRetireV1Schema } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 import { retireExternalBrokerOperationInTx } from "@/app/teams/credentials/externalBrokerOperation";
 import { verifyExternalActionMachineRpcExecution } from "@/app/auth/externalActionExecutionAuthorization";
 import * as privacyKit from "privacy-kit";

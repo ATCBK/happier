@@ -33,11 +33,7 @@ import {
     type MachineSerializationRow,
 } from "@/app/machines/machineSerialization";
 import type { FastifyRequest } from "fastify";
-import {
-    isPlainMachineDataKeyMarker,
-    machineStoredContentMatchesAccountMode,
-    machineUpdateMatchesStoredMode,
-} from "@happier-dev/protocol";
+import { isPlainMachineDataKeyMarker, machineStoredContentMatchesAccountMode, machineUpdateMatchesStoredMode } from '@happier-dev/protocol/machines/machineStoredContent';
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
@@ -50,7 +46,7 @@ import { registerMachineAdmissionRoutes } from "./registerMachineAdmissionRoutes
 import { registerMachinePoolRoutes } from "./pools/registerMachinePoolRoutes";
 import { registerMachinePresetRoutes } from "./managed/registerMachinePresetRoutes";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
-import { ManagedEnrollmentCorrelationV1Schema } from "@happier-dev/protocol";
+import { ManagedEnrollmentCorrelationV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { registerManagedMachineRoutes } from "@/app/machines/managed/managedRoutes";
 import { requireManagedMachineRegistrationInTx, linkManagedEnrollmentInTx } from "@/app/machines/managed/managedMutations";
 import { ManagedMachineError, readMachineDevcontainerChildInTx } from "@/app/machines/managed/managedRows";

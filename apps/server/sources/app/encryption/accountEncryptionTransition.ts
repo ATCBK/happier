@@ -7,11 +7,8 @@ import {
 import {
     resolveEffectiveAccountEncryptionModeFromAccountRow,
 } from "@/app/encryption/accountEncryptionMode";
-import {
-    computeAccountEncryptionMigrateKeyFingerprintV1,
-    parseAccountPasswordCredentialV1,
-    type AccountPasswordCredentialV1,
-} from "@happier-dev/protocol";
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { parseAccountPasswordCredentialV1, type AccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import { isE2eePasswordCredentialBoundToAccount } from "@/app/auth/password/e2eePasswordCredentialAccountBinding";
 import {
     acquireAccountSessionOwnerMetadataFenceInTx,

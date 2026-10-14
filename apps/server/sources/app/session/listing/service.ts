@@ -1,10 +1,8 @@
-import type {
-    SessionListQueryResponseV1,
-    SessionListQueryV1,
-    V2SessionListCursorV2,
-    V2SessionListResponse,
-} from "@happier-dev/protocol";
-import { SESSION_LIST_PAGE_DEFAULT_LIMIT, SessionListQueryResponseV1Schema } from "@happier-dev/protocol";
+import type { SessionListQueryResponseV1 } from '@happier-dev/protocol/sessions/listing/response';
+import type { SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
+import type { V2SessionListCursorV2, V2SessionListResponse } from '@happier-dev/protocol/sessions/control/contract';
+import { SESSION_LIST_PAGE_DEFAULT_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import type { Prisma } from "@prisma/client";
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";

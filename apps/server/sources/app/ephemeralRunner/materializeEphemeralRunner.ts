@@ -1,9 +1,7 @@
-import {
-    computeCanonicalDomainSeparatedDigest,
-    createCanonicalJsonSigningInput,
-    isPlainMachineDataKeyMarker,
-    pluginJsonValuesEqual,
-} from "@happier-dev/protocol";
+import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { isPlainMachineDataKeyMarker } from '@happier-dev/protocol/machines/machineStoredContent';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { RunnerClaimV1Schema } from "@happier-dev/protocol/ephemeralRunner/endpoint";
 import {
     RunnerMaterializationRequestV1Schema,

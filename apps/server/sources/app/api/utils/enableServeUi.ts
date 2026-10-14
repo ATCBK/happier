@@ -4,7 +4,8 @@ import { extname, isAbsolute, relative, resolve } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import { warn } from "@/utils/logging/log";
 import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
-import { readServerConfig, SERVER_CONFIG } from '@happier-dev/protocol';
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { createReadStream, existsSync } from "node:fs";
 import { isServerApiPathname } from "./serverApiPath";
 

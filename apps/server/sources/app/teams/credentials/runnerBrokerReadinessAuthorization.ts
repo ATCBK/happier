@@ -1,10 +1,7 @@
-import {
-    readMachineIrohEndpointAuthorityV1,
-    type RunnerBrokerReadinessRequestV1,
-    type TeamCredentialResourceReadinessV1,
-    type RunnerCredentialSelectionBindingV1,
-    type RunnerBrokerReadinessProjectionV1,
-} from "@happier-dev/protocol";
+import { readMachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { type RunnerBrokerReadinessRequestV1 } from '@happier-dev/protocol/ephemeralRunner/brokerReadinessRequestV1';
+import { type TeamCredentialResourceReadinessV1, type RunnerBrokerReadinessProjectionV1 } from '@happier-dev/protocol/teams/credentials/readinessV1';
+import { type RunnerCredentialSelectionBindingV1 } from '@happier-dev/protocol/ephemeralRunner/review';
 
 import { verifyRunnerBrokerReadinessCurrentnessInTx } from "@/app/ephemeralRunner/runnerBrokerReadinessVerification";
 import { inTx } from "@/storage/inTx";

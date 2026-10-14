@@ -3,12 +3,8 @@ import { getDbProviderFromEnv } from "@/storage/prisma";
 import { buildAccountChangeWakeUpdate } from "@/app/events/eventPayloadBuilders";
 import { eventRouter } from "@/app/events/connectionEventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
-import {
-    ChangeKindSchema,
-    PluginDomainChangeHintSchema,
-    buildPluginDomainAccountChangeEntityId,
-    type ChangeKind,
-} from "@happier-dev/protocol/changes";
+import { ChangeKindSchema, type ChangeKind } from '@happier-dev/protocol/changes';
+import { PluginDomainChangeHintSchema, buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
 function preserveCollectionFullHint(existingHint: unknown, nextHint: unknown): unknown {
     const existing = PluginDomainChangeHintSchema.safeParse(existingHint);

@@ -1,10 +1,7 @@
 import { z } from "zod";
 import * as privacyKit from "privacy-kit";
 
-import {
-    AccountSettingsStoredContentEnvelopeSchema,
-    type AccountSettingsStoredContentEnvelope,
-} from "@happier-dev/protocol";
+import { AccountSettingsStoredContentEnvelopeSchema, type AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
 import { decryptString, encryptString } from "@/modules/encrypt";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 

@@ -10,21 +10,12 @@ import {
     type SessionTranscriptWriteRejectionCode,
 } from "@/app/session/sessionTranscriptWrite";
 import type { Tx } from "@/storage/inTx";
-import {
-    PendingRequestedActionV1Schema,
-    deriveSessionMessageAuthorAccountIdV1,
-    readStoredSessionMessageDeliveryResolutionV1,
-    readSessionInputAuthority,
-    serializeSessionInputRequestEqualityIntentV1,
-    SessionInputAdmissionReceiptV1Schema,
-    SessionInputRequestEqualityEvidenceV1Schema,
-    type SessionEncryptionMode,
-    type SessionInputAdmissionReceiptV1,
-    type SessionInputRequestEqualityEvidenceV1,
-    type SessionMessageDeliveryResolutionV1,
-    type SessionMessageRole,
-    type PendingRequestedActionV1,
-} from "@happier-dev/protocol";
+import { PendingRequestedActionV1Schema, type PendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { deriveSessionMessageAuthorAccountIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
+import { readStoredSessionMessageDeliveryResolutionV1, type SessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import { readSessionInputAuthority, serializeSessionInputRequestEqualityIntentV1, SessionInputAdmissionReceiptV1Schema, SessionInputRequestEqualityEvidenceV1Schema, type SessionInputAdmissionReceiptV1, type SessionInputRequestEqualityEvidenceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { type SessionEncryptionMode } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
+import { type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { notifySessionTranscriptMutationAfterCommit } from '../sessionTranscriptMutationObserver';
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";

@@ -1,9 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 
-import {
-    verifyAccountContentKeyBindingV1,
-    type ContentPublicKeyFingerprint,
-} from "@happier-dev/protocol";
+import { verifyAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
+import { type ContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 import tweetnacl from "tweetnacl";
 
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";

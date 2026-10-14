@@ -1,18 +1,11 @@
 import { createHash } from "node:crypto";
 
-import {
-    BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID,
-    ConnectedServiceIdSchema,
-    PluginContributionLocalIdSchema,
-    QualifiedConnectedAccountGroupRefSchema,
-    QualifiedConnectedAccountRefSchema,
-    QualifiedConnectedAccountServiceRefSchema,
-    type ConnectedServiceId,
-    type BuiltInLegacyConnectedServiceId,
-    type QualifiedConnectedAccountGroupRef,
-    type QualifiedConnectedAccountRef,
-    type QualifiedConnectedAccountServiceRef,
-} from "@happier-dev/protocol";
+import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID, type BuiltInLegacyConnectedServiceId } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
+import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { PluginContributionLocalIdSchema } from '@happier-dev/protocol/plugins/contribution-identity';
+import { QualifiedConnectedAccountGroupRefSchema, QualifiedConnectedAccountServiceRefSchema, type QualifiedConnectedAccountGroupRef } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { type QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 function createQualifiedIdentityDigest(
     kind: "account" | "group",

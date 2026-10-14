@@ -1,15 +1,8 @@
 import { z } from "zod";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
-import {
-    AUTOMATION_INT_COLUMN_MAX,
-    AUTOMATION_TEMPLATE_CIPHERTEXT_MAX_CHARS,
-    AUTOMATION_TEMPLATE_ENCRYPTED_V1_KIND,
-    AUTOMATION_TEMPLATE_PLAIN_V1_KIND,
-    AutomationTemplateEnvelopeSchema,
-    LegacyEncryptedAutomationTemplateEnvelopeSchema,
-    LegacyPlainAutomationTemplateEnvelopeSchema,
-    type AutomationEventFilterPayloadSchemaValidationIssueV1,
-} from "@happier-dev/protocol";
+import { AUTOMATION_INT_COLUMN_MAX } from '@happier-dev/protocol/automations/automationColumnBoundsV1';
+import { AUTOMATION_TEMPLATE_CIPHERTEXT_MAX_CHARS, AUTOMATION_TEMPLATE_ENCRYPTED_V1_KIND, AUTOMATION_TEMPLATE_PLAIN_V1_KIND, AutomationTemplateEnvelopeSchema, LegacyEncryptedAutomationTemplateEnvelopeSchema, LegacyPlainAutomationTemplateEnvelopeSchema } from '@happier-dev/protocol/automations/automationTemplateEnvelope';
+import { type AutomationEventFilterPayloadSchemaValidationIssueV1 } from '@happier-dev/protocol/automations/event';
 
 import { computeNextDueAtForAutomation } from "./automationSchedulingService";
 

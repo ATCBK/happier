@@ -1,4 +1,4 @@
-import { SessionMessageRoleSchema, type SessionMessageRole } from "@happier-dev/protocol";
+import { SessionMessageRoleSchema, type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { sessionMessageRoleMismatchCounter } from "@/app/monitoring/metrics/sessionWriteMetrics";
 import { warn } from "@/utils/logging/log";
 

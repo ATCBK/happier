@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { SESSION_LIST_PAGE_MAX_LIMIT } from "@happier-dev/protocol";
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
 
 /**
  * One existing page-sized work batch. This is an internal memory/bind bound,

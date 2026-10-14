@@ -1,8 +1,6 @@
-import { normalizeAuthMethodId } from "@happier-dev/protocol";
-import type {
-    AuthTokenAuthenticationEvidenceV1,
-    TeamAcceptedAuthenticationV1,
-} from "@happier-dev/protocol";
+import { normalizeAuthMethodId } from '@happier-dev/protocol/auth/providers';
+import type { AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
+import type { TeamAcceptedAuthenticationV1 } from '@happier-dev/protocol/auth/entry';
 
 import { resolveCurrentAuthenticationEvidenceForTeamQualificationInTx } from "@/app/auth/authenticationEvidence";
 import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";

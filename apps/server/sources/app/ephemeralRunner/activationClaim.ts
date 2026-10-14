@@ -1,4 +1,4 @@
-import { pluginJsonValuesEqual } from '@happier-dev/protocol';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { verifyRunnerClaimV1, type RunnerClaimV1 } from '@happier-dev/protocol/ephemeralRunner/endpoint';
 import { acquireAccountSessionOwnerMetadataFenceInTx, AccountSessionOwnerMetadataFenceAccountNotFoundError } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { inTx } from '@/storage/inTx';

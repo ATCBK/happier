@@ -6,7 +6,7 @@ import {
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 import { log } from '@/utils/logging/log';
 import { mapPendingActivationAuthorization, readPendingActivationTargetInTx, type PendingActivationTarget } from './pendingActivationAuthorization';
-import type { ParticipantExecutionRunRecipientRoutingIdentityV1 } from '@happier-dev/protocol';
+import type { ParticipantExecutionRunRecipientRoutingIdentityV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import { inTx, type Tx } from '@/storage/inTx';
 import { readPendingManagedWakeTargetInTx } from '@/app/machines/managed/managedWake';
 import { PendingActivationRequestedEphemeralV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';

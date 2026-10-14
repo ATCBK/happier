@@ -1,11 +1,6 @@
 import { z } from "zod";
 
-import {
-    AccountPetAssetReadResponseV1Schema,
-    AccountPetCreateResponseV1Schema,
-    AccountPetDeleteResponseV1Schema,
-    AccountPetListResponseV1Schema,
-} from "@happier-dev/protocol";
+import { AccountPetAssetReadResponseV1Schema, AccountPetCreateResponseV1Schema, AccountPetDeleteResponseV1Schema, AccountPetListResponseV1Schema } from '@happier-dev/protocol/pets/accountLibrary';
 
 import { readPetsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";

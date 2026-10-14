@@ -1,5 +1,7 @@
-import type { UsageObservationCost } from "@happier-dev/protocol";
-import { createStoredReadSchema, readUsageAccountingMetadata, resolveUsageCostBasis, UsageNativeAccountingSubjectSchema, UsageObservationCostSchema } from "@happier-dev/protocol";
+import type { UsageObservationCost } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { readUsageAccountingMetadata, UsageNativeAccountingSubjectSchema, UsageObservationCostSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { resolveUsageCostBasis } from '@happier-dev/protocol/usage/usageCostFacts';
 
 import type { ScopedUsageEventRow } from "./resolveScopedUsageContributions";
 

@@ -22,7 +22,7 @@ import {
 import { RunnerArtifactAvailabilityProjectionV1Schema } from '@happier-dev/protocol/ephemeralRunner/runnerArtifact';
 import { RunnerServerErrorV1Schema } from '@happier-dev/protocol/ephemeralRunner/errors';
 import { RunnerCredentialSelectionResolutionRequestV1Schema, RunnerCredentialSelectionResolutionResponseV1Schema } from '@happier-dev/protocol/teams';
-import { RPC_METHODS } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import {
     EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1,
     EPHEMERAL_RUNNER_CREATOR_RECIPIENT_PATH_V1,

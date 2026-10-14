@@ -1,14 +1,7 @@
-import {
-    SESSION_DISCUSSION_RECENT_AUTHOR_AVATAR_STACK_V1,
-    SessionDiscussionMessageContentV1Schema,
-    SessionDiscussionProducerV1Schema,
-    SessionDiscussionTitleV1Schema,
-    StrictSessionStoredMessageContentEnvelopeSchema,
-    type SessionDiscussionCapabilitiesV1,
-    type SessionDiscussionMessageV1,
-    type SessionDiscussionSummaryV1,
-    type SessionMessageAccountActorV1,
-} from "@happier-dev/protocol";
+import { SESSION_DISCUSSION_RECENT_AUTHOR_AVATAR_STACK_V1, type SessionDiscussionCapabilitiesV1, type SessionDiscussionMessageV1, type SessionDiscussionSummaryV1 } from '@happier-dev/protocol/sessions/discussions/models';
+import { SessionDiscussionMessageContentV1Schema, SessionDiscussionProducerV1Schema, SessionDiscussionTitleV1Schema } from '@happier-dev/protocol/sessions/discussions/content';
+import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { type SessionMessageAccountActorV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 
 import type { EffectiveSessionAccess } from "@/app/session/access/sessionAccess";
 import { getActivePrismaRuntime } from "@/storage/prisma";

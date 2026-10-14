@@ -1,15 +1,5 @@
 import { z } from 'zod';
-import {
-    MachineAccessGrantSetInputV1Schema,
-    MachineAccessGrantRemoveInputV1Schema,
-    MachineAccessGrantsListResultV1Schema,
-    MachineAccessMutationResultV1Schema,
-    MachineAccessRecipientCensusResponseV1Schema,
-    MachineAccessRefusalV1Schema,
-    MachineRecipientKeyEnvelopeCommitInputV1Schema,
-    MachineRecipientKeyEnvelopeCommitResponseV1Schema,
-    MachineRecipientKeyEnvelopePageQueryV1Schema,
-} from '@happier-dev/protocol';
+import { MachineAccessGrantSetInputV1Schema, MachineAccessGrantRemoveInputV1Schema, MachineAccessGrantsListResultV1Schema, MachineAccessMutationResultV1Schema, MachineAccessRecipientCensusResponseV1Schema, MachineAccessRefusalV1Schema, MachineRecipientKeyEnvelopeCommitInputV1Schema, MachineRecipientKeyEnvelopeCommitResponseV1Schema, MachineRecipientKeyEnvelopePageQueryV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import {
     commitMachineRecipientKeyEnvelopesInTx,
     listMachineAccessGrantsInTx,

@@ -1,11 +1,5 @@
-import {
-  CLAUDE_OAUTH_CLIENT_ID,
-  CLAUDE_OAUTH_PROFILE_HEADERS,
-  CLAUDE_OAUTH_PROFILE_URL,
-  CLAUDE_OAUTH_TOKEN_URL,
-  OPENAI_CODEX_CLIENT_ID,
-  OPENAI_CODEX_TOKEN_URL,
-} from "@happier-dev/protocol";
+import { CLAUDE_OAUTH_CLIENT_ID, CLAUDE_OAUTH_PROFILE_HEADERS, CLAUDE_OAUTH_PROFILE_URL, CLAUDE_OAUTH_TOKEN_URL } from '@happier-dev/protocol/providers/claude/oauth-profile';
+import { OPENAI_CODEX_CLIENT_ID, OPENAI_CODEX_TOKEN_URL } from '@happier-dev/protocol/providers/codex/oauth';
 
 function resolveNonEmptyEnv(raw: string | undefined, fallback: string): string {
   if (typeof raw !== "string") return fallback;

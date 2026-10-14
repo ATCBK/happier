@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 
-import type {
-    LiveActivityApnsDeliveryClassification,
-    LiveActivityRemoteUpdateRequestV1,
-} from "@happier-dev/protocol";
+import type { LiveActivityApnsDeliveryClassification } from '@happier-dev/protocol/activity/live/apnsDelivery';
+import type { LiveActivityRemoteUpdateRequestV1 } from '@happier-dev/protocol/activity/live/remoteUpdates';
 import type { AccountLiveActivityTarget, Prisma } from "@prisma/client";
 
 import { db } from "@/storage/db";

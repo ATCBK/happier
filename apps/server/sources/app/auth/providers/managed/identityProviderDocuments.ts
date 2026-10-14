@@ -6,10 +6,7 @@ import {
     type TeamIdentityConnectionExternalReferenceV1,
     type TeamIdentityConnectionSettingsV1,
 } from "@happier-dev/protocol/teams";
-import {
-    ManagedIdentityProviderKindV1Schema,
-    type ManagedIdentityProviderKindV1,
-} from "@happier-dev/protocol";
+import { ManagedIdentityProviderKindV1Schema, type ManagedIdentityProviderKindV1 } from '@happier-dev/protocol/home/governance';
 
 export const ManagedIdentityProviderKindSchema = ManagedIdentityProviderKindV1Schema;
 export type ManagedIdentityProviderKind = ManagedIdentityProviderKindV1;

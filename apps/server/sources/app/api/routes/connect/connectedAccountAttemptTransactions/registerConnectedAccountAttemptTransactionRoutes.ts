@@ -1,4 +1,4 @@
-import { StoredJsonContentEnvelopeSchema } from "@happier-dev/protocol";
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import { z } from "zod";
 import type { FastifyReply } from "fastify";
 

@@ -35,10 +35,7 @@ import {
     type TeamErrorV1,
     type TeamIdentityErrorCodeV1,
 } from "@happier-dev/protocol/teams";
-import {
-    TEAM_DIRECTORY_ACTION_PATHS_V1,
-    TEAM_EXTERNAL_GROUP_BINDING_ACTION_PATHS_V1,
-} from "@happier-dev/protocol/actions";
+import { TEAM_DIRECTORY_ACTION_PATHS_V1, TEAM_EXTERNAL_GROUP_BINDING_ACTION_PATHS_V1 } from '@happier-dev/protocol/teams';
 
 import type { Fastify } from "@/app/api/types";
 import { readTeamOperationAuthenticationFromRequest } from "../actorContext";

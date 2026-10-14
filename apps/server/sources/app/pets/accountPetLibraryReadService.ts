@@ -1,7 +1,4 @@
-import type {
-    AccountPetListResponseV1,
-    AccountPetSyncUnavailableResponseV1,
-} from "@happier-dev/protocol";
+import type { AccountPetListResponseV1, AccountPetSyncUnavailableResponseV1 } from '@happier-dev/protocol/pets/accountLibrary';
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { inTx } from "@/storage/inTx";

@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { PLUGIN_COLLECTION_INDEX_SORT_KEY_MAX_BYTES_V1 } from "@happier-dev/protocol";
+import { PLUGIN_COLLECTION_INDEX_SORT_KEY_MAX_BYTES_V1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { z } from "zod";
 
 import type { Tx } from "@/storage/inTx";

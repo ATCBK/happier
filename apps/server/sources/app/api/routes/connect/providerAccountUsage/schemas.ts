@@ -1,17 +1,10 @@
 import { z } from "zod";
 
-import {
-    ConnectedServiceIdSchema,
-    ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema,
-    ConnectedServiceUsageSourceV1Schema,
-    ProviderAccountUsageRecordIdSchema,
-    ProviderAccountUsageRecordKeyV1Schema,
-    ProviderAccountUsageRecordWriteV1Schema,
-    ProviderAccountUsageSnapshotV1Schema,
-    ProviderAccountSubscriptionV1Schema,
-    SealedConnectedServiceQuotaSnapshotV1Schema,
-    SealedProviderAccountUsageSnapshotV1Schema,
-} from "@happier-dev/protocol";
+import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema, ConnectedServiceUsageSourceV1Schema, SealedConnectedServiceQuotaSnapshotV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { ProviderAccountUsageRecordIdSchema, ProviderAccountUsageRecordKeyV1Schema, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { ProviderAccountUsageRecordWriteV1Schema, SealedProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/accountUsage';
+import { ProviderAccountSubscriptionV1Schema } from '@happier-dev/protocol/connect/accountSubscription';
 import type { ProviderAccountUsagePayloadMode, ProviderAccountUsageStatus } from "./types";
 
 export const ProviderAccountUsagePayloadModeSchema = z.enum([

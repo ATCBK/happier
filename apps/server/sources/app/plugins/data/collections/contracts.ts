@@ -1,19 +1,9 @@
 import type { Prisma } from "@prisma/client";
-import {
-    PluginAccountCollectionContributionV1Schema,
-    PluginCollectionContractRefV1Schema,
-    PluginCollectionMigrationDeclarationV1Schema,
-    PluginCollectionQuotaRequestV1Schema,
-    PluginCollectionUiQueryDescriptorV1Schema,
-    PluginIdSchema,
-    PluginManifestV2Schema,
-    normalizePluginAccountCollectionContractV1,
-    normalizePluginAccountCollectionContractsV1,
-    type NormalizedPluginAccountCollectionContractV1,
-    type PluginAccountCollectionContributionV1,
-    type PluginCollectionContractRefV1,
-    type PluginCollectionQuotaDimensionV1,
-} from "@happier-dev/protocol";
+import { PluginAccountCollectionContributionV1Schema, PluginCollectionMigrationDeclarationV1Schema, PluginCollectionQuotaRequestV1Schema, PluginCollectionUiQueryDescriptorV1Schema, type PluginAccountCollectionContributionV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
+import { PluginCollectionContractRefV1Schema, type PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
+import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
+import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
+import { normalizePluginAccountCollectionContractV1, normalizePluginAccountCollectionContractsV1, type NormalizedPluginAccountCollectionContractV1, type PluginCollectionQuotaDimensionV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { z } from "zod";
 
 import { readPluginsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";

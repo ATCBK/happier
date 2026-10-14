@@ -1,9 +1,7 @@
-import {
-    ServerRetentionPolicyV2Schema,
-    type HomeConnectionDescriptorV1,
-    type HomeHostFact,
-    type HomeSearchCapabilities,
-} from '@happier-dev/protocol';
+import { ServerRetentionPolicyV2Schema } from '@happier-dev/protocol/retention/serverRetentionPolicyV2';
+import { type HomeConnectionDescriptorV1 } from '@happier-dev/protocol/auth/accountDirectory';
+import { type HomeHostFact } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { type HomeSearchCapabilities } from '@happier-dev/protocol/features/payload/capabilities/homeSearchCapabilities';
 import { readHomeHostFact } from '@happier-dev/cli-common/process';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { type Fastify } from '../../types';

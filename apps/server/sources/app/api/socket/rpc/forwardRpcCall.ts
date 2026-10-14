@@ -1,19 +1,14 @@
 import type { Server, Socket } from "socket.io";
 import { randomUUID } from "node:crypto";
 import type { CallerInputConstraintsV1 } from "@happier-dev/protocol/auth/apiTokenGrant";
-import type { ExternalActionExecutionAuthorizationV1, ExternalActionRequestEnvelope } from "@happier-dev/protocol/actions";
+import type { ExternalActionExecutionAuthorizationV1, ExternalActionRequestEnvelope } from '@happier-dev/protocol/actions/externalActionApi';
 
-import {
-    isPlainMachineDataKeyMarker,
-    type SocketRpcMachineAdmissionContextV1,
-    type AnyClientUpgradeRequiredV1,
-} from "@happier-dev/protocol";
-import {
-    RPC_ERROR_CODES,
-    RPC_METHODS,
-    RPC_ERROR_MESSAGES,
-    type SocketRpcAuthorizationContext,
-} from "@happier-dev/protocol/rpc";
+import { isPlainMachineDataKeyMarker } from '@happier-dev/protocol/machines/machineStoredContent';
+import { type SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/machines/machineAccessV1';
+import { type AnyClientUpgradeRequiredV1 } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
+import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { type SocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import {
     SOCKET_RPC_EVENTS,
     SocketRpcTransportResponseEnvelopeV1Schema,

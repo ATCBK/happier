@@ -1,17 +1,6 @@
-import {
-    bindReviewCommentEventSensitiveEnvelopeV1,
-    BoundReviewCommentEventSensitiveEnvelopeV1Schema,
-    ReviewCommentEventRequestBindingV1Schema,
-    ReviewCommentEventV1Schema,
-    openReviewCommentEventSensitiveEnvelopeV1,
-    sealReviewCommentEventSensitiveEnvelopeV1,
-    StoredJsonContentEnvelopeSchema,
-    reviewCommentEventSensitiveBindingMatchesV1,
-    type BoundReviewCommentEventSensitiveEnvelopeV1,
-    type ReviewCommentEventV1,
-    type ReviewCommentEventRequestBindingV1,
-    type StoredJsonContentEnvelope,
-} from "@happier-dev/protocol";
+import { bindReviewCommentEventSensitiveEnvelopeV1, BoundReviewCommentEventSensitiveEnvelopeV1Schema, ReviewCommentEventRequestBindingV1Schema, openReviewCommentEventSensitiveEnvelopeV1, sealReviewCommentEventSensitiveEnvelopeV1, reviewCommentEventSensitiveBindingMatchesV1, type BoundReviewCommentEventSensitiveEnvelopeV1, type ReviewCommentEventRequestBindingV1 } from '@happier-dev/protocol/reviews/comments/content';
+import { ReviewCommentEventV1Schema, type ReviewCommentEventV1 } from '@happier-dev/protocol/reviews/comments/v1';
+import { StoredJsonContentEnvelopeSchema, type StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 
 import { ReviewCommentOperationError } from "./errors";
 

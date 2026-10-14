@@ -1,28 +1,5 @@
-import {
-    TeamErrorV1Schema,
-    TeamIdentityConnectionCreateInputV1Schema,
-    TeamIdentityConnectionListInputV1Schema,
-    TeamIdentityConnectionListResultV1Schema,
-    TeamIdentityConnectionMutationResultV1Schema,
-    TeamIdentityConnectionRefInputV1Schema,
-    TeamIdentityConnectionSettingsUpdateInputV1Schema,
-    TeamIdentityConnectionRemoveResultV1Schema,
-    TeamIdentityConnectionRemovalPreflightV1Schema,
-    TeamIdentityConnectionTestConsumeInputV1Schema,
-    TeamIdentityConnectionTestConsumeResultV1Schema,
-    TeamIdentityConnectionTestStartInputV1Schema,
-    TeamIdentityConnectionTestStartResultV1Schema,
-    TeamIdentityErrorV1Schema,
-    TeamIdentityWorkosAdminPortalLinkCreateInputV1Schema,
-    TeamIdentityWorkosAdminPortalLinkCreateResultV1Schema,
-    TeamIdentityWorkosConnectionCreateInputV1Schema,
-    TeamIdentityWorkosConnectionSetInputV1Schema,
-    TeamIdentityWorkosReconcileInputV1Schema,
-    TeamIdentityWorkosReconcileResultV1Schema,
-    buildTeamMemberSignInUrl,
-    teamIdentityErrorHttpStatusV1,
-    type TeamIdentityErrorCodeV1,
-} from "@happier-dev/protocol/teams";
+import { TeamErrorV1Schema, TeamIdentityConnectionCreateInputV1Schema, TeamIdentityConnectionListInputV1Schema, TeamIdentityConnectionListResultV1Schema, TeamIdentityConnectionMutationResultV1Schema, TeamIdentityConnectionRefInputV1Schema, TeamIdentityConnectionSettingsUpdateInputV1Schema, TeamIdentityConnectionRemoveResultV1Schema, TeamIdentityConnectionRemovalPreflightV1Schema, TeamIdentityConnectionTestConsumeInputV1Schema, TeamIdentityConnectionTestConsumeResultV1Schema, TeamIdentityConnectionTestStartInputV1Schema, TeamIdentityConnectionTestStartResultV1Schema, TeamIdentityErrorV1Schema, TeamIdentityWorkosAdminPortalLinkCreateInputV1Schema, TeamIdentityWorkosAdminPortalLinkCreateResultV1Schema, TeamIdentityWorkosConnectionCreateInputV1Schema, TeamIdentityWorkosConnectionSetInputV1Schema, TeamIdentityWorkosReconcileInputV1Schema, TeamIdentityWorkosReconcileResultV1Schema, teamIdentityErrorHttpStatusV1, type TeamIdentityErrorCodeV1 } from '@happier-dev/protocol/teams';
+import { buildTeamMemberSignInUrl } from '@happier-dev/protocol/teams/invitation';
 import { HOME_IDENTITY_ACTION_PATHS_V1, TEAM_IDENTITY_ACTION_PATHS_V1 } from "@happier-dev/protocol/actions";
 import * as home from "@happier-dev/protocol/home";
 import { z } from "zod";

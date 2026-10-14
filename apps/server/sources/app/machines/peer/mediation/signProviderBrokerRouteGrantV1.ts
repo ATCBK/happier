@@ -1,9 +1,4 @@
-import {
-    SignedProviderBrokerRouteGrantV1Schema,
-    ProviderBrokerRouteGrantPayloadV1Schema,
-    createProviderBrokerRouteGrantSigningInputV1,
-    type SignedProviderBrokerRouteGrantV1,
-} from '@happier-dev/protocol';
+import { SignedProviderBrokerRouteGrantV1Schema, ProviderBrokerRouteGrantPayloadV1Schema, createProviderBrokerRouteGrantSigningInputV1, type SignedProviderBrokerRouteGrantV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import tweetnacl from 'tweetnacl';
 import { signRouteGrantPayload } from './mintDirectRouteGrantV1';
 import { SignedProviderBrokerRouteGrantV2Schema, createProviderBrokerRouteGrantSigningInputV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';

@@ -1,4 +1,4 @@
-import type { HomeAccountRowV1 } from "@happier-dev/protocol";
+import type { HomeAccountRowV1 } from '@happier-dev/protocol/home/governance';
 
 import { auth } from "@/app/auth/auth";
 import { eventRouter } from "@/app/events/connectionEventRouter";

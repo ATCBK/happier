@@ -10,14 +10,12 @@ import type { TeamCredentialResourceTestBrokerDispatch } from "@/app/api/routes/
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import type { AccountStoredContentCompatibilityEvaluation } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import type { MachineDaemonPresenceSocketServer } from "@/app/machines/machineDaemonPresence";
-import type {
-    AutomationReplyHandoffDispatchResultV1,
-    SessionServerStartDispatchResultV1,
-} from "@happier-dev/protocol";
-import type { AuthTokenAuthenticationEvidenceV1 } from "@happier-dev/protocol";
+import type { AutomationReplyHandoffDispatchResultV1 } from '@happier-dev/protocol/automations/event';
+import type { SessionServerStartDispatchResultV1 } from '@happier-dev/protocol/sessions/creation/sessionServerStartV1';
+import type { AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
-import type { ExternalActionTargetV1, ExternalActionExecutionAuthorizationBindingV1 } from "@happier-dev/protocol/actions";
-import type { ActionId } from "@happier-dev/protocol/actions";
+import type { ExternalActionTargetV1, ExternalActionExecutionAuthorizationBindingV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { CallerInputConstraintsV1 } from "@happier-dev/protocol/auth/apiTokenGrant";
 import type { CurrentSessionPublisherAuthority } from '@/app/presence/sessionPublisherPresence';
 

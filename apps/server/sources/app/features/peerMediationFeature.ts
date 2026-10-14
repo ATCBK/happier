@@ -1,7 +1,5 @@
-import type {
-    PeerFlowKindV1,
-    PeerMediationObservabilityEventKindV1,
-} from '@happier-dev/protocol';
+import type { PeerFlowKindV1 } from '@happier-dev/protocol/machines/peer/mediation/flowKind';
+import type { PeerMediationObservabilityEventKindV1 } from '@happier-dev/protocol/machines/peer/mediation/observability/v1';
 
 import { readPeerMediationFeatureEnv } from './catalog/readFeatureEnv';
 import type { FeaturesPayloadDelta } from './types';

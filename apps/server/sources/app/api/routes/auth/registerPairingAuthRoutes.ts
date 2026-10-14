@@ -1,7 +1,7 @@
 import { z } from "zod";
 import tweetnacl from "tweetnacl";
 import * as privacyKit from "privacy-kit";
-import { HomeQrPairingStatusV2Schema, verifyHomeQrRendezvousSecretV2 } from "@happier-dev/protocol";
+import { HomeQrPairingStatusV2Schema, verifyHomeQrRendezvousSecretV2 } from '@happier-dev/protocol/crypto/qrProvisioningV2';
 
 import { db } from "@/storage/db";
 import { isPrismaUniqueConstraintError } from "@/storage/prisma";

@@ -1,27 +1,22 @@
-import { ExternalSessionStorageStateV1Schema, projectAccountNameToLegacyFieldsV1, type SessionViewerProjectionV1 } from "@happier-dev/protocol";
+import { ExternalSessionStorageStateV1Schema } from '@happier-dev/protocol/sessions/external/operationV1';
+import { projectAccountNameToLegacyFieldsV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
+import { type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 import { AccountProfile } from "@/types";
 import { getPublicUrl } from "@/storage/blob/files";
 import { type UpdatePayload, type EphemeralPayload, type EphemeralEvent } from "./eventPayloadTypes";
-import {
-    MachineKindFromLegacyProjectionSchema,
-    type MachineKind,
-    SESSION_MESSAGE_USER_ATTENTION_IMPACT,
-    parseSessionRuntimeActivityProjectionFields,
-    type AutomationRunStateV3,
-    type PendingActivationAuthorizationV1,
-    type ManagedWakeTargetV1,
-    type ParticipantExecutionRunRecipientRoutingIdentityV1,
-    SessionMetadataRecipientProjectionV1Schema,
-    type PrimaryTurnStatusV1,
-    type SessionMessageDeliveryResolutionV1,
-    type SessionMessageAccountActorV1,
-    type SessionMessageAttentionImpact,
-    type SessionMetadataRecipientProjectionV1,
-    type SessionOwnerMetadataEnvelopeV1,
-    type SessionMessageRole,
-    type SessionRuntimeIssueV1,
-    type SessionTranscriptObservationProvenanceV1,
-} from "@happier-dev/protocol";
+import { MachineKindFromLegacyProjectionSchema, type MachineKind } from '@happier-dev/protocol/machines/machineKind';
+import { SESSION_MESSAGE_USER_ATTENTION_IMPACT, type SessionMessageAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { parseSessionRuntimeActivityProjectionFields } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { type AutomationRunStateV3 } from '@happier-dev/protocol/automations/automationRunStateV3';
+import { type PendingActivationAuthorizationV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import { type ManagedWakeTargetV1 } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { type ParticipantExecutionRunRecipientRoutingIdentityV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
+import { SessionMetadataRecipientProjectionV1Schema, type SessionMetadataRecipientProjectionV1, type SessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { type SessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import { type SessionMessageAccountActorV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
+import { type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
+import { type SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { applySessionTranscriptPublicationCeiling } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { projectSessionInputAdmissionReceipt } from "@/app/session/messages/sessionInputAdmission";
 import { serializeMachineKeyBasis } from "@/app/machines/machineSerialization";

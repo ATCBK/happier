@@ -1,4 +1,4 @@
-import { defineServerConfigRegistry, type ServerConfigEntry } from "@happier-dev/protocol";
+import { defineServerConfigRegistry, type ServerConfigEntry } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 
 /**
  * Per-route API rate-limit defaults and the configuration keys derived from them.

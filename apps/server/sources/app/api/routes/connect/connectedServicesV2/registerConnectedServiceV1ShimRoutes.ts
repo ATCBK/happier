@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Fastify } from "../../../types";
-import { ConnectedServiceIdSchema, SealedConnectedServiceCredentialV1Schema, type ConnectedServiceId } from "@happier-dev/protocol";
+import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { SealedConnectedServiceCredentialV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 import { encodeCredentialTokenBytes } from "./credentialTokenCodec";
 import { type ConnectedServiceCredentialMetadataV2 } from "./credentialMetadataV2";

@@ -1,19 +1,8 @@
 import type { Prisma as PrismaTypes } from "@prisma/client";
-import type {
-    PluginPermissionCapabilityV1,
-    PluginPermissionGrantAuditEventV1,
-    PluginPermissionGrantAuthoritySourceV1,
-    PluginPermissionGrantRequestV1,
-    PluginPermissionSubjectV1,
-    PluginPermissionGrantTargetScopeV1,
-    PluginPermissionGrantV1,
-} from "@happier-dev/protocol";
-import {
-    computeCanonicalDomainSeparatedDigest,
-    PluginPermissionGrantRequestV1Schema,
-    PluginPermissionGrantV1Schema,
-    PluginPermissionSubjectV1Schema,
-} from "@happier-dev/protocol";
+import type { PluginPermissionCapabilityV1 } from '@happier-dev/protocol/plugins/permissions/capabilityV1';
+import type { PluginPermissionGrantAuditEventV1, PluginPermissionGrantAuthoritySourceV1, PluginPermissionGrantRequestV1, PluginPermissionSubjectV1, PluginPermissionGrantTargetScopeV1, PluginPermissionGrantV1 } from '@happier-dev/protocol/plugins/permissions/grants';
+import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
+import { PluginPermissionGrantRequestV1Schema, PluginPermissionGrantV1Schema, PluginPermissionSubjectV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";

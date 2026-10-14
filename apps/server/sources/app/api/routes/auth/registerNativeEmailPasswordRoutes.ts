@@ -1,15 +1,6 @@
-import {
-    AUTH_TOKEN_KIND_AUTHORITIES,
-    NATIVE_AUTH_EMAIL_PRELOGIN_PATH_V1, NativeEmailPasswordPreloginRequestV1Schema, NativeEmailPasswordPreloginResponseV1Schema,
-    NATIVE_AUTH_EMAIL_LOGIN_PATH_V1, NativeEmailPasswordLoginRequestV1Schema,
-    NativeEmailPasswordLoginResponseV1Schema, NativeEmailPasswordErrorResponseV1Schema,
-    NATIVE_AUTH_EMAIL_UNLOCK_PATH_V1, NativeEmailPasswordUnlockRequestV1Schema,
-    NativeEmailPasswordUnlockResponseV1Schema,
-    NATIVE_AUTH_EMAIL_PROVISION_PATH_V1, NativeEmailPasswordProvisionRequestV1Schema,
-    NativeEmailPasswordProvisionResponseV1Schema, NativeEmailPasswordProvisionErrorResponseV1Schema,
-    decodePasswordCredentialFieldV1,
-    type AccountPasswordCredentialV1,
-} from "@happier-dev/protocol";
+import { AUTH_TOKEN_KIND_AUTHORITIES } from '@happier-dev/protocol/auth/authToken';
+import { NATIVE_AUTH_EMAIL_PRELOGIN_PATH_V1, NativeEmailPasswordPreloginRequestV1Schema, NativeEmailPasswordPreloginResponseV1Schema, NATIVE_AUTH_EMAIL_LOGIN_PATH_V1, NativeEmailPasswordLoginRequestV1Schema, NativeEmailPasswordLoginResponseV1Schema, NativeEmailPasswordErrorResponseV1Schema, NATIVE_AUTH_EMAIL_UNLOCK_PATH_V1, NativeEmailPasswordUnlockRequestV1Schema, NativeEmailPasswordUnlockResponseV1Schema, NATIVE_AUTH_EMAIL_PROVISION_PATH_V1, NativeEmailPasswordProvisionRequestV1Schema, NativeEmailPasswordProvisionResponseV1Schema, NativeEmailPasswordProvisionErrorResponseV1Schema } from '@happier-dev/protocol/auth/nativeAuthEmailRoutes';
+import { decodePasswordCredentialFieldV1, type AccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import type { Fastify } from "../../types";
 import { registerNativePasswordStepUpRoutes } from "./registerNativePasswordStepUpRoutes";
 import {
@@ -20,7 +11,7 @@ import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCata
 import { loginWithNativePlainPassword, unlockNativeE2eePassword, preloginNativePassword } from "@/app/auth/password/nativePasswordAuthentication";
 import { PasswordHashOverloadedError } from "@/app/auth/password/passwordHashAdmission";
 import { registerAccountSecurityRoutes } from "./registerAccountSecurityRoutes";
-import { normalizeVerifiedEmail } from "@happier-dev/protocol";
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 import {
     abortFreshAccountProvision,
     FreshAccountProvisionAbort,
@@ -35,7 +26,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { auth } from "@/app/auth/auth";
 import * as privacyKit from "privacy-kit";
-import { createKeyChallengeV2SigningInput } from "@happier-dev/protocol";
+import { createKeyChallengeV2SigningInput } from '@happier-dev/protocol/auth/keyChallenge';
 import { verifyAccountContentKeyBinding } from "@/app/encryption/accountContentKeyAdmission";
 import { readKeyChallengeV2ForLogin, verifyKeyChallengeSignature, consumeLoginKeyChallengeV2 } from "@/app/auth/keyChallengeV2";
 import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";

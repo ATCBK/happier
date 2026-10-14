@@ -1,9 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
-import {
-    SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT,
-    isSessionAgentTransitionDividerLocalId,
-} from "@happier-dev/protocol";
+import { SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { isSessionAgentTransitionDividerLocalId } from '@happier-dev/protocol/sessions/agentTransitionDivider';
 
 import {
     createSessionMessage,

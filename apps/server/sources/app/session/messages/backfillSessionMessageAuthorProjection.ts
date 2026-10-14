@@ -1,6 +1,6 @@
 import { db } from "@/storage/db";
 import { warn } from "@/utils/logging/log";
-import { deriveSessionMessageAuthorAccountIdV1 } from "@happier-dev/protocol";
+import { deriveSessionMessageAuthorAccountIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 
 export type SessionMessageAuthorProjectionBackfillResult = Readonly<{
     /** False when any pre-existing row disagreed with its receipt; activation must not proceed. */

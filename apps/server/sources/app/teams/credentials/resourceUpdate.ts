@@ -1,21 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-    TeamCredentialDisclosureCeilingV1Schema,
-    TeamCredentialSessionUsePolicyV1Schema,
-    TeamCredentialRequestPolicyV1Schema,
-    TeamCredentialBrokerPlacementV1Schema,
-    TeamCredentialResourceReplacementV1Schema,
-    TeamCredentialResourceUpdateInputV1Schema,
-    TeamCredentialSourceBindingV1Schema,
-    TeamCredentialDeliveryModeV1Schema,
-    narrowTeamCredentialDeliveryModeToBrokeredOnlyV1,
-    type TeamCredentialDeliveryModeV1,
-    type TeamCredentialDisclosureCeilingV1,
-    type TeamCredentialSessionUsePolicyV1,
-    type TeamCredentialRequestPolicyV1,
-    type TeamCredentialBrokerPlacementV1,
-    type TeamCredentialResourceReplacementV1,
-} from "@happier-dev/protocol/teams";
+import { TeamCredentialDisclosureCeilingV1Schema, TeamCredentialSessionUsePolicyV1Schema, TeamCredentialRequestPolicyV1Schema, TeamCredentialBrokerPlacementV1Schema, TeamCredentialResourceReplacementV1Schema, TeamCredentialResourceUpdateInputV1Schema, TeamCredentialDeliveryModeV1Schema, narrowTeamCredentialDeliveryModeToBrokeredOnlyV1, type TeamCredentialDeliveryModeV1, type TeamCredentialDisclosureCeilingV1, type TeamCredentialSessionUsePolicyV1, type TeamCredentialRequestPolicyV1, type TeamCredentialBrokerPlacementV1, type TeamCredentialResourceReplacementV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 import type { Tx } from "@/storage/inTx";
 import { AccountStatus } from "@/storage/enums.generated";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";

@@ -1,4 +1,4 @@
-import type { ConnectedServiceCredentialHealthV1 } from "@happier-dev/protocol";
+import type { ConnectedServiceCredentialHealthV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { hasValidCredentialHealth, parseConnectedServiceCredentialHealth } from "../credentialHealthMetadata";
 import { isConnectedServiceCredentialRevision } from "../credentials/credentialRevision";
 

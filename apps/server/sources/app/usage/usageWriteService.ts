@@ -1,13 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type {
-    UsageEventIngestRequest,
-    UsageNativeAccountingSubject,
-    UsageNativeHistoryDeleteRequest,
-    UsageObservationCost,
-    UsageObservationTokens,
-} from "@happier-dev/protocol";
-import { UsageEventIngestRequestSchema, UsageNativeAccountingSubjectSchema, readUsageAccountingMetadata } from "@happier-dev/protocol";
+import type { UsageEventIngestRequest, UsageNativeAccountingSubject, UsageNativeHistoryDeleteRequest, UsageObservationCost, UsageObservationTokens } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { UsageEventIngestRequestSchema, UsageNativeAccountingSubjectSchema, readUsageAccountingMetadata } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import type { Prisma } from "@prisma/client";
 import { buildUsageEphemeral, eventRouter } from "@/app/events/eventRouter";
 import { publishTeamCredentialUsageChangedInTx } from "./teamCredentialUsageInvalidation";

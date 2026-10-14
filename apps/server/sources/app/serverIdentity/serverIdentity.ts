@@ -1,4 +1,4 @@
-import { SERVER_IDENTITY_ID_PATTERN } from "@happier-dev/protocol";
+import { SERVER_IDENTITY_ID_PATTERN } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 import { db, isPrismaErrorCode } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";

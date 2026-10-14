@@ -1,7 +1,4 @@
-import type {
-    UsageObservationCost,
-    UsageObservationTokens,
-} from "@happier-dev/protocol";
+import type { UsageObservationCost, UsageObservationTokens } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 
 type LegacyNumberMap = Record<string, number>;
 export { normalizeLegacyUsageTokens } from '@happier-dev/protocol/usage/legacyUsageTokens';

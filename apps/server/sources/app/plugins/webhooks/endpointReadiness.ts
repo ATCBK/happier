@@ -1,4 +1,4 @@
-import type { PluginWebhookEndpointReadinessV1 } from "@happier-dev/protocol";
+import type { PluginWebhookEndpointReadinessV1 } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
 
 /**
  * The facts that decide whether the binding itself can carry a delivery at

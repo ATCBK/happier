@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol';
+import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogKeyV1Schema,
     ConnectedAccountCatalogRowReadResponseV1Schema, ConnectedAccountCatalogRowMutationV1Schema,
     ConnectedAccountCatalogRowMutationResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';

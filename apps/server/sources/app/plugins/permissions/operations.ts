@@ -1,31 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type {
-    PluginPermissionGrantActorV1,
-    PluginPermissionGrantAuditEventV1,
-    PluginPermissionGrantAuthoritySourceV1,
-    PluginPermissionGrantDismissRequestActionInputV1,
-    PluginPermissionGrantDismissRequestActionOutputV1,
-    PluginPermissionGrantGrantActionInputV1,
-    PluginPermissionGrantGrantActionOutputV1,
-    PluginPermissionGrantListActionInputV1,
-    PluginPermissionGrantListActionOutputV1,
-    PluginPermissionGrantRequestActionInputV1,
-    PluginPermissionGrantRequestActionOutputV1,
-    PluginPermissionGrantRequestV1,
-    PluginPermissionSubjectV1,
-    PluginPermissionGrantRevokeActionInputV1,
-    PluginPermissionGrantRevokeActionOutputV1,
-    PluginPermissionGrantV1,
-} from "@happier-dev/protocol";
-import {
-    PluginPermissionGrantDismissRequestActionOutputV1Schema,
-    PluginPermissionGrantGrantActionOutputV1Schema,
-    PluginPermissionGrantListActionOutputV1Schema,
-    PluginPermissionGrantRequestActionOutputV1Schema,
-    PluginPermissionGrantRevokeActionOutputV1Schema,
-    pluginPermissionSubjectsEqualV1,
-} from "@happier-dev/protocol";
+import type { PluginPermissionGrantActorV1, PluginPermissionGrantAuditEventV1, PluginPermissionGrantAuthoritySourceV1, PluginPermissionGrantDismissRequestActionInputV1, PluginPermissionGrantDismissRequestActionOutputV1, PluginPermissionGrantGrantActionInputV1, PluginPermissionGrantGrantActionOutputV1, PluginPermissionGrantListActionInputV1, PluginPermissionGrantListActionOutputV1, PluginPermissionGrantRequestActionInputV1, PluginPermissionGrantRequestActionOutputV1, PluginPermissionGrantRequestV1, PluginPermissionSubjectV1, PluginPermissionGrantRevokeActionInputV1, PluginPermissionGrantRevokeActionOutputV1, PluginPermissionGrantV1 } from '@happier-dev/protocol/plugins/permissions/grants';
+import { PluginPermissionGrantDismissRequestActionOutputV1Schema, PluginPermissionGrantGrantActionOutputV1Schema, PluginPermissionGrantListActionOutputV1Schema, PluginPermissionGrantRequestActionOutputV1Schema, PluginPermissionGrantRevokeActionOutputV1Schema, pluginPermissionSubjectsEqualV1 } from '@happier-dev/protocol/plugins/permissions/grants';
 import { isPrismaUniqueConstraintError } from "@/storage/prisma";
 
 import { PluginPermissionGrantOperationError } from "./errors";

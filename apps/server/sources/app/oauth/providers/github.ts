@@ -3,7 +3,7 @@ import { resolveGitHubOAuthConfigFromEnv } from "./githubOAuthConfig";
 import { GitHubProfileSchema, type GitHubProfile } from "@/app/auth/providers/github/types";
 import { shouldRequestReadOrgScopeForGitHub } from "@/app/auth/providers/github/restrictions";
 import { resolveGitHubHttpTimeoutMs } from "@/app/auth/providers/github/httpTimeout";
-import { isLoopbackHostname } from "@happier-dev/protocol";
+import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
 
 function parseGitHubProfile(raw: unknown): GitHubProfile | null {
     const parsed = GitHubProfileSchema.safeParse(raw);

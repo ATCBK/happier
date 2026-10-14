@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { AccountEncryptionMigrateArtifactsDirective, ArtifactBlobStoredContentV1, ArtifactBlobAccountEncryptionStageV1 } from '@happier-dev/protocol';
+import type { AccountEncryptionMigrateArtifactsDirective } from '@happier-dev/protocol/account/encryptionMigrate';
+import type { ArtifactBlobStoredContentV1, ArtifactBlobAccountEncryptionStageV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
 import { artifactBlobCandidateStorageKey, artifactBlobConversionUploadPrefix, artifactBlobRejectedUploadReuseKey, completeArtifactBlobCandidateCustodyInTx, openArtifactBlobBytes, prepareArtifactBlobWrite, discardArtifactBlobCandidate, type ArtifactBlobRow, type PreparedArtifactBlobWrite } from './artifactBlobService';

@@ -1,4 +1,4 @@
-import { NO_TEAM_CAPABILITIES_V1, type TeamCapabilitiesV1 } from "@happier-dev/protocol";
+import { NO_TEAM_CAPABILITIES_V1, type TeamCapabilitiesV1 } from '@happier-dev/protocol/teams';
 
 import { AccountStatus, type TeamMembershipStatus, type TeamRole } from "@/storage/enums.generated";
 import type { HomeGovernanceAuthority } from "@/app/home/governance/homeCapabilities";

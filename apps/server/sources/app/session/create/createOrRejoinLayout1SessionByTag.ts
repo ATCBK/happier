@@ -1,7 +1,4 @@
-import {
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    validateSessionOwnerMetadataEnvelopeForAccountModeV1,
-} from "@happier-dev/protocol";
+import { SESSION_METADATA_LAYOUT_VERSION_V1, validateSessionOwnerMetadataEnvelopeForAccountModeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { publishSessionArchiveTransition } from "@/app/session/archive/publishSessionArchiveTransition";
@@ -27,7 +24,7 @@ import { classifyLayout1SessionCreateThrow } from "./createFreshBoundLayout1Sess
 import type { PreparedLayout1SessionCreate } from "./prepareLayout1SessionCreate";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { restoreSessionTagRejoinInTx } from "./restoreSessionTagRejoinInTx";
-import type { ExternalActionExecutionAuthorizationBindingV1 } from "@happier-dev/protocol/actions";
+import type { ExternalActionExecutionAuthorizationBindingV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { readSessionCreationApiTokenIdInTx } from './apiTokenSessionCreationAuthorization';
 
 /**

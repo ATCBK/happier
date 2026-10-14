@@ -1,4 +1,4 @@
-import { isActiveHomeAccountStatus, type AccountStatusV1 } from "@happier-dev/protocol";
+import { isActiveHomeAccountStatus, type AccountStatusV1 } from '@happier-dev/protocol/home/governance';
 
 /** Internal admission failure. Transports reveal it only after fresh Account proof. */
 export class InactiveAccountError extends Error {

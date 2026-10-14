@@ -1,8 +1,5 @@
 import { AGENTS_CORE } from "@happier-dev/agents";
-import {
-    ConnectedServiceCloudVendorKeySchema,
-    type ConnectedServiceCloudVendorKey,
-} from "@happier-dev/protocol";
+import { ConnectedServiceCloudVendorKeySchema, type ConnectedServiceCloudVendorKey } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 type LegacyConnectedServiceVendorCore = Readonly<{
     cloudConnect?: Readonly<{

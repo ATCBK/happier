@@ -1,11 +1,9 @@
 import { inTx } from "@/storage/inTx";
 import { z } from "zod";
-import {
-    AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
-    PasswordCredentialMutationDigestV1Schema,
-    TeamInvitationAccountAdmissionV1Schema,
-    type NativeAccountAdmissionV1,
-} from "@happier-dev/protocol";
+import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema } from '@happier-dev/protocol/account/encryptionMigrate';
+import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
+import { TeamInvitationAccountAdmissionV1Schema } from '@happier-dev/protocol/auth/accountAdmission';
+import { type NativeAccountAdmissionV1 } from '@happier-dev/protocol/auth/nativeAuthEmailRoutes';
 
 import type { Fastify } from "@/app/api/types";
 import { db } from "@/storage/db";
@@ -31,7 +29,7 @@ import {
     resolveTeamInvitationFreshAccountAdmissionReferenceInTx,
     TeamInvitationFreshAccountAdmissionAbort,
 } from "@/app/teams/invitations/freshAccountAdmission";
-import { TeamInvitationPostAuthContinuationV1Schema } from "@happier-dev/protocol/teams";
+import { TeamInvitationPostAuthContinuationV1Schema } from '@happier-dev/protocol/teams/invitation';
 import { isTeamMembershipAdmissionEnabled } from "@/app/teams/memberships/membershipService";
 import {
     finalizeMtlsAuthenticationInTx,

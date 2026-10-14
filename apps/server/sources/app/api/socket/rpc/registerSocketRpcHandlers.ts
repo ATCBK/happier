@@ -4,36 +4,22 @@ import { cancelRpcTarget } from './cancelRpcTarget';
 
 import type { Server, Socket } from "socket.io";
 
-import {
-    RPC_ERROR_CODES,
-    RPC_ERROR_MESSAGES,
-    RPC_METHODS,
-    SESSION_RPC_METHODS,
-    SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS,
-    parseSocketRpcAuthorizationContext,
-    isSocketRpcSessionAuthorizationNamespace,
-    resolveSocketRpcSessionAuthorization,
-    type SocketRpcAuthorizationContext,
-    type SocketRpcCurrentSessionPresentationOriginAuthorizationContext,
-} from "@happier-dev/protocol/rpc";
-import {
-    AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1,
-    CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD,
-    CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD,
-    ExternalActionMachineRpcExecutionV1Schema,
-    SESSION_SERVER_START_DAEMON_RPC_METHOD_V1,
-    SessionFollowSourceKeyPrepareAuthorizationV1Schema,
-    resolveEphemeralRunnerMachineRpcAuthority,
-    isUiBrowserAutomationDispatchMethod,
-    UI_BROWSER_AUTOMATION_DISPATCH_KEY_MAX_LENGTH,
-    type EphemeralRunnerMachineRpcAuthority,
-    type SocketRpcMachineAdmissionContextV1,
-    MANAGED_FINITE_WAKE_RPC_METHOD,
-} from "@happier-dev/protocol";
+import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS, parseSocketRpcAuthorizationContext, isSocketRpcSessionAuthorizationNamespace, resolveSocketRpcSessionAuthorization, type SocketRpcAuthorizationContext, type SocketRpcCurrentSessionPresentationOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
+import { AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/automations/event';
+import { CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
+import { ExternalActionMachineRpcExecutionV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { SESSION_SERVER_START_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/sessions/creation/sessionServerStartV1';
+import { SessionFollowSourceKeyPrepareAuthorizationV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
+import { resolveEphemeralRunnerMachineRpcAuthority, type EphemeralRunnerMachineRpcAuthority } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
+import { isUiBrowserAutomationDispatchMethod, UI_BROWSER_AUTOMATION_DISPATCH_KEY_MAX_LENGTH } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
+import { type SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/machines/machineAccessV1';
+import { MANAGED_FINITE_WAKE_RPC_METHOD } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import { VerifiedEphemeralSessionRunnerPrincipalSchema } from "@happier-dev/protocol/ephemeralRunner/principal";
 import { canCredentialDecideV1 } from "@happier-dev/protocol/actions/decisionAuthority";
-import { computeExternalActionSocketRpcRequestDigestV1, ExternalActionRequestEnvelopeSchema,
-    isExternalActionAuthorizationBoundToEnvelope } from "@happier-dev/protocol/actions";
+import { computeExternalActionSocketRpcRequestDigestV1, isExternalActionAuthorizationBoundToEnvelope } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 import { StrictJsonValueSchema, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { resolveMachineRpcExternalActionEffectV1 } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';

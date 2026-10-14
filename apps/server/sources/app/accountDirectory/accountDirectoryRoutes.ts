@@ -1,13 +1,5 @@
 import type { FastifyError, FastifyReply } from "fastify";
-import {
-    ACCOUNT_DIRECTORY_HOME_HTTP_PATH_V1,
-    ACCOUNT_DIRECTORY_HOME_LOGIN_ASSERTION_HTTP_PATH_V1,
-    ACCOUNT_DIRECTORY_HOMES_HTTP_PATH_V1,
-    ACCOUNT_DIRECTORY_LINKS_HTTP_PATH_V1,
-    ACCOUNT_DIRECTORY_ME_HTTP_PATH_V1,
-    ACCOUNT_DIRECTORY_PREFERRED_HOME_HTTP_PATH_V1,
-    HOME_LOGIN_HTTP_PATH_V1,
-} from "@happier-dev/protocol";
+import { ACCOUNT_DIRECTORY_HOME_HTTP_PATH_V1, ACCOUNT_DIRECTORY_HOME_LOGIN_ASSERTION_HTTP_PATH_V1, ACCOUNT_DIRECTORY_HOMES_HTTP_PATH_V1, ACCOUNT_DIRECTORY_LINKS_HTTP_PATH_V1, ACCOUNT_DIRECTORY_ME_HTTP_PATH_V1, ACCOUNT_DIRECTORY_PREFERRED_HOME_HTTP_PATH_V1, HOME_LOGIN_HTTP_PATH_V1 } from '@happier-dev/protocol/auth/accountDirectory';
 import { type Fastify } from "@/app/api/types";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { requirePresentUser, PresentUserRequiredResponseSchema } from "@/app/api/utils/requirePresentUser";

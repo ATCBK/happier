@@ -7,7 +7,7 @@ import { serializeMachineRow } from "@/app/machines/machineSerialization";
 import { hasExactMachineReadiness } from "@/app/machines/machineSocketReadiness";
 import { validateMachineReplacement } from "@/app/machines/validateMachineReplacement";
 import { inTx } from "@/storage/inTx";
-import { isPlainMachineDataKeyMarker } from "@happier-dev/protocol";
+import { isPlainMachineDataKeyMarker } from '@happier-dev/protocol/machines/machineStoredContent';
 import { z } from "zod";
 import type { Fastify } from "../../types";
 

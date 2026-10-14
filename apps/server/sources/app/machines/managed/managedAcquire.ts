@@ -1,13 +1,7 @@
-import {
-    ManagedAdmissionInputV1Schema,
-    ManagedMachineV1Schema,
-    createManagedConfigurationFactsV1Schema,
-    resolveManagedAcquireReviewV1,
-    type ManagedAdmissionInputV1,
-    type ManagedMachineV1,
-    type ValidatedLaunchSnapshotV1,
-    type MachineEnvironmentV1,
-} from "@happier-dev/protocol";
+import { ManagedAdmissionInputV1Schema, resolveManagedAcquireReviewV1, type ManagedAdmissionInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedMachineV1Schema, type ManagedMachineV1, type ValidatedLaunchSnapshotV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { createManagedConfigurationFactsV1Schema } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
+import { type MachineEnvironmentV1 } from '@happier-dev/protocol/machines/managed/machineEnvironmentV1';
 import { inTx } from "@/storage/inTx";
 import { createPluginJsonSchemaZodValueAdapter } from "@happier-dev/protocol/plugins/actions/json-schema-validation";
 import { db, isPrismaUniqueConstraintError } from "@/storage/db";

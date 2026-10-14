@@ -1,4 +1,4 @@
-import type { IdentityConnectionTestDiagnosticsV1 } from "@happier-dev/protocol";
+import type { IdentityConnectionTestDiagnosticsV1 } from '@happier-dev/protocol/identity/testDiagnostics';
 
 import { db } from "@/storage/db";
 import type { OAuthFlowProvider } from "@/app/oauth/providers/types";

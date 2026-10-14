@@ -1,20 +1,12 @@
-import type {
-    ConnectedServiceUsageSourceV1,
-    ProviderAccountUsageRecordId,
-    ProviderAccountUsageRecordKeyV1,
-    ProviderAccountUsageSnapshotV1,
-    SealedConnectedServiceQuotaSnapshotV1,
-    SealedProviderAccountUsageSnapshotV1,
-} from "@happier-dev/protocol";
+import type { ConnectedServiceUsageSourceV1, SealedConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import type { ProviderAccountUsageRecordId, ProviderAccountUsageRecordKeyV1, ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
+import type { SealedProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/accountUsage';
 import { isPrismaErrorCode, type TransactionClient } from "@/storage/prisma";
 import { serializeProviderAccountUsageSnapshotMaterialV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
-import {
-    compareConnectedServiceQuotaObservationRecency,
-    isConnectedServiceQuotaObservationAtOrBeforeNow,
-    mergeProviderAccountSubscription,
-} from "@happier-dev/protocol";
+import { compareConnectedServiceQuotaObservationRecency, isConnectedServiceQuotaObservationAtOrBeforeNow } from '@happier-dev/protocol/connect/quotaObservationTime';
+import { mergeProviderAccountSubscription } from '@happier-dev/protocol/connect/accountSubscription';
 
 import { inTx } from "@/storage/inTx";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";

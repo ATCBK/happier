@@ -1,25 +1,10 @@
-import {
-    AutomationConversationAdmitEncryptedHostEvidenceV1Schema,
-    AutomationConversationAdmitReplyHandoffV1Schema,
-    AutomationConversationAdmitInputV1Schema,
-    AutomationConversationAdmitResultV1Schema,
-    AutomationReplyHandoffTargetV1Schema,
-    buildAutomationConversationOccurrenceEvidenceV1,
-    createCanonicalJsonSigningInput,
-    deriveAutomationOccurrenceKeyV1,
-    isAutomationConversationResultDeliveryOwnedByCallerV1,
-    isAutomationConversationAdmitScopedCorrespondenceV1,
-    isAutomationReplyHandoffIdForRunV1,
-    isAutomationTriggerEvidenceCiphertextV1,
-    openAutomationConversationReplyContextStoredEnvelopeV1,
-    type AutomationConversationAdmitEncryptedHostEvidenceV1,
-    type AutomationConversationAdmitReplyHandoffV1,
-    type AutomationConversationAdmitInputV1,
-    type AutomationConversationAdmitResultV1,
-    type AutomationConversationOccurrenceEvidenceV1,
-    type AutomationConversationScopedTriggerEvidenceV1,
-    type AutomationOccurrenceKeyV1,
-} from "@happier-dev/protocol";
+import { AutomationConversationAdmitEncryptedHostEvidenceV1Schema, AutomationConversationAdmitReplyHandoffV1Schema, AutomationReplyHandoffTargetV1Schema, type AutomationConversationAdmitEncryptedHostEvidenceV1, type AutomationConversationAdmitReplyHandoffV1 } from '@happier-dev/protocol/automations/event';
+import { AutomationConversationAdmitInputV1Schema, AutomationConversationAdmitResultV1Schema, isAutomationConversationResultDeliveryOwnedByCallerV1, isAutomationConversationAdmitScopedCorrespondenceV1, type AutomationConversationAdmitInputV1, type AutomationConversationAdmitResultV1, type AutomationConversationScopedTriggerEvidenceV1 } from '@happier-dev/protocol/automations/result-delivery';
+import { buildAutomationConversationOccurrenceEvidenceV1, deriveAutomationOccurrenceKeyV1, type AutomationConversationOccurrenceEvidenceV1, type AutomationOccurrenceKeyV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { isAutomationReplyHandoffIdForRunV1 } from '@happier-dev/protocol/automations/automationReplyHandoffIdentityV1';
+import { isAutomationTriggerEvidenceCiphertextV1 } from '@happier-dev/protocol/automations/automationEventTriggerEvidence';
+import { openAutomationConversationReplyContextStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationReplyHandoffStoredContent';
 import type { Prisma } from "@prisma/client";
 
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";

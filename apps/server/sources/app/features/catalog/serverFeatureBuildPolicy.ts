@@ -1,8 +1,5 @@
-import {
-    resolveEmbeddedFeaturePolicyEnv,
-    resolveFeatureBuildPolicyFromEnvOrEmbedded,
-    type FeatureBuildPolicy,
-} from "@happier-dev/protocol";
+import { resolveEmbeddedFeaturePolicyEnv, resolveFeatureBuildPolicyFromEnvOrEmbedded } from '@happier-dev/protocol/features/embeddedFeaturePolicy';
+import { type FeatureBuildPolicy } from '@happier-dev/protocol/features/buildPolicy';
 
 type Cached = Readonly<{
     key: string;

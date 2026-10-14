@@ -1,13 +1,9 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 
-import {
-    PluginHostedWebOriginV1Schema,
-} from "@happier-dev/protocol";
-import {
-    GENERATED_HOSTED_WEB_ASSET_PROFILE_V1,
-    PluginUiArtifactIdV2Schema,
-    PluginUiArtifactDigestV1Schema,
-} from "@happier-dev/protocol/plugins/ui";
+import { PluginHostedWebOriginV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/hostedWebSecurity';
+import { GENERATED_HOSTED_WEB_ASSET_PROFILE_V1 } from '@happier-dev/protocol/plugins/ui/hostedWebAssetPolicy';
+import { PluginUiArtifactIdV2Schema } from '@happier-dev/protocol/plugins/ui/uiArtifactsManifest';
+import { PluginUiArtifactDigestV1Schema } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { decodeBase64, encodeBase64 } from "privacy-kit";
 import { z } from "zod";
 

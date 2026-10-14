@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema, AccountEncryptionMigrateExternalAuthProofSchema, PASSWORD_MAX_UTF8_BYTES_V1 } from "@happier-dev/protocol";
+import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema, AccountEncryptionMigrateExternalAuthProofSchema } from '@happier-dev/protocol/account/encryptionMigrate';
+import { PASSWORD_MAX_UTF8_BYTES_V1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import type { Fastify } from "../../types";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { isEffectiveHomeAuthMethodActionEnabled } from "@/app/auth/methods/effectiveHomeAuthMethods";

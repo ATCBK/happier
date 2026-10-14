@@ -1,14 +1,8 @@
-import {
-    pluginJsonValuesEqual,
-    verifyPeerTcpTunnelRelayAuthorizationV2,
-    type PeerTcpTunnelRelayAuthorizationTrustRootV1,
-} from '@happier-dev/protocol';
-import {
-    TeamCredentialResourceTestAdmissionResponseV1Schema,
-    TeamCredentialResourceTestAdmissionV1Schema,
-    TeamCredentialSourceBindingV1Schema,
-    type TeamCredentialResourceTestAdmissionResponseV1,
-} from '@happier-dev/protocol/teams';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { verifyPeerTcpTunnelRelayAuthorizationV2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorization';
+import { type PeerTcpTunnelRelayAuthorizationTrustRootV1 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorizationSchemas';
+import { TeamCredentialResourceTestAdmissionResponseV1Schema, TeamCredentialResourceTestAdmissionV1Schema, type TeamCredentialResourceTestAdmissionResponseV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 
 import type { Tx } from '@/storage/inTx';
 import { admitTeamCredentialBrokerMachineForResourceInTx } from './brokerPlacementResolver';

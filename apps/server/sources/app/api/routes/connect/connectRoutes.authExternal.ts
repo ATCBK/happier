@@ -14,12 +14,9 @@ import { registerExternalAuthFinalizeRoute } from "./oauthExternal/registerExter
 import { registerExternalAuthFinalizeKeylessRoute } from "./oauthExternal/registerExternalAuthFinalizeKeylessRoute";
 import { oauthAuthPendingSchema } from "./oauthExternal/oauthExternalSchemas";
 import { deleteOAuthPendingBestEffort, loadValidOAuthPending } from "./connectRoutes.oauthPending";
-import {
-    AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
-    PasswordCredentialMutationDigestV1Schema,
-    ExternalOAuthErrorResponseSchema,
-    ExternalOAuthParamsResponseSchema,
-} from "@happier-dev/protocol";
+import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema } from '@happier-dev/protocol/account/encryptionMigrate';
+import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
+import { ExternalOAuthErrorResponseSchema, ExternalOAuthParamsResponseSchema } from '@happier-dev/protocol/auth/externalOAuth';
 import { readAuthOauthKeylessFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { resolveKeylessAccountsAvailability } from "@/app/features/e2ee/resolveKeylessAccountsEnabled";
 import {

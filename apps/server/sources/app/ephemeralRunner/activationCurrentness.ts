@@ -7,7 +7,7 @@ import {
     acquireAccountSessionOwnerMetadataFenceInTx,
     AccountSessionOwnerMetadataFenceAccountNotFoundError,
 } from '@/app/encryption/accountSessionOwnerMetadataFence';
-import { pluginJsonValuesEqual } from '@happier-dev/protocol';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ActivationRow } from './activationService';
 import { closeEphemeralRunnerActivationInTx, PREMATERIALIZED_RUNNER_ACTIVATION_STATES } from './activationLifecycle';
 

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
-import { encodeHomeClaimCodeV1, normalizeHomeClaimCodeV1 } from "@happier-dev/protocol";
+import { encodeHomeClaimCodeV1, normalizeHomeClaimCodeV1 } from '@happier-dev/protocol/home/governance/claim';
 
 import { inTx, type Tx } from "@/storage/inTx";
 

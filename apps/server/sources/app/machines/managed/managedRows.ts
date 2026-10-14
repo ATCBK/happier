@@ -1,20 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import * as z from "zod/mini";
-import {
-    createStoredReadSchema,
-    createManagedMachineV1Schema,
-    ManagedMachineV1Schema,
-    RetainedManagedLaunchSnapshotV1Schema,
-    type ManagedMachineV1,
-    type ValidatedLaunchSnapshotV1,
-    type RetainedManagedLaunchSnapshotV1,
-    ManagedAdmissionComputeInputV1Schema, ManagedControllerCurrentnessV1Schema,
-    ManagedControlAdmissionInputV1Schema, ManagedPolicyAdmissionInputV1Schema,
-    SupportedNativeIntentSchema,
-    ManagedResourceV1Schema, deriveManagedDevcontainerChildProjectionV1,
-    type DevcontainerChildProjectionV1,
-    managedDevcontainerChildProjectionsEqualV1,
-} from "@happier-dev/protocol";
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { createManagedMachineV1Schema, ManagedMachineV1Schema, RetainedManagedLaunchSnapshotV1Schema, type ManagedMachineV1, type ValidatedLaunchSnapshotV1, type RetainedManagedLaunchSnapshotV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { ManagedAdmissionComputeInputV1Schema, ManagedControllerCurrentnessV1Schema, ManagedControlAdmissionInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedPolicyAdmissionInputV1Schema } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
+import { SupportedNativeIntentSchema, ManagedResourceV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
+import { deriveManagedDevcontainerChildProjectionV1, type DevcontainerChildProjectionV1, managedDevcontainerChildProjectionsEqualV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { resolvePluginActionConnectedAccountUseRequestsV2, type PluginActionConnectedAccountUseRequestV2 } from "@happier-dev/protocol/plugins/manifest/v2";
 import { SubmittedNativeEffectV1Schema } from "@happier-dev/protocol/machines/managed/managedMachineV1";
 import type { MachineProvisionerContributionV1 } from "@happier-dev/protocol/plugins/contributions/machineProvisioners";

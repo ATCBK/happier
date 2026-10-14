@@ -1,11 +1,5 @@
-import {
-    PluginAccountSettingsContentV1Schema,
-    PluginAccountSettingsMutationRequestV1Schema,
-    PluginAccountSettingsMutationResponseV1Schema,
-    PluginAccountSettingsReadResponseV1Schema,
-    PluginAccountSettingsStorageUnavailableV1Schema,
-    PluginIdSchema,
-} from "@happier-dev/protocol";
+import { PluginAccountSettingsContentV1Schema, PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsMutationResponseV1Schema, PluginAccountSettingsReadResponseV1Schema, PluginAccountSettingsStorageUnavailableV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
+import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { z } from "zod";
 
 import {

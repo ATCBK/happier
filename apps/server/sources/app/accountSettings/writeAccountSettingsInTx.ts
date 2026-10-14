@@ -1,7 +1,5 @@
-import type {
-    AccountRemoteAlertPolicyV1,
-    AccountSettingsStoredContentEnvelope,
-} from "@happier-dev/protocol";
+import type { AccountRemoteAlertPolicyV1 } from '@happier-dev/protocol/account/settings/accountRemoteAlertPolicy';
+import type { AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
 import type { Prisma } from "@prisma/client";
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";

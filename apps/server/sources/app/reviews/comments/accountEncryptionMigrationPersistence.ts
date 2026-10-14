@@ -1,29 +1,9 @@
-import type {
-    BoundReviewCommentEventSensitiveEnvelopeV1,
-    ReviewCommentAnchorIndexV1,
-    ReviewCommentAccountEncryptionMigrationInventoryResponseV1,
-    ReviewCommentEventV1,
-    ReviewCommentStructuralV1,
-    ReviewCommentSensitiveMigrationSourceV1,
-    StoredReviewCommentV1,
-    StoredJsonContentEnvelope,
-} from "@happier-dev/protocol";
-import {
-    BoundReviewCommentEventSensitiveEnvelopeV1Schema,
-    ReviewCommentAccountEncryptionMigrationInventoryResponseV1Schema,
-    ReviewCommentAnchorIndexV1Schema,
-    ReviewCommentAnchorV1Schema,
-    ReviewCommentEventV1Schema,
-    ReviewCommentEventRequestBindingV1Schema,
-    ReviewCommentStructuralV1Schema,
-    ReviewCommentSensitiveMigrationSourceV1Schema,
-    StoredJsonContentEnvelopeSchema,
-    StoredReviewCommentV1Schema,
-    bindReviewCommentEventSensitiveEnvelopeV1,
-    classifyReviewCommentEventSensitiveMigrationLayoutV1,
-    openReviewCommentSensitiveEnvelopeV1,
-    reviewCommentEventSensitiveBindingMatchesV1,
-} from "@happier-dev/protocol";
+import type { BoundReviewCommentEventSensitiveEnvelopeV1, ReviewCommentAnchorIndexV1, ReviewCommentAccountEncryptionMigrationInventoryResponseV1, ReviewCommentStructuralV1, ReviewCommentSensitiveMigrationSourceV1, StoredReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/content';
+import type { ReviewCommentEventV1 } from '@happier-dev/protocol/reviews/comments/v1';
+import type { StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { BoundReviewCommentEventSensitiveEnvelopeV1Schema, ReviewCommentAccountEncryptionMigrationInventoryResponseV1Schema, ReviewCommentAnchorIndexV1Schema, ReviewCommentEventRequestBindingV1Schema, ReviewCommentStructuralV1Schema, ReviewCommentSensitiveMigrationSourceV1Schema, StoredReviewCommentV1Schema, bindReviewCommentEventSensitiveEnvelopeV1, classifyReviewCommentEventSensitiveMigrationLayoutV1, openReviewCommentSensitiveEnvelopeV1, reviewCommentEventSensitiveBindingMatchesV1 } from '@happier-dev/protocol/reviews/comments/content';
+import { ReviewCommentAnchorV1Schema, ReviewCommentEventV1Schema } from '@happier-dev/protocol/reviews/comments/v1';
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import { createStoredReadSchema } from "@happier-dev/protocol/json/storedReadSchema";
 
 import type { Tx } from "@/storage/inTx";

@@ -32,7 +32,7 @@ import {
     publishTeamChangedInTx,
 } from "@/app/teams/teamChanges";
 
-import type { HomeAdministrationActionV1 } from "@happier-dev/protocol";
+import type { HomeAdministrationActionV1 } from '@happier-dev/protocol/home/governance';
 
 import { recordHomeAdministrationEventInTx } from "@/app/home/audit/homeAdministrationEvents";
 import { readHomeGovernanceAccountInTx, resolveHomeGovernanceAuthority } from "./homeCapabilities";

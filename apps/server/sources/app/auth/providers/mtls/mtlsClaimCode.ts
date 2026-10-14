@@ -1,10 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import {
-    AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
-    PasswordCredentialMutationDigestV1Schema,
-    type AccountEncryptionMigrateExternalAuthBindingDigestV1,
-} from "@happier-dev/protocol";
+import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema, type AccountEncryptionMigrateExternalAuthBindingDigestV1 } from '@happier-dev/protocol/account/encryptionMigrate';
+import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
 
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";

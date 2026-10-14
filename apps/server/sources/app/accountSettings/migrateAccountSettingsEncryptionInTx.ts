@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
-import type { AccountSettingsStoredContentEnvelope } from "@happier-dev/protocol";
+import type { AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
 
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
 import {

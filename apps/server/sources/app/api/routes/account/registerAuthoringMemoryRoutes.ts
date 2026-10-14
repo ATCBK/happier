@@ -1,12 +1,4 @@
-import {
-    AUTHORING_MEMORY_ROUTE_V1,
-    AuthoringMemoryKeyV1Schema,
-    AuthoringMemoryListResponseV1Schema,
-    AuthoringMemoryMutationRequestV1Schema,
-    AuthoringMemoryMutationResponseV1Schema,
-    AuthoringMemoryReadResponseV1Schema,
-    AuthoringMemoryStorageUnavailableV1Schema,
-} from "@happier-dev/protocol";
+import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryKeyV1Schema, AuthoringMemoryListResponseV1Schema, AuthoringMemoryMutationRequestV1Schema, AuthoringMemoryMutationResponseV1Schema, AuthoringMemoryReadResponseV1Schema, AuthoringMemoryStorageUnavailableV1Schema } from '@happier-dev/protocol/account/authoringMemory';
 import { z } from "zod";
 
 import type { Fastify } from "@/app/api/types";

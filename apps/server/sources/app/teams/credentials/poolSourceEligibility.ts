@@ -1,6 +1,7 @@
-import { RPC_METHODS, type ProviderBrokerOpenRequestV1 } from "@happier-dev/protocol";
-import { DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema } from "@happier-dev/protocol/rpc";
-import type { TeamCredentialSourceBindingV1 } from "@happier-dev/protocol/teams";
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { type ProviderBrokerOpenRequestV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
+import type { TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 
 /**
  * Asks each candidate Pool member whether it can currently run this source for

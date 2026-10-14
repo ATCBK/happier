@@ -12,7 +12,7 @@ import {
     type TeamCredentialExternalApiKeyListOutputV1,
     type TeamCredentialExternalApiKeySummaryV1,
 } from "@happier-dev/protocol/teams";
-import { AuthTokenAuthenticationEvidenceSnapshotV1Schema } from "@happier-dev/protocol";
+import { AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '@happier-dev/protocol/auth/authToken';
 import { parseAuthenticationEvidenceSnapshot, resolveCurrentAuthenticationEvidenceInTx } from "@/app/auth/authenticationEvidence";
 import { qualifyTeamAuthenticationInTx } from "@/app/auth/entry/qualifyTeamAuthentication";
 import { getActivePrismaRuntime } from "@/storage/prisma";

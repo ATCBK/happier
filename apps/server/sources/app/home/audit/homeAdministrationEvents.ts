@@ -1,17 +1,5 @@
-import {
-    decodeKeysetCursorV1,
-    encodeKeysetCursorV1,
-    HOME_AUDIT_PAGE_LIMIT_DEFAULT_V1,
-    HomeAdministrationTargetKindV1Schema,
-    parseHomeAdministrationEventDetailV1,
-    readKeysetCursorIdV1,
-    readKeysetCursorTimeV1,
-    type HomeAdministrationActorKindV1,
-    type HomeAdministrationEventDetailV1,
-    type HomeAdministrationEventV1,
-    type HomeAdministrationTargetKindV1,
-    type HomeAuditListResultV1,
-} from "@happier-dev/protocol";
+import { decodeKeysetCursorV1, encodeKeysetCursorV1, readKeysetCursorIdV1, readKeysetCursorTimeV1 } from '@happier-dev/protocol/pagination/keysetCursorV1';
+import { HOME_AUDIT_PAGE_LIMIT_DEFAULT_V1, HomeAdministrationTargetKindV1Schema, parseHomeAdministrationEventDetailV1, type HomeAdministrationActorKindV1, type HomeAdministrationEventDetailV1, type HomeAdministrationEventV1, type HomeAdministrationTargetKindV1, type HomeAuditListResultV1 } from '@happier-dev/protocol/home/governance';
 
 import {
     ACCOUNT_DISPLAY_PROFILE_SELECT,

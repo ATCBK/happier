@@ -1,18 +1,9 @@
-import {
-    ACTIVITY_REMOTE_ALERT_POLICY_EVENT_V1,
-    ActivityRemoteAlertV2Schema,
-    SESSION_CHANGED_WAKE_TYPE,
-    SessionChangedWakeV1Schema,
-    resolveAccountRemoteAlertPolicyCurrentness,
-    resolveActivityRemoteAlertEventForPersonalEventV2,
-    resolveExpoNotificationSoundName,
-    resolvePushNotificationAndroidChannelId,
-    resolveRemoteAlertPolicyDecision,
-    shouldMuteMobileAlertsForComputerFocus,
-    type ActivityRemoteAlertCommittedMessageV2,
-    type ActivityRemoteAlertEventV2,
-    type SessionPersonalEventKindV1,
-} from "@happier-dev/protocol";
+import { ACTIVITY_REMOTE_ALERT_POLICY_EVENT_V1, ActivityRemoteAlertV2Schema, resolveActivityRemoteAlertEventForPersonalEventV2, type ActivityRemoteAlertCommittedMessageV2, type ActivityRemoteAlertEventV2 } from '@happier-dev/protocol/push/activityRemoteAlert';
+import { SESSION_CHANGED_WAKE_TYPE, SessionChangedWakeV1Schema } from '@happier-dev/protocol/push/sessionChangedWake';
+import { resolveAccountRemoteAlertPolicyCurrentness, resolveRemoteAlertPolicyDecision } from '@happier-dev/protocol/account/settings/accountRemoteAlertPolicy';
+import { resolveExpoNotificationSoundName, resolvePushNotificationAndroidChannelId } from '@happier-dev/protocol/push/pushNotificationActions';
+import { shouldMuteMobileAlertsForComputerFocus } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicyDecision';
+import { type SessionPersonalEventKindV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
 
 import { listSessionPersonalEventRecipients } from "@/app/session/personal/eventEligibility";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";

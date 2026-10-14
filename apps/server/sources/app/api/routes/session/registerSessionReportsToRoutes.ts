@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { SessionReportsToSetRequestV1Schema, SessionReportsToSetResultV1Schema,
-    SessionReportsToOptionsRequestV1Schema, SessionReportsToOptionsV1Schema } from '@happier-dev/protocol';
+import { SessionReportsToSetRequestV1Schema, SessionReportsToSetResultV1Schema, SessionReportsToOptionsRequestV1Schema, SessionReportsToOptionsV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
 import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 import { setSessionReportsTo, readSessionReportsToOptions } from '@/app/session/relations/sessionReportsToService';
 import type { Fastify } from '../../types';

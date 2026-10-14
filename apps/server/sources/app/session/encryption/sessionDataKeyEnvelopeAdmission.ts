@@ -1,9 +1,6 @@
 import { decodeBase64 } from "privacy-kit";
-import {
-    parseEncryptedDataKeyEnvelopeV1,
-    SessionRecipientEnvelopeInputV1Schema,
-    type SessionDataKeyEnvelopeErrorCodeV1,
-} from "@happier-dev/protocol";
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { SessionRecipientEnvelopeInputV1Schema, type SessionDataKeyEnvelopeErrorCodeV1 } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
 
 import type {
     AccountRecipientEnvelopeReadiness,

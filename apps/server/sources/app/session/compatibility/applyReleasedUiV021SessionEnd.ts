@@ -20,12 +20,7 @@ import {
 } from "@/app/session/sessionWriteService";
 import { inTx } from "@/storage/inTx";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
-import {
-    PrimaryTurnStatusV1Schema,
-    SessionRuntimeIssueV1Schema,
-    type PrimaryTurnStatusV1,
-    type SessionRuntimeIssueV1,
-} from "@happier-dev/protocol";
+import { PrimaryTurnStatusV1Schema, SessionRuntimeIssueV1Schema, type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 function readMillis(value: unknown): number | null {
     if (typeof value === "bigint") {

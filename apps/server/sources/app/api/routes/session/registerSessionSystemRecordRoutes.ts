@@ -17,37 +17,10 @@ import {
 } from "@/app/session/systemRecords/sessionSystemRecordService";
 import { isSessionSystemRecordsProtocolV1Active } from "@/app/session/systemRecords/sessionSystemRecordProtocolContract";
 import { toPublicSessionSystemRecord } from "@/app/session/systemRecords/sessionSystemRecordSerialization";
-import {
-    LegacyHostSessionSystemRecordLatestQuerySchema,
-    LegacyHostSessionSystemRecordLatestResponseSchema,
-    LegacyHostSessionSystemRecordListQuerySchema,
-    LegacyHostSessionSystemRecordLookupQuerySchema,
-    LegacyHostSessionSystemRecordLookupResponseSchema,
-    LegacyHostSessionSystemRecordPageResponseSchema,
-    LegacyHostSessionSystemRecordUpsertRequestSchema,
-    LegacyHostSessionSystemRecordUpsertResponseSchema,
-    PluginIdSchema,
-    SESSION_SYSTEM_RECORDS_PLUGIN_ID_HEADER,
-    SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
-    SESSION_SYSTEM_RECORDS_PROTOCOL_V1_HTTP_HEADER_VALUE,
-    SessionSystemRecordAddressSchema,
-    SessionSystemRecordErrorResponseSchema,
-    SessionSystemRecordDeleteRequestSchema,
-    SessionSystemRecordDeleteResponseSchema,
-    SessionSystemRecordListQuerySchema,
-    SessionSystemRecordStoredPageResponseSchema,
-    SessionSystemRecordStoredReadResponseSchema,
-    SessionSystemRecordStoredUpsertRequestSchema,
-    SessionSystemRecordStoredUpsertResponseSchema,
-    SessionPermissionMediationRecordListQuerySchema,
-    SessionPermissionMediationRecordListResponseSchema,
-    SessionPermissionMediationRecordIdentityV1Schema,
-    SessionPermissionMediationRecordReadResponseSchema,
-    SessionPermissionMediationRecordPruneRequestSchema,
-    SessionPermissionMediationRecordPruneResponseSchema,
-    SessionPermissionMediationRecordWriteRequestSchema,
-    SessionPermissionMediationRecordWriteResponseSchema,
-} from "@happier-dev/protocol";
+import { LegacyHostSessionSystemRecordLatestQuerySchema, LegacyHostSessionSystemRecordLatestResponseSchema, LegacyHostSessionSystemRecordListQuerySchema, LegacyHostSessionSystemRecordLookupQuerySchema, LegacyHostSessionSystemRecordLookupResponseSchema, LegacyHostSessionSystemRecordPageResponseSchema, LegacyHostSessionSystemRecordUpsertRequestSchema, LegacyHostSessionSystemRecordUpsertResponseSchema, SESSION_SYSTEM_RECORDS_PLUGIN_ID_HEADER, SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER, SESSION_SYSTEM_RECORDS_PROTOCOL_V1_HTTP_HEADER_VALUE, SessionSystemRecordErrorResponseSchema, SessionSystemRecordDeleteRequestSchema, SessionSystemRecordDeleteResponseSchema, SessionSystemRecordListQuerySchema, SessionSystemRecordStoredPageResponseSchema, SessionSystemRecordStoredReadResponseSchema, SessionSystemRecordStoredUpsertRequestSchema, SessionSystemRecordStoredUpsertResponseSchema, SessionPermissionMediationRecordListQuerySchema, SessionPermissionMediationRecordListResponseSchema, SessionPermissionMediationRecordReadResponseSchema, SessionPermissionMediationRecordPruneRequestSchema, SessionPermissionMediationRecordPruneResponseSchema, SessionPermissionMediationRecordWriteRequestSchema, SessionPermissionMediationRecordWriteResponseSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
+import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
+import { SessionSystemRecordAddressSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordAddress';
+import { SessionPermissionMediationRecordIdentityV1Schema } from '@happier-dev/protocol/sessions/permissions/mediationRecordsV1';
 import { type Fastify } from "../../types";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 

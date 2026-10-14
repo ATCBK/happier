@@ -1,8 +1,5 @@
 import * as crypto from "crypto";
-import {
-    TEAM_INVITATION_TOKEN_LENGTH,
-    TeamInvitationTokenV1Schema,
-} from "@happier-dev/protocol/teams";
+import { TEAM_INVITATION_TOKEN_LENGTH, TeamInvitationTokenV1Schema } from '@happier-dev/protocol/teams/invitation';
 import { createRandomAlphanumeric } from "@/utils/keys/createRandomAlphanumeric";
 
 /**

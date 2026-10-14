@@ -1,17 +1,7 @@
 import { decodeBase64 } from "privacy-kit";
 import { isDeepStrictEqual } from "node:util";
-import {
-    classifySessionDataKeyEnvelopeItemV1,
-    decodeSessionDataKeyEnvelopeCursorV1,
-    encodeSessionDataKeyEnvelopeCursorV1,
-    parseEncryptedDataKeyEnvelopeV1,
-    PatchSessionDataKeyEnvelopesV1Schema,
-    type SessionDataKeyEnvelopeErrorCodeV1,
-    type SessionDataKeyEnvelopeItemV1,
-    type SessionDataKeyEnvelopePageQueryV1,
-    type SessionDataKeyEnvelopePageV1,
-    type SessionDataKeyEnvelopeStateV1,
-} from "@happier-dev/protocol";
+import { classifySessionDataKeyEnvelopeItemV1, decodeSessionDataKeyEnvelopeCursorV1, encodeSessionDataKeyEnvelopeCursorV1, PatchSessionDataKeyEnvelopesV1Schema, type SessionDataKeyEnvelopeErrorCodeV1, type SessionDataKeyEnvelopeItemV1, type SessionDataKeyEnvelopePageQueryV1, type SessionDataKeyEnvelopePageV1, type SessionDataKeyEnvelopeStateV1 } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 
 import { writeSessionDataKeyEnvelopeInTx } from "./sessionDataKeyEnvelopePersistence";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";

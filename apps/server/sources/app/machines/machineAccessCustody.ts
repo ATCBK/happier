@@ -1,6 +1,6 @@
-import { MachineAccessLossCustodyResponseV1Schema, MachineAccessLossRequesterCensusResponseV1Schema,
-    type MachineAccessLossCustodyResponseV1, type MachineAccessLossCustodyRequestV1, type MachineAdmission } from '@happier-dev/protocol';
-import { MACHINE_ACCESS_LOSS_SERVER_ORIGIN, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MachineAccessLossCustodyResponseV1Schema, MachineAccessLossRequesterCensusResponseV1Schema, type MachineAccessLossCustodyResponseV1, type MachineAccessLossCustodyRequestV1, type MachineAdmission } from '@happier-dev/protocol/machines/machineAccessV1';
+import { MACHINE_ACCESS_LOSS_SERVER_ORIGIN } from '@happier-dev/protocol/socketRpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { eventRouter } from '@/app/events/connectionEventRouter';
 import { readMachineAccessKeySessionBindingsInTx } from '@/app/accessKeys/sessionMachineAccessKeyMutations';
 import { db } from '@/storage/db';

@@ -2,13 +2,10 @@ import type { Prisma } from "@prisma/client";
 
 import { db } from "@/storage/db";
 import { prismaRuntime, type TransactionClient } from "@/storage/prisma";
-import {
-    createStoredReadSchema,
-    ProviderAccountUsageRecordKeyV1Schema,
-    parseBuiltInLegacyProviderAccountUsageSnapshotV1,
-    SealedProviderAccountUsageSnapshotV1Schema,
-    type SealedProviderAccountUsageSnapshotV1,
-} from "@happier-dev/protocol";
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { ProviderAccountUsageRecordKeyV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
+import { SealedProviderAccountUsageSnapshotV1Schema, type SealedProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/accountUsage';
 import {
     ProviderAccountUsageRecordMetadataSchema,
     UpsertProviderAccountUsageRecordSchema,

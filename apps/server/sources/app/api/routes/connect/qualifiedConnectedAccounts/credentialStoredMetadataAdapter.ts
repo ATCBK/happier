@@ -1,14 +1,10 @@
-import type {
-    ConnectedServiceCredentialHealthV1,
-    QualifiedConnectedAccountCredentialMetadataV4,
-    StoredJsonContentEnvelope,
-} from "@happier-dev/protocol";
-import {
-    CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1,
-    ConnectedServiceCredentialRecordV1Schema,
-    ConnectedServiceIdSchema,
-    assertConnectedServiceCredentialRecordBinding,
-} from "@happier-dev/protocol";
+import type { ConnectedServiceCredentialHealthV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import type { QualifiedConnectedAccountCredentialMetadataV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import type { StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
+import { ConnectedServiceCredentialRecordV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { assertConnectedServiceCredentialRecordBinding } from '@happier-dev/protocol/connect/connectedServiceCredentialBinding';
 import { createStoredReadSchema } from "@happier-dev/protocol/json/storedReadSchema";
 
 import { decryptString } from "@/modules/encrypt";

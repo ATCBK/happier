@@ -1,4 +1,4 @@
-import { isActiveHomeAccountStatus } from "@happier-dev/protocol";
+import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { inTx, type Tx } from "@/storage/inTx";

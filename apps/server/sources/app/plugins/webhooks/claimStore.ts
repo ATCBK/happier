@@ -1,19 +1,8 @@
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 
-import {
-    encodeBase64,
-    PluginWebhookClaimResultV1Schema,
-    PluginWebhookAutomationAdmissionUnresolvedV1Schema,
-    PluginWebhookInvocationReferenceV1Schema,
-    PluginWebhookRenewResultV1Schema,
-    PluginWebhookSettleResultV1Schema,
-    type PluginWebhookClaimRequestV1,
-    type PluginWebhookClaimResultV1,
-    type PluginWebhookAutomationAdmissionUnresolvedV1,
-    type PluginWebhookInvocationReferenceV1,
-    type PluginWebhookRenewResultV1,
-    type PluginWebhookSettleResultV1,
-} from "@happier-dev/protocol";
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { PluginWebhookClaimResultV1Schema, PluginWebhookInvocationReferenceV1Schema, PluginWebhookRenewResultV1Schema, PluginWebhookSettleResultV1Schema, type PluginWebhookClaimRequestV1, type PluginWebhookClaimResultV1, type PluginWebhookInvocationReferenceV1, type PluginWebhookRenewResultV1, type PluginWebhookSettleResultV1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
+import { PluginWebhookAutomationAdmissionUnresolvedV1Schema, type PluginWebhookAutomationAdmissionUnresolvedV1 } from '@happier-dev/protocol/plugins/webhooks/statusV1';
 
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import {

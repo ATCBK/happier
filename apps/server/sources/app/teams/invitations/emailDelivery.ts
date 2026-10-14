@@ -1,8 +1,5 @@
-import type { NormalizedVerifiedEmail } from "@happier-dev/protocol";
-import type {
-    TeamInvitationAdmissibleRoleV1,
-    TeamInvitationEmailDeliveryV1,
-} from "@happier-dev/protocol/teams";
+import type { NormalizedVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
+import type { TeamInvitationAdmissibleRoleV1, TeamInvitationEmailDeliveryV1 } from '@happier-dev/protocol/teams/invitation';
 import type { AuthEmailDelivery } from "@/app/auth/email/authEmailDelivery";
 import type { SessionHistoryAccess } from "@/storage/enums.generated";
 import { db } from "@/storage/db";

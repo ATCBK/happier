@@ -1,7 +1,7 @@
 import { rm, stat } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { IrohError } from '@happier-dev/iroh-native/node';
-import { parseIrohEndpointDescriptorV1, type IrohEndpointDescriptorV1 } from '@happier-dev/protocol';
+import { parseIrohEndpointDescriptorV1, type IrohEndpointDescriptorV1 } from '@happier-dev/protocol/connectivity/iroh/endpointDescriptorV1';
 import { resolvePersonalHomeRuntimeLayout } from '@happier-dev/cli-common/firstPartyRuntime/server';
 import { resolveBoundServerListener } from '@/app/runtime/startupReceipt';
 import { resolveConfiguredCanonicalServerUrl } from '@/app/serverUrls/effectiveServerUrls';

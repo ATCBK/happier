@@ -1,13 +1,11 @@
-import {
-    AccountEncryptionMigrateAutomationsDirectiveSchema,
-    AutomationRunCauseSchema,
-    AutomationTriggerIdSchema,
-    deriveAutomationOccurrenceKeyV1,
-    AutomationSourceSelectorIdV1Schema,
-    sealAutomationTriggerDefinitionStoredEnvelopeV1,
-    sealAutomationRunFailureDetailStoredEnvelopeV1,
-    serializeAutomationRunExecutionRecipeV1,
-} from "@happier-dev/protocol";
+import { AccountEncryptionMigrateAutomationsDirectiveSchema } from '@happier-dev/protocol/account/encryptionMigrate';
+import { AutomationRunCauseSchema } from '@happier-dev/protocol/automations/run-cause';
+import { AutomationTriggerIdSchema } from '@happier-dev/protocol/automations/automationTriggerIdentity';
+import { deriveAutomationOccurrenceKeyV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { AutomationSourceSelectorIdV1Schema } from '@happier-dev/protocol/automations/automationEventJsonBoundsV1';
+import { sealAutomationTriggerDefinitionStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationTriggerDefinitionStoredContent';
+import { sealAutomationRunFailureDetailStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationRunFailureDetailStoredContent';
+import { serializeAutomationRunExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
 import { expect } from "vitest";
 
 import { db } from "@/storage/db";

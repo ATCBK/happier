@@ -1,8 +1,6 @@
-import {
-    ConnectedServiceCredentialRecordV1Schema,
-    assertConnectedServiceCredentialRecordBinding,
-    type ConnectedServiceId,
-} from "@happier-dev/protocol";
+import { ConnectedServiceCredentialRecordV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { assertConnectedServiceCredentialRecordBinding } from '@happier-dev/protocol/connect/connectedServiceCredentialBinding';
+import { type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { encryptString } from "@/modules/encrypt";

@@ -21,10 +21,7 @@ import {
     requireCurrentOAuthPendingRuntimeInTx,
 } from "./oauthSecurityBinding";
 import { oauthExternalFinalizeErrorHandler } from "./oauthExternalFinalizeErrorHandler";
-import {
-    ExternalOAuthFinalizeConnectRequestSchema,
-    ExternalOAuthFinalizeConnectSuccessResponseSchema,
-} from "@happier-dev/protocol";
+import { ExternalOAuthFinalizeConnectRequestSchema, ExternalOAuthFinalizeConnectSuccessResponseSchema } from '@happier-dev/protocol/auth/externalOAuth';
 import { inTx } from "@/storage/inTx";
 import { isEffectiveHomeAuthMethodActionEnabledInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
 import {

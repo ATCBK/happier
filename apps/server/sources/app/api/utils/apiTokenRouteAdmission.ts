@@ -4,14 +4,11 @@ import type {
     RestrictedCredentialRouteSessionSelector,
 } from "../types";
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
-import type {
-    AuthTokenAuthenticationEvidenceV1,
-    AuthTokenAuthority,
-    AuthTokenKind,
-} from "@happier-dev/protocol";
+import type { AuthTokenAuthenticationEvidenceV1, AuthTokenAuthority, AuthTokenKind } from '@happier-dev/protocol/auth/authToken';
 import { isApiTokenGrantRestrictedV1, type ApiTokenGrantV1 } from "@happier-dev/protocol/auth/apiTokenGrant";
 import { canCredentialDecideV1 } from "@happier-dev/protocol/actions/decisionAuthority";
-import { getActionSpec, type ActionId } from "@happier-dev/protocol/actions";
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { type ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { resolveSessionAccessForOperation, type EffectiveSessionAccess, type SessionCapability } from "@/app/session/access/sessionAccess";

@@ -5,7 +5,7 @@ import { NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV
 import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
-import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol';
+import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
 import { PresentUserRequiredResponseSchema, requirePresentUser } from '@/app/api/utils/requirePresentUser';
 import { enforceProfilePreservingSettingsWriterCompatibilityForHttpRequest } from '@/app/clientCompatibility/accountStoredContentCompatibility';
 import { isServerFeatureEnabledForRequest } from '@/app/features/catalog/serverFeatureGate';

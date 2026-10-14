@@ -5,7 +5,7 @@ import {
 } from "@/app/serverUrls/effectiveServerUrls";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { isPersonalHomeRuntimePurpose } from '@/app/runtime/personalHomeRuntimePurpose';
-import type { HomeConnectionDescriptorV1 } from "@happier-dev/protocol";
+import type { HomeConnectionDescriptorV1 } from '@happier-dev/protocol/auth/accountDirectory';
 import type { HomeConnectionDescriptorContinuityStore } from "@/app/features/homeConnectionDescriptorContinuity";
 import { readRequiredAuthenticatedHomeConnectionDescriptor } from "@/app/features/homeConnectionDescriptorPublication";
 import type { JoinScreenHomeIdentity } from "./invitationService";

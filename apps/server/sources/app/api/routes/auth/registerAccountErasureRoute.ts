@@ -1,9 +1,4 @@
-import {
-    ACCOUNT_ERASURE_HTTP_PATH_V1,
-    AccountErasureErrorV1Schema,
-    AccountErasureRequestV1Schema,
-    AccountErasureResponseV1Schema,
-} from "@happier-dev/protocol";
+import { ACCOUNT_ERASURE_HTTP_PATH_V1, AccountErasureErrorV1Schema, AccountErasureRequestV1Schema, AccountErasureResponseV1Schema } from '@happier-dev/protocol/auth/accountErasure';
 import { deleteAccountForErasure } from "@/app/plugins/data/accountDataErase";
 import { PresentUserRequiredResponseSchema, requirePresentUser } from "@/app/api/utils/requirePresentUser";
 import { type Fastify } from "../../types";

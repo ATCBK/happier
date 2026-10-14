@@ -1,4 +1,4 @@
-import type { TeamInvitationPostAuthContinuationV1 } from "@happier-dev/protocol/teams";
+import type { TeamInvitationPostAuthContinuationV1 } from '@happier-dev/protocol/teams/invitation';
 
 import { qualifyTeamAuthenticationInTx } from "@/app/auth/entry/qualifyTeamAuthentication";
 import { resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";

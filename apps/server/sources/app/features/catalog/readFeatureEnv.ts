@@ -1,23 +1,12 @@
 import { parseBooleanEnv } from '../../../config/env';
-import {
-  MACHINE_TRANSFER_SERVER_ROUTED_MAX_BYTES_ENV_KEY,
-  MachineLiveStreamRelayCapsV1Schema,
-  LocalServicePublicExposureModeV1Schema,
-  PLUGIN_WEBHOOK_MAX_RAW_BODY_BYTES_V1,
-  PluginDataCollectionsCapabilitiesSchema,
-  readServerConfig,
-  normalizeMachineTunnelAllowedPorts,
-  normalizeMachineTunnelPreferredEncoding,
-  normalizeMachineTunnelPositiveInt,
-  normalizeMachineTunnelSupportedEncodings,
-  normalizeMachineTransferServerRoutedMaxBytes,
-  type MachineLiveStreamRelayCaps,
-  type MachineTunnelSubstreamCapabilities,
-  type LocalServicePublicExposureModeV1,
-  type LocalServicePublicPolicyV1,
-  type PeerTcpTunnelEncoding,
-  type PluginDataCollectionsCapabilities,
-} from '@happier-dev/protocol';
+import { MACHINE_TRANSFER_SERVER_ROUTED_MAX_BYTES_ENV_KEY, normalizeMachineTransferServerRoutedMaxBytes } from '@happier-dev/protocol/features/payload/capabilities/machineTransferCapabilities';
+import { MachineLiveStreamRelayCapsV1Schema, type MachineLiveStreamRelayCaps } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { LocalServicePublicExposureModeV1Schema, type LocalServicePublicExposureModeV1, type LocalServicePublicPolicyV1 } from '@happier-dev/protocol/local/services/public/v1';
+import { PLUGIN_WEBHOOK_MAX_RAW_BODY_BYTES_V1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
+import { PluginDataCollectionsCapabilitiesSchema, type PluginDataCollectionsCapabilities } from '@happier-dev/protocol/features/payload/capabilities/pluginDataCollectionsCapabilities';
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { normalizeMachineTunnelAllowedPorts, normalizeMachineTunnelPreferredEncoding, normalizeMachineTunnelPositiveInt, normalizeMachineTunnelSupportedEncodings, type MachineTunnelSubstreamCapabilities } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
+import { type PeerTcpTunnelEncoding } from '@happier-dev/protocol/machines/peer/mediation/tunnel/encoding';
 import { resolvePeerMediationGrantSigningConfig } from '@/app/machines/peer/mediation/mintDirectRouteGrantV1';
 import { resolveEffectiveWebappBaseUrl } from '../../serverUrls/effectiveServerUrls';
 import { chargePluginWebhookWorkingBytesV1 } from '@/app/plugins/webhooks/admission';

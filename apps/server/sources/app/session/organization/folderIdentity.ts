@@ -1,4 +1,4 @@
-import { SESSION_FOLDER_MAX_DEPTH } from "@happier-dev/protocol";
+import { SESSION_FOLDER_MAX_DEPTH } from '@happier-dev/protocol/sessions/folders/folderSettings';
 
 import type { SessionOrganizationTx } from "./types";
 

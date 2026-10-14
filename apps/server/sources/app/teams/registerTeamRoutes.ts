@@ -1,18 +1,6 @@
-import {
-    TEAM_LOGO_REQUEST_MAX_BODY_BYTES_V1,
-    TeamCreateInputV1Schema,
-    TeamErrorV1Schema,
-    TeamLogoSetInputV1Schema,
-    TeamPolicySetInputV1Schema,
-    TeamRefInputV1Schema,
-    TeamSummaryV1Schema,
-    TeamUpdateInputV1Schema,
-    TeamsListInputV1Schema,
-    TeamsPageV1Schema,
-    teamErrorHttpStatusV1,
-    type TeamErrorCodeV1,
-    type TeamErrorV1,
-} from "@happier-dev/protocol/teams";
+import { TEAM_LOGO_REQUEST_MAX_BODY_BYTES_V1, TeamLogoSetInputV1Schema } from '@happier-dev/protocol/teams/logo';
+import { TeamCreateInputV1Schema, TeamErrorV1Schema, TeamPolicySetInputV1Schema, TeamRefInputV1Schema, TeamUpdateInputV1Schema, teamErrorHttpStatusV1, type TeamErrorCodeV1, type TeamErrorV1 } from '@happier-dev/protocol/teams';
+import { TeamSummaryV1Schema, TeamsListInputV1Schema, TeamsPageV1Schema } from '@happier-dev/protocol/teams/projections';
 
 import type { Fastify } from "@/app/api/types";
 import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";

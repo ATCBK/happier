@@ -1,26 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import {
-    DIRECT_ROUTE_GRANT_TTL_MS,
-    PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
-    PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES,
-    PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
-    decodePeerTcpTunnelBinaryFrameV2,
-    type PeerTcpTunnelRelayEnvelope,
-    type AuthTokenAuthenticationEvidenceV1,
-} from '@happier-dev/protocol';
-import {
-    TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1,
-    TeamCredentialProviderBrokerApplicationCarrierRequestV1Schema,
-    TeamCredentialExternalProviderApplicationRequestV1Schema,
-    TeamCredentialResourceTestApplicationRequestV1Schema,
-    TeamCredentialUsageLimitDenialV1Schema,
-    type TeamCredentialSourceBindingV1,
-    type TeamCredentialResourceTestApplicationRequestV1,
-} from '@happier-dev/protocol/teams';
-import type {
-    ProviderBrokerApplicationBindingV1,
-    ProviderBrokerRelayApplicationBindingV1,
-} from '@happier-dev/protocol';
+import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
+import { PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/encoding';
+import { PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES } from '@happier-dev/protocol/machines/peer/mediation/tunnel/v1';
+import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, type PeerTcpTunnelRelayEnvelope } from '@happier-dev/protocol/machines/peer/mediation/tunnel/relay';
+import { decodePeerTcpTunnelBinaryFrameV2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/v2';
+import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
+import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1, TeamCredentialProviderBrokerApplicationCarrierRequestV1Schema, TeamCredentialExternalProviderApplicationRequestV1Schema, TeamCredentialResourceTestApplicationRequestV1Schema, type TeamCredentialResourceTestApplicationRequestV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
+import { TeamCredentialUsageLimitDenialV1Schema } from '@happier-dev/protocol/teams';
+import { type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import type { ProviderBrokerRelayApplicationBindingV1 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorizationSchemas';
 
 import { readMachineTunnelFeatureEnv } from '@/app/features/catalog/readFeatureEnv';
 import { resolvePeerMediationGrantSigningConfig } from '@/app/machines/peer/mediation/mintDirectRouteGrantV1';

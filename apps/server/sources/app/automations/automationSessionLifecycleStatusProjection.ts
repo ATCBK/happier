@@ -1,4 +1,4 @@
-import type { AutomationSessionLifecycleTriggerStatus } from "@happier-dev/protocol";
+import type { AutomationSessionLifecycleTriggerStatus } from '@happier-dev/protocol/automations/automationTriggerProjectionV1';
 
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";

@@ -1,14 +1,9 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 
-import {
-    AccountPetCreateRequestV1Schema,
-    inspectPetAtlasRgbaPixelsV1,
-    PET_ATLAS_V1,
-    PET_PACKAGE_LIMITS_V1,
-    type AccountPetCreateRequestV1,
-    type PetAssetMediaTypeV1,
-} from "@happier-dev/protocol";
+import { AccountPetCreateRequestV1Schema, type AccountPetCreateRequestV1, type PetAssetMediaTypeV1 } from '@happier-dev/protocol/pets/accountLibrary';
+import { inspectPetAtlasRgbaPixelsV1 } from '@happier-dev/protocol/pets/atlasPixelInspection';
+import { PET_ATLAS_V1, PET_PACKAGE_LIMITS_V1 } from '@happier-dev/protocol/pets/constants';
 import { loadSharp } from "@/storage/blob/sharpRuntime";
 
 export type PetAtlasInspection = Readonly<{

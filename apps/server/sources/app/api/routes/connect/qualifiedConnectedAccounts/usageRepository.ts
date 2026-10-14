@@ -1,19 +1,12 @@
 import { createHash } from "node:crypto";
 
-import {
-    buildProviderAccountUsageRecordId,
-    ProviderAccountUsageSnapshotV1Schema,
-    QualifiedConnectedAccountRefSchema,
-    projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4,
-    QualifiedConnectedServiceUsageSourceV4Schema,
-    readAccountScopedCiphertextKindByte,
-    type ConnectedServiceId,
-    type ConnectedServiceQuotaSnapshotV1,
-    type QualifiedConnectedAccountRef,
-    type QualifiedConnectedServiceUsageSourceResolutionV4,
-    type QualifiedConnectedServiceUsageSourceV4,
-    type SealedConnectedServiceQuotaSnapshotV1,
-} from "@happier-dev/protocol";
+import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4, type QualifiedConnectedServiceUsageSourceResolutionV4, type QualifiedConnectedServiceUsageSourceV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { readAccountScopedCiphertextKindByte } from '@happier-dev/protocol/crypto/accountScopedCipherEnvelope';
+import { type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { type ConnectedServiceQuotaSnapshotV1, type SealedConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { isConnectedServiceUsageProviderCompatible } from "@happier-dev/agents";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";

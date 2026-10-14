@@ -1,8 +1,5 @@
-import {
-    SessionListQueryResponseV1Schema,
-    SessionListQueryV1Schema,
-    SessionListUnavailableQueryV1Schema,
-} from '@happier-dev/protocol';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionListQueryV1Schema, SessionListUnavailableQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { z } from 'zod';
 
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';

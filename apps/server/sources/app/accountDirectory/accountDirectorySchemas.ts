@@ -3,40 +3,6 @@
  * module only keeps short server-local aliases used by route composition; no
  * second parser or codec is maintained here.
  */
-export {
-    HomeConnectionDescriptorV1Schema,
-    AccountDirectoryHomePutRequestV1Schema as AccountDirectoryHomePutRequestSchema,
-    AccountDirectoryPreferredHomePatchRequestV1Schema as AccountDirectoryPreferredRequestSchema,
-    AccountDirectoryLinkPutRequestV1Schema as AccountDirectoryLinkPutRequestSchema,
-    HomeLoginAssertionRequestV1Schema as HomeLoginAssertionRequestSchema,
-    HomeLoginAssertionV1Schema,
-    HomeLoginRedemptionRequestV1Schema,
-    HomeLoginCredentialPayloadV1Schema,
-    HomeLoginRedemptionResponseV1Schema,
-    HomeLoginRedemptionResultV1Schema,
-    AccountDirectoryMeResponseV1Schema as AccountDirectoryMeResponseSchema,
-    AccountDirectoryHomesResponseV1Schema,
-    AccountDirectoryHomePutResponseV1Schema,
-    AccountDirectoryHomeDeleteParamsV1Schema,
-    AccountDirectoryHomeDeleteRequestV1Schema,
-    AccountDirectoryHomeDeleteResponseV1Schema,
-    AccountDirectoryLinkDeleteParamsV1Schema,
-    AccountDirectoryLinkDeleteRequestV1Schema,
-    AccountDirectoryLinkPutResponseV1Schema,
-    AccountDirectoryLinkDeleteResponseV1Schema,
-    AccountDirectoryPreferredHomePatchResponseV1Schema,
-    HomeLoginRedemptionApprovalRequiredV1Schema,
-    AccountDirectoryRouteErrorResponseV1Schema,
-} from "@happier-dev/protocol";
+export { HomeConnectionDescriptorV1Schema, AccountDirectoryHomePutRequestV1Schema as AccountDirectoryHomePutRequestSchema, AccountDirectoryPreferredHomePatchRequestV1Schema as AccountDirectoryPreferredRequestSchema, AccountDirectoryLinkPutRequestV1Schema as AccountDirectoryLinkPutRequestSchema, HomeLoginAssertionRequestV1Schema as HomeLoginAssertionRequestSchema, HomeLoginAssertionV1Schema, HomeLoginRedemptionRequestV1Schema, HomeLoginCredentialPayloadV1Schema, HomeLoginRedemptionResponseV1Schema, HomeLoginRedemptionResultV1Schema, AccountDirectoryMeResponseV1Schema as AccountDirectoryMeResponseSchema, AccountDirectoryHomesResponseV1Schema, AccountDirectoryHomePutResponseV1Schema, AccountDirectoryHomeDeleteParamsV1Schema, AccountDirectoryHomeDeleteRequestV1Schema, AccountDirectoryHomeDeleteResponseV1Schema, AccountDirectoryLinkDeleteParamsV1Schema, AccountDirectoryLinkDeleteRequestV1Schema, AccountDirectoryLinkPutResponseV1Schema, AccountDirectoryLinkDeleteResponseV1Schema, AccountDirectoryPreferredHomePatchResponseV1Schema, HomeLoginRedemptionApprovalRequiredV1Schema, AccountDirectoryRouteErrorResponseV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 
-export type {
-    HomeConnectionDescriptorV1,
-    AccountDirectoryHomePutRequestV1 as AccountDirectoryHomePutRequest,
-    AccountDirectoryPreferredHomePatchRequestV1 as AccountDirectoryPreferredRequest,
-    AccountDirectoryLinkPutRequestV1 as AccountDirectoryLinkPutRequest,
-    HomeLoginAssertionRequestV1 as HomeLoginAssertionRequest,
-    HomeLoginAssertionV1,
-    HomeLoginRedemptionResponseV1,
-    HomeLoginRedemptionResultV1,
-    AccountDirectoryMeResponseV1,
-} from "@happier-dev/protocol";
+export type { HomeConnectionDescriptorV1, AccountDirectoryHomePutRequestV1 as AccountDirectoryHomePutRequest, AccountDirectoryPreferredHomePatchRequestV1 as AccountDirectoryPreferredRequest, AccountDirectoryLinkPutRequestV1 as AccountDirectoryLinkPutRequest, HomeLoginAssertionRequestV1 as HomeLoginAssertionRequest, HomeLoginAssertionV1, HomeLoginRedemptionResponseV1, HomeLoginRedemptionResultV1, AccountDirectoryMeResponseV1 } from '@happier-dev/protocol/auth/accountDirectory';

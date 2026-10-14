@@ -1,73 +1,15 @@
-import {
-    TeamCredentialErrorCodeV1Schema,
-    teamCredentialErrorHttpStatusV1,
-    TeamCredentialResourceAudienceInputV1Schema,
-    TeamCredentialResourceCreateInputV1Schema,
-    TeamCredentialResourceDeleteInputV1Schema,
-    TeamCredentialResourceErrorV1Schema,
-    TeamCredentialResourcePageV1Schema,
-    TeamCredentialResourceEntitledPageV1Schema,
-    TeamCredentialResourceGetInputV1Schema,
-    TeamCredentialResourceReadInputV1Schema,
-    TeamCredentialResourceListInputV1Schema,
-    TeamCredentialResourceSummaryV1Schema,
-    TeamCredentialResourceMutationResultV1Schema,
-    TeamCredentialResourceUpdateInputV1Schema,
-    TeamCredentialResourceActivityReadInputV1Schema,
-    TeamCredentialResourceActivityPageV1Schema,
-    TeamCredentialTestActionInputV1Schema,
-    TeamCredentialTestActionOutputV1Schema,
-    TeamCredentialSourceCandidateListInputV1Schema,
-    TeamCredentialSourceCandidateListOutputV1Schema,
-    TeamCredentialSourceResourceListInputV1Schema,
-    TeamCredentialSourceResourceListOutputV1Schema,
-    TeamCredentialSourceResourceAdministrationV1Schema,
-    TeamCredentialRequestPolicySupportInputV1Schema,
-    TeamCredentialRequestPolicySupportOutputV1Schema,
-    TeamCredentialUsageLimitDeleteInputV1Schema,
-    TeamCredentialUsageLimitListInputV1Schema,
-    TeamCredentialUsageLimitListOutputV1Schema,
-    TeamCredentialUsageLimitUpsertInputV1Schema,
-    TeamCredentialUsageLimitUpsertOutputV1Schema,
-    TeamCredentialUsageQueryInputV1Schema,
-    TeamCredentialUsageQueryResultV1Schema,
-    TeamCredentialExternalApiKeyCreateInputV1Schema,
-    TeamCredentialExternalApiKeyAuthorizeInputV1Schema,
-    TeamCredentialExternalApiKeyAuthorizeOutputV1Schema,
-    TeamCredentialExternalApiKeyCreateOutputV1Schema,
-    TeamCredentialExternalApiKeyListInputV1Schema,
-    TeamCredentialExternalApiKeyListOutputV1Schema,
-    TeamCredentialExternalApiKeyRevokeInputV1Schema,
-    TeamCredentialExternalApiKeyRevokeOutputV1Schema,
-    TeamCredentialExternalApiKeyRevokeAllInputV1Schema,
-    TeamCredentialExternalApiKeyRevokeAllOutputV1Schema,
-    RunnerBrokerReadinessRequestV1Schema,
-    RunnerBrokerReadinessResponseV1Schema,
-    TeamCredentialDirectMaterialRouteParamsV1Schema,
-    TeamCredentialDirectMaterialReadQueryV1Schema,
-    TeamCredentialDirectMaterialMineResponseV1Schema,
-    TeamCredentialDirectMaterialOpenRequestV1Schema,
-    TeamCredentialDirectMaterialPreparationResponseV1Schema,
-    TeamCredentialDirectMaterialCensusOutputV1Schema,
-    TeamCredentialPreparationOutputV1Schema,
-    TeamCredentialDirectMaterialUpsertRequestV1Schema,
-    TeamCredentialDirectMaterialUpsertResponseV1Schema,
-    TeamCredentialDirectMaterialWithdrawRequestV1Schema,
-    TeamCredentialDirectMaterialWithdrawResponseV1Schema,
-    type TeamCredentialErrorCodeV1,
-} from "@happier-dev/protocol/teams";
-import {
-    PROVIDER_BROKER_READINESS_AUTHORIZE_HTTP_PATH_V1,
-    resolveTeamCredentialExternalApiAvailability,
-    RPC_METHODS,
-} from "@happier-dev/protocol";
+import { TeamCredentialErrorCodeV1Schema, teamCredentialErrorHttpStatusV1, TeamCredentialResourceAudienceInputV1Schema, TeamCredentialResourceCreateInputV1Schema, TeamCredentialResourceDeleteInputV1Schema, TeamCredentialResourceErrorV1Schema, TeamCredentialResourcePageV1Schema, TeamCredentialResourceEntitledPageV1Schema, TeamCredentialResourceGetInputV1Schema, TeamCredentialResourceReadInputV1Schema, TeamCredentialResourceListInputV1Schema, TeamCredentialResourceSummaryV1Schema, TeamCredentialResourceMutationResultV1Schema, TeamCredentialResourceUpdateInputV1Schema, TeamCredentialResourceActivityReadInputV1Schema, TeamCredentialResourceActivityPageV1Schema, TeamCredentialRequestPolicySupportInputV1Schema, TeamCredentialRequestPolicySupportOutputV1Schema, type TeamCredentialErrorCodeV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { TeamCredentialTestActionInputV1Schema, TeamCredentialTestActionOutputV1Schema, TeamCredentialPreparationOutputV1Schema } from '@happier-dev/protocol/teams/credentials/actionsV1';
+import { TeamCredentialSourceCandidateListInputV1Schema, TeamCredentialSourceCandidateListOutputV1Schema, TeamCredentialSourceResourceListInputV1Schema, TeamCredentialSourceResourceListOutputV1Schema, TeamCredentialSourceResourceAdministrationV1Schema, TeamCredentialUsageLimitDeleteInputV1Schema, TeamCredentialUsageLimitListInputV1Schema, TeamCredentialUsageLimitListOutputV1Schema, TeamCredentialUsageLimitUpsertInputV1Schema, TeamCredentialUsageLimitUpsertOutputV1Schema, TeamCredentialUsageQueryInputV1Schema, TeamCredentialUsageQueryResultV1Schema, TeamCredentialExternalApiKeyCreateInputV1Schema, TeamCredentialExternalApiKeyAuthorizeInputV1Schema, TeamCredentialExternalApiKeyAuthorizeOutputV1Schema, TeamCredentialExternalApiKeyCreateOutputV1Schema, TeamCredentialExternalApiKeyListInputV1Schema, TeamCredentialExternalApiKeyListOutputV1Schema, TeamCredentialExternalApiKeyRevokeInputV1Schema, TeamCredentialExternalApiKeyRevokeOutputV1Schema, TeamCredentialExternalApiKeyRevokeAllInputV1Schema, TeamCredentialExternalApiKeyRevokeAllOutputV1Schema } from '@happier-dev/protocol/teams';
+import { RunnerBrokerReadinessRequestV1Schema } from '@happier-dev/protocol/ephemeralRunner/brokerReadinessRequestV1';
+import { RunnerBrokerReadinessResponseV1Schema } from '@happier-dev/protocol/teams/credentials/readinessV1';
+import { TeamCredentialDirectMaterialRouteParamsV1Schema, TeamCredentialDirectMaterialReadQueryV1Schema, TeamCredentialDirectMaterialMineResponseV1Schema, TeamCredentialDirectMaterialOpenRequestV1Schema, TeamCredentialDirectMaterialPreparationResponseV1Schema, TeamCredentialDirectMaterialUpsertRequestV1Schema, TeamCredentialDirectMaterialUpsertResponseV1Schema, TeamCredentialDirectMaterialWithdrawRequestV1Schema, TeamCredentialDirectMaterialWithdrawResponseV1Schema } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
+import { TeamCredentialDirectMaterialCensusOutputV1Schema } from '@happier-dev/protocol/teams/credentials/directMaterialCensusV1';
+import { PROVIDER_BROKER_READINESS_AUTHORIZE_HTTP_PATH_V1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { resolveTeamCredentialExternalApiAvailability } from '@happier-dev/protocol/features/payload/capabilities/teamCredentialCapabilities';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { parseProviderContributionIdentityV1 } from "@happier-dev/protocol/providers/contribution-identity";
-import {
-    DaemonProviderConnectionsDescribeResponseV1Schema,
-    DaemonProviderModelProjectionResponseV1Schema,
-    DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema,
-    DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema,
-} from "@happier-dev/protocol/rpc";
+import { DaemonProviderConnectionsDescribeResponseV1Schema, DaemonProviderModelProjectionResponseV1Schema, DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema, DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { z } from "zod";
 import type { Fastify } from "@/app/api/types";
 import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";

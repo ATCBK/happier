@@ -1,11 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import * as privacyKit from "privacy-kit";
-import { parseEncryptedDataKeyEnvelopeV1, projectAutomationAccountCurrentnessWitnessV1, resolveWorkflowRunVisibleTeamV1 } from "@happier-dev/protocol";
-import type {
-    WorkflowRunRecipientCensusInputV1, WorkflowRunRecipientCensusResponseV1,
-    WorkflowRunRecipientKeyEnvelopeV1, WorkflowRunRecipientKeyEnvelopeCommitInputV1,
-    WorkflowRunRecipientKeyEnvelopeCommitResponseV1,
-} from "@happier-dev/protocol/workflows";
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { projectAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { resolveWorkflowRunVisibleTeamV1 } from '@happier-dev/protocol/workflows';
+import type { WorkflowRunRecipientCensusInputV1, WorkflowRunRecipientCensusResponseV1, WorkflowRunRecipientKeyEnvelopeV1, WorkflowRunRecipientKeyEnvelopeCommitInputV1, WorkflowRunRecipientKeyEnvelopeCommitResponseV1 } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import type { Tx } from "@/storage/inTx";
 import { resolveArtifactAccessInTx, resolveArtifactAudienceInTx } from "@/app/artifacts/artifactAccessService";
 import { resolveTeamMembershipContextInTx } from "@/app/teams/memberships/effectiveMembership";

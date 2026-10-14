@@ -1,17 +1,12 @@
 import { isDeepStrictEqual } from 'node:util';
 import { decodeBase64, encodeBase64 } from 'privacy-kit';
-import {
-    computeMachineOwnerEnvelopeFingerprintV1, decodePlainMachineStoredContent,
-    decodeSessionDataKeyEnvelopeCursorV1, encodeSessionDataKeyEnvelopeCursorV1,
-    isMachinePublishedContentSafeV1, parseEncryptedDataKeyEnvelopeV1,
-    machineStoredContentMatchesAccountMode,
-    MachineRecipientKeyEnvelopePageQueryV1Schema,
-    type AccessibleMachineAccessV1, type MachineAdmission, type MachineAccessRoleV1,
-    type MachineAccessRefusalV1, type MachineAccessRefusalCode, type MachineAccessGrantRowV1,
-    type MachineAccessGrantsListResultV1, type MachineAccessMutationResultV1, type PrincipalRefV1,
-    type MachineAccessRecipientCensusResponseV1, type MachineRecipientKeyEnvelopeCommitInputV1,
-    type MachineRecipientKeyEnvelopeCommitResponseV1, type MachineRecipientKeyEnvelopePageQueryV1,
-} from '@happier-dev/protocol';
+import { computeMachineOwnerEnvelopeFingerprintV1 } from '@happier-dev/protocol/machines/machineOwnerEnvelopeFingerprintV1';
+import { decodePlainMachineStoredContent, machineStoredContentMatchesAccountMode } from '@happier-dev/protocol/machines/machineStoredContent';
+import { decodeSessionDataKeyEnvelopeCursorV1, encodeSessionDataKeyEnvelopeCursorV1 } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
+import { isMachinePublishedContentSafeV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { MachineRecipientKeyEnvelopePageQueryV1Schema, type AccessibleMachineAccessV1, type MachineAdmission, type MachineAccessRoleV1, type MachineAccessRefusalV1, type MachineAccessRefusalCode, type MachineAccessGrantRowV1, type MachineAccessGrantsListResultV1, type MachineAccessMutationResultV1, type MachineAccessRecipientCensusResponseV1, type MachineRecipientKeyEnvelopeCommitInputV1, type MachineRecipientKeyEnvelopeCommitResponseV1, type MachineRecipientKeyEnvelopePageQueryV1 } from '@happier-dev/protocol/machines/machineAccessV1';
+import { type PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
 import { resolveMachineRpcRoutePolicy } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 import { isRequesterProjectExecutionActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { inTx, type Tx } from '@/storage/inTx';

@@ -1,9 +1,5 @@
-import {
-    MessageActionReferenceV1Schema,
-    type MessageActionDurableResolutionV1,
-    type MessageActionReferenceV1,
-    type SessionMessageRole,
-} from "@happier-dev/protocol";
+import { MessageActionReferenceV1Schema, type MessageActionDurableResolutionV1, type MessageActionReferenceV1 } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
+import { type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 
 import { parseSessionMessageRole } from "./messageRole/resolveSessionMessageRole";
 import { resolveSessionTranscriptPublicationCeiling } from "./sessionTranscriptPublicationPolicy";

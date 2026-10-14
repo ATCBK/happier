@@ -1,4 +1,4 @@
-import { isPersistentMachine, type MachineKind } from "@happier-dev/protocol";
+import { isPersistentMachine, type MachineKind } from '@happier-dev/protocol/machines/machineKind';
 
 import { db } from "@/storage/db";
 import { parseIntEnv } from "@/config/env";

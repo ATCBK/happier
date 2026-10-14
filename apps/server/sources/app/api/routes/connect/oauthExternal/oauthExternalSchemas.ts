@@ -1,9 +1,7 @@
 import { z } from "zod";
-import {
-    AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
-    ManagedGitHubAppOwnerV1Schema,
-    PasswordCredentialMutationDigestV1Schema,
-} from "@happier-dev/protocol";
+import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema } from '@happier-dev/protocol/account/encryptionMigrate';
+import { ManagedGitHubAppOwnerV1Schema } from '@happier-dev/protocol/identity/githubApps';
+import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
 import { GitHubAppManagementAuthenticationV1Schema } from "@/app/integrations/github/githubManagedApp";
 import { ProviderReferenceSchema } from "@/app/auth/providers/providerReference";
 import { teamOAuthAdmissionSourceSchema } from "@/app/teams/memberships/teamOAuthAdmissionSource";

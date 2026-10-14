@@ -1,4 +1,4 @@
-import type { HomeSignInServicePolicyV1 } from "@happier-dev/protocol";
+import type { HomeSignInServicePolicyV1 } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 import { narrowAuthSignInServicePolicy } from "@/app/auth/authPolicy";
 

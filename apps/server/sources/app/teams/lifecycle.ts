@@ -1,12 +1,8 @@
 import { withTeamSessionAccessEffectsInTx } from "./memberships/sessionAccessEffects";
 import { createHash } from "node:crypto";
 
-import {
-    NO_TEAM_CAPABILITIES_V1,
-    type TeamSummaryV1,
-    validateTeamDescriptionV1,
-    validateTeamNameV1,
-} from "@happier-dev/protocol/teams";
+import { NO_TEAM_CAPABILITIES_V1, validateTeamDescriptionV1, validateTeamNameV1 } from '@happier-dev/protocol/teams';
+import { type TeamSummaryV1 } from '@happier-dev/protocol/teams/projections';
 
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { readHomeGovernancePolicyInTx } from "@/app/home/governance/governancePolicy";

@@ -1,12 +1,5 @@
-import {
-    NO_TEAM_CAPABILITIES_V1,
-    TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1,
-    decodeTeamDirectoryCursorV1,
-    encodeTeamDirectoryCursorV1,
-    teamDirectoryQueryKeyV1,
-    type TeamsListInputV1,
-    type TeamsPageV1,
-} from "@happier-dev/protocol/teams";
+import { NO_TEAM_CAPABILITIES_V1 } from '@happier-dev/protocol/teams';
+import { TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1, decodeTeamDirectoryCursorV1, encodeTeamDirectoryCursorV1, teamDirectoryQueryKeyV1, type TeamsListInputV1, type TeamsPageV1 } from '@happier-dev/protocol/teams/projections';
 
 import { readHomeGovernanceAccountInTx, resolveHomeGovernanceAuthority } from "@/app/home/governance/homeCapabilities";
 import type { Tx } from "@/storage/inTx";

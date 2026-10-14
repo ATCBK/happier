@@ -1,22 +1,6 @@
-import {
-    SESSION_ORGANIZATION_MAX_FOLDERS,
-    SESSION_ORGANIZATION_MAX_LABELS,
-    SESSION_ORGANIZATION_MAX_PINNED_SESSIONS,
-    SESSION_ORGANIZATION_MAX_TAGS,
-    type CreateOrUpdateSessionOrganizationFolderRequest,
-    type CreateOrUpdateSessionOrganizationTagRequest,
-    type DeleteSessionOrganizationFolderRequest,
-    type DeleteSessionOrganizationLabelRequest,
-    type DeleteSessionOrganizationTagRequest,
-    type ImportLegacySessionOrganizationRequest,
-    type ImportLegacySessionOrganizationResponse,
-    type MoveSessionFolderAssignmentsResponse,
-    type ReorderSessionOrganizationRequest,
-    type SetSessionAttentionStandingRequest,
-    type SetSessionPinRequest,
-    type SetSessionTagAssignmentsRequest,
-    type UpsertSessionOrganizationLabelRequest,
-} from "@happier-dev/protocol";
+import { SESSION_ORGANIZATION_MAX_FOLDERS, SESSION_ORGANIZATION_MAX_LABELS, SESSION_ORGANIZATION_MAX_PINNED_SESSIONS, SESSION_ORGANIZATION_MAX_TAGS } from '@happier-dev/protocol/sessions/organization/constants';
+import { type CreateOrUpdateSessionOrganizationFolderRequest, type CreateOrUpdateSessionOrganizationTagRequest, type DeleteSessionOrganizationFolderRequest, type DeleteSessionOrganizationLabelRequest, type DeleteSessionOrganizationTagRequest, type ImportLegacySessionOrganizationRequest, type ImportLegacySessionOrganizationResponse, type MoveSessionFolderAssignmentsResponse, type ReorderSessionOrganizationRequest, type SetSessionPinRequest, type SetSessionTagAssignmentsRequest, type UpsertSessionOrganizationLabelRequest } from '@happier-dev/protocol/sessions/organization/mutations';
+import { type SetSessionAttentionStandingRequest } from '@happier-dev/protocol/sessions/organization/standings';
 
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { scheduleAccountActivityBadgeRefresh } from "@/app/activity/refreshAccountActivityBadgePushes";

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { isLoopbackHostname } from "@happier-dev/protocol";
+import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
 
 export type OidcAuthProviderInstanceConfig = Readonly<{
     id: string;

@@ -1,13 +1,8 @@
 import type { Server, Socket } from "socket.io";
 import { z } from "zod";
-import {
-    SESSION_HUMAN_PRESENCE_SNAPSHOT_EVENT,
-    type SessionAccessAccountSummaryV1,
-    type SessionHumanPresenceLocationV1,
-    type SessionHumanPresenceSnapshotV1,
-    type SessionHumanPresenceTypingSetV1,
-} from "@happier-dev/protocol/sessions";
-import { SessionIdSchema } from "@happier-dev/protocol/sessions";
+import { SESSION_HUMAN_PRESENCE_SNAPSHOT_EVENT, type SessionHumanPresenceLocationV1, type SessionHumanPresenceSnapshotV1, type SessionHumanPresenceTypingSetV1 } from '@happier-dev/protocol/sessions';
+import { type SessionAccessAccountSummaryV1 } from '@happier-dev/protocol/sessions/access/sessionAccessPrincipalV1';
+import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";

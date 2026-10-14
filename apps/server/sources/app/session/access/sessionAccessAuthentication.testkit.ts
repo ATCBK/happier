@@ -1,4 +1,4 @@
-import type { AuthTokenAuthenticationEvidenceV1 } from "@happier-dev/protocol";
+import type { AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 
 import type { SessionAccessAuthentication } from "./sessionAccessAuthentication";
 

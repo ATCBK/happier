@@ -1,4 +1,5 @@
-import { TeamAuthenticationPolicyV1Schema, type AuthTokenAuthenticationEvidenceV1 } from "@happier-dev/protocol";
+import { TeamAuthenticationPolicyV1Schema } from '@happier-dev/protocol/auth/entry';
+import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 import type { TeamCapabilitiesV1, TeamErrorCodeV1 } from "@happier-dev/protocol/teams";
 
 import type { Tx } from "@/storage/inTx";

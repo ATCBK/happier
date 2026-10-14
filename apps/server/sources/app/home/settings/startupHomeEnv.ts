@@ -1,12 +1,5 @@
-import {
-    readServerConfigRaw,
-    serializeServerConfigValue,
-    validateServerConfigText,
-    readStoredServerConfigValue,
-    type ServerConfigEnv,
-    type ServerConfigInvalidReason,
-    type ServerConfigRegistry,
-} from '@happier-dev/protocol';
+import { readServerConfigRaw, serializeServerConfigValue, validateServerConfigText, readStoredServerConfigValue, type ServerConfigEnv, type ServerConfigInvalidReason } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { type ServerConfigRegistry } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 
 import { SERVER_CONFIG_REGISTRY } from '@/config/serverConfigRegistry';
 

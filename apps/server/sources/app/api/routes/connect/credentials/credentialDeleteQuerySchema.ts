@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ConnectedServiceCredentialRevisionV1Schema } from "@happier-dev/protocol";
+import { ConnectedServiceCredentialRevisionV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 function parseBooleanQueryFlag(value: unknown): unknown {
     if (typeof value !== "string") return value;

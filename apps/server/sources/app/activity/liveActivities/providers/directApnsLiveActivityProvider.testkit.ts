@@ -1,9 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 
-import {
-    LiveActivityRemoteUpdateRequestV1Schema,
-    type LiveActivityRemoteUpdateRequestV1,
-} from "@happier-dev/protocol";
+import { LiveActivityRemoteUpdateRequestV1Schema, type LiveActivityRemoteUpdateRequestV1 } from '@happier-dev/protocol/activity/live/remoteUpdates';
 import { db } from "@/storage/db";
 
 export function createP8PrivateKey(): string {

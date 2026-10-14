@@ -7,21 +7,10 @@ import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { readMachineAvailabilityStateInTx } from "@/app/machines/machineStateGuards";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
-import {
-    AutomationV3WorkerClaimResponseSchema,
-    AutomationV3WorkerClaimReceiptRunSchema,
-    AutomationV3WorkerClaimedAutomationSchema,
-    AutomationV3WorkerClaimedRunSchema,
-    parseWorkflowStoredContentEnvelopeV1,
-    validateWorkflowStoredEnvelopeOuterForModeV1,
-    parseAutomationRunExecutionRecipeV1,
-    validateAutomationRunExecutionRecipeOuterV1,
-    type AutomationAccountCurrentnessWitnessV1,
-    type AutomationV3WorkerClaimResponse,
-    type AutomationV3WorkerClaimedAutomation,
-    type AutomationV3WorkerClaimReceiptRun,
-    type AutomationV3WorkerClaimedRun,
-} from "@happier-dev/protocol";
+import { AutomationV3WorkerClaimResponseSchema, AutomationV3WorkerClaimReceiptRunSchema, AutomationV3WorkerClaimedAutomationSchema, AutomationV3WorkerClaimedRunSchema, type AutomationV3WorkerClaimResponse, type AutomationV3WorkerClaimedAutomation, type AutomationV3WorkerClaimReceiptRun, type AutomationV3WorkerClaimedRun } from '@happier-dev/protocol/automations/automationApiV3';
+import { parseWorkflowStoredContentEnvelopeV1, validateWorkflowStoredEnvelopeOuterForModeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
+import { parseAutomationRunExecutionRecipeV1, validateAutomationRunExecutionRecipeOuterV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 
 import { emitAutomationRunTransition, emitAutomationRunUpdatedToMachineOnly } from "./automationChangePublisher";
 import { lockScopedAutomationTriggerInTx } from "./automationScopedTrigger";

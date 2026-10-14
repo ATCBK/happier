@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
-import { SessionListQueryV1Schema } from "@happier-dev/protocol";
+import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { db } from "@/storage/db";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { listSessionsForAccount } from "./service";

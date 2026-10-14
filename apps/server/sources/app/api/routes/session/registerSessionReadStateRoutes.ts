@@ -1,14 +1,5 @@
 import { z } from "zod";
-import {
-    SESSION_READ_STATE_HTTP_PATHS_V1,
-    SessionReadStateRouteRequestBodyV1Schema,
-    SessionReadStateRouteSuccessResponseV1Schema,
-    SessionReadStateRouteInvalidRequestResponseV1Schema,
-    SessionReadStateRouteForbiddenResponseV1Schema,
-    SessionReadStateRouteNotTrackedResponseV1Schema,
-    SessionReadStateRouteNotFoundResponseV1Schema,
-    SessionReadStateRouteFailureResponseV1Schema,
-} from "@happier-dev/protocol";
+import { SESSION_READ_STATE_HTTP_PATHS_V1, SessionReadStateRouteRequestBodyV1Schema, SessionReadStateRouteSuccessResponseV1Schema, SessionReadStateRouteInvalidRequestResponseV1Schema, SessionReadStateRouteForbiddenResponseV1Schema, SessionReadStateRouteNotTrackedResponseV1Schema, SessionReadStateRouteNotFoundResponseV1Schema, SessionReadStateRouteFailureResponseV1Schema } from '@happier-dev/protocol/sessions';
 
 import { publishSessionReadCursorUpdate } from "@/app/session/readCursor/publishSessionReadCursorUpdate";
 import { applySessionReadCursorOperation } from "@/app/session/sessionWriteService";

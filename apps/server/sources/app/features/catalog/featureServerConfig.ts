@@ -1,10 +1,5 @@
-import {
-    FEATURE_CATALOG,
-    assertServerConfigEntry,
-    type FeatureId,
-    type ServerConfigEntry,
-    type ServerConfigSection,
-} from '@happier-dev/protocol';
+import { FEATURE_CATALOG, type FeatureId } from '@happier-dev/protocol/features/catalog';
+import { assertServerConfigEntry, type ServerConfigEntry, type ServerConfigSection } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 
 import { FEATURE_ENV_KEYS } from './featureEnvSchema';
 import { FEATURE_READER_DEFAULTS, type FeatureEnvProperty } from './featureReaderDefaults';

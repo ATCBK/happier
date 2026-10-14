@@ -1,7 +1,4 @@
-import {
-    ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID,
-    buildSessionFollowChangeHintV1,
-} from "@happier-dev/protocol";
+import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID, buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
 import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { scheduleAccountActivityBadgeRefresh } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { afterTx, type Tx } from "@/storage/inTx";

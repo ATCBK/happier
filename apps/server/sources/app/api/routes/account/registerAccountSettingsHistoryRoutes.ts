@@ -1,10 +1,6 @@
 import { z } from "zod";
 
-import {
-    AccountSettingsV2HistoryDetailResponseSchema,
-    AccountSettingsV2HistoryListResponseSchema,
-    AccountSettingsV2HistoryRestoreClientUpdateRequiredResponseSchema,
-} from "@happier-dev/protocol";
+import { AccountSettingsV2HistoryDetailResponseSchema, AccountSettingsV2HistoryListResponseSchema, AccountSettingsV2HistoryRestoreClientUpdateRequiredResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import {
     ACCOUNT_SETTINGS_V2_UPDATE_REQUEST_MAX_UTF8_BYTES,
     AccountSettingsV2HistoryMutationRequestSchema,

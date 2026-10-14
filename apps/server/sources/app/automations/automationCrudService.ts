@@ -11,13 +11,7 @@ import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWork
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
-import type {
-    AccountEncryptionMigrateAutomationInventoryItem,
-    AccountEncryptionMigrateAutomationStageItem,
-    AccountEncryptionMigrateAutomationsDirective,
-    AccountEncryptionMigrateAutomationsDirectiveInput,
-    AccountEncryptionMigrateAutomationsInventoryResponse,
-} from "@happier-dev/protocol";
+import type { AccountEncryptionMigrateAutomationInventoryItem, AccountEncryptionMigrateAutomationStageItem, AccountEncryptionMigrateAutomationsDirective, AccountEncryptionMigrateAutomationsDirectiveInput, AccountEncryptionMigrateAutomationsInventoryResponse } from '@happier-dev/protocol/account/encryptionMigrate';
 import {
     assertWorkflowStoredEnvelopeOuterForMode,
     WorkflowStoredContentError,
@@ -28,53 +22,27 @@ import {
     replaceWorkflowRunKeyEnvelopesInTx,
     WorkflowRunAccessError,
 } from "@/app/workflows/workflowRunAccess";
-import {
-    ACCOUNT_ENCRYPTION_MIGRATE_AUTOMATIONS_MAX_ITEMS,
-    AUTOMATION_TEMPLATE_ENCRYPTED_V1_KIND,
-    ACCOUNT_ENCRYPTION_MIGRATE_TRANSITION_COLLECTION_PAGE_MAX_ITEMS,
-    AUTOMATION_V3_DEFINITION_LIST_MAX_ITEMS,
-    AUTOMATION_V3_RUN_LIST_MAX_ITEMS,
-    AccountEncryptionMigrateAutomationsDirectiveSchema,
-    AccountEncryptionMigrateAutomationsInventoryResponseSchema,
-    parseWorkflowStoredContentEnvelopeV1,
-    isAccountScopedBlobCiphertextForKind,
-    AutomationEventTriggerDefinitionStoredPayloadV1Schema,
-    AutomationPullRequestTriggerSchema,
-    AutomationSourceSelectorIdV1Schema,
-    AutomationTriggerIdSchema,
-    AutomationOccurrenceEvidenceEqualityTagV1Schema,
-    AutomationOccurrenceEvidenceV1ReadSchema,
-    AutomationOccurrenceEvidenceV1Schema,
-    deriveAutomationOccurrenceKeyV1,
-    parseAutomationStoredDefinitionExecutionRecipeV1,
-    AutomationTemplatePayloadV1Schema,
-    normalizeAutomationTemplateEnvelopeStoredRead,
-    parseAutomationStoredWorkflowDefinitionRecipeV2,
-    pluginJsonValuesEqual,
-    serializeAutomationStoredDefinitionExecutionRecipeV1,
-    serializeAutomationStoredWorkflowDefinitionRecipeV2,
-    sealAutomationTriggerDefinitionStoredEnvelopeV1,
-    openAutomationTriggerDefinitionStoredEnvelopeV1,
-    parseAutomationRunFailureDetailStoredEnvelopeV1,
-    parseAutomationRunResultStoredEnvelopeV1,
-    parseAutomationRunExecutionRecipeV1,
-    compilePluginJsonSchema,
-    createCanonicalJsonSigningInput,
-    isValidPluginJsonSchemaValue,
-    validateAutomationEventFilterAgainstPayloadSchemaV1,
-    validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1,
-    type AutomationRunCause,
-    type AutomationSessionLifecycleTrigger,
-    type AutomationDefinitionReconcileRequest,
-    type AutomationStoredDefinitionExecutionRecipeV1,
-    type AutomationStoredWorkflowDefinitionRecipeV2,
-    type AutomationTriggerCreateRequest,
-    type AutomationTriggerPatchRequest,
-    type AutomationTriggerDefinition,
-    type AutomationTriggerDefinitionInput,
-    type AutomationPluginEventDefinitionTriggerInput,
-    type AutomationPluginEventEncryptedDefinitionTrigger,
-} from "@happier-dev/protocol";
+import { ACCOUNT_ENCRYPTION_MIGRATE_AUTOMATIONS_MAX_ITEMS, ACCOUNT_ENCRYPTION_MIGRATE_TRANSITION_COLLECTION_PAGE_MAX_ITEMS, AccountEncryptionMigrateAutomationsDirectiveSchema, AccountEncryptionMigrateAutomationsInventoryResponseSchema } from '@happier-dev/protocol/account/encryptionMigrate';
+import { AUTOMATION_TEMPLATE_ENCRYPTED_V1_KIND, normalizeAutomationTemplateEnvelopeStoredRead } from '@happier-dev/protocol/automations/automationTemplateEnvelope';
+import { AUTOMATION_V3_DEFINITION_LIST_MAX_ITEMS, AUTOMATION_V3_RUN_LIST_MAX_ITEMS, type AutomationDefinitionReconcileRequest, type AutomationTriggerCreateRequest, type AutomationTriggerPatchRequest } from '@happier-dev/protocol/automations/automationApiV3';
+import { parseWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
+import { isAccountScopedBlobCiphertextForKind } from '@happier-dev/protocol/crypto/accountScopedCipherEnvelope';
+import { AutomationEventTriggerDefinitionStoredPayloadV1Schema, validateAutomationEventFilterAgainstPayloadSchemaV1, validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1 } from '@happier-dev/protocol/automations/event';
+import { AutomationPullRequestTriggerSchema, type AutomationSessionLifecycleTrigger, type AutomationTriggerDefinition, type AutomationTriggerDefinitionInput, type AutomationPluginEventDefinitionTriggerInput, type AutomationPluginEventEncryptedDefinitionTrigger } from '@happier-dev/protocol/automations/automationTriggerDefinition';
+import { AutomationSourceSelectorIdV1Schema } from '@happier-dev/protocol/automations/automationEventJsonBoundsV1';
+import { AutomationTriggerIdSchema } from '@happier-dev/protocol/automations/automationTriggerIdentity';
+import { AutomationOccurrenceEvidenceEqualityTagV1Schema, AutomationOccurrenceEvidenceV1ReadSchema, AutomationOccurrenceEvidenceV1Schema, deriveAutomationOccurrenceKeyV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { parseAutomationStoredDefinitionExecutionRecipeV1, serializeAutomationStoredDefinitionExecutionRecipeV1, parseAutomationRunExecutionRecipeV1, type AutomationStoredDefinitionExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { AutomationTemplatePayloadV1Schema } from '@happier-dev/protocol/automations/automationTemplatePayloadV1';
+import { parseAutomationStoredWorkflowDefinitionRecipeV2, serializeAutomationStoredWorkflowDefinitionRecipeV2, type AutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { sealAutomationTriggerDefinitionStoredEnvelopeV1, openAutomationTriggerDefinitionStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationTriggerDefinitionStoredContent';
+import { parseAutomationRunFailureDetailStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationRunFailureDetailStoredContent';
+import { parseAutomationRunResultStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationReplyHandoffStoredContent';
+import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { type AutomationRunCause } from '@happier-dev/protocol/automations/run-cause';
 
 import {
     emitAutomationAssignmentUpdated,

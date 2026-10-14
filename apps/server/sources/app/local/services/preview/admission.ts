@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { LOCAL_SERVICES_PREVIEW_ADMISSION_SERVER_ORIGIN, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { LOCAL_SERVICES_PREVIEW_ADMISSION_SERVER_ORIGIN } from '@happier-dev/protocol/socketRpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonLocalServicePreviewAdmissionResponseV1Schema,
     type DaemonLocalServicePreviewAdmissionRequestV1, type LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import type { MachineAdmission } from '@happier-dev/protocol/machines/machineAccessV1';

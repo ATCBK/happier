@@ -38,7 +38,9 @@ import {
     enforceCurrentAccountStoredContentCompatibilityForHttpRequest,
     readAccountStoredContentCompatibilityForHttpRequest,
 } from "@/app/clientCompatibility/accountStoredContentCompatibility";
-import { SESSION_METADATA_LAYOUT_VERSION_V1, SessionStoredMessageContentSchema, resolveStoredContentKindForSessionEncryptionMode } from "@happier-dev/protocol";
+import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { resolveStoredContentKindForSessionEncryptionMode } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
 
 /** Public readers preserve released envelopes, but never disclose a retained mode mismatch. */
 export function publicShareMessagesMatchSessionMode(messages: readonly Readonly<{ content: unknown }>[], mode: "plain" | "e2ee"): boolean {

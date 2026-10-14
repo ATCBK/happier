@@ -1,4 +1,4 @@
-import { isSessionAccessGrantIncreaseV1 } from "@happier-dev/protocol";
+import { isSessionAccessGrantIncreaseV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import type { Tx } from "@/storage/inTx";
 import { AccountStatus, TeamExternalSharingPolicy, TeamMembershipStatus, TeamRole } from "@/storage/prisma";
 import { resolveTeamActorContextInTx } from "@/app/teams/actorContext";

@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { AccountStatus, TeamMembershipStatus } from "@/storage/prisma";
 import { resolveGrantableTeamForActorInTx } from "@/app/teams/queries";
 import { resolveGrantableTeamGroupForActorInTx } from "@/app/teams/groups/groupService";
-import type { PrincipalRefV1 } from "@happier-dev/protocol";
+import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
 
 /**
  * Who may be named as the subject of a Session access grant.

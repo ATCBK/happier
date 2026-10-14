@@ -1,9 +1,6 @@
 import { z } from "zod";
 
-import {
-    AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS,
-    AuthTokenAuthenticationEvidenceV1Schema,
-} from "@happier-dev/protocol";
+import { AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS, AuthTokenAuthenticationEvidenceV1Schema } from '@happier-dev/protocol/auth/authToken';
 
 import { decryptString, encryptString } from "@/modules/encrypt";
 

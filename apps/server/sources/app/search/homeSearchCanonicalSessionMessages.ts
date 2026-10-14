@@ -1,7 +1,5 @@
-import {
-    SessionStoredMessageContentSchema,
-    isStoredJsonContentEnvelopeModeCompatible,
-} from '@happier-dev/protocol';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { isStoredJsonContentEnvelopeModeCompatible } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import { db } from '@/storage/db';
 import type { HomeSearchCanonicalPageReader } from './homeSearchIndexer';
 

@@ -1,4 +1,4 @@
-import type { LinkedIdentityManagementV1 } from "@happier-dev/protocol";
+import type { LinkedIdentityManagementV1 } from '@happier-dev/protocol/account/profile';
 
 import {
     buildAccountLoginViabilityFactsAfterProviderRemoval,

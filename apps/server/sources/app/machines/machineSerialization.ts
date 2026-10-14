@@ -1,13 +1,10 @@
-import {
-    ACCOUNT_STORED_CONTENT_SESSION_SPAWN_PLACEMENT_ORIGIN_PROTOCOL_VERSION,
-    ExternalActionMachineBootstrapV1Schema,
-    MachineOperationProtocolCapabilitiesV1StoredReadSchema,
-    MachineKindFromLegacyProjectionSchema,
-    RunnerClaimV1Schema,
-    RunnerMachineContentKeyBindingV1Schema,
-    type AccessibleMachineAccessV1,
-    type MachineKind,
-} from "@happier-dev/protocol";
+import { ACCOUNT_STORED_CONTENT_SESSION_SPAWN_PLACEMENT_ORIGIN_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
+import { ExternalActionMachineBootstrapV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { MachineOperationProtocolCapabilitiesV1StoredReadSchema } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { MachineKindFromLegacyProjectionSchema, type MachineKind } from '@happier-dev/protocol/machines/machineKind';
+import { RunnerClaimV1Schema } from '@happier-dev/protocol/ephemeralRunner/endpoint';
+import { RunnerMachineContentKeyBindingV1Schema } from '@happier-dev/protocol/ephemeralRunner/machineContentKeyBinding';
+import { type AccessibleMachineAccessV1 } from '@happier-dev/protocol/machines/machineAccessV1';
 import * as privacyKit from 'privacy-kit';
 import type { MachineKeyBasisV1 } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import type { DevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';

@@ -1,12 +1,6 @@
 import type { Fastify } from "@/app/api/types";
-import {
-    PluginPermissionGrantDismissRequestActionInputV1Schema,
-    PluginPermissionGrantGrantActionInputV1Schema,
-    PluginPermissionGrantListActionInputV1Schema,
-    PluginPermissionGrantRequestActionInputV1Schema,
-    PluginPermissionGrantRevokeActionInputV1Schema,
-    type PluginMachineMaterializationRefV1,
-} from "@happier-dev/protocol";
+import { PluginPermissionGrantDismissRequestActionInputV1Schema, PluginPermissionGrantGrantActionInputV1Schema, PluginPermissionGrantListActionInputV1Schema, PluginPermissionGrantRequestActionInputV1Schema, PluginPermissionGrantRevokeActionInputV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
+import { type PluginMachineMaterializationRefV1 } from '@happier-dev/protocol/plugins/availability/materializationRefV1';
 import type { z } from "zod";
 
 import { PluginPermissionGrantOperationError } from "./errors";

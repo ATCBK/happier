@@ -1,10 +1,8 @@
 import { vi } from "vitest";
 import tweetnacl from "tweetnacl";
-import {
-    decodeBase64,
-    signAccountContentKeyBindingV1,
-    CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
-} from "@happier-dev/protocol";
+import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
+import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 
 import type { SessionAccessProjectionRow } from "@/app/session/access/sessionAccess";
 

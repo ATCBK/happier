@@ -1,22 +1,8 @@
 import { z } from "zod";
 
-import {
-    PluginWebhookClaimRequestV1Schema,
-    PluginWebhookClaimResultV1Schema,
-    PluginWebhookCompleteRequestV1Schema,
-    PluginMachineMaterializationRefV1Schema,
-    PluginWebhookEndpointCheckCorrespondenceInputV1Schema,
-    PluginWebhookEndpointCheckCorrespondenceResultV1Schema,
-    PluginWebhookEndpointConvergeTargetInputV1Schema,
-    PluginWebhookEndpointConvergeTargetResultV1Schema,
-    PluginWebhookPluginSurfaceActionHttpPathsV1,
-    PluginWebhookFailRequestV1Schema,
-    PluginWebhookRenewRequestV1Schema,
-    PluginWebhookRenewResultV1Schema,
-    PluginWebhookSettleResultV1Schema,
-    type PluginWebhookClaimRequestV1,
-    type PluginWebhookClaimResultV1,
-} from "@happier-dev/protocol";
+import { PluginWebhookClaimRequestV1Schema, PluginWebhookClaimResultV1Schema, PluginWebhookCompleteRequestV1Schema, PluginWebhookFailRequestV1Schema, PluginWebhookRenewRequestV1Schema, PluginWebhookRenewResultV1Schema, PluginWebhookSettleResultV1Schema, type PluginWebhookClaimRequestV1, type PluginWebhookClaimResultV1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
+import { PluginMachineMaterializationRefV1Schema } from '@happier-dev/protocol/plugins/availability/materializationRefV1';
+import { PluginWebhookEndpointCheckCorrespondenceInputV1Schema, PluginWebhookEndpointCheckCorrespondenceResultV1Schema, PluginWebhookEndpointConvergeTargetInputV1Schema, PluginWebhookEndpointConvergeTargetResultV1Schema, PluginWebhookPluginSurfaceActionHttpPathsV1 } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
 
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
 import { authenticateCurrentPluginMaterializationCallerV1 } from "@/app/plugins/availability/callerMaterialization";

@@ -1,4 +1,4 @@
-import type { ServerRetentionDomainV2, ServerRetentionPolicyV2 } from '@happier-dev/protocol';
+import type { ServerRetentionDomainV2, ServerRetentionPolicyV2 } from '@happier-dev/protocol/retention/serverRetentionPolicyV2';
 
 import { resolveEffectiveRetentionDomains, resolveEffectiveRetentionEnabled } from './retentionPolicyState';
 import type { RetentionPolicy } from './retentionPolicyTypes';

@@ -1,4 +1,4 @@
-import { HAPPIER_VOICE_BINDING_NONCE_DYNAMIC_VARIABLE } from "@happier-dev/protocol";
+import { HAPPIER_VOICE_BINDING_NONCE_DYNAMIC_VARIABLE } from '@happier-dev/protocol/voice/sessionBinding';
 import { z } from "zod";
 import { voiceProviderConversationIdSchema } from "@/app/api/routes/voice/voiceSessionLifecycleSchemas";
 

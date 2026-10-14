@@ -1,9 +1,5 @@
-import {
-    TeamCredentialSourceBindingV1Schema,
-    TeamCredentialSourceCandidateV1Schema,
-    teamCredentialSourceCandidateIdV1,
-    type TeamCredentialSourceCandidateV1,
-} from "@happier-dev/protocol/teams";
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { TeamCredentialSourceCandidateV1Schema, teamCredentialSourceCandidateIdV1, type TeamCredentialSourceCandidateV1 } from '@happier-dev/protocol/teams';
 
 import type { Tx } from "@/storage/inTx";
 import { listQualifiedConnectedAccountSourceOffersInTx } from "@/app/api/routes/connect/qualifiedConnectedAccounts/credentialRepository";

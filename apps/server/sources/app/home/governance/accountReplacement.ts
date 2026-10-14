@@ -1,4 +1,4 @@
-import { isActiveHomeAccountStatus } from "@happier-dev/protocol";
+import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
 
 import type { Tx } from "@/storage/inTx";
 import { captureSessionAccessMembershipImpactsInTx, applySessionAccessMembershipImpactsInTx } from "@/app/session/access/sessionAccessMembershipImpact";

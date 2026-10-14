@@ -1,9 +1,5 @@
-import {
-    normalizeAuthMethodId,
-    normalizeTeamAuthenticationPolicyV1,
-    TeamAuthenticationPolicyV1Schema,
-    type TeamAcceptedAuthenticationV1,
-} from "@happier-dev/protocol";
+import { normalizeAuthMethodId } from '@happier-dev/protocol/auth/providers';
+import { normalizeTeamAuthenticationPolicyV1, TeamAuthenticationPolicyV1Schema, type TeamAcceptedAuthenticationV1 } from '@happier-dev/protocol/auth/entry';
 import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
 import { listProviderDescriptorsInTx } from "@/app/auth/providers/identityProviderCatalog";

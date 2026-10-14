@@ -3,25 +3,22 @@ import type { EphemeralUpdate, SessionPersonalEventEphemeralV1 } from "@happier-
 import type { LinkedProvider } from "@/app/auth/providers/linkedProviders";
 import type { MachineKeyBasisV1 } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
 import type { DevcontainerChildProjectionV1 } from "@happier-dev/protocol/machines/managed/devcontainerV1";
-import type {
-    MachineKind,
-    AutomationRunStateV3,
-    AutomationRunCause,
-    AutomationRunStateChangedHostEventV1,
-    ExternalSessionTranscriptInvalidationV1,
-    ExecutionRunPublicState,
-    PendingActivationAuthorizationV1,
-    ParticipantExecutionRunRecipientRoutingIdentityV1,
-    PrimaryTurnStatusV1,
-    SessionMessageDeliveryResolutionV1,
-    SessionMessageAttentionImpact,
-    SessionRuntimeIssueV1,
-    SessionStoredMessageContent,
-    ActionOperationRevisionEphemeralV1,
-    SessionDraftSocketUpdateV1,
-    SessionDraftSocketUpdateV2,
-    SessionTranscriptObservationProvenanceV1,
-} from "@happier-dev/protocol";
+import type { MachineKind } from '@happier-dev/protocol/machines/machineKind';
+import type { AutomationRunStateV3 } from '@happier-dev/protocol/automations/automationRunStateV3';
+import type { AutomationRunCause } from '@happier-dev/protocol/automations/run-cause';
+import type { AutomationRunStateChangedHostEventV1 } from '@happier-dev/protocol/plugins/events/hostReferencesV1';
+import type { ExternalSessionTranscriptInvalidationV1 } from '@happier-dev/protocol/sessions/external/secureRefreshV1';
+import type { ExecutionRunPublicState } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import type { PendingActivationAuthorizationV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import type { ParticipantExecutionRunRecipientRoutingIdentityV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
+import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import type { SessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import type { SessionMessageAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import type { SessionStoredMessageContent } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import type { ActionOperationRevisionEphemeralV1 } from '@happier-dev/protocol/actions/operations/v1';
+import type { SessionDraftSocketUpdateV1 } from '@happier-dev/protocol/drafts/sessionDrafts';
+import type { SessionDraftSocketUpdateV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import type { SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import type { PendingActivationRequestedEphemeralV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { UsageSourcesInvalidationV1 } from '@happier-dev/protocol/usage/usageSources';
 

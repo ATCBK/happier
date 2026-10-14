@@ -29,10 +29,8 @@ import { shouldDenyPublicSignupProvisioningAction } from "@/app/integrations/pub
 import { provisionFreshAccountInTx } from "@/app/auth/provisionFreshAccountInTx";
 import { inTx } from "@/storage/inTx";
 import { isCurrentAccountDirectoryOAuthTarget } from "./accountDirectoryOAuthTarget";
-import {
-    AccountDirectoryRouteErrorResponseV1Schema,
-    ExternalOAuthFinalizeAuthSuccessResponseSchema,
-} from "@happier-dev/protocol";
+import { AccountDirectoryRouteErrorResponseV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import { ExternalOAuthFinalizeAuthSuccessResponseSchema } from '@happier-dev/protocol/auth/externalOAuth';
 import { oauthExternalFinalizeErrorHandler } from "./oauthExternalFinalizeErrorHandler";
 import {
     isTeamOwnedConnectionAdmission,

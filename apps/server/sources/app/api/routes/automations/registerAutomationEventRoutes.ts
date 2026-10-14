@@ -1,14 +1,7 @@
 import { z } from "zod";
 
-import {
-    AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1,
-    AutomationEventActionHttpPathsV1,
-    AutomationEventActionHttpRequestSchemasV1,
-    AutomationEventAdmitHttpResultV1Schema,
-    AutomationEventStoredDefinitionsReadHttpRequestV1Schema,
-    AutomationEventStoredDefinitionsReadResultV1Schema,
-    AutomationEventSourceStatusReportResultV1Schema,
-} from "@happier-dev/protocol";
+import { AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1, AutomationEventActionHttpPathsV1, AutomationEventActionHttpRequestSchemasV1, AutomationEventStoredDefinitionsReadHttpRequestV1Schema, AutomationEventStoredDefinitionsReadResultV1Schema } from '@happier-dev/protocol/automations/event';
+import { AutomationEventAdmitHttpResultV1Schema, AutomationEventSourceStatusReportResultV1Schema } from '@happier-dev/protocol/automations/automationActionSpecsV1';
 
 import {
     AutomationEventAdmissionError,

@@ -1,8 +1,5 @@
-import {
-    AutomationReplyHandoffTargetV1Schema,
-    validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1,
-    validateWorkflowStoredEnvelopeOuterForModeV1,
-} from "@happier-dev/protocol";
+import { AutomationReplyHandoffTargetV1Schema, validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1 } from '@happier-dev/protocol/automations/event';
+import { validateWorkflowStoredEnvelopeOuterForModeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 
 /**
  * The facts Conversation admission froze on the Run. Nothing in the product

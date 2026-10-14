@@ -1,19 +1,10 @@
 import { createHash } from "node:crypto";
 
-import {
-    AutomationEventSourcesListInputV1Schema,
-    AutomationEventStoredDefinitionProjectionV1Schema,
-    AutomationEventStoredDefinitionsReadResultV1Schema,
-    PluginWebhookInvocationReferenceV1Schema,
-    createCanonicalJsonSigningInput,
-    decodeBase64,
-    encodeBase64,
-    type AutomationEventStoredDefinitionsReadResultV1,
-    type AutomationEventCheckpointRetirementCandidateV1,
-    type AutomationEventSourcesListInputV1,
-    type AutomationEventDeclarationReleaseV1,
-    type PluginWebhookInvocationReferenceV1,
-} from "@happier-dev/protocol";
+import { AutomationEventSourcesListInputV1Schema, type AutomationEventCheckpointRetirementCandidateV1, type AutomationEventSourcesListInputV1 } from '@happier-dev/protocol/automations/automationActionSpecsV1';
+import { AutomationEventStoredDefinitionProjectionV1Schema, AutomationEventStoredDefinitionsReadResultV1Schema, type AutomationEventStoredDefinitionsReadResultV1, type AutomationEventDeclarationReleaseV1 } from '@happier-dev/protocol/automations/event';
+import { PluginWebhookInvocationReferenceV1Schema, type PluginWebhookInvocationReferenceV1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { listCurrentPluginWebhookEndpointTargetsTxV1 } from "@/app/plugins/webhooks/endpointStore";

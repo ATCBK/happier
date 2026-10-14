@@ -1,12 +1,8 @@
 import { z } from "zod";
 import type { Fastify } from "../../../types";
-import {
-  CONNECTED_SERVICE_ERROR_CODES,
-  ConnectedServiceCredentialMutationSupersededV1Schema,
-  ConnectedServiceIdSchema,
-  SealedConnectedServiceCredentialV1Schema,
-  type ConnectedServiceId,
-} from "@happier-dev/protocol";
+import { CONNECTED_SERVICE_ERROR_CODES } from '@happier-dev/protocol/connect/connectedServiceErrors';
+import { ConnectedServiceCredentialMutationSupersededV1Schema, SealedConnectedServiceCredentialV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import { encodeCredentialTokenBytes } from "./credentialTokenCodec";
 import { ConnectedServiceProfileIdSchema } from "./profileIdSchema";

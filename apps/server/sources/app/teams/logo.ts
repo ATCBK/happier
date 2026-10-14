@@ -1,10 +1,5 @@
-import {
-    TEAM_LOGO_MAX_SOURCE_PIXELS_V1,
-    TEAM_LOGO_PUBLISHED_EDGE_V1,
-    decodeTeamLogoSourceV1,
-    type TeamLogoSourceV1,
-    type TeamSummaryV1,
-} from "@happier-dev/protocol/teams";
+import { TEAM_LOGO_MAX_SOURCE_PIXELS_V1, TEAM_LOGO_PUBLISHED_EDGE_V1, decodeTeamLogoSourceV1, type TeamLogoSourceV1 } from '@happier-dev/protocol/teams/logo';
+import { type TeamSummaryV1 } from '@happier-dev/protocol/teams/projections';
 
 import { deletePublicFile, writePublicFile } from "@/storage/blob/files";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";

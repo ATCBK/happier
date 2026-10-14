@@ -1,24 +1,7 @@
 import { resolveConfiguredPublicServerUrl } from "@/app/serverUrls/effectiveServerUrls";
 import { managedGitHubAppUserAuthorizationCallbackUrl } from "./githubManagedAppManifest";
-import {
-    ManagedGitHubAppCreateInputV1Schema,
-    ManagedGitHubAppCreateOutputV1Schema,
-    ManagedGitHubAppManifestSetupStartInputV1Schema,
-    ManagedGitHubAppManifestSetupStartOutputV1Schema,
-    ManagedGitHubAppUpdateInputV1Schema,
-    ManagedGitHubAppUpdateOutputV1Schema,
-    ManagedGitHubAppInstallationV1Schema,
-    ManagedGitHubAppErrorV1Schema,
-    ManagedGitHubAppRemoveInputV1Schema,
-    ManagedGitHubAppRemoveOutputV1Schema,
-    ManagedGitHubAppsListInputV1Schema,
-    ManagedGitHubAppsListOutputV1Schema,
-    ManagedGitHubAppVerifyInstallationInputV1Schema,
-    ManagedGitHubAppVerifyInstallationOutputV1Schema,
-    TeamIdentityErrorV1Schema,
-    type ManagedGitHubAppErrorCodeV1,
-    type TeamIdentityErrorCodeV1,
-} from "@happier-dev/protocol";
+import { ManagedGitHubAppCreateInputV1Schema, ManagedGitHubAppCreateOutputV1Schema, ManagedGitHubAppManifestSetupStartInputV1Schema, ManagedGitHubAppManifestSetupStartOutputV1Schema, ManagedGitHubAppUpdateInputV1Schema, ManagedGitHubAppUpdateOutputV1Schema, ManagedGitHubAppInstallationV1Schema, ManagedGitHubAppErrorV1Schema, ManagedGitHubAppRemoveInputV1Schema, ManagedGitHubAppRemoveOutputV1Schema, ManagedGitHubAppsListInputV1Schema, ManagedGitHubAppsListOutputV1Schema, ManagedGitHubAppVerifyInstallationInputV1Schema, ManagedGitHubAppVerifyInstallationOutputV1Schema, type ManagedGitHubAppErrorCodeV1 } from '@happier-dev/protocol/identity/githubApps';
+import { TeamIdentityErrorV1Schema, type TeamIdentityErrorCodeV1 } from '@happier-dev/protocol/teams';
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import {

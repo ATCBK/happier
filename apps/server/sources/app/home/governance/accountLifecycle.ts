@@ -1,4 +1,4 @@
-import type { AccountStatusV1 } from "@happier-dev/protocol";
+import type { AccountStatusV1 } from '@happier-dev/protocol/home/governance';
 import { afterTx, type Tx } from "@/storage/inTx";
 import { auth } from "@/app/auth/auth";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";

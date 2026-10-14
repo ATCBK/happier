@@ -6,27 +6,16 @@ import { SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS, SessionHistoricalTransc
 
 import { buildMessageUpdatedUpdate, buildNewMessageUpdate, eventRouter } from "@/app/events/eventRouter";
 import { catchupFollowupFetchesCounter, catchupFollowupReturnedCounter } from "@/app/monitoring/metrics/index";
-import {
-    SessionMessageDeliveryResolutionV1Schema,
-    SessionMessageRoleSchema,
-    MessageActionDurableResolutionV1Schema,
-    MessageActionReferenceV1Schema,
-    ExternalShareableActorV1Schema,
-    SessionMessageAccountActorV1Schema,
-    SessionInputAdmissionReceiptV1Schema,
-    SESSION_TRANSCRIPT_MAX_PAGE_ROWS_V1,
-    EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_PAGE_ROWS_V1,
-    EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_REFERENCED_USER_ROWS_V1,
-    EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_SNAPSHOT_TURNS_V1,
-    ExternalShareableTranscriptSnapshotV1Schema,
-    SessionStoredMessageContentSchema,
-    SessionTranscriptObservationProvenanceV1Schema,
-    deriveExternalShareableActorFromAdmissionReceiptV1,
-    isRecoveredHistoryTranscriptObservationProvenance,
-    readStoredSessionMessageDeliveryResolutionV1,
-    type SessionMessageRole,
-} from "@happier-dev/protocol";
-import { isSessionAgentTransitionDividerLocalId } from "@happier-dev/protocol";
+import { SessionMessageDeliveryResolutionV1Schema, readStoredSessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import { SessionMessageRoleSchema, type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
+import { MessageActionDurableResolutionV1Schema, MessageActionReferenceV1Schema } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
+import { ExternalShareableActorV1Schema, EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_PAGE_ROWS_V1, EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_REFERENCED_USER_ROWS_V1, EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_SNAPSHOT_TURNS_V1, ExternalShareableTranscriptSnapshotV1Schema, deriveExternalShareableActorFromAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionExternalShareableTranscriptV1';
+import { SessionMessageAccountActorV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
+import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SESSION_TRANSCRIPT_MAX_PAGE_ROWS_V1 } from '@happier-dev/protocol/sessions/messages/sessionTranscriptPageLimits';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { SessionTranscriptObservationProvenanceV1Schema, isRecoveredHistoryTranscriptObservationProvenance } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { isSessionAgentTransitionDividerLocalId } from '@happier-dev/protocol/sessions/agentTransitionDivider';
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 import {
     importHistoricalSessionTranscript,

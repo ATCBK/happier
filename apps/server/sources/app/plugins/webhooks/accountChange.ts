@@ -1,4 +1,4 @@
-import { buildPluginDomainAccountChangeEntityId } from "@happier-dev/protocol/changes";
+import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import type { Tx } from "@/storage/inTx";

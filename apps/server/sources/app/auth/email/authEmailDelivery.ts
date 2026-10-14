@@ -1,4 +1,4 @@
-import type { NormalizedVerifiedEmail } from "@happier-dev/protocol";
+import type { NormalizedVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 
 /**
  * The closed transactional-mail boundary for Lane 02 authentication messages.

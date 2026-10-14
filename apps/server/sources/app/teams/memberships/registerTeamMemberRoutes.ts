@@ -1,12 +1,6 @@
 import { z } from "zod";
 
-import {
-    decodeMembershipSessionDataKeyEnvelopeCursorV1,
-    MembershipSessionDataKeyEnvelopePageQueryV1Schema,
-    MembershipSessionDataKeyEnvelopePageV1Schema,
-    PatchMembershipSessionDataKeyEnvelopesResultV1Schema,
-    PatchMembershipSessionDataKeyEnvelopesV1Schema,
-} from "@happier-dev/protocol";
+import { decodeMembershipSessionDataKeyEnvelopeCursorV1, MembershipSessionDataKeyEnvelopePageQueryV1Schema, MembershipSessionDataKeyEnvelopePageV1Schema, PatchMembershipSessionDataKeyEnvelopesResultV1Schema, PatchMembershipSessionDataKeyEnvelopesV1Schema } from '@happier-dev/protocol/sessions/encryption/membershipSessionDataKeyEnvelopes';
 import {
     TeamErrorV1Schema,
     TeamMemberAddInputV1Schema,

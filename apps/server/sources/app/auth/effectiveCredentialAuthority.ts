@@ -1,5 +1,5 @@
-import type { AuthTokenAuthority, AuthTokenKind } from "@happier-dev/protocol";
-import { resolveInvocationAuthority, TerminalPresentUserPolicySchema } from "@happier-dev/protocol/actions";
+import type { AuthTokenAuthority, AuthTokenKind } from '@happier-dev/protocol/auth/authToken';
+import { resolveInvocationAuthority, TerminalPresentUserPolicySchema } from '@happier-dev/protocol/actions/invocationAuthority';
 import type { ActionRequiredAuthority } from "@happier-dev/protocol/actions/metadata";
 
 /** A caller can lower verified authority; no caller-supplied value can raise it. */

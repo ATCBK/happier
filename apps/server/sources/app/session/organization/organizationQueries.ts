@@ -1,7 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import {
-    type SessionOrganizationSnapshotRequest,
-} from "@happier-dev/protocol";
+import { type SessionOrganizationSnapshotRequest } from '@happier-dev/protocol/sessions/organization/snapshot';
 
 import type { Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";

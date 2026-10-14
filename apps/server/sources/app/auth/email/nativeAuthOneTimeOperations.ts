@@ -1,15 +1,5 @@
 import { randomBytes } from "node:crypto";
-import {
-    createNativeAuthOneTimeOperationKeyV1,
-    decodeNativeAuthOneTimeOperationV1,
-    encodeNativeAuthOneTimeOperationV1,
-    NATIVE_AUTH_EMAIL_VERIFY_TTL_MS,
-    NATIVE_AUTH_ONE_TIME_BEARER_BYTES,
-    NATIVE_AUTH_PASSWORD_RESET_TTL_MS,
-    NativeAuthOneTimeBearerV1Schema,
-    type NativeAuthOneTimeOperationV1,
-    type NativeAuthOneTimePurpose,
-} from "@happier-dev/protocol";
+import { createNativeAuthOneTimeOperationKeyV1, decodeNativeAuthOneTimeOperationV1, encodeNativeAuthOneTimeOperationV1, NATIVE_AUTH_EMAIL_VERIFY_TTL_MS, NATIVE_AUTH_ONE_TIME_BEARER_BYTES, NATIVE_AUTH_PASSWORD_RESET_TTL_MS, NativeAuthOneTimeBearerV1Schema, type NativeAuthOneTimeOperationV1, type NativeAuthOneTimePurpose } from '@happier-dev/protocol/auth/nativeAuthOneTimeOperation';
 
 import { deleteRepeatKeyExact, fetchRepeatKey, saveRepeatKey } from "@/storage/queue/repeatKey";
 import type { Tx } from "@/storage/inTx";

@@ -1,16 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import type { z } from "zod";
-import {
-    SessionBoardMutationV1Schema, SessionBoardLayoutV1Schema, SessionSurfaceItemV1Schema,
-    isSessionSurfaceItemSourceCompatible,
-    sessionBoardMutationUsesLayoutV1,
-    type SessionBoardMutationV1, type SessionBoardMutationResultV1, type SessionBoardErrorV1,
-    type SessionBoardFeatureGateErrorV1Schema,
-} from "@happier-dev/protocol/sessions/board";
-import {
-    type SessionSystemRecordContent, type SessionSystemRecordStored,
-    type SessionSystemRecordCreatorV1,
-} from "@happier-dev/protocol";
+import { SessionBoardMutationV1Schema, sessionBoardMutationUsesLayoutV1, type SessionBoardMutationV1, type SessionBoardMutationResultV1 } from '@happier-dev/protocol/sessions/board/mutations';
+import { SessionBoardLayoutV1Schema } from '@happier-dev/protocol/sessions/board/layout';
+import { SessionSurfaceItemV1Schema, isSessionSurfaceItemSourceCompatible } from '@happier-dev/protocol/sessions/board/item';
+import { type SessionBoardErrorV1, type SessionBoardFeatureGateErrorV1Schema } from '@happier-dev/protocol/sessions/board/errors';
+import { type SessionSystemRecordContent } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordContent';
+import { type SessionSystemRecordStored } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
+import { type SessionSystemRecordCreatorV1 } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecord';
 import { inTx } from "@/storage/inTx";
 import { isPrismaErrorCode } from "@/storage/prisma";
 import { resolveSessionBoardRecordsInTx } from "@/app/session/systemRecords/sessionSystemRecordService";

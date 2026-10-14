@@ -5,10 +5,9 @@ import {
     type ProviderBrokerAccountOpenRequestV2, type ProviderBrokerAccountOpenResponseV2,
     type ProviderBrokerAccountAdmissionV2, type ProviderBrokerAccountAdmissionResponseV2,
 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
-import {
-    DIRECT_ROUTE_GRANT_TTL_MS, readMachineIrohEndpointAuthorityV1,
-    MachineOperationProtocolCapabilitiesV1StoredReadSchema, pluginJsonValuesEqual,
-} from '@happier-dev/protocol';
+import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
+import { readMachineIrohEndpointAuthorityV1, MachineOperationProtocolCapabilitiesV1StoredReadSchema } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { auth } from '@/app/auth/auth';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
 import type { MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';

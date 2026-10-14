@@ -1,7 +1,4 @@
-import {
-    StoredJsonContentEnvelopeSchema,
-    type StoredJsonContentEnvelope,
-} from "@happier-dev/protocol";
+import { StoredJsonContentEnvelopeSchema, type StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { decryptString, encryptString } from "@/modules/encrypt";

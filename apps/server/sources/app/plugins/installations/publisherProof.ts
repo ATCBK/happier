@@ -1,11 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-    createPluginInstallationManifestPublisherSigningInputV1,
-    PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1,
-    PluginInstallationManifestPublisherHeaderV1Schema,
-    stringifyPluginInstallationManifestCanonicalJsonV1,
-    type PluginInstallationManifestPublisherHeaderV1,
-} from "@happier-dev/protocol";
+import { createPluginInstallationManifestPublisherSigningInputV1, PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1, PluginInstallationManifestPublisherHeaderV1Schema, stringifyPluginInstallationManifestCanonicalJsonV1, type PluginInstallationManifestPublisherHeaderV1 } from '@happier-dev/protocol/plugins/installations/manifests';
 import tweetnacl from "tweetnacl";
 
 import { db } from "@/storage/db";

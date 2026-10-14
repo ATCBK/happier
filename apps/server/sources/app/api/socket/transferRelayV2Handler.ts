@@ -1,10 +1,5 @@
-import {
-  TRANSFER_RELAY_V2_SOCKET_EVENT,
-  TransferRelayV2SendEnvelopeSchema,
-  type TransferRelayV2Recipient,
-  type TransferRelayV2SendEnvelope,
-  type TransferRelayV2Sender,
-} from '@happier-dev/protocol';
+import { TRANSFER_RELAY_V2_SOCKET_EVENT } from '@happier-dev/protocol/transfers/relay/v2/socketEvents';
+import { TransferRelayV2SendEnvelopeSchema, type TransferRelayV2Recipient, type TransferRelayV2SendEnvelope, type TransferRelayV2Sender } from '@happier-dev/protocol/transfers/relay/v2/transferRelayEnvelopeSchema';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { Server, Socket } from 'socket.io';
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { serializeAutomationStoredDefinitionExecutionRecipeV1 } from "@happier-dev/protocol";
+import { serializeAutomationStoredDefinitionExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
 
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { applySessionTurnMutation as applySessionTurnMutationWithAuthentication } from "@/app/session/sessionWriteService";

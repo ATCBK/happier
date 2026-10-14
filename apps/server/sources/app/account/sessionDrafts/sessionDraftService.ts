@@ -1,24 +1,7 @@
-import {
-    SESSION_DRAFT_SOCKET_EVENT,
-    SESSION_DRAFT_V2_SOCKET_EVENT,
-    SessionDraftStoredContentEnvelopeV2StoredSchema,
-    canonicalSessionDraftAddressV1,
-    canonicalSessionDraftAddressV2,
-    isSessionDraftAddressV1,
-    isSessionDraftContentV1,
-    isAccountOwnedDraftAddressV2,
-    pluginJsonValuesEqual,
-    type SessionDraftAddressKindV2,
-    type SessionDraftAddressV2,
-    type SessionDraftExpectedRevisionV1,
-    type SessionDraftListResponseV2,
-    type SessionDraftMutateResponseV2,
-    type SessionDraftReadResponseV2,
-    type SessionDraftRecordV2,
-    type SessionDraftStoredContentEnvelopeV2,
-    type AccountEncryptionMigrateSessionDraftsDirective,
-    type AccountOwnedDraftAddressV2,
-} from "@happier-dev/protocol";
+import { SESSION_DRAFT_SOCKET_EVENT, canonicalSessionDraftAddressV1, type SessionDraftExpectedRevisionV1 } from '@happier-dev/protocol/drafts/sessionDrafts';
+import { SESSION_DRAFT_V2_SOCKET_EVENT, SessionDraftStoredContentEnvelopeV2StoredSchema, canonicalSessionDraftAddressV2, isSessionDraftAddressV1, isSessionDraftContentV1, isAccountOwnedDraftAddressV2, type SessionDraftAddressKindV2, type SessionDraftAddressV2, type SessionDraftListResponseV2, type SessionDraftMutateResponseV2, type SessionDraftReadResponseV2, type SessionDraftRecordV2, type SessionDraftStoredContentEnvelopeV2, type AccountOwnedDraftAddressV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { type AccountEncryptionMigrateSessionDraftsDirective } from '@happier-dev/protocol/account/encryptionMigrate';
 import * as privacyKit from "privacy-kit";
 
 import { closeDraftEphemeralRunnerActivationsInTx } from "@/app/ephemeralRunner/activationLifecycle";

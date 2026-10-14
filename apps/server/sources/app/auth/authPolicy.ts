@@ -1,14 +1,8 @@
 import { parseOptionalBooleanEnv } from "@/config/env";
 import { resolveDeploymentProviderSnapshot } from "@/app/auth/providers/providerModules";
-import {
-    AccountServicePresentationV1Schema,
-    HomeSignInServicePolicyV1Schema,
-    SERVER_CONFIG,
-    readServerConfig,
-    readServerConfigRaw,
-    type AccountServicePresentationV1,
-    type HomeSignInServicePolicyV1,
-} from "@happier-dev/protocol";
+import { AccountServicePresentationV1Schema, HomeSignInServicePolicyV1Schema, type AccountServicePresentationV1, type HomeSignInServicePolicyV1 } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
+import { readServerConfig, readServerConfigRaw } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 export type AuthOffboardingMode = "per-request-cache";
 

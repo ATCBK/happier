@@ -3,26 +3,12 @@ import { z } from 'zod';
 import type { Fastify } from "@/app/api/types";
 import { resolveMachineAdmissionInTx, resolveEffectiveMachineRoleInTx } from '@/app/machines/machineAccess';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
-import {
-    ManagedAdmissionInputV1Schema, ManagedControllerCurrentnessV1Schema, ManagedControllerCurrentInputV1Schema,
-    ManagedControllerReportV1Schema, ManagedEnrollmentCorrelationV1Schema,
-    ManagedControllerContextInputV1Schema, ManagedBootstrapCredentialCreateV1Schema,
-    ManagedControllerSubmitInputV1Schema,
-    ManagedControllerMachineOutputV1Schema,
-    resolveManagedAcquireReviewV1,
-    ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1,
-    managedMachineActionEndpointPathV1,
-    ManagedControlAdmissionInputV1Schema, ManagedControllerIntentReportV1Schema, MANAGED_CONTROL_ACTION_IDS_V1,
-    MANAGED_ACTIVITY_READ_RPC_METHOD, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD,
-    verifyMachineInstallationProof, encodeBase64,
-    ManagedGuestCurrentInputV1Schema, ManagedGuestCurrentOutputV1Schema,
-    ManagedWakeTargetsReadRequestV1Schema, ManagedWakeTargetsReadResultV1Schema,
-    ManagedPolicyAdmissionInputV1Schema, ManagedPolicyAdmissionOutputV1Schema, MANAGED_POLICY_PROOF_HEADER,
-    decodeManagedPolicyProofV1, managedPolicyDigestV1, managedPolicyPurposeDigestV1,
-    ManagedPolicyCensusInputV1Schema, ManagedPolicyCensusOutputV1Schema,
-    ManagedPendingActivationFailureRequestV1Schema, PendingActivationFailureResponseV1Schema,
-    MachineEnvironmentApplyInputV1Schema, MachineEnvironmentResolveResultV1Schema, MachineEnvironmentReportInputV1Schema,
-} from "@happier-dev/protocol";
+import { ManagedAdmissionInputV1Schema, ManagedControllerCurrentnessV1Schema, ManagedControllerCurrentInputV1Schema, ManagedControllerReportV1Schema, ManagedEnrollmentCorrelationV1Schema, ManagedControllerContextInputV1Schema, ManagedBootstrapCredentialCreateV1Schema, ManagedControllerSubmitInputV1Schema, ManagedControllerMachineOutputV1Schema, resolveManagedAcquireReviewV1, ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1, managedMachineActionEndpointPathV1, ManagedControlAdmissionInputV1Schema, ManagedControllerIntentReportV1Schema, MANAGED_CONTROL_ACTION_IDS_V1, ManagedGuestCurrentInputV1Schema, ManagedGuestCurrentOutputV1Schema, MachineEnvironmentApplyInputV1Schema, MachineEnvironmentResolveResultV1Schema, MachineEnvironmentReportInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { MANAGED_ACTIVITY_READ_RPC_METHOD, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, ManagedWakeTargetsReadRequestV1Schema, ManagedWakeTargetsReadResultV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { ManagedPolicyAdmissionInputV1Schema, ManagedPolicyAdmissionOutputV1Schema, MANAGED_POLICY_PROOF_HEADER, decodeManagedPolicyProofV1, managedPolicyDigestV1, managedPolicyPurposeDigestV1, ManagedPolicyCensusInputV1Schema, ManagedPolicyCensusOutputV1Schema } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
+import { ManagedPendingActivationFailureRequestV1Schema, PendingActivationFailureResponseV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import { inTx } from "@/storage/inTx";
 import { readTeamOperationAuthenticationFromRequest } from "@/app/teams/actorContext";
 import { admitManagedAcquire } from "./managedAcquire";

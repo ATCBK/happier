@@ -1,8 +1,7 @@
-import {
-    AutomationRunLifecycleOccurrenceEvidenceV1Schema,
-    AutomationRunCauseSchema, deriveAutomationOccurrenceKeyV1, createCanonicalJsonSigningInput,
-    type AutomationRunLifecycleTrigger, type AutomationRunLifecycleOccurrenceEvidenceV1,
-} from "@happier-dev/protocol";
+import { AutomationRunLifecycleOccurrenceEvidenceV1Schema, type AutomationRunLifecycleTrigger, type AutomationRunLifecycleOccurrenceEvidenceV1 } from '@happier-dev/protocol/automations/automationRunLifecycle';
+import { AutomationRunCauseSchema } from '@happier-dev/protocol/automations/run-cause';
+import { deriveAutomationOccurrenceKeyV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import type { Tx } from "@/storage/inTx";
 import { resolveWorkflowRunAccessInTx } from "@/app/workflows/workflowRunAccess";
 import { workflowRunAttentionWhere } from "@/app/workflows/workflowRunAttention";

@@ -1,34 +1,13 @@
 import type { Prisma } from "@prisma/client";
-import {
-    PLUGIN_COLLECTION_REVISION_MAX,
-    PluginAccountPluginIntentV1Schema,
-    PluginCollectionContentEnvelopeV1Schema,
-    PluginCollectionMutationErrorV1Schema,
-    PluginCollectionMutationRequestV1Schema,
-    PluginCollectionMutationResultV1Schema,
-    PluginCollectionProjectionV1Schema,
-    assertPluginCollectionContentEnvelopeForModeV1,
-    buildPluginDomainAccountChangeEntityId,
-    compilePluginJsonSchema,
-    encodePluginCollectionIndexSortKeyV1,
-    getPluginCollectionScalarKindV1,
-    isCanonicalPluginCollectionIndexedInstantV1,
-    measurePluginCollectionMutationRequestEncodedBytesV1,
-    isValidPluginJsonSchemaValue,
-    type NormalizedPluginAccountCollectionContractV1,
-    type PluginCollectionMutationErrorCodeV1,
-    type PluginCollectionMutationErrorV1,
-    type PluginCollectionMutationOperationV1,
-    type PluginCollectionMutationRequestV1,
-    type PluginCollectionMutationResultV1,
-    PluginCollectionForgetRequestV1Schema,
-    PluginCollectionForgetResultV1Schema,
-    type PluginCollectionForgetResultV1,
-    type PluginCollectionProjectionV1,
-    type PluginCollectionRelationV1,
-    type PluginDataCollectionsCapabilities,
-    type PluginCollectionRelationRestrictionContinuationV1,
-} from "@happier-dev/protocol";
+import { PLUGIN_COLLECTION_REVISION_MAX } from '@happier-dev/protocol/plugins/data/collectionLimitsV1';
+import { PluginAccountPluginIntentV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
+import { PluginCollectionContentEnvelopeV1Schema, PluginCollectionMutationErrorV1Schema, PluginCollectionMutationRequestV1Schema, PluginCollectionMutationResultV1Schema, PluginCollectionProjectionV1Schema, assertPluginCollectionContentEnvelopeForModeV1, encodePluginCollectionIndexSortKeyV1, getPluginCollectionScalarKindV1, measurePluginCollectionMutationRequestEncodedBytesV1, type NormalizedPluginAccountCollectionContractV1, type PluginCollectionMutationErrorCodeV1, type PluginCollectionMutationErrorV1, type PluginCollectionMutationOperationV1, type PluginCollectionMutationRequestV1, type PluginCollectionMutationResultV1, PluginCollectionForgetRequestV1Schema, PluginCollectionForgetResultV1Schema, type PluginCollectionForgetResultV1, type PluginCollectionProjectionV1, type PluginCollectionRelationRestrictionContinuationV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
+import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
+import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { isCanonicalPluginCollectionIndexedInstantV1 } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
+import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { type PluginCollectionRelationV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
+import { type PluginDataCollectionsCapabilities } from '@happier-dev/protocol/features/payload/capabilities/pluginDataCollectionsCapabilities';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";

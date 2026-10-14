@@ -1,9 +1,5 @@
-import {
-    AutomationEventSourceStatusReportV1Schema,
-    automationEventSourceCatalogScopeKeyV1,
-    type AutomationEventSourceStatusReportV1,
-    type ParsedPluginManifestV2,
-} from "@happier-dev/protocol";
+import { AutomationEventSourceStatusReportV1Schema, automationEventSourceCatalogScopeKeyV1, type AutomationEventSourceStatusReportV1 } from '@happier-dev/protocol/automations/automationActionSpecsV1';
+import { type ParsedPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest/v2';
 
 import { emitAutomationSourceStatusUpdated } from "@/app/automations/automationChangePublisher";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";

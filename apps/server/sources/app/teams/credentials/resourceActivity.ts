@@ -1,12 +1,6 @@
 import { createHash } from "node:crypto";
-import {
-    decodeTeamKeysetCursorV1,
-    encodeTeamKeysetCursorV1,
-    readTeamKeysetIdV1,
-    readTeamKeysetTimeV1,
-    TeamCredentialActivityKindV1Schema,
-    type TeamCredentialActivityKindV1,
-} from "@happier-dev/protocol/teams";
+import { decodeTeamKeysetCursorV1, encodeTeamKeysetCursorV1, readTeamKeysetIdV1, readTeamKeysetTimeV1 } from '@happier-dev/protocol/teams';
+import { TeamCredentialActivityKindV1Schema, type TeamCredentialActivityKindV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { Tx } from "@/storage/inTx";
 import { resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";

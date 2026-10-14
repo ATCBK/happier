@@ -1,4 +1,4 @@
-import { projectTranscriptBodySearchableText } from '@happier-dev/protocol';
+import { projectTranscriptBodySearchableText } from '@happier-dev/protocol/sessions/messages/transcriptBodySemanticProjection';
 
 import type { HomeSearchDb, HomeSearchMessage } from './homeSearchDb';
 

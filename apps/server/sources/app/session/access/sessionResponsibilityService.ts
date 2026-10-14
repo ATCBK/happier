@@ -1,18 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 
-import {
-    HOME_ACCOUNT_PAGE_LIMIT_DEFAULT_V1,
-    HOME_ACCOUNT_PAGE_LIMIT_MAX_V1,
-    decodeKeysetCursorV1,
-    encodeKeysetCursorV1,
-    readKeysetCursorIdV1,
-    type AccountDisplayProfileV1,
-    type SessionAccessAccountSummaryV1,
-    type SessionResponsibilityCandidateAccessHintV1,
-    type SessionResponsibilityCandidatePurposeV1,
-    type SetSessionResponsibilityResponse,
-} from "@happier-dev/protocol";
+import { HOME_ACCOUNT_PAGE_LIMIT_DEFAULT_V1, HOME_ACCOUNT_PAGE_LIMIT_MAX_V1 } from '@happier-dev/protocol/home/governance';
+import { decodeKeysetCursorV1, encodeKeysetCursorV1, readKeysetCursorIdV1 } from '@happier-dev/protocol/pagination/keysetCursorV1';
+import { type AccountDisplayProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
+import { type SessionAccessAccountSummaryV1 } from '@happier-dev/protocol/sessions/access/sessionAccessPrincipalV1';
+import { type SessionResponsibilityCandidateAccessHintV1, type SessionResponsibilityCandidatePurposeV1, type SetSessionResponsibilityResponse } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
 
 import {
     ACCOUNT_DISPLAY_PROFILE_SELECT,

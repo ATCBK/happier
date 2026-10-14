@@ -15,55 +15,19 @@ import { log, warn } from "@/utils/logging/log";
 import type { Prisma } from "@prisma/client";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
-import {
-    SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT,
-    AccountEncryptionMigrateSessionsDirectiveSchema,
-    VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
-    agentEventLocalIdAttentionImpact,
-    ExactSessionTurnEndMutationV1Schema,
-    PrimaryTurnStatusV1Schema,
-    SessionRuntimeActivityProjectionSchema,
-    SessionRuntimeActivitySnapshotSchema,
-    TranscriptRawRecordV1Schema,
-    SessionTurnMutationActionV1Schema,
-    SessionTurnMutationV1Schema,
-    SessionTranscriptObservationProvenanceV1Schema,
-    SessionStoredMessageContentSchema,
-    SessionInputAdmissionReceiptV1Schema,
-    deriveSessionMessageAuthorAccountIdV1,
-    isRecoveredHistoryTranscriptObservationProvenance,
-    sanitizeSessionRuntimeIssueV1,
-    createPlainSessionOwnerMetadataEnvelopeV1,
-    createSessionOwnerMetadataV1,
-    encodeSessionOwnerMetadataEnvelopeV1,
-    projectSessionSharedMetadataV1,
-    validateSessionOwnerMetadataEnvelopeForAccountModeV1,
-    SessionOwnerMetadataEnvelopeV1Schema,
-    SessionSharedMetadataV1Schema,
-    SessionUserActionRequiredOccurrenceV1Schema,
-    SessionAgentStateActivitySummaryV1Schema,
-    SessionMetadataPublisherPreconditionV1Schema,
-    SESSION_METADATA_LAYOUT_VERSION_V1,
-    type PrimaryTurnStatusV1,
-    type AccountEncryptionMigrateSessionsDirective,
-    type SessionMetadataInactiveModelIntentExpectationV1,
-    type SessionOwnerMetadataEnvelopeV1,
-    type SessionMetadataOwnerMigrationPatchV1,
-    type SessionMetadataOwnerPatchV1,
-    type SessionMetadataInactiveModelIntentOwnerPatchV1,
-    type SessionMetadataPublisherPreconditionV1,
-    type SessionMessageRole,
-    type SessionInputAdmissionReceiptV1,
-    type SessionRuntimeIssueV1,
-    type SessionMessageAttentionImpact,
-    type SessionRuntimeActivityState,
-    type SessionTurnMutationActionV1,
-    type SessionTurnMutationDecisionV1,
-    type SessionTurnMutationReceiptV1,
-    type SessionTurnMutationV1,
-    type SessionUserActionRequiredOccurrenceV1,
-    type SessionTranscriptObservationProvenanceV1,
-} from "@happier-dev/protocol";
+import { SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT, agentEventLocalIdAttentionImpact, TranscriptRawRecordV1Schema, type SessionMessageAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { AccountEncryptionMigrateSessionsDirectiveSchema, type AccountEncryptionMigrateSessionsDirective } from '@happier-dev/protocol/account/encryptionMigrate';
+import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@happier-dev/protocol/sessions/control/contract';
+import { ExactSessionTurnEndMutationV1Schema, SessionTurnMutationActionV1Schema, SessionTurnMutationV1Schema, type SessionTurnMutationActionV1, type SessionTurnMutationDecisionV1, type SessionTurnMutationReceiptV1, type SessionTurnMutationV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
+import { PrimaryTurnStatusV1Schema, sanitizeSessionRuntimeIssueV1, type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { SessionRuntimeActivityProjectionSchema, SessionRuntimeActivitySnapshotSchema, type SessionRuntimeActivityState } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { SessionTranscriptObservationProvenanceV1Schema, isRecoveredHistoryTranscriptObservationProvenance, type SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { SessionInputAdmissionReceiptV1Schema, type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { deriveSessionMessageAuthorAccountIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
+import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, encodeSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1, validateSessionOwnerMetadataEnvelopeForAccountModeV1, SessionOwnerMetadataEnvelopeV1Schema, SessionSharedMetadataV1Schema, SessionAgentStateActivitySummaryV1Schema, SessionMetadataPublisherPreconditionV1Schema, SESSION_METADATA_LAYOUT_VERSION_V1, type SessionMetadataInactiveModelIntentExpectationV1, type SessionOwnerMetadataEnvelopeV1, type SessionMetadataOwnerMigrationPatchV1, type SessionMetadataOwnerPatchV1, type SessionMetadataInactiveModelIntentOwnerPatchV1, type SessionMetadataPublisherPreconditionV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SessionUserActionRequiredOccurrenceV1Schema, type SessionUserActionRequiredOccurrenceV1 } from '@happier-dev/protocol/sessions/userActionRequiredOccurrenceV1';
+import { type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { isDeepStrictEqual } from "node:util";
 import {
     scheduleSessionActivityRemoteAlerts,
@@ -127,11 +91,7 @@ import { rejoinAutomationOccurrenceInsertRace } from "@/app/automations/automati
 import { producesAutomationSessionLifecycleOccurrence } from "@/app/automations/automationSessionLifecycleTerminalTruth";
 import { SESSION_MESSAGE_WRITE_SELECT, SessionMessageRowRevisionRaceError, updateSessionMessageAtCurrentRevisionInTx } from './sessionMessageRevisionWrite';
 import { loadSessionRollbackEligibleTurnStartsInTx } from "./turns/sessionRollbackEligibilityProjection";
-import {
-    SessionTeamCredentialBindingMetadataPatchV1Schema,
-    type SessionTeamCredentialBindingMetadataPatchV1,
-    type SessionTeamCredentialBindingRejectionV1,
-} from "@happier-dev/protocol/teams";
+import { SessionTeamCredentialBindingMetadataPatchV1Schema, type SessionTeamCredentialBindingMetadataPatchV1, type SessionTeamCredentialBindingRejectionV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import {
     readSessionTeamCredentialBindingInTx,
     isSessionTeamCredentialBindingIntentCurrentInTx,

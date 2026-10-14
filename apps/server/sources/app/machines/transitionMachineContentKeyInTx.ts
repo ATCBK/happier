@@ -4,7 +4,8 @@ import {
     type MachineContentKeyTransitionInputV1,
     type MachineContentKeyTransitionResultV1,
 } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
-import { machineStoredContentMatchesAccountMode, parseEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
+import { machineStoredContentMatchesAccountMode } from '@happier-dev/protocol/machines/machineStoredContent';
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { afterTx, type Tx } from "@/storage/inTx";

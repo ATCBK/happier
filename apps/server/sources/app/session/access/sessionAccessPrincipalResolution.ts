@@ -1,4 +1,4 @@
-import type { ResolveSessionAccessPrincipalsResponseV1 } from "@happier-dev/protocol";
+import type { ResolveSessionAccessPrincipalsResponseV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { projectAccountDisplayProfileV1, ACCOUNT_DISPLAY_PROFILE_SELECT } from "@/app/account/profile/accountDisplayProfile";
 import { buildSessionAccessCollaborationAccountWhere } from "./sessionAccessGrantEligibility";
 import { resolveGrantableTeamForActorInTx } from "@/app/teams/queries";
@@ -9,7 +9,7 @@ import {
 } from "@/app/teams/actorContext";
 import type { SessionAccessAuthentication } from "./sessionAccessAuthentication";
 import type { Tx } from "@/storage/inTx";
-import type { PrincipalRefV1 } from "@happier-dev/protocol";
+import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
 
 /** Resolve only the explicitly requested, currently discoverable principals. */
 export async function resolveSessionAccessPrincipalsInTx(input: Readonly<{

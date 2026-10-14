@@ -1,10 +1,5 @@
-import {
-    SERVER_CONFIG_REGISTRY_BASE,
-    composeServerConfigRegistry,
-    defineServerConfigRegistry,
-    type ServerConfigEntry,
-    type ServerConfigRegistry,
-} from '@happier-dev/protocol';
+import { SERVER_CONFIG_REGISTRY_BASE } from '@happier-dev/protocol/serverConfig/registry';
+import { composeServerConfigRegistry, defineServerConfigRegistry, type ServerConfigEntry, type ServerConfigRegistry } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 import { normalizePublicReleaseRingId, PUBLIC_RELEASE_RING_IDS } from '@happier-dev/release-runtime/releaseRings';
 
 import { API_RATE_LIMIT_GLOBAL_SERVER_CONFIG, API_ROUTE_RATE_LIMIT_SERVER_CONFIG } from '@/app/api/utils/apiRateLimitDefaults';

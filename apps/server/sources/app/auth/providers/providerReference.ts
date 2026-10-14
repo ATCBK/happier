@@ -1,4 +1,4 @@
-import { AuthProviderIdSchema, type AuthProviderId } from "@happier-dev/protocol";
+import { AuthProviderIdSchema, type AuthProviderId } from '@happier-dev/protocol/auth/providers';
 import { z } from "zod";
 
 /**

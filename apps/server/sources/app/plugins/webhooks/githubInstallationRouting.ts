@@ -1,4 +1,4 @@
-import { PLUGIN_WEBHOOK_MAX_RAW_BODY_BYTES_V1 } from "@happier-dev/protocol";
+import { PLUGIN_WEBHOOK_MAX_RAW_BODY_BYTES_V1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
 
 const INSTALLATION_ID_PATTERN_V1 = /^[1-9][0-9]{0,19}$/u;
 

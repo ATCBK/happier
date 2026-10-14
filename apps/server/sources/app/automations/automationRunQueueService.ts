@@ -1,7 +1,5 @@
-import {
-    AutomationTriggerIdSchema,
-    deriveAutomationOccurrenceKeyV1,
-} from "@happier-dev/protocol";
+import { AutomationTriggerIdSchema } from '@happier-dev/protocol/automations/automationTriggerIdentity';
+import { deriveAutomationOccurrenceKeyV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
 
 import type { Tx } from "@/storage/inTx";
 import { afterTx } from "@/storage/inTx";

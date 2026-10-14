@@ -1,10 +1,7 @@
-import type {
-    UsageAccountingCoverageReason,
-    UsageObservationCost,
-    UsageObservationTokens,
-} from "@happier-dev/protocol";
+import type { UsageAccountingCoverageReason, UsageObservationCost, UsageObservationTokens } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import type { UsageAnalyticsSourceContext } from "@happier-dev/protocol/usage/usageAnalyticsContracts";
-import { createStoredReadSchema, UsageNativeAccountingSubjectSchema, readUsageAccountingMetadata } from "@happier-dev/protocol";
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { UsageNativeAccountingSubjectSchema, readUsageAccountingMetadata } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 
 import { addUsageCost, addUsageTokens, createEmptyUsageCost, createEmptyUsageTokens, subtractUsageCost, subtractUsageTokens, usageHasAnyValue } from "../usageMetrics";
 

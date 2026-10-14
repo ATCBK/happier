@@ -1,9 +1,4 @@
-import {
-    PluginWebhookEndpointCheckCorrespondenceResultV1Schema,
-    type PluginWebhookEndpointCheckCorrespondenceInputV1,
-    type PluginWebhookEndpointCheckCorrespondenceResultV1,
-    type PluginWebhookEndpointSetupV1,
-} from "@happier-dev/protocol";
+import { PluginWebhookEndpointCheckCorrespondenceResultV1Schema, type PluginWebhookEndpointCheckCorrespondenceInputV1, type PluginWebhookEndpointCheckCorrespondenceResultV1, type PluginWebhookEndpointSetupV1 } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
 
 import type { Tx } from "@/storage/inTx";
 

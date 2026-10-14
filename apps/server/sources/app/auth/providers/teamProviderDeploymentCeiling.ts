@@ -1,8 +1,4 @@
-import type {
-    HomeTeamProviderPolicyReadV1,
-    HomeTeamProviderPolicyV1,
-    ManagedIdentityProviderKindV1,
-} from "@happier-dev/protocol";
+import type { HomeTeamProviderPolicyReadV1, HomeTeamProviderPolicyV1, ManagedIdentityProviderKindV1 } from '@happier-dev/protocol/home/governance';
 
 import { resolveWorkosPlatformRuntimeMetadata } from "@/app/integrations/workos/workosPlatform";
 import { resolveConfiguredPublicServerUrl } from "@/app/serverUrls/effectiveServerUrls";

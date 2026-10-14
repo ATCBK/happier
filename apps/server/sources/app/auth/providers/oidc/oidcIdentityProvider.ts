@@ -21,7 +21,7 @@ import {
     prepareIdentityConnectionGroupRefresh,
     selectMatchingExternalGroupIds,
 } from "@/app/teams/memberships/identityConnectionGroupRefresh";
-import { normalizeVerifiedEmail } from "@happier-dev/protocol";
+import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 
 export type OidcTeamIdentityConnection = Readonly<{
     teamId: string;

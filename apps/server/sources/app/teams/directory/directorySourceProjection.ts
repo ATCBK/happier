@@ -1,9 +1,5 @@
-import type {
-    TeamDirectorySafeErrorCodeV1,
-    TeamDirectorySourceAllowedActionV1,
-    TeamDirectorySourceSummaryV1,
-    TeamSummaryV1,
-} from "@happier-dev/protocol/teams";
+import type { TeamDirectorySafeErrorCodeV1, TeamDirectorySourceAllowedActionV1, TeamDirectorySourceSummaryV1 } from '@happier-dev/protocol/teams';
+import type { TeamSummaryV1 } from '@happier-dev/protocol/teams/projections';
 
 export const WORKOS_DIRECTORY_SYNC_TARGET_MS = 5 * 60 * 1_000;
 export const GITHUB_DIRECTORY_SYNC_TARGET_MS = 30 * 60 * 1_000;

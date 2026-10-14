@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { redactBugReportSensitiveText, type ServerConfigEnv } from "@happier-dev/protocol";
+import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
+import { type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 import { parseBooleanEnv, parseIntEnv } from "@/config/env";
 import { resolveLegacyServerDiagnosticsEntitlement } from "@/app/home/governance/serverDiagnosticsEntitlement";

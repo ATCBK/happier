@@ -1,12 +1,9 @@
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
-import {
-    encodeBase64,
-    MachineInstallationProofV1Schema,
-    SocketRpcMachineAdmissionContextV1Schema,
-    verifyMachineInstallationProof,
-    ExternalActionExecutionAuthorizationV1Schema,
-} from '@happier-dev/protocol';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { MachineInstallationProofV1Schema, verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { SocketRpcMachineAdmissionContextV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncTargetRoutingV1Schema,
     WorkspaceSyncSourceWriterTargetRoutingV1Schema, WorkspaceSyncSourceExecutionV1Schema, WorkspaceSyncSeedRoutingV1Schema } from '@happier-dev/protocol/socketRpc';
 import { verifyWorkspaceSyncHandoffSourceAuthorization, readCurrentWorkspaceSyncHandoffWriterTarget,
@@ -16,7 +13,7 @@ import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGua
 import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { resolveMachineAdmission, resolveMachineAdmissionInTx, resolveEffectiveMachineRoleInTx } from '@/app/machines/machineAccess';
 import { readMachineDevcontainerWorkspaceSyncRouteInTx } from '@/app/machines/managed/managedRows';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { inTx } from '@/storage/inTx';
 import { db } from '@/storage/db';
 import { RequesterSessionCurrentnessPurposeV1Schema } from '@happier-dev/protocol/machines/identity/installationIdentity';

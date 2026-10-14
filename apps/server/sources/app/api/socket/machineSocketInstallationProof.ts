@@ -1,4 +1,4 @@
-import { readMachineDaemonOwnershipMetadataFromSocketAuth } from "@happier-dev/protocol";
+import { readMachineDaemonOwnershipMetadataFromSocketAuth } from '@happier-dev/protocol/machines/ownership/daemonOwnership';
 
 import {
     machineInstallationPublicKeysEqual,

@@ -1,4 +1,5 @@
-import type { LocalServicePublicExposureV1, LocalServicePreviewResourceV1 } from "@happier-dev/protocol";
+import type { LocalServicePublicExposureV1 } from '@happier-dev/protocol/local/services/public/v1';
+import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import { isDeepStrictEqual } from 'node:util';
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 

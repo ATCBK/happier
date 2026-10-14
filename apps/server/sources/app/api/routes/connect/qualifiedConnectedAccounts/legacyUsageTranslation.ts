@@ -1,12 +1,8 @@
-import {
-    ConnectedServiceQuotaSnapshotV1Schema,
-    ConnectedServiceUsageSourceV1Schema,
-    ProviderAccountUsageSnapshotV1Schema,
-    projectBuiltInLegacyConnectedServiceQuotaSnapshotV1,
-    QualifiedConnectedServiceUsageSourceV4Schema,
-    type ConnectedServiceUsageSourceV1,
-    type QualifiedConnectedServiceUsageSourceV4,
-} from "@happier-dev/protocol";
+import { ConnectedServiceQuotaSnapshotV1Schema, ConnectedServiceUsageSourceV1Schema, type ConnectedServiceUsageSourceV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { projectBuiltInLegacyConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
+import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { type QualifiedConnectedServiceUsageSourceV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 import {
     resolveLegacyQualifiedConnectedAccountService,

@@ -1,11 +1,6 @@
 import { getPublicUrl } from "@/storage/blob/files";
-import {
-    AccountDisplayProfileV1Schema,
-    ReleasedDirectSessionShareProfileV1Schema,
-    projectAccountNameToLegacyFieldsV1,
-    type AccountDisplayProfileV1,
-    type ReleasedDirectSessionShareProfileV1,
-} from "@happier-dev/protocol";
+import { AccountDisplayProfileV1Schema, projectAccountNameToLegacyFieldsV1, type AccountDisplayProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
+import { ReleasedDirectSessionShareProfileV1Schema, type ReleasedDirectSessionShareProfileV1 } from '@happier-dev/protocol/sessions';
 
 /**
  * The one select every neutral Account display projection uses.
@@ -63,7 +58,7 @@ export function projectAccountDisplayProfileV1(row: AccountDisplayProfileRow): A
  * Callers that need a label must consume this rather than re-deriving the rule,
  * so a Home never names the same person two different ways.
  */
-export { resolveAccountDisplayLabelV1 } from "@happier-dev/protocol";
+export { resolveAccountDisplayLabelV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 
 /**
  * Released direct-share/public-owner wire shape. It is the same projection with

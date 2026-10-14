@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
-import {
-    AccountEncryptionMigrateAutomationInventoryItemSchema,
-    AccountEncryptionMigrateAutomationStageItemSchema,
-    pluginJsonValuesEqual,
-} from "@happier-dev/protocol";
+import { AccountEncryptionMigrateAutomationInventoryItemSchema, AccountEncryptionMigrateAutomationStageItemSchema } from '@happier-dev/protocol/account/encryptionMigrate';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { z } from "zod";
 
 import {

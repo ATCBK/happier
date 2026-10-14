@@ -1,4 +1,4 @@
-import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT } from "@happier-dev/protocol";
+import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT } from '@happier-dev/protocol/machines/peer/mediation/tunnel/relay';
 
 // Relative, not aliased: the CLI relay test imports this testkit across packages
 // to drive the real server handler, and cannot resolve the server `@/` alias.

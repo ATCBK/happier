@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { Fastify } from "../../../types";
-import { ConnectedServiceIdSchema, type ConnectedServiceId } from "@happier-dev/protocol";
+import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import { ConnectedServiceProfileIdSchema } from "./profileIdSchema";
 import { NotFoundSchema } from "../../../schemas/notFoundSchema";

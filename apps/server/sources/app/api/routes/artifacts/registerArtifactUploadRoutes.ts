@@ -1,7 +1,8 @@
 import { Readable } from 'node:stream';
 import { readFile, rm } from 'node:fs/promises';
 import { z } from 'zod';
-import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1, type ArtifactBlobUploadInitV1 } from '@happier-dev/protocol';
+import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
+import { type ArtifactBlobUploadInitV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, decodeArtifactUploadMetadataV1 } from '@happier-dev/transfers';
 import { TransferSessionStore, createTransferSessionLifecycle, readFiniteTransferConfig } from '@happier-dev/transfers/node';
 import { inTx } from '@/storage/inTx';

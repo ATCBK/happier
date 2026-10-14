@@ -1,8 +1,4 @@
-import {
-    MemorySearchQueryV1Schema,
-    type MemorySearchQueryV1,
-    type MemorySearchResultV1,
-} from '@happier-dev/protocol';
+import { MemorySearchQueryV1Schema, type MemorySearchQueryV1, type MemorySearchResultV1 } from '@happier-dev/protocol/memory/memorySearch';
 import type { SessionTranscriptPublicationConstraint } from '@/app/session/sessionTranscriptPublicationPolicy';
 import { isPlainHomeStoragePolicy, resolveHomeSearchCapability } from './homeSearchCapability';
 import type { HomeSearchDb } from './homeSearchDb';

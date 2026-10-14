@@ -1,4 +1,5 @@
-import { isSessionPersonallyTrackedV1, resolveSessionPersonalEventEligibilityV1, type SessionPersonalEventKindV1, type SessionPersonalEventEligibilityReasonV1 } from "@happier-dev/protocol";
+import { isSessionPersonallyTrackedV1 } from '@happier-dev/protocol/sessions/personal/tracking';
+import { resolveSessionPersonalEventEligibilityV1, type SessionPersonalEventKindV1, type SessionPersonalEventEligibilityReasonV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
 import { db } from "@/storage/db";
 import { admitSessionBackgroundDeliveryInTx } from "./backgroundDelivery";
 import { listActivelyFollowingAccountIdsInTx, resolveSessionFollowFactsForAccountsInTx } from "./followFacts";

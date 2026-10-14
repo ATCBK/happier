@@ -1,20 +1,15 @@
 import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
-import {
-    MAX_NON_TERMINAL_EVENT_CONVERSATION_RUNS_PER_ACCOUNT,
-    AutomationRunCauseSchema,
-    AutomationRunExecutionInputV1Schema,
-    createCanonicalJsonSigningInput,
-    deriveAutomationManualOccurrenceKeyV1,
-    normalizeAutomationTemplateEnvelopeStoredRead,
-    parseAutomationStoredDefinitionExecutionRecipeV1,
-    parseAutomationStoredWorkflowDefinitionRecipeV2,
-    serializeAutomationRunExecutionRecipeV1,
-    toAutomationRunExecutionInputV1Origin,
-    automationReplyHandoffIdForRunV1,
-    type AutomationRunCause,
-    type AutomationConversationScopedTriggerRefV1,
-} from "@happier-dev/protocol";
+import { MAX_NON_TERMINAL_EVENT_CONVERSATION_RUNS_PER_ACCOUNT } from '@happier-dev/protocol/automations/event';
+import { AutomationRunCauseSchema, type AutomationRunCause } from '@happier-dev/protocol/automations/run-cause';
+import { AutomationRunExecutionInputV1Schema, toAutomationRunExecutionInputV1Origin } from '@happier-dev/protocol/automations/automationApiV3';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { deriveAutomationManualOccurrenceKeyV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { normalizeAutomationTemplateEnvelopeStoredRead } from '@happier-dev/protocol/automations/automationTemplateEnvelope';
+import { parseAutomationStoredDefinitionExecutionRecipeV1, serializeAutomationRunExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { parseAutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
+import { automationReplyHandoffIdForRunV1 } from '@happier-dev/protocol/automations/automationReplyHandoffIdentityV1';
+import { type AutomationConversationScopedTriggerRefV1 } from '@happier-dev/protocol/automations/result-delivery';
 
 import { afterTx, type Tx } from "@/storage/inTx";
 import { publishManagedRunWakeInTx } from '@/app/machines/managed/managedWake';

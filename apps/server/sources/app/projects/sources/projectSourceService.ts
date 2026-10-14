@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import * as privacyKit from 'privacy-kit';
-import { decodePlainArtifactStoredContent } from '@happier-dev/protocol';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import {
     ProjectSourceGrantV1Schema, ProjectSourceV1StoredSchema, PROJECT_SOURCES_ACCOUNT_CHANGE_ENTITY_ID_V1,

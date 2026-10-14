@@ -1,4 +1,4 @@
-import type { ReorderSessionOrganizationRequest } from "@happier-dev/protocol";
+import type { ReorderSessionOrganizationRequest } from '@happier-dev/protocol/sessions/organization/mutations';
 
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { createVisibleUnarchivedOrganizationSessionWhere } from "./sessionVisibility";

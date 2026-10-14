@@ -1,12 +1,8 @@
 import { z } from "zod";
 
 import type { Fastify } from "../../../types";
-import {
-  CONNECTED_SERVICE_ERROR_CODES,
-  ConnectedServiceErrorCodeSchema,
-  ConnectedServiceIdSchema,
-  type ConnectedServiceId,
-} from "@happier-dev/protocol";
+import { CONNECTED_SERVICE_ERROR_CODES, ConnectedServiceErrorCodeSchema } from '@happier-dev/protocol/connect/connectedServiceErrors';
+import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import {
   ConnectedServiceOauthExchangeError,

@@ -1,27 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Fastify } from "@/app/api/types";
-import type { ReviewCommentActorRefV1, ReviewCommentPrincipalHeaderV1 } from "@happier-dev/protocol";
+import type { ReviewCommentActorRefV1 } from '@happier-dev/protocol/reviews/comments/v1';
+import type { ReviewCommentPrincipalHeaderV1 } from '@happier-dev/protocol/reviews/comments/actions';
 import type { z } from "zod";
-import {
-    GENERAL_PLUGIN_PERMISSION_SUBJECT_V1,
-    createReviewCommentPrincipalSigningInputV1,
-    REVIEW_COMMENT_DIRECT_WRITE_SCOPE_V1,
-    REVIEW_COMMENT_PRINCIPAL_HEADER_V1,
-    ReviewCommentAttachEvidenceRequestV1Schema,
-    ReviewCommentBulkTransitionRequestV1Schema,
-    ReviewCommentPublicationTransportRequestV1Schema,
-    ReviewCommentCreateRequestV1Schema,
-    ReviewCommentEditRequestV1Schema,
-    ReviewCommentGetRequestV1Schema,
-    ReviewCommentListRequestV1Schema,
-    ReviewCommentRedactRequestV1Schema,
-    ReviewCommentReplyRequestV1Schema,
-    ReviewCommentSetDispositionRequestV1Schema,
-    ReviewCommentPrincipalHeaderV1Schema,
-    ReviewCommentTransitionRequestV1Schema,
-    stringifyReviewCommentPrincipalCanonicalJsonV1,
-    ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentCommitMutationRequestV1Schema,
-} from "@happier-dev/protocol";
+import { GENERAL_PLUGIN_PERMISSION_SUBJECT_V1 } from '@happier-dev/protocol/plugins/permissions/grants';
+import { createReviewCommentPrincipalSigningInputV1, REVIEW_COMMENT_PRINCIPAL_HEADER_V1, ReviewCommentBulkTransitionRequestV1Schema, ReviewCommentGetRequestV1Schema, ReviewCommentListRequestV1Schema, ReviewCommentPrincipalHeaderV1Schema, stringifyReviewCommentPrincipalCanonicalJsonV1 } from '@happier-dev/protocol/reviews/comments/actions';
+import { REVIEW_COMMENT_DIRECT_WRITE_SCOPE_V1, ReviewCommentAttachEvidenceRequestV1Schema, ReviewCommentCreateRequestV1Schema, ReviewCommentEditRequestV1Schema, ReviewCommentRedactRequestV1Schema, ReviewCommentReplyRequestV1Schema, ReviewCommentSetDispositionRequestV1Schema, ReviewCommentTransitionRequestV1Schema } from '@happier-dev/protocol/reviews/comments/v1';
+import { ReviewCommentPublicationTransportRequestV1Schema } from '@happier-dev/protocol/reviews/comments/publicationTransport';
+import { ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentCommitMutationRequestV1Schema } from '@happier-dev/protocol/reviews/comments/mutation';
 import { readReviewCommentPreparationReceipt } from "./mutations";
 import tweetnacl from "tweetnacl";
 

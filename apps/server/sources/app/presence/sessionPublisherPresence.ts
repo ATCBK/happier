@@ -1,11 +1,7 @@
-import {
-  SessionRuntimeActivitySnapshotSchema,
-  SessionPublisherGenerationV1Schema,
-  type SessionMetadataPublisherPreconditionV1,
-  type PrimaryTurnStatusV1,
-    type SessionRuntimeActivitySnapshot,
-    type SessionRuntimeIssueV1,
-} from "@happier-dev/protocol";
+import { SessionRuntimeActivitySnapshotSchema, type SessionRuntimeActivitySnapshot } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { SessionPublisherGenerationV1Schema } from '@happier-dev/protocol/sessions/control/machineSessionTerminalV1';
+import { type SessionMetadataPublisherPreconditionV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 import {
     didSessionActivityBadgeSignalChange,

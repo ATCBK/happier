@@ -4,7 +4,7 @@ import type { Log } from "@sentry/node";
 
 import { parseOptionalBooleanEnv } from "@/config/env";
 import { redactSentryEvent, redactSentryLog } from "./sentryLogRedaction";
-import { redactPublicShareCapabilityUrl } from "@happier-dev/protocol";
+import { redactPublicShareCapabilityUrl } from '@happier-dev/protocol/crypto/publicShareCapabilityUrl';
 import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
 import { resolveSentryEnvironment } from './sentryEnvironment';
 

@@ -1,10 +1,8 @@
-import {
-    DaemonExecutionRunBrokerAuthorityResponseV1Schema,
-    RPC_METHODS,
-} from '@happier-dev/protocol';
+import { DaemonExecutionRunBrokerAuthorityResponseV1Schema } from '@happier-dev/protocol/daemon/executionRuns';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import type { Fastify } from '@/app/api/types';
-import type { ProviderBrokerAdmissionFailureCodeV1 } from '@happier-dev/protocol';
+import type { ProviderBrokerAdmissionFailureCodeV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import type { TeamCredentialExecutionRunCurrentnessResolver } from './providerBrokerAdmission';
 
 type Failure = Readonly<{ ok: false; reasonCode: ProviderBrokerAdmissionFailureCodeV1 }>;

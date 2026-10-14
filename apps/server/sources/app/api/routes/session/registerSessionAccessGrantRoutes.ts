@@ -1,11 +1,5 @@
 import { z } from "zod";
-import {
-    SessionAccessGrantsListRequestV1Schema, SessionAccessGrantsListResponseV1Schema,
-    SetSessionAccessGrantRequestV1Schema, SetSessionAccessGrantResponseV1Schema,
-    RemoveSessionAccessGrantRequestV1Schema, RemoveSessionAccessGrantResponseV1Schema,
-    SetSessionAccessContextRequestV1Schema, SetSessionAccessContextResponseV1Schema,
-    ResolveSessionAccessPrincipalsRequestV1Schema, ResolveSessionAccessPrincipalsResponseV1Schema,
-} from "@happier-dev/protocol";
+import { SessionAccessGrantsListRequestV1Schema, SessionAccessGrantsListResponseV1Schema, SetSessionAccessGrantRequestV1Schema, SetSessionAccessGrantResponseV1Schema, RemoveSessionAccessGrantRequestV1Schema, RemoveSessionAccessGrantResponseV1Schema, SetSessionAccessContextRequestV1Schema, SetSessionAccessContextResponseV1Schema, ResolveSessionAccessPrincipalsRequestV1Schema, ResolveSessionAccessPrincipalsResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { ACCOUNT_DISPLAY_PROFILE_SELECT } from "@/app/account/profile/accountDisplayProfile";
 import { createServerFeatureGatedRouteApp } from "@/app/features/catalog/serverFeatureGate";
 import { inspectSessionAccessGrants } from "@/app/session/access/sessionAccessGrantInspection";
@@ -13,7 +7,7 @@ import { assertSessionAccessManageAccessInTx, putSessionAccessGrantInTx, deleteS
 import { projectReleasedDirectShareEvent, scheduleReleasedDirectShareEvent } from "@/app/session/access/publishSessionAccessChange";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { validateRequiredTeamVisibilityInTx } from "@/app/teams/credentials/sessionBinding";
-import { SessionTeamCredentialBindingRejectionV1Schema } from "@happier-dev/protocol/teams";
+import { SessionTeamCredentialBindingRejectionV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import { resolveSessionAccessPrincipalsInTx } from "@/app/session/access/sessionAccessPrincipalResolution";

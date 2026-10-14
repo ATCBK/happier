@@ -1,5 +1,5 @@
 import { removeAutomationMachineAssignmentsTx } from "@/app/automations/automationMachineAssignmentRemoval";
-import { type MachineKind, isPersistentMachine } from '@happier-dev/protocol';
+import { type MachineKind, isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     buildNewMachineUpdate,
@@ -13,7 +13,7 @@ import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessio
 import { serializeMachineKeyBasis } from "./machineSerialization";
 import { readMachineDevcontainerChildInTx } from './managed/managedRows';
 import { linkManagedEnrollmentInTx } from './managed/managedMutations';
-import type { ManagedEnrollmentCorrelationV1 } from '@happier-dev/protocol';
+import type { ManagedEnrollmentCorrelationV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { resolveMachineAccessInTx } from './machineAccess';
 
 import {

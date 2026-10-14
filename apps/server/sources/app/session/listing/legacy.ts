@@ -1,6 +1,6 @@
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import type { Prisma } from "@prisma/client";
-import { projectLegacyViewerLastViewedSessionSeqV1, projectLegacyViewerUnreadSinceV1 } from "@happier-dev/protocol";
+import { projectLegacyViewerLastViewedSessionSeqV1, projectLegacyViewerUnreadSinceV1 } from '@happier-dev/protocol/sessions';
 import { QUIET_SESSION_PERSONAL_DISCUSSION_FACTS } from "@/app/session/personal/discussionFacts";
 import { createSessionPersonalProjectionSelect, projectSessionViewer } from "@/app/session/personal/projection";
 import { db } from "@/storage/db";

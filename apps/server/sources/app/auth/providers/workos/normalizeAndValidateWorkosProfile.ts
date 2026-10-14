@@ -2,7 +2,7 @@ import {
     ACCOUNT_IDENTITY_PROVIDER_LOGIN_MAX_CODE_UNITS,
     ACCOUNT_IDENTITY_PROVIDER_USER_ID_MAX_CODE_UNITS,
 } from "@/app/auth/providers/accountIdentityBounds";
-import { readAccountNameFromLegacyProfileV1 } from "@happier-dev/protocol";
+import { readAccountNameFromLegacyProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 
 export interface WorkosIdentityBinding {
     organizationId: string;

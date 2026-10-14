@@ -1,39 +1,9 @@
-import type { FeatureId } from "@happier-dev/protocol";
-import {
-    AnyClientUpgradeRequiredV1Schema,
-    CLIENT_UPGRADE_REQUIRED_ERROR_CODE,
-    CLIENT_UPGRADE_REQUIRED_HTTP_STATUS,
-    SESSION_ORGANIZATION_CURRENT_PROJECTION_VERSION,
-    SESSION_ORGANIZATION_LEGACY_MAX_ATTENTION_STANDINGS,
-    CreateOrUpdateSessionOrganizationFolderRequestSchema,
-    CreateOrUpdateSessionOrganizationFolderResponseSchema,
-    CreateOrUpdateSessionOrganizationTagRequestSchema,
-    CreateOrUpdateSessionOrganizationTagResponseSchema,
-    DeleteSessionOrganizationLabelRequestSchema,
-    DeleteSessionOrganizationLabelResponseSchema,
-    DeleteSessionOrganizationFolderRequestSchema,
-    DeleteSessionOrganizationFolderResponseSchema,
-    DeleteSessionOrganizationTagRequestSchema,
-    DeleteSessionOrganizationTagResponseSchema,
-    ImportLegacySessionOrganizationRequestSchema,
-    ImportLegacySessionOrganizationResponseSchema,
-    MoveSessionFolderAssignmentsRequestSchema,
-    MoveSessionFolderAssignmentsResponseSchema,
-    ReorderSessionOrganizationRequestSchema,
-    ReorderSessionOrganizationResponseSchema,
-    SessionOrganizationSnapshotRequestSchema,
-    SessionOrganizationSnapshotResponseSchema,
-    SetSessionAttentionStandingRequestSchema,
-    SetSessionAttentionStandingResponseSchema,
-    SetSessionFolderAssignmentRequestSchema,
-    SetSessionFolderAssignmentResponseSchema,
-    SetSessionPinRequestSchema,
-    SetSessionPinResponseSchema,
-    SetSessionTagAssignmentsRequestSchema,
-    SetSessionTagAssignmentsResponseSchema,
-    UpsertSessionOrganizationLabelRequestSchema,
-    UpsertSessionOrganizationLabelResponseSchema,
-} from "@happier-dev/protocol";
+import type { FeatureId } from '@happier-dev/protocol/features/catalog';
+import { AnyClientUpgradeRequiredV1Schema, CLIENT_UPGRADE_REQUIRED_ERROR_CODE, CLIENT_UPGRADE_REQUIRED_HTTP_STATUS } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
+import { SESSION_ORGANIZATION_CURRENT_PROJECTION_VERSION, SESSION_ORGANIZATION_LEGACY_MAX_ATTENTION_STANDINGS } from '@happier-dev/protocol/sessions/organization/constants';
+import { CreateOrUpdateSessionOrganizationFolderRequestSchema, CreateOrUpdateSessionOrganizationFolderResponseSchema, CreateOrUpdateSessionOrganizationTagRequestSchema, CreateOrUpdateSessionOrganizationTagResponseSchema, DeleteSessionOrganizationLabelRequestSchema, DeleteSessionOrganizationLabelResponseSchema, DeleteSessionOrganizationFolderRequestSchema, DeleteSessionOrganizationFolderResponseSchema, DeleteSessionOrganizationTagRequestSchema, DeleteSessionOrganizationTagResponseSchema, ImportLegacySessionOrganizationRequestSchema, ImportLegacySessionOrganizationResponseSchema, MoveSessionFolderAssignmentsRequestSchema, MoveSessionFolderAssignmentsResponseSchema, ReorderSessionOrganizationRequestSchema, ReorderSessionOrganizationResponseSchema, SetSessionFolderAssignmentRequestSchema, SetSessionFolderAssignmentResponseSchema, SetSessionPinRequestSchema, SetSessionPinResponseSchema, SetSessionTagAssignmentsRequestSchema, SetSessionTagAssignmentsResponseSchema, UpsertSessionOrganizationLabelRequestSchema, UpsertSessionOrganizationLabelResponseSchema } from '@happier-dev/protocol/sessions/organization/mutations';
+import { SessionOrganizationSnapshotRequestSchema, SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { SetSessionAttentionStandingRequestSchema, SetSessionAttentionStandingResponseSchema } from '@happier-dev/protocol/sessions/organization/standings';
 import { z } from "zod";
 
 import { enforceCurrentAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";

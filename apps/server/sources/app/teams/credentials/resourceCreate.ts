@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { TeamCredentialResourceCreateInputV1Schema, type TeamCredentialResourceCreateInputV1 } from "@happier-dev/protocol/teams";
+import { TeamCredentialResourceCreateInputV1Schema, type TeamCredentialResourceCreateInputV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { Tx } from "@/storage/inTx";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";

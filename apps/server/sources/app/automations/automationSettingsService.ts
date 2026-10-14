@@ -1,7 +1,4 @@
-import {
-    AutomationV3SettingsSchema,
-    type AutomationV3Settings,
-} from "@happier-dev/protocol";
+import { AutomationV3SettingsSchema, type AutomationV3Settings } from '@happier-dev/protocol/automations/automationApiV3';
 import type { Prisma } from "@prisma/client";
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";

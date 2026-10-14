@@ -1,37 +1,9 @@
 import { z } from "zod";
 
-import {
-    AUTOMATION_V3_RUN_LIST_MAX_ITEMS,
-    AutomationAssignmentUpdateRequestSchema,
-    AutomationV3SettingsSchema,
-    AutomationV3SettingsUpdateRequestSchema,
-    AutomationV3WorkerClaimRequestSchema,
-    AutomationV3WorkerAssignmentsResponseSchema,
-    AutomationExecutionRunLifecycleReportRequestSchema,
-    AutomationExecutionRunLifecycleSourcesResponseSchema,
-    AutomationV3WorkerExecutionDispatchSettlementRequestSchema,
-    AutomationV3WorkerFailRequestSchema,
-    AutomationV3WorkerHeartbeatRequestSchema,
-    AutomationV3WorkerHeartbeatResponseSchema,
-    AutomationV3WorkerStartRequestSchema,
-    AutomationV3WorkerStartResponseSchema,
-    AutomationV3WorkerSucceedRequestSchema,
-    AutomationV3ClearRunHistoryResponseSchema,
-    AutomationDeleteResponseSchema,
-    AutomationDefinitionCreateRequestSchema,
-    AutomationDefinitionReconcileRequestSchema,
-    AutomationDefinitionPatchRequestSchema,
-    AutomationDefinitionListRequestSchema,
-    AutomationDefinitionListResponseSchema,
-    AutomationTriggerCreateRequestSchema,
-    AutomationTriggerDeleteRequestSchema,
-    AutomationTriggerPatchRequestSchema,
-    AutomationV3RunMutationResponseSchema,
-    AutomationV3RunReplyHandoffRedeliverRequestSchema,
-    AutomationV3RunListResponseSchema,
-    AutomationManualIdempotencyKeyV1Schema,
-    type AutomationAccountCurrentnessWitnessV1,
-} from "@happier-dev/protocol";
+import { AUTOMATION_V3_RUN_LIST_MAX_ITEMS, AutomationAssignmentUpdateRequestSchema, AutomationV3SettingsSchema, AutomationV3SettingsUpdateRequestSchema, AutomationV3WorkerClaimRequestSchema, AutomationV3WorkerAssignmentsResponseSchema, AutomationV3WorkerExecutionDispatchSettlementRequestSchema, AutomationV3WorkerFailRequestSchema, AutomationV3WorkerHeartbeatRequestSchema, AutomationV3WorkerHeartbeatResponseSchema, AutomationV3WorkerStartRequestSchema, AutomationV3WorkerStartResponseSchema, AutomationV3WorkerSucceedRequestSchema, AutomationV3ClearRunHistoryResponseSchema, AutomationDeleteResponseSchema, AutomationDefinitionCreateRequestSchema, AutomationDefinitionReconcileRequestSchema, AutomationDefinitionPatchRequestSchema, AutomationDefinitionListRequestSchema, AutomationDefinitionListResponseSchema, AutomationTriggerCreateRequestSchema, AutomationTriggerDeleteRequestSchema, AutomationTriggerPatchRequestSchema, AutomationV3RunMutationResponseSchema, AutomationV3RunReplyHandoffRedeliverRequestSchema, AutomationV3RunListResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { AutomationExecutionRunLifecycleReportRequestSchema, AutomationExecutionRunLifecycleSourcesResponseSchema } from '@happier-dev/protocol/automations/automationRunLifecycle';
+import { AutomationManualIdempotencyKeyV1Schema } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 import { type Fastify } from "../../types";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";

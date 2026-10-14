@@ -1,4 +1,4 @@
-import { SessionTurnTranscriptAnchorsV1Schema } from "@happier-dev/protocol";
+import { SessionTurnTranscriptAnchorsV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 
 /**
  * Which message seqs a turn-projection page should return.

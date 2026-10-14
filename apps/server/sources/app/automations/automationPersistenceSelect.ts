@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
-import { AUTOMATION_V3_RUN_DETAIL_MAX_EVENTS } from "@happier-dev/protocol";
+import { AUTOMATION_V3_RUN_DETAIL_MAX_EVENTS } from '@happier-dev/protocol/automations/automationApiV3';
 
 /** The predecessor started transaction committed before any Session effect.
  * Reclaimed pre-start claims remain safe; attempt count is not effect evidence.

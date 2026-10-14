@@ -1,17 +1,7 @@
-import {
-    TeamCredentialRequestPolicyModelSupportV1Schema,
-    TeamCredentialProviderModelCatalogEntryV1Schema,
-    type ProviderBrokerApplicationBindingV1,
-    type TeamCredentialRequestPolicyModelSupportV1,
-    type TeamCredentialProviderModelCatalogEntryV1,
-    type TeamCredentialSourceBindingV1,
-} from "@happier-dev/protocol";
-import {
-    DaemonProviderModelProjectionResponseV1Schema,
-    DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema,
-    type DaemonProviderModelProjectionRowV1,
-    type DaemonProviderTeamCredentialRequestPolicySupportV1,
-} from "@happier-dev/protocol/rpc";
+import { TeamCredentialRequestPolicyModelSupportV1Schema, TeamCredentialProviderModelCatalogEntryV1Schema, type TeamCredentialRequestPolicyModelSupportV1, type TeamCredentialProviderModelCatalogEntryV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { type ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { DaemonProviderModelProjectionResponseV1Schema, DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema, type DaemonProviderModelProjectionRowV1, type DaemonProviderTeamCredentialRequestPolicySupportV1 } from '@happier-dev/protocol/rpc/providers';
 import {
     selectMachinePoolCandidate,
     type MachinePoolSelectableMemberV1,

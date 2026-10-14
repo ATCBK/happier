@@ -1,18 +1,11 @@
 import * as privacyKit from "privacy-kit";
 import { z } from "zod";
-import {
-    ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentPrepareMutationResponseV1Schema,
-    ReviewCommentCommitMutationRequestV1Schema, ReviewCommentCommitMutationResponseV1Schema,
-    ReviewCommentOperationErrorCodeV1Schema, ReviewCommentPrincipalHeaderV1Schema,
-    deriveReviewCommentStructuralMutationV1, applyReviewCommentPreparedSensitiveMutationV1,
-    buildReviewCommentEventRequestBindingV1, sealReviewCommentSensitiveEnvelopeV1,
-    openReviewCommentSensitiveMigrationSourceV1, stringifyReviewCommentPrincipalCanonicalJsonV1,
-    reviewCommentMutationInputWithoutEventEnvelopeV1,
-    StoredJsonContentEnvelopeSchema, isAccountScopedBlobCiphertextForKind,
-    type ReviewCommentPrepareMutationRequestV1, type ReviewCommentPrepareMutationResponseV1,
-    type ReviewCommentCommitMutationRequestV1, type ReviewCommentStructuralMutationV1,
-    type ReviewCommentStoredSourceV1, type ReviewCommentV1,
-} from "@happier-dev/protocol";
+import { ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentPrepareMutationResponseV1Schema, ReviewCommentCommitMutationRequestV1Schema, ReviewCommentCommitMutationResponseV1Schema, deriveReviewCommentStructuralMutationV1, applyReviewCommentPreparedSensitiveMutationV1, type ReviewCommentPrepareMutationRequestV1, type ReviewCommentPrepareMutationResponseV1, type ReviewCommentCommitMutationRequestV1, type ReviewCommentStructuralMutationV1, type ReviewCommentStoredSourceV1 } from '@happier-dev/protocol/reviews/comments/mutation';
+import { ReviewCommentOperationErrorCodeV1Schema, ReviewCommentPrincipalHeaderV1Schema, stringifyReviewCommentPrincipalCanonicalJsonV1 } from '@happier-dev/protocol/reviews/comments/actions';
+import { buildReviewCommentEventRequestBindingV1, sealReviewCommentSensitiveEnvelopeV1, openReviewCommentSensitiveMigrationSourceV1, reviewCommentMutationInputWithoutEventEnvelopeV1 } from '@happier-dev/protocol/reviews/comments/content';
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { isAccountScopedBlobCiphertextForKind } from '@happier-dev/protocol/crypto/accountScopedCipherEnvelope';
+import { type ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
 import { encryptString, decryptString } from "@/modules/encrypt";
 import type { ReviewCommentStore } from "./store";
 import { ReviewCommentOperationError } from "./errors";
