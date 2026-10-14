@@ -172,6 +172,31 @@ function createRuntimeActionSpecFor<
       ...(executorReal ? {
         cli: { commands: [{ path: ['projects', 'service', 'relocate'], visibility: 'canonical' as const }] },
         bindings: { mcpToolName: 'projects_service_relocate', voiceClientToolName: 'projects_service_relocate' },
+        examples: { voice: { argsExample: JSON.stringify({
+          workspace: { serverId: 'home', refId: 'checkout' },
+          serviceName: 'web',
+          requestId: 'move-web-1',
+          currentTarget: {
+            kind: 'managed_service',
+            managedServiceId: 'web-current',
+            machineId: 'source-machine',
+            workspaceId: 'checkout',
+            cwd: '/workspace',
+            declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'web' } },
+          },
+          destination: { kind: 'workers', destination: { kind: 'machine', machineId: 'worker-1' } },
+          desiredPlacement: {
+            workspace: { serverId: 'home', refId: 'checkout' },
+            serviceName: 'web',
+            expectedRevision: 'absent',
+            expected: { kind: 'absent' },
+            value: {
+              runsOn: { kind: 'workers', destination: { kind: 'machine', machineId: 'worker-1' } },
+              unavailable: 'fail',
+            },
+          },
+          selectedTarget: { machineId: 'worker-1' },
+        }) } },
       } : {}),
     } : {}),
     ...(actionId !== 'computer.secret.fill' && Object.hasOwn(COMPUTER_RUNTIME_ACTION_INPUT_SCHEMAS, actionId)
