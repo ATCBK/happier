@@ -318,15 +318,17 @@ function CapacityCell(
       : null;
   // Only a state that changes what the viewer can do speaks under the segment (excluded, stale, used
   // up); the ordinary reset is the headline's job (lab ucap/wgusage-CD: one figure, one plan label).
-  const detail =
-    cell.excluded ??
-    (cell.account.stale && cell.account.observedAtMs !== null
+  const staleDetail =
+    cell.excluded === null && cell.account.stale && cell.account.observedAtMs !== null
       ? t('usage.board.plans.cellStale', {
           time: formatPlanMoment(cell.account.observedAtMs, nowMs),
         })
-      : usedUp && countdown
-        ? `${t('usage.board.plans.cellUsedUp')} · ${countdown}`
-        : null);
+      : null;
+  // Red belongs to "used up" alone: a stale read of a used-up plan stays the quiet "last read" note.
+  const usedUpDetail = cell.excluded === null && staleDetail === null && usedUp && countdown
+    ? `${t('usage.board.plans.cellUsedUp')} · ${countdown}`
+    : null;
+  const detail = cell.excluded ?? staleDetail ?? usedUpDetail;
   const value =
     remaining === null
       ? '—'
@@ -391,7 +393,7 @@ function CapacityCell(
           styles.cellDetail,
           text.detail,
           { minHeight: text.detail.lineHeight },
-          usedUp ? styles.danger : null,
+          usedUpDetail !== null ? styles.danger : null,
         ]}
         // A narrow segment wraps its note ("last read 07:31") rather than cutting the time off.
         numberOfLines={2}
