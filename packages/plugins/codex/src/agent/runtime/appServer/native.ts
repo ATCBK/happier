@@ -1096,19 +1096,15 @@ export async function openCodexNativeAppServerSession(
           },
         }
       : {}),
-    ...(appServerTransport === 'daemonProxy' && runtimeDescriptor
-      ? {
-          runtimeDescriptorV1: buildCodexAgentRuntimeDescriptorV1({
-            backendMode: 'appServer',
-            providerSessionId,
-            home: runtimeDescriptor.home,
-            homePath: runtimeDescriptor.homePath,
-            connectedServiceId: runtimeDescriptor.connectedServiceId,
-            connectedServiceProfileId: runtimeDescriptor.connectedServiceProfileId,
-            connectedServiceGroupId: runtimeDescriptor.connectedServiceGroupId,
-          }),
-        }
-      : {}),
+    runtimeDescriptorV1: buildCodexAgentRuntimeDescriptorV1({
+      backendMode: 'appServer',
+      providerSessionId: providerSessionId ?? runtime.identity.read().providerSessionId,
+      home: runtimeDescriptor?.home,
+      homePath: runtimeDescriptor?.homePath,
+      connectedServiceId: runtimeDescriptor?.connectedServiceId,
+      connectedServiceProfileId: runtimeDescriptor?.connectedServiceProfileId,
+      connectedServiceGroupId: runtimeDescriptor?.connectedServiceGroupId,
+    }),
     runtimeCapabilities: {
       ...sessionRuntime.runtimeCapabilities,
       localControl: sharedAppServer

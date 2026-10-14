@@ -18,6 +18,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   runtime: ReturnType<typeof createCodexAppServerRuntime>;
   requests: Array<{ method: string; params: Record<string, unknown> }>;
   exec: ExecService;
+  directory: string;
   endpoints: readonly string[];
   nativeLaunches: readonly (readonly string[])[];
   resume(): Promise<unknown>;
@@ -190,7 +191,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     },
   } as unknown as ExecService;
   try {
-    await run({ runtime, requests, exec: nativeExec, endpoints, nativeLaunches, failRead: () => { rejectRead = true; }, failResume: (message) => { resumeFailure = message; }, async openConfiguredSession(providerSessionId) {
+    await run({ runtime, requests, exec: nativeExec, directory: root, endpoints, nativeLaunches, failRead: () => { rejectRead = true; }, failResume: (message) => { resumeFailure = message; }, async openConfiguredSession(providerSessionId) {
       // Exec and host SDK services are genuine external boundaries; native/runtime/client logic stays real.
       const context = {
         signal: new AbortController().signal,
