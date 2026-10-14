@@ -15,6 +15,7 @@ import {
 const ASK = TRIAGE_DEFAULT_ACTIONS_V1[0]!;
 const FIX = TRIAGE_DEFAULT_ACTIONS_V1[1]!;
 const REVIEW = TRIAGE_DEFAULT_ACTIONS_V1[2]!;
+const EXPLAIN = TRIAGE_DEFAULT_ACTIONS_V1[3]!;
 
 function storedFrom(actions: readonly TriageActionV1[]): unknown {
     return {
@@ -68,7 +69,7 @@ describe('the Triage action record', () => {
         // The seed is what a reader sees, not what the record holds: an absent
         // value must not need a write before the headline controls exist.
         expect(read.value.actions.map((action) => action.label))
-            .toEqual(['Ask', 'Fix', 'Review']);
+            .toEqual(['Ask', 'Fix', 'Review', 'Explain this PR in chat']);
     });
 
     it('keeps an explicitly emptied catalog empty rather than restoring the seed', () => {
@@ -277,9 +278,10 @@ describe('the Triage action record', () => {
             'Ask',
             'Fix',
             'Review',
+            'Explain this PR in chat',
             'Explain',
         ]);
-        expect(created.value.actions[3]).toEqual({
+        expect(created.value.actions.at(-1)).toEqual({
             actionId: 'minted-1',
             label: 'Explain',
             enabled: true,
@@ -336,7 +338,7 @@ describe('the Triage action record', () => {
         const reordered = await mutateTriageAction(deps, {
             kind: 'reorder',
             expectedRevision: testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
-            actionIds: [REVIEW.actionId, FIX.actionId, ASK.actionId],
+            actionIds: [REVIEW.actionId, FIX.actionId, ASK.actionId, EXPLAIN.actionId],
         });
         expect(reordered.status).toBe('applied');
         if (reordered.status !== 'applied') return;
@@ -344,6 +346,7 @@ describe('the Triage action record', () => {
             REVIEW.actionId,
             FIX.actionId,
             ASK.actionId,
+            EXPLAIN.actionId,
         ]);
 
         const deleted = await mutateTriageAction(deps, { kind: 'delete', actionId: FIX.actionId, expectedRevision: testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1) });
@@ -352,6 +355,7 @@ describe('the Triage action record', () => {
         expect(deleted.value.actions.map((action) => action.actionId)).toEqual([
             REVIEW.actionId,
             ASK.actionId,
+            EXPLAIN.actionId,
         ]);
     });
 
@@ -589,7 +593,7 @@ describe('the caller-observed revision', () => {
         // Nothing was written, and the other device's action is still there.
         const now = parseTriageActions(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1));
         expect(now.value.actions.map((action) => action.label))
-            .toEqual(['Ask', 'Fix', 'Review', 'Triage']);
+            .toEqual(['Ask', 'Fix', 'Review', 'Explain this PR in chat', 'Triage']);
     });
 
     it('returns the revision an applied write landed on, so a second edit can name it', async () => {

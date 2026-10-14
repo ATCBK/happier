@@ -13,6 +13,11 @@ import { TriageStartEntrySessionInputV1Schema } from '../actions/entrySessionPro
 import { createTestkitActionInvoker, spawnSuccess, testkitConfiguredInstance, TESTKIT_OBSERVED_REVISION } from './testkit/entrySessionTestkit.test-support.js';
 import { deriveSessionLinkTag } from '../corpus/identity/tags.js';
 import { runTriageConfiguredActionV1, type TriageConfiguredActionRunHostV1 } from './configuredActionRun.js';
+import { readTriageActionsForSurface } from '../actions/actionsCatalog.js';
+import { createTestkitAccountKv } from '../settings/testkit/accountKv.test-support.js';
+import { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1 } from '../settings/actions.js';
+import { parseTriageComposerEntryAttachmentValue } from '../composer/attachmentValue.js';
+import { PLUGIN_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol';
 
 const action = {
     actionId: 'custom-fix', label: 'Repair', enabled: true, appliesTo: ['issue'],
@@ -33,6 +38,46 @@ const settlement = {
 };
 
 describe('configured action execution through the shared Session owner', () => {
+    it('explains a pull request through ordinary chat with its canonical context attachment and opens the Session', async () => {
+        const kv = createTestkitAccountKv();
+        const { collections } = createTestkitCorpusCollections();
+        const invoker = createTestkitActionInvoker({ spawn: [spawnSuccess()] });
+        const host = {
+            version: () => ({ methods: [] }),
+            executeAction: async (id: string, input: JsonValue) => {
+                if (id === 'actions/read-v1') return TriageReadActionsResultV1Schema.parse(await readTriageActionsForSurface(
+                    { v: 1 }, { catalog: kv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1) },
+                ));
+                if (id === 'projects.list') return { items: [], truncated: false };
+                if (id === 'sessions/start-entry-v1') return startTriageEntrySession(
+                    TriageStartEntrySessionInputV1Schema.parse(input), { collections, execute: invoker.execute, nowMs: () => 1 },
+                );
+                throw new Error(`unexpected Action ${id}`);
+            },
+        } as unknown as TriageConfiguredActionRunHostV1; // Host RPC and persistent Account storage boundaries.
+        const pullRequest = { ...entry, key: 'pull-request-17',
+            entryRef: testkitEntryRef({ kindId: 'pull-request', entryId: '17' }),
+            presentation: { label: testkitSnapshot().title }, workflowSubject: 'pullRequest' as const };
+        const request = { actionId: 'explain-pr', destination: 'single' as const,
+            entries: [pullRequest], settlements: [settlement] };
+        const result = TriageRunConfiguredActionResultV1Schema.parse(await runTriageConfiguredActionV1(host, request));
+        expect(result).toMatchObject({ status: 'single', result: { type: 'opened', sessionId: 'session-a', delivery: 'accepted' } });
+        const sent = PLUGIN_ACTION_INPUT_SCHEMAS['session.message.send'].parse(invoker.callsFor('session.message.send')[0]?.input);
+        expect(sent).toMatchObject({ sessionId: 'session-a', message: expect.stringMatching(/explain/i) });
+        expect('recipient' in sent && sent.recipient != null).toBe(false);
+        expect('attachments' in sent && sent.attachments).toHaveLength(1);
+        const attachment = 'attachments' in sent ? sent.attachments?.[0] : undefined;
+        const authored = attachment?.value;
+        expect(authored).toMatchObject({ presentation: { label: testkitSnapshot().title } });
+        const value = authored !== null && typeof authored === 'object' && 'value' in authored ? authored.value : undefined;
+        expect(parseTriageComposerEntryAttachmentValue(value)).toMatchObject({
+            status: 'valid', value: { entryRef: pullRequest.entryRef, sourceInstance: pullRequest.sourceInstance },
+        });
+        expect(invoker.callsFor('session.open')[0]?.input).toEqual({ sessionId: 'session-a' });
+        expect(kv.setCallCount()).toBe(0);
+        const inapplicable = await runTriageConfiguredActionV1(host, { ...request, entries: [entry] });
+        expect(inapplicable).toMatchObject({ status: 'unavailable', reason: 'actionInapplicable' });
+    });
     it.each(['single', 'oneSessionPerEntry'] as const)('retains unknown dispatch custody for $0 without repeating successful bulk units', async (destination) => {
         const { collections } = createTestkitCorpusCollections();
         const invoker = createTestkitActionInvoker({ spawn: [

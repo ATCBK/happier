@@ -60,7 +60,7 @@ describe('the configured-action Actions', () => {
         // both: absent is showing the seed and the first write stores it.
         expect(result.availability).toBe('absent');
         expect(result.actions.map((action) => action.label))
-            .toEqual(['Ask', 'Fix', 'Review']);
+            .toEqual(['Ask', 'Fix', 'Review', 'Explain this PR in chat']);
         // The runnable Review arm is explicit on the wire, so nothing
         // downstream infers it from a label.
         expect(result.actions[2]?.target)
@@ -72,7 +72,7 @@ describe('the configured-action Actions', () => {
             });
     });
 
-    it('creates against the seed, so a first action does not delete the shipped three', async () => {
+    it('creates against the seed, so a first action does not delete the shipped actions', async () => {
         const testkit = createTestkitAccountKv();
 
         const input = TriageAdministerActionInputV1Schema.parse({
@@ -98,7 +98,7 @@ describe('the configured-action Actions', () => {
 
         expect(applied.status).toBe('applied');
         expect(applied.actions?.map((action) => action.label))
-            .toEqual(['Ask', 'Fix', 'Review', 'Explain']);
+            .toEqual(['Ask', 'Fix', 'Review', 'Explain this PR in chat', 'Explain']);
 
         // The seed became stored bytes on that first write, which is also the
         // moment the person first expressed an opinion about it.
@@ -132,12 +132,12 @@ describe('the configured-action Actions', () => {
                 v: 1,
                 kind: 'reorder',
                 expectedRevision: testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
-                actionIds: ['review', 'ask', 'fix'],
+                actionIds: ['review', 'ask', 'fix', 'explain-pr'],
             }),
             deps,
         ));
         expect(reordered.actions?.map((action) => action.actionId))
-            .toEqual(['review', 'ask', 'fix']);
+            .toEqual(['review', 'ask', 'fix', 'explain-pr']);
 
         // A shorter list would delete an action under the guise of reordering.
         const dropped = TriageAdministerActionResultV1Schema.parse(await administerTriageAction(
