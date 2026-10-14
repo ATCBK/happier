@@ -35,13 +35,14 @@ export const SessionHeaderComputerButton = React.memo((props: Readonly<{
     const open = useOpenSessionComputerScreen({ sessionId: props.sessionId, serverId: props.serverId });
     const viewer = useOptionalSessionViewerController();
     const hasMachine = useSessionViewerMachineId(props.sessionId, serverId) !== null;
-    const apply = viewer?.apply;
+    const port = viewer?.port;
+    // The Action front door reaches the Session's Machine; one that cannot be reached still has a viewer to say so.
     const openHere = React.useCallback(() => {
-        apply?.({ kind: 'viewer.open', source: 'computer' });
-    }, [apply]);
+        port?.apply({ kind: 'viewer.open', source: 'computer' });
+    }, [port]);
     const testId = useOptionalSessionScreenTestId('session-header-computer-button');
 
-    if (deviceType === 'phone' || !apply || !hasMachine) return null;
+    if (deviceType === 'phone' || !port || !hasMachine) return null;
 
     const label = t('computerUse.viewer.sourceComputer');
     return (
