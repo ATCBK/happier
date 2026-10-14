@@ -20,6 +20,22 @@ const skills = { v: 1 as const, forceIncludeSkillIds: [], forceExcludeSkillIds: 
 const next = { mcp: { ...mcp, forceIncludeServerIds: ['linear'] }, skills: { ...skills, forceIncludeSkillIds: ['lint'] } };
 
 describe('session capability metadata codec', () => {
+    it('keeps a rule-only apply refusal visible with unchanged overrides until positive application', () => {
+        const pending = { skillSelectionV1: skills, capabilitySelectionApplyV1: {
+            skills: { reason: 'restart_to_apply', restartBy: 'user' as const, source: 'rules' as const },
+        } };
+        expect(readPendingCapabilityApplyV1(pending)).toEqual({ mcp: false, skills: true });
+        const owner = createSessionOwnerMetadataV1({ metadata: pending });
+        if (!owner.ok) throw new Error('Rule apply status rejected by the real metadata consumer');
+        expect(SessionOwnerMetadataV1Schema.parse(owner.ownerMetadata)).toEqual(owner.ownerMetadata);
+        expect(resolveSelectionRestartMarkersForStartupV1({ current: pending, applied: 'preserved_process' })).toEqual(pending);
+        const acknowledged = resolveSelectionRestartMarkersForStartupV1({ current: pending, applied: { skills } });
+        expect(readPendingCapabilityApplyV1(acknowledged)).toEqual({ mcp: false, skills: false });
+        expect(acknowledged).not.toHaveProperty('capabilitySelectionApplyV1');
+        const edited = writeSessionCapabilitySelectionToMetadataV1(pending, { skills }, { sessionActive: true });
+        // An unchanged override is not acknowledgement that the rules reached the Agent.
+        expect(readPendingCapabilityApplyV1(edited)).toEqual({ mcp: false, skills: true });
+    });
     it('clears only the edited or acknowledged kind of apply refusal without changing desired policy', () => {
         const pending = { ...writeSessionCapabilitySelectionToMetadataV1({ path: '/project' }, next, { sessionActive: true }),
             capabilitySelectionApplyV1: { mcp: { reason: 'restart_to_apply', restartBy: 'terminal' as const },

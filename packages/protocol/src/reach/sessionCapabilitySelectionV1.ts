@@ -80,6 +80,7 @@ export function areSessionCapabilitySelectionsEquivalentV1(
 }
 export type CapabilitySelectionReasonV1 = 'rule_on' | 'rule_off' | 'no_rule' | 'session_added' | 'session_removed' | 'managed_off' | 'not_portable' | 'agent_unsupported';
 
+/** Rules choose defaults. Selectability describes actual item/Agent admission, never rule applicability. */
 export function applySessionSelectionV1(input: Readonly<{ reach: ReachDecisionV1; selectable: boolean;
   forceIncluded: boolean; forceExcluded: boolean; managedEnabled: boolean }>): Readonly<{ selected: boolean; reason: CapabilitySelectionReasonV1 }> {
   if (input.forceExcluded) return { selected: false, reason: 'session_removed' };

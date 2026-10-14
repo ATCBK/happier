@@ -1,9 +1,5 @@
 import { randomUUID } from 'node:crypto';
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { ElicitRequestSchema, ResourceUpdatedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import type {
     GetPromptResult,
     ListPromptsResult,
@@ -36,10 +32,6 @@ import {
     createInteractionTransientRequesterForInvocation,
     createPluginInteractionsService,
 } from './interactions';
-import {
-    mcpElicitationFormContent,
-    mcpElicitationFormQuestions,
-} from './mcpElicitationForm';
 import type { DeclaredTransportConnector } from './mcp';
 import type { ManagedExecutableRef } from '@happier-dev/plugin-sdk/managed-services';
 
@@ -243,6 +235,26 @@ export function createStableDeclaredMcpTransportConnector(params?: Readonly<{
         if (declaration.definition.kind !== 'static') {
             throw new PluginError({ code: 'plugin_mcp_transport_unavailable', message: 'Declared MCP transport is unavailable' });
         }
+        const assertCurrent = () => {
+            seed.signal.throwIfAborted();
+            signal?.throwIfAborted();
+            if (!seed.isOccurrenceCurrent()) {
+                throw new PluginError({ code: 'plugin_mcp_generation_retired', message: 'Plugin occurrenceId is no longer current' });
+            }
+        };
+        assertCurrent();
+        const [
+            { Client }, { StdioClientTransport }, { StreamableHTTPClientTransport },
+            { ElicitRequestSchema, ResourceUpdatedNotificationSchema },
+            { mcpElicitationFormContent, mcpElicitationFormQuestions },
+        ] = await Promise.all([
+            import('@modelcontextprotocol/sdk/client/index.js'),
+            import('@modelcontextprotocol/sdk/client/stdio.js'),
+            import('@modelcontextprotocol/sdk/client/streamableHttp.js'),
+            import('@modelcontextprotocol/sdk/types.js'),
+            import('./mcpElicitationForm'),
+        ]);
+        assertCurrent();
         const transportDefinition = declaration.definition.transport;
         let releaseExecutable: (() => void) | null = null;
         const release = () => {
@@ -359,6 +371,7 @@ export function createStableDeclaredMcpTransportConnector(params?: Readonly<{
             });
         }
         try {
+            assertCurrent();
             await client.connect(transport, lifetimeSignal ? { signal: lifetimeSignal } : undefined);
         } catch (error) {
             await client.close().catch(() => {});

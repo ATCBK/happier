@@ -148,7 +148,7 @@ describe('resolveSessionCapabilitiesV1 predecessor MCP session selection', () =>
     });
   });
 
-  it('marks out-of-scope machine-specific servers as unavailable for manual include', () => {
+  it('admits an explicit include independently of a different Machine default', () => {
     const settings = McpServersSettingsV1Schema.parse({
       v: 1,
       strictMode: false,
@@ -186,12 +186,14 @@ describe('resolveSessionCapabilitiesV1 predecessor MCP session selection', () =>
       },
     });
 
-    expect(resolved.selectedServersByName.github).toBeUndefined();
+    expect(resolved.selectedServersByName.github).toMatchObject({
+      serverId: 'server-local', bindingId: null, enabled: true,
+    });
     expect(resolved.itemsByName.github).toMatchObject({
-      selected: false,
-      selectable: false,
-      availability: 'unavailable',
-      reasonCode: 'not_portable',
+      selected: true,
+      selectable: true,
+      availability: 'active',
+      reasonCode: 'forced_included',
       portability: 'machine_scoped',
     });
   });

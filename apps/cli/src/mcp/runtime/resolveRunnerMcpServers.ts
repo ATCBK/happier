@@ -45,7 +45,7 @@ import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifet
   type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import type { HappyMcpSessionClient } from '../startHappyServer';
-import { SessionAttestedContextV1Schema } from '@happier-dev/protocol';
+import { SessionAttestedContextV1Schema } from '@happier-dev/protocol/sessions/creation/sessionAttestedContextV1';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { randomUUID } from 'node:crypto';
@@ -203,6 +203,7 @@ type RunnerMcpServersParams = Readonly<{
 type RunnerMcpServersResult<Bridge extends { stop: () => void }> = Readonly<{
   happierMcpServer: Bridge;
   mcpServers: Record<string, McpServerConfig>;
+  mcpServersStrictMode?: boolean;
   mcpServerIdentities?: Readonly<Record<string, McpServerIdentity>>;
   mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
   resolvedServers?: readonly ResolvedSessionMcpServer[];
@@ -524,6 +525,7 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
       },
     },
     mcpServers: merged,
+    mcpServersStrictMode: mcpSettings.strictMode,
     mcpServerIdentities,
     resolvedServers: projectResolvedMcpServers({ mcpServers: merged, identities: mcpServerIdentities,
       scope: { sessionId: params.session.sessionId, directory: params.directory } }),

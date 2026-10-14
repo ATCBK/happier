@@ -25,6 +25,8 @@ import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRu
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { writeCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { refreshActiveMcpServerCatalog } from '@/settings/mcp/hydrateMcpServerCatalog';
 import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { readRpcErrorCode, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 import { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1,
@@ -39,7 +41,9 @@ describe('Session capabilities composed Account and Machine seam', () => {
       db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, metadata TEXT NOT NULL, revision INTEGER NOT NULL, ownerMetadata TEXT NOT NULL, agentState TEXT, agentRevision INTEGER NOT NULL)');
       const sessionId = 'c111111111111111111111111';
       const machineId = 'capabilities-machine';
-      const metadata = createTestMetadata({ path: home, host: 'fixture', machineId, flavor: 'codex' });
+      const metadata = writeCapabilitySelectionApplyV1(createTestMetadata({ path: home, host: 'fixture', machineId, flavor: 'codex' }), {
+        skills: { source: 'rules', reason: 'restart_to_apply', restartBy: 'user' },
+      });
       const owner = createSessionOwnerMetadataV1({ metadata });
       if (!owner.ok) throw new Error(`Invalid canonical metadata fixture: ${owner.unsupportedFields.join(',')}`);
       db.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)').run(sessionId,
@@ -57,6 +61,7 @@ describe('Session capabilities composed Account and Machine seam', () => {
           id: 'everywhere-off', serverId: 'mcp-linear', target: { t: 'allMachines' }, enabled: false, createdAt: 1, updatedAt: 1,
         }] });
       const catalog = { v: 1, servers: settings.servers, bindings: settings.bindings };
+      let catalogRevision = 1;
       const failures: unknown[] = [];
       const rpcResponses: unknown[] = [];
       let machineOnline = true;
@@ -72,7 +77,7 @@ describe('Session capabilities composed Account and Machine seam', () => {
           signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 };
         else if (path === '/v1/account/encryption') result = { mode: 'plain', updatedAt: 0 };
         else if (path === '/v2/account/settings') result = { version: 1, content: { t: 'plain', v: {} } };
-        else if (path === '/v1/account/entity-rows/mcp') result = { status: 'present', revision: 1, content: { t: 'plain', v: catalog } };
+        else if (path === '/v1/account/entity-rows/mcp') result = { status: 'present', revision: catalogRevision, content: { t: 'plain', v: catalog } };
         else if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) result = { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
           key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) };
         else if (path === '/v1/artifacts') result = [];
@@ -134,6 +139,21 @@ describe('Session capabilities composed Account and Machine seam', () => {
           mcp: { items: [{ id: 'mcp-linear', selected: false, reason: 'rule_off' }] } } });
         if (!preview.ok) throw new Error(preview.error);
         SpawnCapabilitiesPreviewSuccessV1Schema.parse(preview.result);
+        const selection = { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['mcp-linear'], forceExcludeServerIds: [] } };
+        const defaultBindings = catalog.bindings;
+        for (const bindings of [[], [{ ...defaultBindings[0]!, target: { t: 'machine' as const, machineId: 'elsewhere' } }],
+          [{ ...defaultBindings[0]!, agentId: 'gemini' }]]) {
+          catalog.bindings = bindings; catalogRevision++;
+          await runWithServerHttpBaseUrl(base, () => refreshActiveMcpServerCatalog({ credentials }));
+          const included = await executor.execute('sessions.spawn.capabilities.preview', { machineId, agentId: 'codex', capabilitySelection: selection }, context);
+          expect(included).toMatchObject({ ok: true, result: { ok: true, mcp: { items: [{
+            id: 'mcp-linear', selected: true, selectable: true, reason: 'session_added', sessionOverride: 'added',
+          }] } } });
+          if (!included.ok) throw new Error('Registered preview failed');
+          SpawnCapabilitiesPreviewSuccessV1Schema.parse(included.result);
+        }
+        catalog.bindings = defaultBindings; catalogRevision++;
+        await runWithServerHttpBaseUrl(base, () => refreshActiveMcpServerCatalog({ credentials }));
         const transport = await resolveSessionTransportContext({ credentials, idOrPrefix: sessionId });
         expect(transport).toMatchObject({ ok: true });
         if (!transport.ok) throw new Error(`Canonical fixture read failed: ${transport.code}`);
@@ -144,6 +164,9 @@ describe('Session capabilities composed Account and Machine seam', () => {
         expect(stopped, JSON.stringify({ stopped, rpcResponses, failures: failures.map(error => error instanceof Error ? error.message : error) }))
           .toMatchObject({ ok: true, result: { ok: true, applyTiming: { mcp: { t: 'session_not_running' } } } });
         if (stopped.ok) SessionCapabilitiesGetOutputV1Schema.parse(stopped.result);
+        expect(stopped).toMatchObject({ ok: true, result: { ok: true,
+          pendingApply: { mcp: false, skills: true, reason: 'restart_to_apply', restartBy: 'user' } } });
+        expect(stopped).not.toHaveProperty('result.pendingApply.source');
         machineOnline = false;
         const changed = await executor.execute('session.capabilities.set', { sessionId, kind: 'mcp_server', id: 'linear', state: 'on' }, context);
         expect(changed, JSON.stringify({ changed, failures: failures.map(error => error instanceof Error ? error.message : error) }))

@@ -65,7 +65,7 @@ describe('resolveSessionMcpPreview detection warnings', () => {
     const preview = await resolveSessionMcpPreview({ settings, machineId: 'machine-1', directory: null,
       agentId: 'codex', detectedServers: [] });
     expect(preview).toMatchObject({ machinePlatform: process.platform === 'win32' ? 'win32' : 'posix',
-      mcp: { strictMode: false, items: [{ id: 'off', selected: false, reason: 'not_portable' }], detected: [] },
+      mcp: { strictMode: false, items: [{ id: 'off', selected: false, selectable: true, reason: 'no_rule' }], detected: [] },
       skills: { items: [], plan: { items: [] } }, applyTiming: {
         mcp: { t: 'session_not_running' }, skills: { t: 'session_not_running' },
       } });

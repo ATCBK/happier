@@ -1,163 +1,71 @@
-import { describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { accountSettingsParse, deriveSettingsSecretsKeyV1, encryptSecretStringV1 } from '@happier-dev/protocol';
+import { accountSettingsParse, deriveSettingsSecretsKeyV1, encryptSecretStringV1, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonMcpServersTestResponseSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 
+import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { resolveAccountSettingsCachePath } from '@/settings/accountSettings/accountSettingsCache';
+import type { StoredCredentials } from '@/persistence';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerMachineMcpServersRpcHandlers } from './rpcHandlers.mcpServers';
-import type { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 
-type BootstrapAccountSettingsContextParams = Parameters<typeof bootstrapAccountSettingsContext>[0];
-
-function deterministicRandomBytes(length: number): Uint8Array {
-  const out = new Uint8Array(length);
-  for (let index = 0; index < length; index += 1) {
-    out[index] = (index + 1) & 0xff;
-  }
-  return out;
-}
+const randomBytes = (length: number) => new Uint8Array(length).fill(11);
+// A real MCP process advertises a tool only if fresh secret material reached it.
+const fixture = String.raw`
+require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.id === undefined) return;
+  const result = request.method === 'initialize' ? {
+    protocolVersion: request.params.protocolVersion, capabilities: { tools: {} },
+    serverInfo: { name: 'saved-secret-fixture', version: '1.0.0' }
+  } : { tools: process.env.API_KEY === 'newly-saved-private-value'
+    ? [{ name: 'fresh_secret_received', inputSchema: { type: 'object' } }] : [] };
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+});
+`;
 
 describe('rpcHandlers.mcpServers (saved secret refresh)', () => {
-  it('forces a fresh settings fetch so draft tests can resolve newly saved secrets', async () => {
-    const handlers = new Map<string, (raw: unknown) => Promise<unknown>>();
-    const rpcHandlerManager = {
-      registerHandler: (method: string, handler: (raw: unknown) => Promise<unknown>) => {
-        handlers.set(method, handler);
-      },
-    } as any;
+  beforeEach(() => resetInMemoryAccountSettingsContextForTests());
+  afterEach(() => resetInMemoryAccountSettingsContextForTests());
 
-    const credentials = {
-      token: 'tok_test',
-      encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) },
-    };
-    const settingsSecretsKey = deriveSettingsSecretsKeyV1(credentials.encryption.secret);
-    const encryptedSecret = encryptSecretStringV1('Bearer test-secret', settingsSecretsKey, deterministicRandomBytes);
-    const staleSettings = accountSettingsParse({});
-    const freshSettings = accountSettingsParse({
-      secrets: [{
-        id: 'sec_remote_auth',
-        name: 'remote auth',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true as const, encryptedValue: encryptedSecret },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-    });
-
-    registerMachineMcpServersRpcHandlers({
-      rpcHandlerManager,
-      deps: {
-        readCredentials: async () => credentials as any,
-        bootstrapAccountSettingsContext: async (args: BootstrapAccountSettingsContextParams) => ({
-          source: args.refresh === 'force' ? 'remote' : 'cache',
-          settings: args.refresh === 'force' ? freshSettings : staleSettings,
-          settingsVersion: args.refresh === 'force' ? 2 : 1,
-          loadedAtMs: 0,
-          whenRefreshed: null,
-        }),
-        probeMcpStdioServerTools: async () => ({ tools: [{ name: 'remote_echo', inputSchema: { type: 'object' } }] }),
-      },
-    } as any);
-
-    const handler = handlers.get(RPC_METHODS.DAEMON_MCP_SERVERS_TEST);
-    expect(handler).toBeTruthy();
-
-    const out = (await handler!({
-      t: 'draft',
-      machineId: 'm1',
-      directory: '/',
-      server: {
-        id: 'srv_remote',
-        name: 'remote_fixture',
-        transport: 'http',
-        remote: {
-          url: 'https://mcp.example.com',
-          headers: {
-            Authorization: { t: 'savedSecret', secretId: 'sec_remote_auth' },
-          },
-        },
-        env: {},
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-      binding: null,
-    })) as any;
-
-    expect(out.ok).toBe(true);
-    expect(out.toolNamesSample).toContain('remote_echo');
-  });
-
-  it('resolves a plaintext saved secret with token-only credentials', async () => {
-    const handlers = new Map<string, (raw: unknown) => Promise<unknown>>();
-    const rpcHandlerManager = {
-      registerHandler: (method: string, handler: (raw: unknown) => Promise<unknown>) => {
-        handlers.set(method, handler);
-      },
-    } as any;
-    const tokenOnlyCredentials = {
-      token: 'token-only',
-      encryption: null,
-    };
-    const settings = accountSettingsParse({
-      secrets: [{
-        id: 'sec_remote_auth',
-        name: 'remote auth',
-        kind: 'apiKey',
-        encryptedValue: {
-          _isSecretValue: true as const,
-          value: 'Bearer token-only-secret',
-        },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-    });
-    const probeMcpStdioServerTools = vi.fn(async ({ config }: {
-      config: { env?: Record<string, string> };
-    }) => {
-      expect(config.env).toMatchObject({
-        HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: expect.any(String),
-      });
-      return { tools: [{ name: 'remote_echo', inputSchema: { type: 'object' } }] };
-    });
-
-    registerMachineMcpServersRpcHandlers({
-      rpcHandlerManager,
-      deps: {
-        readCredentials: async () => tokenOnlyCredentials as any,
-        bootstrapAccountSettingsContext: async () => ({
-          source: 'remote',
-          settings,
-          settingsVersion: 1,
-          loadedAtMs: 0,
-          whenRefreshed: null,
-        }),
-        probeMcpStdioServerTools,
-      },
-    } as any);
-
-    const handler = handlers.get(RPC_METHODS.DAEMON_MCP_SERVERS_TEST);
-    expect(handler).toBeTruthy();
-    const out = await handler!({
-      t: 'draft',
-      machineId: 'm1',
-      directory: '/',
-      server: {
-        id: 'srv_remote',
-        name: 'remote_fixture',
-        transport: 'http',
-        remote: {
-          url: 'https://mcp.example.com',
-          headers: {
-            Authorization: { t: 'savedSecret', secretId: 'sec_remote_auth' },
-          },
-        },
-        env: {},
-        createdAt: 1,
-        updatedAt: 1,
-      },
-      binding: null,
-    });
-
-    expect(out).toMatchObject({ ok: true });
-    expect(probeMcpStdioServerTools).toHaveBeenCalledOnce();
+  it.each(['plain', 'e2ee'] as const)('refreshes a draft from stale Account settings and consumes its %s saved secret', async mode => {
+    const secret = new Uint8Array(32).fill(7);
+    const credentials: StoredCredentials = { token: `saved-secret-${mode}`, encryption:
+      mode === 'plain' ? null : { type: 'legacy', secret } };
+    const sealSettings = (settings: ReturnType<typeof accountSettingsParse>) => mode === 'plain'
+      ? { t: 'plain' as const, v: settings }
+      : { t: 'encrypted' as const, c: sealAccountScopedBlobCiphertext({ kind: 'account_settings',
+        material: { type: 'legacy', secret }, payload: settings, randomBytes }) };
+    let settings = accountSettingsParse({});
+    let version = 1;
+    // Only Account HTTP/cache I/O is substituted; bootstrap publication,
+    // invocation admission, decryption, materialization and probing stay real.
+    const bootstrap: typeof bootstrapAccountSettingsContext = input => bootstrapAccountSettingsContext({ ...input,
+      honorAccountSettingsModeEnv: false, deps: { resolveCachePath: resolveAccountSettingsCachePath,
+        readCache: async () => null, writeCache: async () => undefined,
+        fetchFromServer: async () => ({ settingsVersion: version, settingsContent: sealSettings(settings) }),
+      } });
+    await bootstrap({ credentials, mode: 'blocking', refresh: 'force' });
+    settings = accountSettingsParse({ secrets: [{ id: 'new-secret', name: 'New token', kind: 'apiKey',
+      encryptedValue: mode === 'plain'
+        ? { _isSecretValue: true, value: 'newly-saved-private-value' }
+        : { _isSecretValue: true, encryptedValue: encryptSecretStringV1('newly-saved-private-value',
+          deriveSettingsSecretsKeyV1(secret), randomBytes) }, createdAt: 1, updatedAt: 1 }] });
+    version = 2;
+    const rpcHandlerManager = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain' });
+    registerMachineMcpServersRpcHandlers({ rpcHandlerManager,
+      deps: { readCredentials: async () => credentials, bootstrapAccountSettingsContext: bootstrap } });
+    const result = DaemonMcpServersTestResponseSchema.parse(await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_MCP_SERVERS_TEST, {
+      t: 'draft', machineId: 'machine', directory: tmpdir(), server: {
+        id: 'draft', name: 'saved_secret_fixture', transport: 'stdio',
+        stdio: { command: process.execPath, args: ['-e', fixture] },
+        env: { API_KEY: { t: 'savedSecret', secretId: 'new-secret' } }, createdAt: 1, updatedAt: 1,
+      }, binding: null,
+    }));
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, toolCount: 1,
+      toolNamesSample: ['fresh_secret_received'] });
+    expect(JSON.stringify(result)).not.toContain('newly-saved-private-value');
   });
 });

@@ -7,6 +7,7 @@ import { DaemonMcpServersTestResponseSchema } from '@happier-dev/protocol/mcp/se
 import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { resolveAccountSettingsCachePath } from '@/settings/accountSettings/accountSettingsCache';
+import * as executableBoundary from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 
 import { registerMachineMcpServersRpcHandlers } from './rpcHandlers.mcpServers';
 
@@ -100,18 +101,29 @@ describe('Machine MCP Test pipeline', () => {
   it('reports a missing executable by its configured command', async () => {
     const { test, writes } = register(false, { PATH: '' });
     expect(await test({ t: 'draft', machineId: 'machine', directory: tmpdir(), server: {
-      ...server, stdio: { command: 'uvx', args: [] },
-    } })).toMatchObject({ ok: false, errorCode: 'mcp_connect_failed', runtimeMissing: 'uvx' });
+      ...server, stdio: { command: 'happier-fixture-missing-command', args: [] },
+    } })).toMatchObject({ ok: false, errorCode: 'mcp_connect_failed', runtimeMissing: 'happier-fixture-missing-command' });
     expect(writes).toEqual([]);
   });
 
   it('preserves a missing child executable through the private env/cwd launcher', async () => {
-    const { test, writes } = register(false, { ...process.env, PATH: '' });
-    expect(await test({ t: 'draft', machineId: 'machine', directory: tmpdir(), server: {
-      ...server, stdio: { command: 'uvx', args: [], cwd: { t: 'path', path: tmpdir() } },
-      env: { PRIVATE_KEY: { t: 'literal', v: 'synthetic-fixture-private-value' } },
-    } })).toMatchObject({ ok: false, errorCode: 'mcp_connect_failed', runtimeMissing: 'uvx' });
-    expect(writes).toEqual([]);
+    // Executable selection is the process boundary: this current-source test
+    // must not accidentally execute a worker's older packaged launcher.
+    const resolveExecutable = executableBoundary.resolveNodeBackedMcpServerCommand;
+    const executable = vi.spyOn(executableBoundary, 'resolveNodeBackedMcpServerCommand')
+      .mockImplementation(async input => {
+        const invocation = await resolveExecutable({ ...input, preferSourceEntrypoint: true });
+        return { ...invocation, args: ['--conditions=happier-source', ...invocation.args] };
+      });
+    try {
+      const { test, writes } = register(false, { ...process.env, PATH: '' });
+      const result = await test({ t: 'draft', machineId: 'machine', directory: tmpdir(), server: {
+        ...server, stdio: { command: 'happier-fixture-missing-command', args: [], cwd: { t: 'path', path: tmpdir() } },
+        env: { PRIVATE_KEY: { t: 'literal', v: 'synthetic-fixture-private-value' } },
+      } });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode: 'mcp_connect_failed', runtimeMissing: 'happier-fixture-missing-command' });
+      expect(writes).toEqual([]);
+    } finally { executable.mockRestore(); }
   });
 
   it('redacts bare configured secret bytes before returning child stderr and leaves drafts unpersisted', async () => {

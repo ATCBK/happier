@@ -23,9 +23,12 @@ export type SessionSkillSelectionRestartRequiredV1 = z.infer<typeof SessionSkill
 const CapabilitySelectionApplyReasonV1Schema = lazyZodSchema(() => z.object({
   reason: z.string().min(1), restartBy: z.enum(['user', 'terminal']).optional(),
 }).strict());
+const SkillCapabilitySelectionApplyReasonV1Schema = lazyZodSchema(() => CapabilitySelectionApplyReasonV1Schema.extend({
+  source: z.literal('rules').optional(),
+}).strict());
 /** Status projection only. Desired policy and applied baselines stay in their existing keys. */
 export const CapabilitySelectionApplyAuthoringV1Schema = lazyZodSchema(() => z.object({
-  mcp: CapabilitySelectionApplyReasonV1Schema.optional(), skills: CapabilitySelectionApplyReasonV1Schema.optional(),
+  mcp: CapabilitySelectionApplyReasonV1Schema.optional(), skills: SkillCapabilitySelectionApplyReasonV1Schema.optional(),
 }).strict());
 export const CapabilitySelectionApplyV1Schema = createStoredReadSchema(CapabilitySelectionApplyAuthoringV1Schema);
 export type CapabilitySelectionApplyV1 = z.infer<typeof CapabilitySelectionApplyV1Schema>;
@@ -68,15 +71,30 @@ export function readPendingCapabilityApplyV1(metadata: unknown): Readonly<{ mcp:
   const applied = readAppliedSessionCapabilitySelectionFromMetadataV1(metadata);
   return {
     mcp: !areSessionCapabilitySelectionsEquivalentV1({ mcp: desired.mcp }, { mcp: applied.mcp }),
-    skills: !areSessionCapabilitySelectionsEquivalentV1({ skills: desired.skills }, { skills: applied.skills }),
+    skills: !areSessionCapabilitySelectionsEquivalentV1({ skills: desired.skills }, { skills: applied.skills })
+      || readPendingSkillRuleApplyV1(metadata),
   };
 }
 
-export function readCapabilitySelectionApplyV1(metadata: unknown): CapabilitySelectionApplyV1 {
+/** Retained rule refusals are not positive evidence of the runtime's applied rules. */
+export function readPendingSkillRuleApplyV1(metadata: unknown): boolean {
+  const status = CapabilitySelectionApplyV1Schema.safeParse(metadataRecord(metadata).capabilitySelectionApplyV1);
+  return status.success && status.data.skills?.source === 'rules';
+}
+
+function readCapabilitySelectionApplyStateV1(metadata: unknown): CapabilitySelectionApplyV1 {
   const parsed = CapabilitySelectionApplyV1Schema.safeParse(metadataRecord(metadata).capabilitySelectionApplyV1);
   const pending = readPendingCapabilityApplyV1(metadata);
   return parsed.success ? { ...(pending.mcp && parsed.data.mcp ? { mcp: parsed.data.mcp } : {}),
     ...(pending.skills && parsed.data.skills ? { skills: parsed.data.skills } : {}) } : {};
+}
+
+/** Public refusal projection; the rule trigger remains owned by the metadata codec. */
+export function readCapabilitySelectionApplyV1(metadata: unknown): CapabilitySelectionApplyV1 {
+  const status = readCapabilitySelectionApplyStateV1(metadata);
+  return { ...(status.mcp ? { mcp: status.mcp } : {}), ...(status.skills ? { skills: {
+    reason: status.skills.reason, ...(status.skills.restartBy ? { restartBy: status.skills.restartBy } : {}),
+  } } : {}) };
 }
 
 export function writeCapabilitySelectionApplyV1<TMetadata extends object>(metadata: TMetadata,
@@ -88,9 +106,15 @@ export function writeCapabilitySelectionApplyV1<TMetadata extends object>(metada
   return result;
 }
 
+/** A refusal publication updates its own kinds, never acknowledging another pending kind. */
+export function patchCapabilitySelectionApplyV1<TMetadata extends object>(metadata: TMetadata,
+  next: CapabilitySelectionApplyV1): TMetadata & SessionCapabilityMetadataV1 {
+  return writeCapabilitySelectionApplyV1(metadata, { ...readCapabilitySelectionApplyStateV1(metadata), ...next });
+}
+
 export function clearCapabilitySelectionApplyV1<TMetadata extends object>(metadata: TMetadata,
   kind: 'mcp' | 'skills'): TMetadata & SessionCapabilityMetadataV1 {
-  const status = readCapabilitySelectionApplyV1(metadata);
+  const status = readCapabilitySelectionApplyStateV1(metadata);
   delete status[kind];
   return writeCapabilitySelectionApplyV1(metadata, status);
 }
@@ -103,6 +127,7 @@ export function writeSessionCapabilitySelectionToMetadataV1<TMetadata extends ob
 ): TMetadata & SessionCapabilityMetadataV1 {
   const selection = SessionCapabilitySelectionAuthoringV1Schema.parse(next);
   const applied = readAppliedSessionCapabilitySelectionFromMetadataV1(metadata);
+  const previousApply = readCapabilitySelectionApplyStateV1(metadata);
   const result: TMetadata & { -readonly [K in keyof SessionCapabilityMetadataV1]: SessionCapabilityMetadataV1[K] } = { ...metadata };
   if (selection.mcp !== undefined) {
     result.mcpSelectionV1 = selection.mcp;
@@ -117,8 +142,9 @@ export function writeSessionCapabilitySelectionToMetadataV1<TMetadata extends ob
     } else delete result.skillSelectionRestartRequiredV1;
   }
   return writeCapabilitySelectionApplyV1(result, {
-    ...(selection.mcp === undefined ? { mcp: readCapabilitySelectionApplyV1(result).mcp } : {}),
-    ...(selection.skills === undefined ? { skills: readCapabilitySelectionApplyV1(result).skills } : {}),
+    ...(selection.mcp === undefined ? { mcp: readCapabilitySelectionApplyStateV1(result).mcp } : {}),
+    ...(selection.skills === undefined ? { skills: readCapabilitySelectionApplyStateV1(result).skills }
+      : opts.sessionActive && previousApply.skills?.source === 'rules' ? { skills: previousApply.skills } : {}),
   });
 }
 
@@ -140,5 +166,7 @@ export function resolveSelectionRestartMarkersForStartupV1<TMetadata extends obj
       delete result.skillSelectionRestartRequiredV1;
     } else result.skillSelectionRestartRequiredV1 = { v: 1, appliedSelection: applied.skills };
   }
-  return writeCapabilitySelectionApplyV1(result, readCapabilitySelectionApplyV1(result));
+  const status = readCapabilitySelectionApplyStateV1(result);
+  if (applied.skills !== undefined && status.skills?.source === 'rules') delete status.skills;
+  return writeCapabilitySelectionApplyV1(result, status);
 }

@@ -1,7 +1,4 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { McpError, type Tool } from '@modelcontextprotocol/sdk/types.js';
-import { getDisplayName } from '@modelcontextprotocol/sdk/shared/metadataUtils.js';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpToolAnnotationsV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 
 import type { McpServerConfig } from '@/agent';
@@ -24,13 +21,12 @@ export class McpServerProbeError extends Error {
   readonly stderrTail: string | undefined;
   readonly spawnFailure: StdioMcpServerStartupFailure | undefined;
 
-  constructor(cause: unknown, phase: 'connect' | 'list_tools', stderrTail: string | undefined) {
+  constructor(cause: unknown, phase: 'connect' | 'list_tools', stderrTail: string | undefined, spawnFailure?: StdioMcpServerStartupFailure) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = 'McpServerProbeError';
     this.phase = phase;
     this.stderrTail = stderrTail;
-    const failure = cause instanceof McpError ? StdioMcpServerStartupFailureSchema.safeParse(cause.data) : null;
-    this.spawnFailure = failure?.success ? failure.data : undefined;
+    this.spawnFailure = spawnFailure;
   }
 }
 
@@ -52,6 +48,13 @@ export async function probeMcpStdioServerTools(params: Readonly<{
   sanitizeDiagnosticText?: (value: string) => string;
   createDiagnosticStreamingSanitizer?: () => ProviderStreamingSanitizer;
 }>): Promise<McpServerProbeResult> {
+  params.signal?.throwIfAborted();
+  const [{ Client }, { StdioClientTransport }, { McpError }, { getDisplayName }] = await Promise.all([
+    import('@modelcontextprotocol/sdk/client/index.js'),
+    import('@modelcontextprotocol/sdk/client/stdio.js'),
+    import('@modelcontextprotocol/sdk/types.js'),
+    import('@modelcontextprotocol/sdk/shared/metadataUtils.js'),
+  ]);
   params.signal?.throwIfAborted();
   const baseEnv = params.baseEnv ?? process.env;
   const env = params.config.env ? { ...resolveEnvRecord(baseEnv), ...params.config.env } : resolveEnvRecord(baseEnv);
@@ -126,7 +129,8 @@ export async function probeMcpStdioServerTools(params: Readonly<{
   } catch (error) {
     await close();
     finishStderr();
-    throw new McpServerProbeError(error, phase, stderrTail());
+    const failure = error instanceof McpError ? StdioMcpServerStartupFailureSchema.safeParse(error.data) : null;
+    throw new McpServerProbeError(error, phase, stderrTail(), failure?.success ? failure.data : undefined);
   } finally {
     params.signal?.removeEventListener('abort', onAbort);
     await close();
