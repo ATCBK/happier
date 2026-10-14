@@ -29,6 +29,8 @@ import { resolveSessionForkVisualReferenceTargetV1, type SessionForkVisualContex
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
+import { useTranscriptRowLayoutMutation } from '@/components/sessions/transcript/measurement/TranscriptRowLayoutMutationContext';
 
 import {
     resolveTranscriptSessionBoardItemReference,
@@ -101,11 +103,26 @@ function MountedSessionBoardReference(props: Readonly<{
     const companionReveal = useSessionCompanionRevealPort(address);
     const binding = useSessionSurfaceItem({ ...address, itemId, enabled: props.contentDemand });
     // Before this reply was ever measured its footprint is the smallest declared size.
-    const [retainedHeight, setRetainedHeight] = React.useState<number>(SESSION_BOARD_SEMANTIC_HEIGHTS.compact);
+    const repository = getSyncSingleton().readSessionSystemRecordObservation(address)?.repository;
+    const measurements = repository?.readSurfaceItemMeasurements(address, itemId);
+    const savedHeight = measurements?.reply;
+    const [intrinsicHeight, setIntrinsicHeight] = React.useState<number | undefined>(measurements?.['intrinsic:inlineTranscript']);
+    const [retainedHeight, setRetainedHeight] = React.useState<number>(savedHeight ?? SESSION_BOARD_SEMANTIC_HEIGHTS.compact);
+    const [reservedHeight, setReservedHeight] = React.useState<number | undefined>(savedHeight);
+    const reportLayoutMutation = useTranscriptRowLayoutMutation();
+    const onIntrinsicHeightChange = React.useCallback((height: number) => {
+        repository?.reportSurfaceItemMeasurement(address, itemId, 'intrinsic:inlineTranscript', height);
+        setIntrinsicHeight(height);
+        setReservedHeight(undefined);
+        reportLayoutMutation({ reason: 'content-change', sourceId: `visual:${itemId}` });
+    }, [address, itemId, reportLayoutMutation, repository]);
     const onLayout = React.useCallback((event: Readonly<{ nativeEvent: { layout: { height: number } } }>) => {
         const height = event.nativeEvent.layout.height;
-        if (height > 0) setRetainedHeight(previous => previous === height ? previous : height);
-    }, []);
+        if (Number.isFinite(height) && height > 0) {
+            setRetainedHeight(previous => previous === height ? previous : height);
+            repository?.reportSurfaceItemMeasurement(address, itemId, 'reply', height);
+        }
+    }, [address, itemId, repository]);
 
     const pluginRuntime = mounted?.pluginRuntime;
     const callerHostedHtmlRuntime = mounted?.callerHostedHtmlRuntime ?? null;
@@ -191,6 +208,8 @@ function MountedSessionBoardReference(props: Readonly<{
         frame: 'reply',
         canEdit: false,
         executableCurrentness: currentness,
+        onIntrinsicHeightChange,
+        reportedHeight: intrinsicHeight,
         resolveSourceAvailability,
         ...(openInPanel ? { headerAccessory: openInPanel } : {}),
         ...(pinToBoard ? { onPinToBoard: pinToBoard } : {}),
@@ -200,7 +219,7 @@ function MountedSessionBoardReference(props: Readonly<{
     };
 
     return (
-        <View style={styles.root} onLayout={onLayout} testID={`transcript-board-item-${itemId}`}>
+        <View style={[styles.root, { minHeight: reservedHeight }]} onLayout={onLayout} testID={`transcript-board-item-${itemId}`}>
             {companionReveal ? (
                 <MountedInlineBoardWidget
                     address={address}

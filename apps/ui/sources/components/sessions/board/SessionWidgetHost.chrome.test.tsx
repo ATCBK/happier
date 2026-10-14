@@ -187,6 +187,26 @@ describe('SessionWidgetHost chrome', () => {
         expect(title?.props.accessibilityLabel).toBe('Loading this widget');
     });
 
+    it('fits an auto-height native card to what it draws, not to its fallback size', async () => {
+        const screen = await renderCard();
+        const bodyHeight = () => {
+            const style = screen.findHostByTestId('widget-body')?.props.style as unknown;
+            const flat = (Array.isArray(style) ? style : [style]).reduce<Record<string, unknown>>(
+                (merged, entry) => ({ ...merged, ...(entry && typeof entry === 'object' ? entry : {}) }), {});
+            return flat.height;
+        };
+        const measured = screen.tree.root.findAll(
+            (node) => typeof node.type === 'string' && typeof (node.props as { onLayout?: unknown }).onLayout === 'function'
+                && node.findAll((child) => child.props.testID === 'widget-declarative').length > 0
+                && node.props.testID !== 'widget-body',
+        ).at(-1);
+        expect(measured).toBeDefined();
+        await act(async () => {
+            (measured!.props as { onLayout: (event: unknown) => void }).onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 140 } } });
+        });
+        expect(bodyHeight()).toBe(140);
+    });
+
     it('names the reorder handle after the item it reorders', async () => {
         const screen = await renderCard({
             entityDrag: entityDrag(),

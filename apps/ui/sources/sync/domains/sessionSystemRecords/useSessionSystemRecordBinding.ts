@@ -15,10 +15,16 @@ export function useSessionSystemRecordBinding<Binding extends { status: 'ready' 
     enabled: boolean;
     loading: Binding;
     observe: (options: SessionSystemRecordObservationOptions<Binding, Reason>) => () => void;
+    read?: (options: Pick<SessionSystemRecordObservationBase, 'session' | 'repository' | 'isCurrent' | 'readCapabilities' | 'readContentContext'>) => Binding | Unavailable<Reason> | null;
 }>): (Binding | Unavailable<Reason>) & Readonly<{ refresh: () => void }> {
     const address = React.useMemo(() => normalizeSessionAddress(input.serverId, input.sessionId), [input.serverId, input.sessionId]);
     const resolution = useServerCredentialAccountScopeResolution(address?.serverId);
     const lifetime = React.useMemo(() => ({ address, resolution, observe: input.observe }), [address, resolution, input.observe]);
+    const sync = getSyncSingleton();
+    const retained = address && input.read ? sync.readSessionSystemRecordObservation(address) : null;
+    const retainedAllowed = retained && (resolution.kind === 'resolving'
+        || (resolution.kind === 'bound' && resolution.scope.accountId === retained.repository.scope.accountId));
+    const retainedBinding = retainedAllowed ? input.read?.(retained) : null;
     const [retry, setRetry] = React.useState(0);
     const [observed, setObserved] = React.useState<Readonly<{
         lifetime: typeof lifetime;
@@ -27,20 +33,20 @@ export function useSessionSystemRecordBinding<Binding extends { status: 'ready' 
         refreshRecords?: () => void;
     }> | null>(null);
     React.useEffect(() => {
-        if (!input.enabled || !address || resolution.kind !== 'bound') return;
+        if (!input.enabled || !address || (resolution.kind !== 'bound' && !retainedAllowed)) return;
         let stopped = false;
         let unsubscribe: (() => void) | undefined;
-        const sync = getSyncSingleton();
         const publish = (binding: Binding | Unavailable<Reason>, isCurrent = () => !stopped, refreshRecords?: () => void) => {
             if (!stopped) setObserved({ lifetime, binding, isCurrent, refreshRecords });
         };
-        void sync.withSessionSystemRecordRuntime(address, async runtime => {
+        const start = (runtime: Pick<SessionSystemRecordObservationBase, 'repository' | 'readCapabilities' | 'readContentContext' | 'isCurrent'>
+            & Readonly<{ scope: SessionSystemRecordObservationBase['repository']['scope'] }>) => {
             if (stopped) return;
-            if (runtime.scope.accountId !== resolution.scope.accountId || !runtime.isCurrent()) {
+            if ((resolution.kind === 'bound' && runtime.scope.accountId !== resolution.scope.accountId) || !runtime.isCurrent()) {
                 publish({ status: 'unavailable', reason: 'forbidden' });
                 return;
             }
-            const readCapabilities = () => runtime.readSession()?.access?.capabilities ?? null;
+            const readCapabilities = runtime.readCapabilities;
             const capabilities = readCapabilities();
             if (!capabilities?.readTranscript) { publish({ status: 'unavailable', reason: 'forbidden' }); return; }
             unsubscribe = input.observe({
@@ -59,10 +65,17 @@ export function useSessionSystemRecordBinding<Binding extends { status: 'ready' 
                 },
                 onChange: binding => publish(binding, runtime.isCurrent, () => runtime.repository.invalidate(address)),
             });
-        }).then(result => {
+        };
+        if (retainedAllowed && retained) start(retained);
+        else void sync.withSessionSystemRecordRuntime(address, async runtime => start({
+            scope: runtime.scope, repository: runtime.repository, readCapabilities: () => runtime.readSession()?.access?.capabilities ?? null,
+            readContentContext: runtime.readContentContext, isCurrent: runtime.isCurrent,
+        })).then(result => {
             if (result.status !== 'ok') publish({ status: 'unavailable', reason: result.status });
         }).catch(() => publish({ status: 'unavailable', reason: 'offline' }));
         return () => { stopped = true; unsubscribe?.(); };
+    // The retained wrapper is selected by address/lifetime, not by its object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [address, input.enabled, input.observe, lifetime, resolution, retry]);
     const observedRef = React.useRef(observed);
     observedRef.current = observed;
@@ -74,9 +87,9 @@ export function useSessionSystemRecordBinding<Binding extends { status: 'ready' 
     const binding: Binding | Unavailable<Reason> = !address
         ? { status: 'unavailable', reason: 'invalid_address' }
         : resolution.kind !== 'bound'
-            ? resolution.kind === 'resolving' ? input.loading : { status: 'unavailable', reason: resolution.kind }
+            ? resolution.kind === 'resolving' ? retainedBinding ?? input.loading : { status: 'unavailable', reason: resolution.kind }
             : observed?.lifetime !== lifetime
-                ? input.loading
+                ? retainedBinding ?? input.loading
                 : !observed.isCurrent() ? { status: 'unavailable', reason: 'forbidden' } : observed.binding;
     const ready = binding.status === 'ready' ? binding : null;
     const reason = binding.status === 'unavailable' ? binding.reason : 'forbidden';

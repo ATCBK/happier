@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, Pressable, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { formatHappierAsOfTime, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
@@ -126,6 +126,7 @@ export type SessionWidgetHostProps = Readonly<{
     deferBody?: boolean;
     /** Bounded renderer height report for an `auto` item, when the host measured one. */
     reportedHeight?: number | null;
+    onIntrinsicHeightChange?: (height: number) => void;
     /**
      * The canonical expanded route for this item. Card geometry no longer bounds
      * the content, so a long or read-only note is fully readable and selectable
@@ -281,9 +282,21 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const testID = props.testID ?? `session-board-item-${props.item.itemId}`;
-    const [hostedFrameReportedHeight, setHostedFrameReportedHeight] = React.useState<number | null>(null);
+    const [hostedFrameReportedHeight, setHostedFrameReportedHeight] = React.useState<number | null>(props.reportedHeight ?? null);
+    const measuredHeightRef = React.useRef<number | null>(null);
+    const onReportIntrinsicHeight = React.useCallback((height: number) => {
+        if (!Number.isFinite(height) || height <= 0 || measuredHeightRef.current === height) return;
+        measuredHeightRef.current = height;
+        setHostedFrameReportedHeight(height);
+        props.onIntrinsicHeightChange?.(height);
+    }, [props.onIntrinsicHeightChange]);
+    const onDeclarativeLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const height = Math.ceil(event.nativeEvent.layout.height);
+        onReportIntrinsicHeight(height);
+    }, [onReportIntrinsicHeight]);
     React.useLayoutEffect(() => {
-        setHostedFrameReportedHeight(null);
+        measuredHeightRef.current = null;
+        setHostedFrameReportedHeight(props.reportedHeight ?? null);
     }, [props.item.itemId, props.item.revision]);
     const headingRef = React.useRef<Readonly<{ focus?: () => void }> | null>(null);
     const handledHeadingFocusRequestRef = React.useRef<number | null>(null);
@@ -639,14 +652,18 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                 comparisonKind={state.item.source.comparison} interactive={presentation.kind === 'content'} testID={`${testID}-walkthrough`} />
         : state.kind === 'ready' && state.item.source.kind === 'declarative'
             ? (
-                <SessionBoardDeclarativeContent
-                    testID={`${testID}-declarative`}
-                    document={state.item.source.document}
-                    snapshot={state.item.snapshot !== undefined}
-                    // A preview is inert: it renders the same native content with no
-                    // dispatch path, so a background placement cannot cause effects.
-                    actionBinding={presentation.kind === 'content' ? props.actionBinding ?? null : null}
-                />
+                // Native content reports what it draws, as a frame or an installed widget does, so an
+                // `auto` card fits it instead of standing at its fallback size.
+                <View onLayout={state.item.height.mode === 'auto' ? onDeclarativeLayout : undefined}>
+                    <SessionBoardDeclarativeContent
+                        testID={`${testID}-declarative`}
+                        document={state.item.source.document}
+                        snapshot={state.item.snapshot !== undefined}
+                        // A preview is inert: it renders the same native content with no
+                        // dispatch path, so a background placement cannot cause effects.
+                        actionBinding={presentation.kind === 'content' ? props.actionBinding ?? null : null}
+                    />
+                </View>
             )
             : (presentation.kind === 'content' || configuredReference)
                 && state.kind === 'ready'
@@ -668,7 +685,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         presentation={embeddedPresentation}
                         appRuntime={appRuntime}
                         {...(configuredReference ? { reference: openReference ?? runningElsewhere } : {})}
-                        onIntrinsicHeightChange={setHostedFrameReportedHeight}
+                        onIntrinsicHeightChange={onReportIntrinsicHeight}
                         {...(props.onManagePlugin ? { onManagePlugin: props.onManagePlugin } : {})}
                         {...(inputs.onRepairInputs ? { onRepairInputs: inputs.onRepairInputs } : {})}
                     /></WidgetSnapshotCaptureContext.Provider> : <UnavailableInstalledWidget unresolved={{ state: 'unavailable', reasonCode: 'widget_viewer_scope_mismatch' }} testID={testID} />
@@ -694,7 +711,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                             {...(state.item.input === undefined ? {} : { input: state.item.input })}
                             target={hostedHtmlTarget}
                             runtime={props.callerHostedHtmlRuntime}
-                            onIntrinsicHeightChange={setHostedFrameReportedHeight}
+                            onIntrinsicHeightChange={onReportIntrinsicHeight}
                             testID={`${testID}-hosted-html`}
                         />
                     )

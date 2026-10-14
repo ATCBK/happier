@@ -739,9 +739,12 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
     const headerHost = props.host === 'sidebar' || props.host === 'mobileCockpit';
     const snapshotPresent = snapshot !== null;
     // An empty Board says only who sees it (lab ST); the count appears once there is something to count.
-    const widgetCount = snapshot && snapshot.layoutState.kind === 'ready' && !snapshot.incomplete && snapshot.itemsById.size > 0
-        ? snapshot.itemsById.size
-        : null;
+    // It counts what is on the Board (placed in a view, or recovered there), never replies that stay in
+    // the conversation.
+    const boardItemCount = snapshot && snapshot.layoutState.kind === 'ready' && !snapshot.incomplete
+        ? new Set([...snapshot.views.flatMap((view) => view.placements.map((placement) => placement.itemId)), ...snapshot.unplacedItemIds]).size
+        : 0;
+    const widgetCount = boardItemCount > 0 ? boardItemCount : null;
     const headerIconColor = theme.colors.text.secondary;
     // The same line serves the pane header (sidebar, phone) and, in the Details tab, which has no pane
     // header, the left of the views row (lab cwidgets WB).

@@ -12,6 +12,7 @@ import { readLegacyWorkflowSystemRecord, type LegacyWorkflowRecordProjection } f
 import type { SessionSystemRecordCompatibilityOpenInput } from './codec';
 import { openSessionSurfaceItemRecord } from './codec';
 import type { SessionStoredContentContext } from '@happier-dev/sync-client';
+import type { SessionSystemRecordObservationBase } from './observation';
 
 export type SessionSystemRecordQuery =
     | Readonly<{ type: 'read'; address: HostSessionSystemRecordAddress }>
@@ -34,6 +35,11 @@ type Entry = {
     listeners: Set<() => void>;
     pending?: Promise<void>;
     invalidatedWhileLoading: boolean;
+    measurements?: Partial<Record<'reply' | `intrinsic:${string}`, number>>;
+};
+type SessionEntries = {
+    queries: Map<string, Entry>;
+    authority?: Pick<SessionSystemRecordObservationBase, 'readCapabilities' | 'readContentContext' | 'isCurrent'>;
 };
 
 function queryKey(query: SessionSystemRecordQuery): string {
@@ -59,14 +65,17 @@ function retainValue(previous: RecordValue | null, next: RecordValue): RecordVal
 /** Runtime projection retained for one captured Server/Account lifetime. */
 export function createSessionSystemRecordRepository(options: SessionSystemRecordTransportOptions) {
     const transport = createSessionSystemRecordTransport(options);
-    const sessions = new Map<string, Map<string, Entry>>();
+    const sessions = new Map<string, SessionEntries>();
     // Opening follows retained record identity, never a separate content store.
     // Weak keys release decoded bytes with their retained record. Unmounting
     // stops observation work, not the data needed for a scroll/panel remount.
-    const surfaceItemOpenings = new WeakMap<SessionSystemRecordStored, Readonly<{
+    const surfaceItemOpenings = new WeakMap<SessionSystemRecordStored, {
         context: SessionStoredContentContext | null;
         result: ReturnType<typeof openSessionSurfaceItemRecord>;
-    }>>();
+        settled?: Awaited<ReturnType<typeof openSessionSurfaceItemRecord>>;
+    }>();
+    const sameContext = (left: SessionStoredContentContext | null, right: SessionStoredContentContext | null) => left === right
+        || (left?.mode === right?.mode && (right?.mode !== 'e2ee' || (left?.mode === 'e2ee' && left.encryption === right.encryption)));
     let retired = false;
     // A surface may address an identity-bearing Home by its device-local profile id
     // while this scope names it by its published identity; both are the same Home.
@@ -75,12 +84,13 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
     const forbidden: SessionSystemRecordRepositoryEntry<never> = { ...empty, lastError: { status: 'forbidden' } };
     function lookup(session: SessionAddress, query: SessionSystemRecordQuery, create: boolean): Entry | null {
         if (retired || !isScopeHome(session)) return null;
-        let queries = sessions.get(session.sessionId);
-        if (!queries) {
+        let retained = sessions.get(session.sessionId);
+        if (!retained) {
             if (!create) return null;
-            queries = new Map();
-            sessions.set(session.sessionId, queries);
+            retained = { queries: new Map() };
+            sessions.set(session.sessionId, retained);
         }
+        const queries = retained.queries;
         const key = queryKey(query);
         let entry = queries.get(key);
         if (!entry && create) {
@@ -107,7 +117,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         // so their opening is shared without another inventory or record cache.
         const retained = new Map<string, SessionSystemRecordStored>();
         const key = (record: SessionSystemRecordStored) => JSON.stringify([record.id, record.revision]);
-        for (const observed of sessions.get(entry.session.sessionId)?.values() ?? []) {
+        for (const observed of sessions.get(entry.session.sessionId)?.queries.values() ?? []) {
             const value = observed.snapshot.data;
             if (!value || 'source' in value) continue;
             for (const record of 'records' in value ? value.records : [value]) retained.set(key(record), record);
@@ -144,12 +154,38 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         scope: options.scope,
         openSurfaceItem(record: SessionSystemRecordStored, context: SessionStoredContentContext | null) {
             const opening = surfaceItemOpenings.get(record);
-            const sameContext = opening && (opening.context === context || (opening.context?.mode === context?.mode
-                && (context?.mode !== 'e2ee' || (opening.context?.mode === 'e2ee' && opening.context.encryption === context.encryption))));
-            if (sameContext) return opening.result;
+            if (opening && sameContext(opening.context, context)) return opening.result;
             const result = openSessionSurfaceItemRecord(record, context);
-            surfaceItemOpenings.set(record, { context, result });
+            const next: NonNullable<ReturnType<typeof surfaceItemOpenings.get>> = { context, result };
+            surfaceItemOpenings.set(record, next);
+            void result.then(value => { if (!retired) next.settled = value; });
             return result;
+        },
+        readOpenedSurfaceItem(record: SessionSystemRecordStored, context: SessionStoredContentContext | null) {
+            if (retired) return undefined;
+            const opening = surfaceItemOpenings.get(record);
+            return opening && sameContext(opening.context, context) ? opening.settled : undefined;
+        },
+        /** Readers survive request release, but never credential/repository retirement. */
+        retainObservationAuthority(session: SessionAddress, authority: NonNullable<SessionEntries['authority']>) {
+            if (retired || !isScopeHome(session)) return;
+            let retained = sessions.get(session.sessionId);
+            if (!retained) { retained = { queries: new Map() }; sessions.set(session.sessionId, retained); }
+            retained.authority = authority;
+        },
+        readObservationAuthority(session: SessionAddress) {
+            const authority = !retired && isScopeHome(session) ? sessions.get(session.sessionId)?.authority : undefined;
+            return authority?.isCurrent() ? authority : null;
+        },
+        readSurfaceItemMeasurements(session: SessionAddress, itemId: string) {
+            return lookup(session, { type: 'read', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: itemId } }, false)?.measurements;
+        },
+        reportSurfaceItemMeasurement(session: SessionAddress, itemId: string, kind: 'reply' | `intrinsic:${string}`, height: number) {
+            if (!Number.isFinite(height) || height <= 0) return;
+            const entry = lookup(session, { type: 'read', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: itemId } }, false);
+            if (!entry?.snapshot.data) return;
+            entry.measurements ??= {};
+            entry.measurements[kind] = height;
         },
         /** Credential/reset owners retire this exact qualified projection. */
         isCurrent(): boolean {
@@ -174,7 +210,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         },
         invalidate(session: SessionAddress) {
             if (retired || !isScopeHome(session)) return;
-            for (const entry of sessions.get(session.sessionId)?.values() ?? []) {
+            for (const entry of sessions.get(session.sessionId)?.queries.values() ?? []) {
                 entry.invalidatedWhileLoading = Boolean(entry.pending);
                 publish(entry, { ...entry.snapshot, freshness: 'stale' });
                 if (entry.listeners.size > 0 && !entry.pending) void refresh(session, entry.query);
@@ -182,7 +218,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         },
         refreshObserved(options?: Readonly<{ force?: boolean }>) {
             if (retired) return;
-            for (const queries of sessions.values()) for (const entry of queries.values()) {
+            for (const retained of sessions.values()) for (const entry of retained.queries.values()) {
                 if (entry.listeners.size === 0) continue;
                 if (options?.force !== true && entry.snapshot.freshness !== 'stale') continue;
                 entry.invalidatedWhileLoading = Boolean(entry.pending);
@@ -192,11 +228,11 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         },
         notifyContentContextChanged(session: SessionAddress) {
             if (retired || !isScopeHome(session)) return;
-            for (const entry of sessions.get(session.sessionId)?.values() ?? []) publish(entry, { ...entry.snapshot });
+            for (const entry of sessions.get(session.sessionId)?.queries.values() ?? []) publish(entry, { ...entry.snapshot });
         },
         retire() {
             retired = true;
-            for (const queries of sessions.values()) for (const entry of queries.values()) {
+            for (const retained of sessions.values()) for (const entry of retained.queries.values()) {
                 publish(entry, forbidden);
                 entry.listeners.clear();
             }

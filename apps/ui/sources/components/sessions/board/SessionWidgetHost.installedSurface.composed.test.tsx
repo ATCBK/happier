@@ -233,7 +233,7 @@ function nativeRenderer(pluginId: string, rendererId: string, occurrenceId: stri
     };
 }
 function executionOrigin(pluginId: string, generation: number, machineId = 'machine-1') {
-    return { serverIdentityId: state.serverIdentityId, materializationRef: { machineId, materializationId: `${pluginId}-${generation}`, pluginId } };
+    return { executionOrigin: { serverIdentityId: state.serverIdentityId, materializationRef: { machineId, materializationId: `${pluginId}-${generation}`, pluginId } } };
 }
 
 function inlineProps(screen: Awaited<ReturnType<typeof renderScreen>>) {
