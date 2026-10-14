@@ -502,12 +502,12 @@ export type LocalServicesActionsActionResultById = {
                         targetMachineId: string;
                     } | undefined;
                 } | {
-                    kind: 'pendingApproval';
-                    code: 'project_setup_consent_required' | 'project_setup_effect_changed';
                     reviewedEffect: string | number | boolean | readonly JsonValue[] | {
                         readonly [key: string]: JsonValue;
                     } | null;
                     reviewedEffectDigest: string;
+                    kind: 'pendingApproval';
+                    code: 'project_setup_consent_required' | 'project_setup_effect_changed';
                     consentScope?: 'thisTime' | 'untilChanged' | undefined;
                 } | {
                     kind: 'pendingApproval';
@@ -692,12 +692,12 @@ export type LocalServicesActionsActionResultById = {
                 code: string;
             } | undefined;
             setupReview?: {
-                kind: 'pendingApproval';
-                code: 'project_setup_consent_required' | 'project_setup_effect_changed';
                 reviewedEffect: string | number | boolean | readonly JsonValue[] | {
                     readonly [key: string]: JsonValue;
                 } | null;
                 reviewedEffectDigest: string;
+                kind: 'pendingApproval';
+                code: 'project_setup_consent_required' | 'project_setup_effect_changed';
                 consentScope?: 'thisTime' | 'untilChanged' | undefined;
             } | undefined;
         };

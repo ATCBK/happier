@@ -645,6 +645,11 @@ export type MachineProcessesActionResultById = {
                     sessionId?: string | undefined;
                 };
                 reasonCode?: string | undefined;
+                prerequisite?: {
+                    tool: 'docker';
+                    machineName: string;
+                    cause: 'unavailable' | 'permission_denied' | 'not_installed' | 'not_running';
+                } | undefined;
                 reviewedEffect?: string | number | boolean | readonly JsonValue[] | {
                     readonly [key: string]: JsonValue;
                 } | null | undefined;

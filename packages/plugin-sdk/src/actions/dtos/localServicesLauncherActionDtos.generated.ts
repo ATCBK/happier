@@ -388,6 +388,11 @@ export type LocalServicesLauncherActionResultById = {
             sessionId?: string | undefined;
         };
         reasonCode?: string | undefined;
+        prerequisite?: {
+            tool: 'docker';
+            machineName: string;
+            cause: 'unavailable' | 'not_installed' | 'not_running' | 'permission_denied';
+        } | undefined;
         reviewedEffect?: string | number | boolean | readonly JsonValue[] | {
             readonly [key: string]: JsonValue;
         } | null | undefined;

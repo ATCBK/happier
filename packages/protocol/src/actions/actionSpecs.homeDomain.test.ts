@@ -446,11 +446,12 @@ describe('Home and Teams Action family', () => {
   });
 
   /**
-   * Sharing the exact-Home HTTP carrier does not change the execution owner:
-   * mutations targeting one Session retain Session placement.
+   * Organization mutations execute with the live Session owner. Deletion is
+   * Account-placed because its durable Home lifecycle must remain executable
+   * after the originating daemon and Session have stopped.
    */
-  it('retains Session placement for exact Session mutations and Account placement for Home resources', () => {
-    const sessionMutations = new Set(['session.delete', 'session.folder.set', 'session.tags.set']);
+  it('keeps organization mutations Session-placed and durable deletion Account-placed', () => {
+    const sessionMutations = new Set(['session.folder.set', 'session.tags.set']);
     for (const actionId of HOME_DOMAIN_ACTION_IDS_V1) {
       expect(getActionSpec(actionId).executionPlacement, actionId)
         .toBe(sessionMutations.has(actionId) ? 'session' : 'account');

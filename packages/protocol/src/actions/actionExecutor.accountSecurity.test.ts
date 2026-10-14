@@ -167,6 +167,47 @@ describe('createActionExecutor (Account Security)', () => {
     expect(approvalsCreate).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { machineId: 'machine-1', target: { kind: 'attempt' as const, attemptId: 'attempt-1' } },
+    { service: { pluginId: 'happier.channel.email', localId: 'email-imap-smtp' }, modeId: 'password' },
+  ])('keeps configuration approval placement on the admitted target without persisting its values: %j', async (target) => {
+    const persisted: ApprovalRequest[] = [];
+    const input = { ...target, expectedRevision: null, values: { mailbox: 'wilson@test.local' },
+      secretValues: { password: 'private-configuration-value' } };
+    let committed: unknown;
+    const executor = createActionExecutor(createDeps({
+      // The daemon/Home configuration writer is the external boundary. Its
+      // producer input still passes the actual Action schema before committing.
+      connectedServiceAction: async ({ input: replacement }) => {
+        const { CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1 } = await import('../connect/configurationActionsV1.js');
+        committed = CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1['connectedServices.configuration.replace'].parse(replacement);
+        return { applied: true, revision: 'configuration-1' };
+      },
+      approvalsCreate: async ({ request }) => {
+        persisted.push(ApprovalRequestV2Schema.parse(request));
+        return { artifactId: 'configuration-approval' };
+      },
+      approvalsGet: async () => persisted.at(-1) ?? null,
+      approvalsUpdate: async ({ request }) => {
+        persisted.push(ApprovalRequestV2Schema.parse(request));
+        return { ok: true as const };
+      },
+      approvalsWaitForDecision: async ({ request }) => ({ decision: 'approve' as const,
+        request: { ...request, status: 'approved' as const, decision: { kind: 'approve' as const, decidedAtMs: 2 } } }),
+      isApprovalExecutionOriginCurrent: async () => true,
+    }));
+    await expect(executor.execute('connectedServices.configuration.replace', input, {
+      surface: 'ui', authority: 'present_user', serverId: 'server-1', runtimeAccountId: 'account-1',
+      actionRequestId: 'request-configuration', actionCaller: { kind: 'host' },
+    })).resolves.toEqual({ ok: true, result: { applied: true, revision: 'configuration-1' } });
+    expect(committed).toEqual(input);
+    const origin = persisted[0]?.v === 2 ? persisted[0].executionOriginV1 : null;
+    expect(origin?.machineId).toBe('machineId' in target ? target.machineId : undefined);
+    expect(persisted[0]?.actionArgs).toEqual({ ...target, expectedRevision: null });
+    expect(JSON.stringify(persisted)).not.toContain('private-configuration-value');
+    expect(JSON.stringify(persisted)).not.toContain('wilson@test.local');
+  });
+
   it('fails a durable credential approval closed instead of replaying it from the Artifact', async () => {
     const accountPasswordChangeAction = vi.fn(async () => ({ v: 1 as const, status: 'updated' as const }));
     let storedRequest: ApprovalRequest = ApprovalRequestV2Schema.parse({

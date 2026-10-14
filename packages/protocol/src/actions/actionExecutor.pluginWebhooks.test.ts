@@ -19,10 +19,45 @@ const ensureInput = {
 } as const;
 
 describe('createActionExecutor (plugin webhook endpoints)', () => {
-  it('keeps delivery replay and discard Ask-first with a user-changeable surface default', async () => {
-    for (const actionId of ['plugin.webhook.delivery.replay', 'plugin.webhook.delivery.discard'] as const) {
-      const input = { deliveryId: 'delivery-1', expectedRevision: 3 };
-      const result = { kind: actionId.endsWith('replay') ? 'requeued' : 'discarded', revision: 4 };
+  it('settles approved movePending through the existing Account approval executor', async () => {
+    const actionId = 'plugin.webhook.delivery.movePending';
+    const input = { webhookEndpointId: 'wh_ep_AAAAAAAAAAAAAAAAAAAAAA', endpointRevision: 3,
+      targetMaterialization: ensureInput.targetMaterialization, pageSize: 500 };
+    const result = { moved: 2, skippedClaimed: 0, nextCursor: null, done: true };
+    let stored: ApprovalRequest | null = null;
+    const effects: unknown[] = [];
+    // HTTP execution and Artifact persistence are genuine boundaries; admission/replay are real.
+    const executor = createActionExecutor({
+      pluginWebhookAction: async args => { effects.push(args); return result; },
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id,
+        context.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), context),
+      isApprovalExecutionOriginCurrent: async () => true,
+      approvalsCreate: async ({ request }) => { stored = request; return { artifactId: 'move-approval' }; },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => { stored = request; return { ok: true as const }; },
+    } satisfies ActionExecutorDeps);
+    const requested = await executor.execute('approval.request.create', {
+      actionId, actionArgs: input, summary: 'Move pending deliveries', createdBy: { surface: 'cli' },
+    }, {
+      surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' },
+      serverId: 'home-1', runtimeAccountId: 'account-1', actionRequestId: 'move-request',
+    });
+    expect(requested, JSON.stringify(requested)).toMatchObject({ ok: true, result: { artifactId: 'move-approval' } });
+    expect(effects).toEqual([]);
+    expect(await executor.execute('approval.request.decide', { artifactId: 'move-approval', decision: 'approve' }, {
+      surface: 'ui', authority: 'present_user', serverId: 'home-1', runtimeAccountId: 'account-1',
+    })).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true, result } } });
+    expect(effects).toEqual([expect.objectContaining({ actionId, input, caller: { kind: 'host' } })]);
+  });
+  it('keeps delivery replay, discard and move Ask-first with a user-changeable surface default', async () => {
+    for (const actionId of ['plugin.webhook.delivery.replay', 'plugin.webhook.delivery.discard', 'plugin.webhook.delivery.movePending'] as const) {
+      const input = actionId === 'plugin.webhook.delivery.movePending'
+        ? { webhookEndpointId: 'wh_ep_AAAAAAAAAAAAAAAAAAAAAA', endpointRevision: 3,
+            targetMaterialization: ensureInput.targetMaterialization, pageSize: 500 }
+        : { deliveryId: 'delivery-1', expectedRevision: 3 };
+      const result = actionId === 'plugin.webhook.delivery.movePending'
+        ? { moved: 2, skippedClaimed: 0, nextCursor: null, done: true }
+        : { kind: actionId.endsWith('replay') ? 'requeued' : 'discarded', revision: 4 };
       const effects: unknown[] = [];
       const executor = createActionExecutor({
         pluginWebhookAction: async args => { effects.push(args); return result; },

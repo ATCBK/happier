@@ -8,6 +8,17 @@ import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1,
   readBuiltInSettingsOperationPolicyV1 } from './settingsDeclarations.js';
 
 describe('portable built-in Settings declarations', () => {
+  it('owns MCP startup failure policy on Sessions and preserves its Account storage key', () => {
+    const declaration = readBuiltInSettingDeclarationV1('session.mcpServersStrictMode');
+    expect(declaration).toMatchObject({ pageId: 'session', sectionId: 'session.mcpServersReliability',
+      storage: { scope: 'account', key: 'mcpServersStrictMode', access: 'read_write' } });
+    if (!declaration) throw new Error('MCP failure policy declaration unavailable');
+    const settings = accountSettingsParse({ mcpServersStrictMode: false, transcriptShowToolCalls: false });
+    expect(readBuiltInAccountSettingValueV1(declaration, settings)).toBe(false);
+    expect(buildBuiltInAccountSettingMutationV1(declaration, settings, true)).toEqual({ mcpServersStrictMode: true });
+    expect(buildBuiltInAccountSettingMutationV1(declaration, settings, 'stop')).toBeNull();
+    expect(BUILT_IN_SETTINGS_DECLARATIONS_V1.some(row => row.anchor.startsWith('mcp.preview.'))).toBe(false);
+  });
   it('reads and strictly mutates agent HTML network through the Account declaration without touching siblings', () => {
     const declaration = readBuiltInSettingDeclarationV1('transcript.agentHtmlNetworkPolicy');
     expect(declaration).not.toBeNull();

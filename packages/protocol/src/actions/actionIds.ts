@@ -465,12 +465,10 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'prompts.library.list',
     'prompt_doc.update',
     'prompt_bundle.update',
-    'prompt_asset.export',
     'prompt_registry.install',
   ],
   bug_report_submission: BUG_REPORT_SUBMISSION_ACTION_IDS,
   daemon_admin: [
-    'daemon.promptAssets.delete',
     'daemon.filesystem.listRoots',
     'daemon.filesystem.browseDirectory',
     'bugreport.collectDiagnostics',

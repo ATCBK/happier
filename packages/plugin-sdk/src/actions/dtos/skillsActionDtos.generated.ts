@@ -379,6 +379,11 @@ export type SkillsActionResultById = {
             lastUsedAt?: number | undefined;
         }[];
         revision: string;
+        unavailableItems?: {
+            skillId: string;
+            title: string | null;
+            reason: 'skill_content_unavailable' | 'not_found' | 'invalid_skill_lock';
+        }[] | undefined;
         usageObservedSince?: number | null | undefined;
     };
     readonly "skills.read": {

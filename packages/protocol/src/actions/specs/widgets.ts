@@ -138,6 +138,13 @@ function widgetApprovalName(raw: unknown): string | null {
   return definition.success ? readBuiltinWidgetDescriptorV1(definition.data)?.title ?? null : null;
 }
 
+/** A widget the input names reads by that name; one it cannot name is described, never quoted as "widget". */
+function widgetApprovalPhrase(raw: unknown): string {
+  const name = widgetApprovalName(raw);
+  if (name) return quote(name);
+  return WidgetDefinitionRefV1Schema.safeParse(readRecord(raw).definition).data?.kind === 'artifact' ? 'a saved widget' : 'the widget';
+}
+
 function widgetGroupApprovalContents(raw: unknown): string {
   const group = readRecord(raw);
   const children = Array.isArray(group.children) ? group.children : [];
@@ -154,22 +161,22 @@ function describeWidgetActionApprovalSummary(actionId: WidgetInstanceActionIdV1,
   const group = readRecord(value.group);
   const capture = readRecord(value.capture);
   const captureSurface = readWidgetActionSurfaceV1({ surface: capture.surface });
-  const itemName = sentenceCaseIdentifier(instance.displayName, 'selected widget');
-  const groupName = sentenceCaseIdentifier(value.title ?? group.title, 'selected group');
+  const item = widgetApprovalPhrase(instance);
+  const groupName = sentenceCaseIdentifier(value.title ?? group.title, 'group');
   const size = typeof value.size === 'string' ? value.size : null;
   const width = typeof value.width === 'string' ? `${value.width} width` : null;
 
   switch (actionId) {
-    case 'widgets.item.add': return `Add ${quote(itemName)}${size ? ` (${size})` : ''} to ${target}.`;
-    case 'widgets.item.remove': return `Remove ${quote(itemName)} from ${target}.`;
-    case 'widgets.item.move': return `Move ${quote(itemName)} to ${widgetSurfaceApprovalLabel(readWidgetActionDestinationV1(input) ?? surface)}.`;
-    case 'widgets.item.rename': return `Rename ${quote(itemName)} to ${value.displayName === null ? 'its default name' : quote(sentenceCaseIdentifier(value.displayName, 'widget'))} on ${target}.`;
-    case 'widgets.item.size.set': return `Resize ${quote(itemName)} to ${size ?? width ?? 'the selected size'} on ${target}.`;
-    case 'widgets.item.frame.set': return `Show ${quote(itemName)} with ${value.frameStyle === null ? 'the surface default frame' : `${String(value.frameStyle)} framing`} on ${target}.`;
-    case 'widgets.item.network.set': return `Change network access for ${quote(itemName)} on ${target}.`;
-    case 'widgets.item.inputs.set': return `Change settings for ${quote(itemName)} on ${target}.`;
-    case 'widgets.item.inputs.reset': return `Reset settings for ${quote(itemName)} on ${target}.`;
-    case 'widgets.item.refresh': return `Refresh ${quote(itemName)} on ${target}.`;
+    case 'widgets.item.add': return `Add ${item}${size ? ` (${size})` : ''} to ${target}.`;
+    case 'widgets.item.remove': return `Remove ${item} from ${target}.`;
+    case 'widgets.item.move': return `Move ${item} to ${widgetSurfaceApprovalLabel(readWidgetActionDestinationV1(input) ?? surface)}.`;
+    case 'widgets.item.rename': return `Rename ${item} to ${value.displayName === null ? 'its default name' : quote(sentenceCaseIdentifier(value.displayName, 'widget'))} on ${target}.`;
+    case 'widgets.item.size.set': return `Resize ${item} to ${size ?? width ?? 'the selected size'} on ${target}.`;
+    case 'widgets.item.frame.set': return `Show ${item} with ${value.frameStyle === null ? 'the surface default frame' : `${String(value.frameStyle)} framing`} on ${target}.`;
+    case 'widgets.item.network.set': return `Change network access for ${item} on ${target}.`;
+    case 'widgets.item.inputs.set': return `Change settings for ${item} on ${target}.`;
+    case 'widgets.item.inputs.reset': return `Reset settings for ${item} on ${target}.`;
+    case 'widgets.item.refresh': return `Refresh ${item} on ${target}.`;
     case 'widgets.group.create': return `Create ${quote(groupName)} on ${target}.`;
     case 'widgets.group.add': {
       return `Add ${quote(groupName)} to ${target}${widgetGroupApprovalContents(group)}.`;

@@ -4,6 +4,7 @@ import { ProjectDefinitionDetectionV1Schema, ProjectDefinitionImportCandidateV1S
 import { ProjectManifestFileBasisV1Schema, ProjectManifestFileSnapshotSchema, ProjectManifestUpdateResultSchema } from '../workspaces/projectSetup/projectManifestDocument.js';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { WorkspaceAddressV1Schema } from '../workspaces/workspaceRefV1.js';
+import { ProjectSetupReviewV1Schema } from './projectSetupConsentFailure.js';
 
 export const PROJECT_DEFINITION_ACTION_IDS = ['projects.inspect', 'projects.manifest.update'] as const;
 export type ProjectDefinitionActionId = typeof PROJECT_DEFINITION_ACTION_IDS[number];
@@ -37,6 +38,7 @@ export const ProjectDefinitionInspectOutputSchema = lazyZodSchema(() => z.object
   environmentExecutionInputs: z.array(ProjectExecutionInputV1Schema).optional(),
   tools: z.array(ProjectToolInspectionV1Schema).optional(),
   setupReadiness: ProjectSetupReadinessV1Schema.optional(),
+  setupReview: ProjectSetupReviewV1Schema.optional(),
 }).strict());
 export type ProjectDefinitionInspectOutput = z.infer<typeof ProjectDefinitionInspectOutputSchema>;
 export const ProjectManifestUpdateOutputSchema = lazyZodSchema(() => z.lazy(() => ProjectManifestUpdateResultSchema));

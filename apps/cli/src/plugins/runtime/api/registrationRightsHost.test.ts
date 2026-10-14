@@ -4,9 +4,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type {
     ActionHandler } from '@happier-dev/plugin-sdk/actions';
-import type {
-    PromptAssetAdapter,
-} from '@happier-dev/plugin-sdk/resources';
 import type { AgentExternalSessionsContribution } from '@happier-dev/plugin-sdk/sessions/external';
 import type {
     AgentProviderBindingAdapter,
@@ -18,44 +15,7 @@ import {
 } from './registrationRightsHost';
 
 const actionHandler: ActionHandler = async () => ({ ok: true });
-type PromptAssetTypeDescriptor = PromptAssetAdapter['descriptor'];
 const daemonTarget = Object.freeze({ realm: 'daemon' as const });
-const promptAssetDescriptor = Object.freeze({
-    id: 'acme.skill',
-    providerId: 'acme',
-    title: 'Acme skills',
-    description: 'Acme SKILL.md bundles.',
-    libraryKind: 'bundle' as const,
-    supportsScope: { user: true, project: true },
-    supportsFiles: true,
-    formatId: 'skill_md_v1',
-    defaultRoots: [
-        {
-            label: 'Project skills',
-            scope: 'project' as const,
-            pathTemplate: '.acme/skills',
-        },
-    ],
-    capabilities: { supportsCatalogInstall: true },
-} satisfies PromptAssetTypeDescriptor);
-
-function createPromptAssetAdapter(
-    descriptor: PromptAssetTypeDescriptor = promptAssetDescriptor,
-): PromptAssetAdapter {
-    const mutationFailure = Object.freeze({
-        ok: false as const,
-        errorCode: 'unsupported' as const,
-        error: 'not invoked',
-    });
-    return Object.freeze({
-        descriptor,
-        async discover() { return Object.freeze([]); },
-        async read() { return mutationFailure; },
-        async writeDoc() { return mutationFailure; },
-        async writeBundle() { return mutationFailure; },
-        async delete() { return mutationFailure; },
-    });
-}
 const agentFactory = (async () => ({
     sessions: {
         create: async () => { throw new Error('not invoked'); },
@@ -109,88 +69,6 @@ describe('contribution-derived registration host', () => {
         expect(source).not.toContain('voiceProviderDeclaration })');
     });
 
-    it('commits a Prompt Asset adapter whose descriptor matches the advertised row', () => {
-        const adapter = createPromptAssetAdapter();
-        const host = createContributionRegistrationHost({
-            pluginId: 'acme.prompts',
-            occurrenceId: 'generation-7',
-            rights: [{
-                family: 'promptAssets',
-                localId: 'external-skills',
-                target: { realm: 'daemon' },
-                promptAssetDescriptor,
-            }],
-            isOccurrenceCurrent: () => true,
-        });
-
-        host.api.resources.registerPromptAssetAdapter('external-skills', adapter);
-
-        expect(host.commit()).toEqual([{
-            family: 'promptAssets',
-            localId: 'external-skills',
-            value: {
-                descriptor: promptAssetDescriptor,
-                discover: expect.any(Function),
-                read: expect.any(Function),
-                writeDoc: expect.any(Function),
-                writeBundle: expect.any(Function),
-                delete: expect.any(Function),
-            },
-        }]);
-    });
-
-    it('rejects a missing Prompt Asset adapter before publishing the activation', () => {
-        const host = createContributionRegistrationHost({
-            pluginId: 'acme.prompts',
-            occurrenceId: 'generation-7',
-            rights: [{
-                family: 'promptAssets',
-                localId: 'external-skills',
-                target: { realm: 'daemon' },
-                promptAssetDescriptor,
-            }],
-            isOccurrenceCurrent: () => true,
-        });
-
-        expect(() => host.commit()).toThrow(/missing registration 'promptAssets\/external-skills'/i);
-        expect(host.registrations()).toEqual([]);
-    });
-
-    it('rejects an undeclared extra Prompt Asset adapter before staging it', () => {
-        const host = createContributionRegistrationHost({
-            pluginId: 'acme.prompts',
-            occurrenceId: 'generation-7',
-            rights: [],
-            isOccurrenceCurrent: () => true,
-        });
-
-        expect(() => host.api.resources.registerPromptAssetAdapter(
-            'external-skills',
-            createPromptAssetAdapter(),
-        )).toThrow(/undeclared|not declared|registration right/i);
-        expect(host.registrations()).toEqual([]);
-    });
-
-    it('rejects a Prompt Asset adapter descriptor mismatch before commit', () => {
-        const host = createContributionRegistrationHost({
-            pluginId: 'acme.prompts',
-            occurrenceId: 'generation-7',
-            rights: [{
-                family: 'promptAssets',
-                localId: 'external-skills',
-                target: { realm: 'daemon' },
-                promptAssetDescriptor,
-            }],
-            isOccurrenceCurrent: () => true,
-        });
-        host.api.resources.registerPromptAssetAdapter('external-skills', createPromptAssetAdapter({
-            ...promptAssetDescriptor,
-            formatId: 'different_format_v1',
-        }));
-
-        expect(() => host.commit()).toThrow(/mismatched Prompt Asset adapter descriptor/i);
-        expect(host.registrations()).toEqual([]);
-    });
 
     it.each([
         ['accessor', () => Object.defineProperty({}, 'authentication', { enumerable: true, get: () => ({ kind: 'manual' }) })],

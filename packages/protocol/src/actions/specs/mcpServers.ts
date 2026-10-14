@@ -3,6 +3,32 @@ import { MCP_SERVER_ACTION_INPUT_SCHEMAS_V1 as inputs, MCP_SERVER_ACTION_OUTPUT_
   type McpServerActionIdV1 } from '../../mcp/servers/serverActionsV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import { z } from 'zod';
+import type { ValueRefV1 } from '../../valueRefs/valueRefV1.js';
+
+function mcpCliValueRefs(values: readonly string[] | undefined): Record<string, ValueRefV1> {
+  return Object.fromEntries((values ?? []).map(value => {
+    const separator = value.indexOf('=');
+    if (separator <= 0) throw Object.assign(new Error('Supply each value as NAME=value.'), { code: 'invalid_arguments' });
+    const key = value.slice(0, separator);
+    const text = value.slice(separator + 1);
+    return [key, text.startsWith('secret:') ? { t: 'savedSecret', secretId: text.slice(7) }
+      : { t: 'literal', v: text.startsWith('text:') ? text.slice(5) : text }];
+  }));
+}
+
+const mcpCreateCliInput = z.object({
+  name: z.string().min(1), title: z.string().optional(), transport: z.enum(['stdio', 'http', 'sse']).optional(),
+  command: z.string().min(1).optional(), arg: z.array(z.string()).optional(), url: z.string().min(1).optional(),
+  env: z.array(z.string()).optional(), header: z.array(z.string()).optional(),
+  expectedRevision: z.union([z.number().int().nonnegative(), z.literal('absent')]).optional(),
+  // The terminal stamps these before binding; canonical --input-json remains complete input.
+  entryId: z.string().min(1).optional(), nowMs: z.number().int().nonnegative().optional(),
+}).strict().superRefine((input, context) => {
+  const remote = input.transport !== 'stdio' && input.url !== undefined;
+  if (remote ? input.command !== undefined || input.arg !== undefined : !input.command || input.url !== undefined || input.header !== undefined) {
+    context.addIssue({ code: 'custom', message: 'Supply a local command or a remote URL with its matching transport.' });
+  }
+});
 
 function projectMcpObservation(input: unknown): unknown {
   const value = readRecord(input);
@@ -72,8 +98,19 @@ export const MCP_SERVER_ACTION_SPECS_V1 = [
       },
       commands: [{ path: ['mcp', 'servers', 'tools', 'set'], positionals: ['itemId', 'operation', 'toolName', 'setting'],
         visibility: 'canonical' as const }] } },
-  mcpSpec('mcp.servers.create', 'Add MCP server',
+  { ...mcpSpec('mcp.servers.create', 'Add MCP server',
     'Add an MCP server, which gives agents extra tools.', { danger: true }),
+    cli: { acceptsServerId: true, inputSchema: mcpCreateCliInput,
+      bindInput: (value: unknown) => {
+        const input = mcpCreateCliInput.parse(value);
+        const transport = input.transport ?? (input.url ? 'http' : 'stdio');
+        return { expectedRevision: input.expectedRevision, entry: { id: input.entryId, name: input.name,
+          ...(input.title === undefined ? {} : { title: input.title }), transport,
+          ...(transport === 'stdio' ? { stdio: { command: input.command, args: input.arg ?? [] } }
+            : { remote: { url: input.url, headers: mcpCliValueRefs(input.header) } }),
+          env: mcpCliValueRefs(input.env), createdAt: input.nowMs, updatedAt: input.nowMs } };
+      },
+      commands: [{ path: ['mcp', 'servers', 'add'], positionals: ['name'], visibility: 'canonical' as const }] } },
   mcpSpec('mcp.servers.update', 'Update MCP server',
     'Change how an MCP server starts or signs in.', { danger: true }),
   mcpSpec('mcp.servers.duplicate', 'Duplicate MCP server',
@@ -92,6 +129,10 @@ export const MCP_SERVER_ACTION_SPECS_V1 = [
     'Review a config or install link and choose every named value before adding its servers.', { danger: true }), approvalInputCustody: 'live_only' as const },
   { ...mcpSpec('mcp.found.adopt', 'Add a found MCP server',
     'Add a machine configuration after choosing its environment and header values.', { danger: true }), approvalInputCustody: 'live_only' as const },
-  mcpSpec('mcp.found.list', 'Detect MCP servers on a machine',
+  { ...mcpSpec('mcp.found.list', 'Detect MCP servers on a machine',
     'Look for MCP servers already set up for the agents on a machine.', { read: true, machine: true }),
+    cli: { acceptsServerId: true, flagAliases: [{ path: 'providers', aliases: ['--provider'] },
+      { path: 'directory', aliases: ['--dir'] }, { path: 'machineId', aliases: ['--machine'] }],
+      commands: [{ path: ['mcp', 'found'], visibility: 'canonical' as const },
+        { path: ['mcp', 'servers', 'detect'], visibility: 'alias' as const }] } },
 ] as const satisfies readonly PreNormalizedActionSpec[];

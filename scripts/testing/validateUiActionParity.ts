@@ -1,0 +1,45 @@
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
+import { listActionSpecs, listActionCliCommandDeclarations } from '../../packages/protocol/src/actions/actionSpecs.ts';
+import { listActionSpecsForCatalogSurface } from '../../packages/protocol/src/actions/actionCatalog.ts';
+import { BUILT_IN_SETTINGS_DECLARATIONS_V1, buildBuiltInAccountSettingMutationV1,
+  resolveBuiltInAccountSettingResetValueV1 } from '../../packages/protocol/src/actions/settings/settingsDeclarations.ts';
+import { accountSettingsParse } from '../../packages/protocol/src/account/settings/accountSettings.ts';
+import { collectUiActionParity, readUiActionParitySources } from './lib/uiActionParity.ts';
+
+// Development diagnostic for the same source walker consumed by the UI parity test.
+export function readCurrentUiActionParity() {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const files = readUiActionParitySources(root);
+  const specs = listActionSpecs();
+  const defaults = accountSettingsParse({});
+  const settingBindings = new Map<string, string[]>();
+  for (const declaration of BUILT_IN_SETTINGS_DECLARATIONS_V1) {
+    if (declaration.storage?.scope !== 'account' || declaration.storage.access !== 'read_write'
+      || declaration.surfaces?.agent === false) continue;
+    // Ask the real pure semantic owner for an admitted reset delta; no write or service runs.
+    const reset = resolveBuiltInAccountSettingResetValueV1(declaration);
+    const delta = reset.success ? buildBuiltInAccountSettingMutationV1(declaration, defaults, reset.value) : null;
+    for (const key of Object.keys(delta ?? {})) {
+      const anchors = settingBindings.get(`account:${key}`) ?? [];
+      anchors.push(declaration.anchor);
+      settingBindings.set(`account:${key}`, anchors);
+    }
+  }
+  return { sourceFiles: files.length, canonicalSpecs: specs.length,
+    ...collectUiActionParity(files, specs, BUILT_IN_SETTINGS_DECLARATIONS_V1, {
+      agentIds: new Set(listActionSpecsForCatalogSurface({ surface: 'agent' }).map(spec => spec.id)),
+      mcpIds: new Set(listActionSpecsForCatalogSurface({ surface: 'mcp' }).map(spec => spec.id)),
+      cliIds: new Set(listActionSpecsForCatalogSurface({ surface: 'cli' }).map(spec => spec.id)),
+      cliCommandIds: new Set(listActionCliCommandDeclarations().map(({ spec }) => spec.id)),
+      settingBindings,
+    }) };
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const report = readCurrentUiActionParity();
+  console.log(`UI Action parity: ${report.sourceFiles} source files, ${report.canonicalSpecs} canonical specs, `
+    + `${report.actions.length} Action sites, ${report.settings.length} settings sites, ${report.findings.length} findings`);
+  console.log(JSON.stringify(report));
+  if (report.findings.length || !report.actions.length || !report.settings.length) process.exitCode = 1;
+}

@@ -187,15 +187,21 @@ describe('createActionExecutor (session control)', () => {
       }
     }
   });
-  it('discovers detached prompt responses but refuses autonomous answers before transport', async () => {
+  it('discovers detached prompt responses on autonomous surfaces', async () => {
     const responseAction = 'execution.run.permission.respond';
+    const executor = createExecutor();
     for (const surface of ['agent', 'mcp'] as const) {
-      const transport = vi.fn(async () => ({ ok: true }));
-      const executor = createExecutor({ executionRunPermissionRespond: transport });
       expect(await executor.execute('action.spec.search', { query: responseAction }, { surface }))
         .toMatchObject({ ok: true, result: { actionSpecs: expect.arrayContaining([
           expect.objectContaining({ id: responseAction, requiredAuthority: 'present_user' }),
         ]) } });
+    }
+  });
+  it('refuses autonomous detached prompt answers before transport', async () => {
+    const responseAction = 'execution.run.permission.respond';
+    for (const surface of ['agent', 'mcp'] as const) {
+      const transport = vi.fn(async () => ({ ok: true }));
+      const executor = createExecutor({ executionRunPermissionRespond: transport });
       expect(await executor.execute(ActionIdSchema.parse(responseAction), {
         runId: 'run-1', requestId: 'request-1', approved: true,
       }, { surface, authority: 'account_automation', bypassApprovals: true })).toMatchObject({
@@ -233,7 +239,9 @@ describe('createActionExecutor (session control)', () => {
         surface, serverId: 'home', defaultSessionId: 's1', sessionListAccess: 'current_session',
       });
       expect(result, JSON.stringify({ surface, result })).toMatchObject({ ok: true });
-      expect(sessionOpen).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 's1', destination }));
+      expect(sessionOpen).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 's1', destination }), {
+        surface, serverId: 'home', defaultSessionId: 's1', sessionListAccess: 'current_session',
+      });
     }
   });
   it('dispatches current UI reads and opaque invocations to the answering client for Agent/MCP', async () => {
@@ -334,7 +342,9 @@ describe('createActionExecutor (session control)', () => {
     await expect(executor.execute('session.open', { sessionId: 's1', serverId: 'home-1', tabId: 'tab-2' }, {
       surface: 'ui', serverId: 'home-1', defaultSessionId: 's1',
     })).resolves.toMatchObject({ ok: true });
-    expect(sessionOpen).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', serverId: 'home-1', tabId: 'tab-2' }));
+    expect(sessionOpen).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', serverId: 'home-1', tabId: 'tab-2' }), {
+      surface: 'ui', serverId: 'home-1', defaultSessionId: 's1',
+    });
   });
   it('opens an exact SCM comparison through semantic Session navigation and refuses headless success', async () => {
     const destination = { kind: 'scmReview', comparison: { kind: 'pullRequest', locator: {
@@ -345,7 +355,9 @@ describe('createActionExecutor (session control)', () => {
     await expect(executor.execute('session.open', { sessionId: 's1', serverId: 'home-1', destination }, {
       surface: 'ui', serverId: 'home-1',
     })).resolves.toMatchObject({ ok: true });
-    expect(sessionOpen).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', serverId: 'home-1', destination }));
+    expect(sessionOpen).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', serverId: 'home-1', destination }), {
+      surface: 'ui', serverId: 'home-1',
+    });
     sessionOpen.mockClear();
     await expect(createExecutor({ sessionOpen }).execute('session.open', { sessionId: 's1', serverId: 'home-1', destination }, { surface: 'ui' }))
       .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
@@ -399,7 +411,7 @@ describe('createActionExecutor (session control)', () => {
     }, { surface: 'ui', authority: 'present_user', serverId: 'home-1', defaultSessionId: 's1' })).resolves.toMatchObject({ ok: true });
     expect(sessionOpen).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 's1', serverId: 'home-1', approvedNewDirectoryCreation: true,
-    }));
+    }), { surface: 'ui', authority: 'present_user', serverId: 'home-1', defaultSessionId: 's1' });
   });
 
   it('executes delete and organization assignment through the existing Home HTTP owner', async () => {

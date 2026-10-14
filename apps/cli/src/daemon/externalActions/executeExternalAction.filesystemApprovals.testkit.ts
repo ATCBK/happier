@@ -1,15 +1,17 @@
 import { expect, vi } from 'vitest';
 import axios from 'axios';
-import { EventEmitter } from 'node:events';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, type ActionExecuteResult, type ActionId,
   type ExternalActionExecutionAuthorizationV1, type ExternalActionRequestEnvelopeV1 } from '@happier-dev/protocol/actions';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol';
+import { AccountSecurityGetResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
+import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1, MachineUpdateOperationProtocolCapabilitiesRequestV1Schema,
+  MachineUpdateOperationProtocolCapabilitiesResponseV1Schema } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1, verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { ApprovalRequestV2Schema, requiresExactDaemonApprovalReplay } from '@happier-dev/protocol/approvals/approvalRequestV1';
-import { ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
+import { ExternalActionExecutionAuthorizationV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountRowV1Schema, ProjectAccountRowListResponseV1Schema,
   ProjectAccountRowMutationResponseV1Schema, buildProjectAccountRowPhysicalKeyV1, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { ProjectSourcesCreateInputV1Schema, ProjectSourcesUpdateInputV1Schema, ProjectSourcesDeleteInputV1Schema, type ProjectSourceV1 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
@@ -27,7 +29,7 @@ import { readCarrierMutation } from '@/api/artifacts/accountArtifactStore.testki
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
-import { createSocketIoManagerStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { readOrCreateInstallationIdentity } from '@/daemon/identity/store';
 import { readStoredCredentialsForServerId, sameStoredCredentials, updateSettings, writeStoredCredentialsForServerId } from '@/persistence';
@@ -96,6 +98,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   if (actionId === 'localServices.launcher.start') {
     await mkdir(join(rootPath, '.happier'));
     await writeFile(join(rootPath, '.happier/project.json'), JSON.stringify({ version: 1,
+      ...(setup ? { workspace: { setup: [{ kind: 'command', command: 'echo setup-reviewed' }] } } : {}),
       services: { checked: { source: { kind: 'command', command: 'echo service-admitted' } } } }));
   }
   await writeFile(join(directory, 'outside'), 'outside unchanged');
@@ -105,6 +108,10 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   reloadConfiguration();
   expect(configuration.activeServerId).toBe('srv_n2');
   const token = home?.token ?? 'fixture.' + Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url') + '.signature';
+  // The app's original Account HTTP request has current provenance. The
+  // installed daemon keeps its independent retained credential fixture.
+  const uiToken = home?.token ?? 'fixture.' + Buffer.from(JSON.stringify({ sub: 'account', tokenEpoch: 1,
+    provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url') + '.signature';
   const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
   await updateSettings(settings => ({ ...settings, activeServerId: 'srv_n2', servers: { srv_n2: { id: 'srv_n2', name: 'Home',
     homeConnectionDescriptorAuthority: 'exact', homeConnectionDescriptor: HomeConnectionDescriptorV1Schema.parse({ v: 1, homeServerIdentityId: homeId,
@@ -143,6 +150,10 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     const admitted = homeRequest('GET', path, undefined, options?.headers);
     if (admitted) return await admitted;
     if (path === '/v1/account/profile') return { status: 200, data: { id: 'account' } };
+    if (path === '/v1/account/security') return { status: 200, data: AccountSecurityGetResponseV1Schema.parse({
+      v: 1, encryptionMode: 'plain', terminalPresentUserPolicy: 'allowed', nativeEmail: null,
+      password: { status: 'not_enrolled', revision: null },
+    }) };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
@@ -150,12 +161,14 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     if (path === '/v1/artifacts') return { status: 200, data: artifact ? [artifact] : [] };
     if (artifact && path === '/v1/artifacts/' + artifact.id) return { status: 200, data: artifact };
     if (path === '/v1/account/authoring-memory') return { status: 200, data: { rows: [] } };
-    if (path === '/v1/machines/machine') return { status: 200, data: { machine: { id: 'machine', storageMode: 'plain',
+    if (path === '/v1/machines/machine') return { status: 200, data: { machine: { id: 'machine', kind: 'persistent', active: true, storageMode: 'plain',
       metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
       installationId: installation.installationId, installationPublicKey: publicKey.toString('base64'),
-      dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, revokedAt: null, replacedByMachineId: null } } };
+      dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, revokedAt: null, replacedByMachineId: null,
+      access: { custodian: { accountId: 'account', displayName: 'Account' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } } } };
     if (path === '/v1/machines') return { status: 200, data: [{ id: 'machine', active: true, kind: 'persistent',
-      installationId: installation.installationId, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, revokedAt: null, replacedByMachineId: null }] };
+      installationId: installation.installationId, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, revokedAt: null, replacedByMachineId: null,
+      access: { custodian: { accountId: 'account', displayName: 'Account' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }] };
     throw new Error('Unexpected Home GET ' + path);
   });
   vi.spyOn(globalThis, 'fetch').mockImplementation(async url => {
@@ -172,6 +185,29 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     networkPaths.push('POST ' + path);
     const admitted = homeRequest('POST', path, body, options?.headers);
     if (admitted) return await admitted;
+    if (path === '/v1/actions/projects.inspect/execution-authorization') {
+      const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      return { status: 200, data: home ? await home.mintAuthorization('projects.inspect', request.envelope)
+        : ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'inspection-home-root', binding: {
+          accountId: 'account', custodianAccountId: 'account', authentication: { kind: 'account', tokenEpoch: 1 },
+          accountEncryptionMode: 'plain', serverIdentityId: homeId, machineId: target.machineId,
+          installationId: installation.installationId, actionId: 'projects.inspect', requestId: request.envelope.requestId,
+          target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
+        } }) };
+    }
+    if (path === '/v1/actions/projects.inspect') {
+      const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      const authorization = request.executionAuthorization;
+      if (!authorization || !('authentication' in authorization.binding)) throw new Error('Missing inspection Account admission');
+      const result = await executeExternalAction({ actionId: 'projects.inspect', envelope: request.envelope,
+        principal: { accountId: 'account', authority: 'present_user', authentication: authorization.binding.authentication },
+        surface: 'ui', executionAuthorization: authorization, currentMachineId: target.machineId, currentServerId: 'srv_n2',
+        currentServerHttpBaseUrl: params.serverHttpBaseUrl, currentInstallationId: installation.installationId,
+        externalActionMachineRequestPrivateKey: privateKey, verifyExecutionAuthorization: verifyRoot,
+        resolveTarget, executor: owner, prepareRequesterAccountContext: prepareRequester });
+      if (result.kind !== 'response') throw new Error('Inspection ingress refused');
+      return { status: 200, data: result.response };
+    }
     if (path === '/v1/artifacts') {
       const input = readCarrierMutation(body);
       artifact = { ...input, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
@@ -299,15 +335,20 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   const rpc = manager;
   const admission = { actorAccountId: 'account', custodianAccountId: 'account', machineId: target.machineId,
     installationId: installation.installationId, role: 'manage' as const, encryptionMode: 'plain' as const };
-  socketBoundary.create.mockImplementation(() => {
-    const events = new EventEmitter();
-    const socket = Object.assign(events, { io: createSocketIoManagerStub(), connected: false,
-      connect: () => { socket.connected = true; events.emit('connect'); return socket; },
-      disconnect: () => { socket.connected = false; return socket; }, close: () => socket,
-      emitWithAck: async (_event: string, packet: Readonly<{ method: string; params: unknown; requestId?: string;
+  let installedSocket: ReturnType<typeof createApiSessionSocketStub> | undefined;
+  socketBoundary.create.mockImplementation((_url: unknown, options?: Readonly<{ auth?: Readonly<{ clientType?: string }> }>) => {
+    const boundary = createApiSessionSocketStub();
+    if (options?.auth?.clientType === 'machine-scoped') installedSocket = boundary;
+    const socket = Object.assign(boundary, {
+      emitWithAck: async (event: string, packet: Readonly<{ method: string; params: unknown; requestId?: string;
         originalActionEnvelope?: Parameters<typeof executeExternalAction>[0]['envelope'];
         externalActionExecution?: Readonly<{ authorization: NonNullable<import('@happier-dev/protocol/actions').ActionExecutorContext['externalActionExecutionAuthorization']>;
           machineSignature: string; effectActionId: string; target: typeof target; installationId: string }> }>) => {
+        if (event === MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1) {
+          expect(MachineUpdateOperationProtocolCapabilitiesRequestV1Schema.parse(packet).machineId).toBe(target.machineId);
+          return MachineUpdateOperationProtocolCapabilitiesResponseV1Schema.parse({ v: 1, result: 'success', revision: 1 });
+        }
+        if (event !== SOCKET_RPC_EVENTS.CALL) throw new Error('Unexpected socket event ' + event);
         const execution = packet.externalActionExecution;
         if (execution?.authorization.requesterAccountContext) {
           const opensFor = (method: string) => openExternalActionRequesterAccountContextV1({ authorization: execution.authorization,
@@ -368,6 +409,12 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   client.setRPCHandlers({ spawnSession: async () => { throw new Error('Open must never start an Agent'); },
     stopSession: async () => true, requestShutdown() {} }, { actionsSettingsProvider: settings,
     externalActionIngressOwner: installed });
+  if (actionId === 'projects.open') {
+    // The real installed Open receiver is reached on a connected Machine.
+    // Connect the public client rather than bypassing its live transport check.
+    client.connect();
+    await expect.poll(() => installedSocket?.connected).toBe(true);
+  }
   const store = createCliApprovalsArtifactStore({ credentials, serverId: 'srv_n2' });
   const issuerParams = { ...params, ...(features ? { resolveServerFeaturesSnapshot: () => features } : {}) };
   const deciding = createCliActionExecutorHarness(issuerParams, { isApprovalExecutionOriginCurrent: originCurrent,
@@ -379,7 +426,8 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   const issuer = createCliActionExecutorHarness(issuerParams).executor;
   // The app captures the portable Home; the daemon/decider has its own local
   // profile label for that same Home, as in LV2's two-device replay.
-  const uiIssuer = createCliActionExecutorHarness({ ...issuerParams, serverId: homeId }).executor;
+  const uiIssuer = createCliActionExecutorHarness({ ...issuerParams, token: uiToken,
+    credentials: { ...credentials, token: uiToken }, serverId: homeId }).executor;
   const artifactId = () => { if (!artifact) throw new Error('Missing approval Artifact'); return String(artifact.id); };
   const ownOperations = new Set<string>();
   const retainOperation = (value: unknown) => {
@@ -387,6 +435,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     if (parsed.success) ownOperations.add(parsed.data.operation.operationId);
   };
   const harness = { rootPath, directory, ref, rows, rpcOutcomes, networkPaths, finiteIngress, spawned, installation,
+    disconnectInstalledMachine: () => installedSocket?.disconnect(),
     source: () => source, hasApproval: () => artifact !== undefined,
     reviewSetup: () => reviewProjectSetupEffect({ workspace: ref,
       projectAssociation: { workspace: ref, project: { serverId: homeId, projectId: ref.projectKey } },
@@ -411,6 +460,8 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       return present ? Promise.resolve(present) : new Promise<SetupBoundaryPty>(resolve => { spawnWaiters.set(index, resolve); });
     },
     cancelOperation: (operationId: string) => rpc.invokeLocal('actionOperation.cancel.v1', { operationId }),
+    unadmittedPeerCancel: (operationId: string) => client.getPeerMediationMachineRpcHandlerManager()
+      .invokeLocal('actionOperation.cancel.v1', { operationId }),
     readTransportOperation: (operationId: string, timeoutMs: number) => rpc.handleRequest({
       method: 'machine:actionOperation.get.v2', params: { operationId }, machineAdmission: admission, timeoutMs }),
     holdTrustRead() {

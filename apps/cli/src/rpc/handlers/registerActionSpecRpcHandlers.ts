@@ -135,9 +135,11 @@ export function unwrapActionResultForRpc(actionId: ActionId, result: ActionExecu
     if (result.ok) {
         return result.result;
     }
-    let details: unknown = actionId === 'execution.run.start'
+    let details: unknown = (actionId === 'execution.run.start'
+        || (actionId === 'execution.run.ensure_or_start'
+            && readObjectValue(result.details, 'executionRunStart') !== undefined))
         ? withExecutionRunStartFailureDetails(
-            undefined,
+            result.details,
             readExecutionRunStartRunCreation(result.details),
         )
         : undefined;
@@ -392,6 +394,7 @@ export function registerActionSpecRpcHandlers(params: RegisterActionSpecRpcHandl
                     ...(envelopeDefaultSessionId ? { defaultSessionId: envelopeDefaultSessionId } : {}),
                     ...(externalActionTarget ? { externalActionTarget } : {}),
                     ...(execution.signal ? { signal: execution.signal } : {}),
+                    ...(context?.deadlineAtMs === undefined ? {} : { deadlineAtMs: context.deadlineAtMs }),
                     ...(context?.callerAuthority ? { callerAuthority: context.callerAuthority } : {}),
                     ...(context?.sessionActionOrigin ? { sessionActionOrigin: context.sessionActionOrigin } : {}),
                     ...(context?.authorization?.kind === 'session.write'

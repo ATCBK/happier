@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { projectExecutionRunChildChoiceV1 } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
 import type { RpcActionExecutor } from './_actionDispatchAdapter';
 import {
@@ -131,6 +132,23 @@ describe('ActionSpec-derived RPC registrar', () => {
     });
 
     it('projects only strict execution-run start certainty across the generated RPC seam', async () => {
+        const childChoice = projectExecutionRunChildChoiceV1({ agentTargetKey: 'agent:happier.agent.claude/claude' });
+        const choiceFailure = { ok: false as const, errorCode: 'execution_run_child_choice_required',
+            error: 'execution_run_child_choice_required', details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+                childChoice, secret: 'must-not-cross-the-rpc-boundary' } };
+        expect(module.unwrapActionResultForRpc('execution.run.start', choiceFailure)).toEqual({ ...choiceFailure,
+            details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' }, childChoice } });
+        expect(module.unwrapActionResultForRpc('execution.run.ensure_or_start', choiceFailure)).toEqual({ ...choiceFailure,
+            details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' }, childChoice } });
+        expect(module.unwrapActionResultForRpc('execution.run.ensure_or_start', { ...choiceFailure,
+            details: { ...choiceFailure.details, executionRunStart: { v: 2, runCreation: 'noRunCreated' } } }))
+            .toEqual({ ...choiceFailure, details: { executionRunStart: { v: 1, runCreation: 'outcomeUnknown' }, childChoice } });
+        expect(module.unwrapActionResultForRpc('execution.run.ensure_or_start', {
+            ok: false, errorCode: 'execution_run_not_found', error: 'Run not found',
+        })).not.toHaveProperty('details');
+        expect(module.unwrapActionResultForRpc('execution.run.start', { ...choiceFailure,
+            details: { ...choiceFailure.details, childChoice: { ...childChoice, secret: 'private' } } }))
+            .toEqual({ ...choiceFailure, details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
         expect(module.unwrapActionResultForRpc('execution.run.start', {
             ok: false,
             errorCode: 'execution_run_target_unavailable',

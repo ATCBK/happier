@@ -896,6 +896,18 @@ export type ManagedMachinesActionInputById = {
                         machineId: string;
                         runId: string;
                         sessionId?: string | undefined;
+                        observation?: {
+                            kind: 'review_walkthrough';
+                            comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | undefined;
                     } | {
                         kind: 'workflow_run';
                         runId: string;
@@ -2322,6 +2334,18 @@ export type ManagedMachinesActionInputById = {
                         machineId: string;
                         runId: string;
                         sessionId?: string | undefined;
+                        observation?: {
+                            kind: 'review_walkthrough';
+                            comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | undefined;
                     } | {
                         kind: 'workflow_run';
                         runId: string;

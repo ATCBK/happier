@@ -474,6 +474,7 @@ export type DiscoveryActionResultById = {
                         descriptor: {
                             id: string;
                             name: string;
+                            costTier?: 'low' | 'standard' | 'premium' | undefined;
                             aliases?: string[] | undefined;
                             description?: string | undefined;
                             contextWindowTokens?: number | undefined;
@@ -562,6 +563,7 @@ export type DiscoveryActionResultById = {
                             descriptor: {
                                 id: string;
                                 name: string;
+                                costTier?: 'low' | 'standard' | 'premium' | undefined;
                                 aliases?: string[] | undefined;
                                 description?: string | undefined;
                                 contextWindowTokens?: number | undefined;

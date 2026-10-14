@@ -120,6 +120,8 @@ export type ScmDiffSummaryActionInputById = {
             mode: 'read_write' | 'bypass';
             reason?: string | undefined;
         } | undefined;
+        investigateSurroundingFiles?: boolean | undefined;
+        outputLanguage?: string | undefined;
         outputs?: ('summary' | 'walkthrough' | 'commitPlan')[] | undefined;
     };
     readonly "scm.diffSummary.result.list": Record<string, never>;
@@ -398,6 +400,7 @@ export type ScmDiffSummaryActionInputById = {
         expectedRevision: number;
         output: 'summary' | 'walkthrough' | 'commitPlan';
         instructions: string;
+        outputLanguage?: string | undefined;
         stopIds?: string[] | undefined;
         reviewExplanation?: {
             targets: {
@@ -414,12 +417,14 @@ export type ScmDiffSummaryActionInputById = {
         resultId: string;
         expectedRevision: number;
         outputs: ('summary' | 'walkthrough' | 'commitPlan')[];
+        outputLanguage?: string | undefined;
     };
     readonly "scm.diffSummary.discuss": {
         cwd: string;
         resultId: string;
         expectedRevision: number;
         message: string;
+        outputLanguage?: string | undefined;
         stopIds?: string[] | undefined;
         startNew?: boolean | undefined;
     };
@@ -1405,6 +1410,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -1911,6 +1918,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -2417,6 +2426,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -2923,6 +2934,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -3429,6 +3442,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -3973,6 +3988,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -4479,6 +4496,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -4985,6 +5004,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -5506,6 +5527,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -6012,6 +6035,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {
@@ -6518,6 +6543,8 @@ export type ScmDiffSummaryActionResultById = {
                     configuredBackendId?: string | undefined;
                     sourceKind?: 'built_in' | 'configured' | undefined;
                 };
+                investigateSurroundingFiles?: boolean | undefined;
+                outputLanguage?: string | undefined;
                 modelId?: string | undefined;
                 profileId?: string | undefined;
                 modelSelection?: {

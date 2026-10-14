@@ -14,7 +14,7 @@ import {
   ExecutionRunTurnStreamReadResponseSchema,
   ExecutionRunTurnStreamStartResponseSchema,
 } from '../execution/runs/index.js';
-import { actionSpecToActionDefinitionV1, serializeActionSpec } from './actionCatalog.js';
+import { actionSpecToActionDefinitionV1, listActionSpecsForCatalogSurface, serializeActionSpec } from './actionCatalog.js';
 import { listVoiceToolActionSpecs } from './actionSpecs.js';
 import { ActionInputHintsSchema, ActionSpecSchema, PUBLIC_ACTION_IDS, PUBLIC_ACTION_INPUT_SCHEMAS, PUBLIC_ACTION_OUTPUT_SCHEMAS, PublicActionIdSchema, SIGNED_ROOT_ACTION_IDS, SignedRootActionIdSchema, SESSION_TRANSCRIPT_GET_MAX_LIMIT, ActionSurfaceSchema, PLUGIN_ACTION_INPUT_SCHEMAS, PLUGIN_ACTION_OUTPUT_SCHEMAS, PLUGIN_INVOCABLE_ACTION_IDS, PluginInvocableActionIdSchema, SessionTranscriptGetExternalShareableInputV1Schema, getActionContextualDefaults, getActionSpec, isActionSpecSurfacedOn, isHumanSecretApiExcludedActionId, isInternalActionId, isPluginProvenanceOnlyActionId, isPluginSurfaceExcludedActionId, isVoicePromptHotPathSpec, isVoiceSdkSafeActionSpec, listActionSpecs, listActionSpecsForSurface, listVoicePromptHotPathSpecs, projectSessionSpawnNewApiRequest, resolveRuntimeActionHostEffectClass } from './actionSpecs.js';
 import { HOME_GOVERNANCE_ACTION_IDS_V1 } from '../home/governance/actionsV1.js';
@@ -27,6 +27,8 @@ import { MEMORY_DOCUMENT_ACTION_IDS_V1 } from '../prompts/library/memoryActionsV
 import { MANAGED_GITHUB_APP_ACTION_IDS_V1 } from '../identity/githubApps.js';
 import { resolveRuntimeActionSurfaces } from './surfaces.js';
 import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
+import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, resolveLocalServiceDomainActionRpcBinding } from './specs/localServices.js';
 import type { ActionSpec } from './actionSpecs.js';
 import {
@@ -156,11 +158,10 @@ describe('reviewed Prompt Library Action contract', () => {
 
   it('projects the existing eligible prompt operations to Voice without losing dangerous edit policy', () => {
     const voiceIds = listActionSpecsForSurface('voice').map(spec => spec.id);
-    for (const id of ['prompt_doc.get', 'prompt_doc.create', 'prompt_doc.favorite.set', 'prompts.library.list', 'prompt_doc.update', 'prompt_asset.export'] as const) {
+    for (const id of ['prompt_doc.get', 'prompt_doc.create', 'prompt_doc.favorite.set', 'prompts.library.list', 'prompt_doc.update'] as const) {
       expect(voiceIds).toContain(id);
     }
     expect(getActionSpec('prompt_doc.update').safety).toBe('danger');
-    expect(getActionSpec('prompt_asset.export').safety).toBe('danger');
   });
 });
 
@@ -329,6 +330,7 @@ const WORKFLOW_READ_ACTION_ID_SET = new Set([
 ] as const);
 
 const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
+  'plugin.webhook.delivery.movePending',
   ...ROLE_ACTION_IDS_V1,
   'artifact.public_link.create',
   'artifact.public_link.list',
@@ -472,6 +474,9 @@ const RESULT_REQUIRED_DEFERRED_ACTION_IDS = [
   ...TEAM_DEFERRED_APPROVAL_REPLAY_SAFE_ACTION_ID_SET,
   'teams.update',
   'workspace.sync.conflict.resolve',
+  'session.rollback',
+  'session.checkpoint_code_rollback',
+  'workspace.sync.relationship.create',
   ...SHARED_SAVED_SECRET_ACTION_IDS_V1.filter((id) => id !== 'secrets.shared.list'),
 ];
 
@@ -504,7 +509,6 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'prompt_doc.create',
   'prompt_doc.favorite.set',
   'prompt_bundle.update',
-  'prompt_asset.export',
   'prompt_registry.install',
   'approval.request.create',
   'approval.request.decide',
@@ -515,7 +519,6 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'plugin.webhook.endpoint.convergeTarget',
   'plugin.webhook.endpoint.revoke',
   'plugin.webhook.endpoint.retarget',
-  'plugin.webhook.delivery.movePending',
   'plugin.webhook.endpoint.credential.configure',
   'plugin.webhook.endpoint.credential.rotate',
   'plugin.webhook.endpoint.credential.finishRotation',
@@ -588,8 +591,6 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   'session.open',
   'session.fork',
   'session.continue_with_replay',
-  'session.rollback',
-  'session.checkpoint_code_rollback',
   'session.checkpoint',
   'session.restore',
   'session.handoff',
@@ -597,7 +598,6 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   'session.handoff.prepare_target.resume',
   'session.handoff.commit',
   'session.handoff.abort',
-  'workspace.sync.relationship.create',
   'session.spawn_new',
   'session.message.send',
   'session.board.item.upsert',
@@ -617,7 +617,6 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   'session.target.primary.set',
   'session.target.tracked.set',
   'ui.voice_agent.teleport',
-  'daemon.promptAssets.delete',
   'daemon.filesystem.writeFile',
   'bugreport.uploadArtifact',
   'transcript.import',
@@ -1302,7 +1301,8 @@ describe('Action Spec Registry', () => {
         !isInternalActionId(spec.id)
           && !isPluginProvenanceOnlyActionId(spec.id)
           && !isHumanSecretApiExcludedActionId(spec.id)
-          && !['plugins.settings.secret.bind', 'plugins.settings.secret.unbind', 'plugins.settings.secret.delete'].includes(spec.id)
+          && !['plugins.settings.secret.bind', 'plugins.settings.secret.unbind', 'plugins.settings.secret.delete',
+            'plugin.webhook.delivery.movePending'].includes(spec.id)
           && (spec.requiredAuthority === 'account_automation'
             || ['approval.request.decide', 'session.permission.respond', 'session.user_action.answer'].includes(spec.id)),
       );
@@ -1361,7 +1361,6 @@ describe('Action Spec Registry', () => {
     expect(getActionSpec('session.permission_mode.set').surfaces.plugin).toBe(true);
     expect(PluginInvocableActionIdSchema.safeParse('session.permission_mode.set').success).toBe(true);
     expect(getActionSpec('skills.found.list').surfaces.plugin).toBe(true);
-    expect(getActionSpec('daemon.promptAssets.delete').surfaces.plugin).toBe(true);
     expect(getActionSpec('sessions.external.materialize.start').surfaces.plugin).toBe(true);
     // CONTRACTS.md C1: the six-method `SessionsService.external` contextual
     // service is the author capability. Candidate discovery, linking,
@@ -4235,7 +4234,7 @@ describe('Action Spec Registry', () => {
   });
 
   it('declares terminal composer clear as a confirmed destructive session-control action', () => {
-    const spec = getActionSpec('session.terminalComposer.clear' as any);
+    const spec = getActionSpec('session.terminalComposer.clear');
 
     expect(spec.inputSchema).toBe((protocol as any).SessionTerminalComposerClearRequestV1Schema);
     expect(spec.outputSchema).toBe((protocol as any).SessionTerminalComposerClearResultV1Schema);
@@ -4245,8 +4244,9 @@ describe('Action Spec Registry', () => {
     expect(spec.sideEffectClass).toBe('danger');
     expect(spec.approval.result).toBe('required');
     expect(spec.surfaces.ui).toBe(true);
-    expect(spec.surfaces.agent).toBe(false);
+    expect(spec.surfaces.agent).toBe(true);
     expect(spec.surfaces.mcp).toBe(true);
+    expect(listActionSpecsForCatalogSurface({ surface: 'agent' }).some(candidate => candidate.id === spec.id)).toBe(true);
     expect(spec.surfaces.cli).toBe(true);
     expect(spec.surfaces.rpc).toBe(true);
     expect(spec.placements).toEqual(['pending_messages']);
@@ -4254,6 +4254,25 @@ describe('Action Spec Registry', () => {
       expect.objectContaining({ path: 'sessionId', required: true }),
       expect.objectContaining({ path: 'expectedStateAtMs' }),
     ]));
+  });
+
+  it.each([
+    'session.terminalComposer.clear',
+    'session.pendingInput.interruptAndRun',
+    'session.rollback',
+    'session.checkpoint_code_rollback',
+    'plugin.webhook.delivery.movePending',
+    'workspace.sync.relationship.create',
+  ] as const)('offers coordination UI capabilities with user-changeable approval defaults: %s', actionId => {
+    const spec = getActionSpec(actionId);
+    for (const surface of ['agent', 'mcp'] as const) {
+      expect(listActionSpecsForCatalogSurface({ surface }).some(candidate => candidate.id === actionId)).toBe(true);
+      const context = { surface, authority: 'account_automation', actionCaller: { kind: 'host' } } as const;
+      expect(resolveActionApprovalRouting({ actionId, spec, context,
+        settings: normalizeActionsSettingsV1({ v: 1 }) }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId, spec, context,
+        settings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } }) }).required).toBe(false);
+    }
   });
 
   it('declares exact contextual defaults without inferring identifier semantics from field names', () => {
@@ -4403,13 +4422,11 @@ describe('Action Spec Registry', () => {
   it('exposes prompt library mutation actions for approval workflows', () => {
     expect(getActionSpec('prompt_doc.update').safety).toBe('danger');
     expect(getActionSpec('prompt_bundle.update').safety).toBe('danger');
-    expect(getActionSpec('prompt_asset.export').safety).toBe('danger');
     expect(getActionSpec('prompt_registry.install').safety).toBe('danger');
   });
 
   it('binds daemon administrative RPC methods to ActionSpec rows', () => {
     const expectedBindings = new Map([
-      ['daemon.promptAssets.delete', RPC_METHODS.DAEMON_PROMPT_ASSETS_DELETE],
       ['daemon.filesystem.listRoots', RPC_METHODS.DAEMON_FILESYSTEM_LIST_ROOTS],
       ['daemon.filesystem.browseDirectory', RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY],
       ['bugreport.collectDiagnostics', RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS],
@@ -4440,34 +4457,6 @@ describe('Action Spec Registry', () => {
       expect(spec.bindings?.rpcMethodAliases).toEqual(aliases);
       expect(spec.surfaces).toMatchObject({ rpc: true, agent: true, mcp: true, cli: true, voice: true, api: true });
     }
-  });
-
-  it('accepts installMode for prompt asset export and registry install actions', () => {
-    const exportParsed = getActionSpec('prompt_asset.export').inputSchema.parse({
-      artifactId: 'doc-1',
-      machineId: 'machine-1',
-      assetTypeId: 'agents.skill',
-      scope: 'project',
-      directory: '/tmp/project',
-      targetName: 'reviewer',
-      installMode: 'symlink',
-    });
-    const registryParsed = getActionSpec('prompt_registry.install').inputSchema.parse({
-      machineId: 'machine-1',
-      sourceId: 'skills_sh:featured',
-      itemId: 'skills_sh:featured:web-design-guidelines',
-      configuredSources: [],
-      installTarget: {
-        assetTypeId: 'agents.skill',
-        scope: 'project',
-        directory: '/tmp/project',
-        targetName: 'reviewer',
-        installMode: 'symlink',
-      },
-    });
-
-    expect((exportParsed as any).installMode).toBe('symlink');
-    expect((registryParsed as any).installTarget?.installMode).toBe('symlink');
   });
 
   it('provides input hints for every ActionSpec (single source of truth for elicitation)', () => {

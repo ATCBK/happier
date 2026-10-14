@@ -11,6 +11,9 @@ import { createActionApprovalContinuation } from '../../../../../apps/ui/sources
 import { ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { ProjectCommandActionOutputV1Schema } from '@happier-dev/protocol/actions/actionCompletion';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
+import { ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
+import { DaemonLocalServiceLauncherStartResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import { createHarness, resetFilesystemApprovalSocketBoundary } from './executeExternalAction.filesystemApprovals.testkit';
 
@@ -29,6 +32,13 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
     let operationId: string | undefined;
     try {
       const workspace = { serverId: h.ref.serverId, workspaceId: h.ref.id, machineId: h.ref.machineId, rootPath: h.rootPath };
+      const inspected = await h.run({ workspace }, 'ui', false, 'present_user', 'projects.inspect', 'setup-inspection');
+      expect(inspected, JSON.stringify(inspected)).toMatchObject({ ok: true });
+      const before = ProjectDefinitionInspectOutputSchema.parse(inspected.ok ? inspected.result : null);
+      expect(before).toMatchObject({ setupReadiness: { kind: 'unprepared' }, setupReview: {
+        reviewedEffect: { commands: [{ kind: 'command', command: 'echo setup-reviewed' }] },
+      } });
+      expect(h.spawned).toEqual([]);
       const run = await h.run({ workspace, selection: { kind: 'named', name: 'lint' } }, 'ui', false, 'present_user');
       if (!run.ok) throw new Error(run.errorCode);
       const accepted = PROJECT_ACTION_OUTPUT_SCHEMAS_V1['projects.script.run'].parse(run.result);
@@ -37,10 +47,15 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       await expect.poll(() => h.readOperation(operationId!)).toMatchObject({ kind: 'found', operation: { setupReview: { code: 'project_setup_consent_required' } } });
       const held = ActionOperationGetV1ResponseSchema.parse(await h.readOperation(operationId));
       if (held.kind !== 'found' || !held.operation.setupReview) throw new Error('Missing actual held review');
+      const changed = await h.run({ workspace, phase: 'setup', expectedEffectDigest: 'stale-review', consentScope: 'thisTime' },
+        'ui', unsignedUi ? 'unsigned-ui' : false, 'present_user', 'projects.prepare', 'changed-setup-review');
+      expect(changed).toMatchObject({ ok: false, errorCode: 'project_setup_effect_changed' });
+      expect(h.hasApproval()).toBe(false);
       const setup = await h.run({ workspace, phase: 'setup', expectedEffectDigest: held.operation.setupReview.reviewedEffectDigest,
         consentScope: 'thisTime' }, 'ui', unsignedUi ? 'unsigned-ui' : false, 'present_user', 'projects.prepare', 'this-time-setup');
       expect(setup, JSON.stringify(setup)).toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId: 'projects.prepare' } });
       expect(ActionApprovalRequestCreatedResultSchema.parse(setup.ok ? setup.result : null).actionId).toBe('projects.prepare');
+      expect((await h.approval()).preview).toMatchObject({ setupReview: before.setupReview });
       const decision = await h.decide('approve');
       expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
       const prepared = (await h.approval()).execution;
@@ -111,6 +126,11 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       operationId = parsed.operation.operationId;
       await expect.poll(() => h.readOperation(operationId!)).toMatchObject({ kind: 'found', operation: {
         setupReview: { code: 'project_setup_consent_required' }, progress: { phase: 'setup' } } });
+      // A verified peer grant is a different ingress from this installed
+      // approval's private requester custody; it must not authorize Stop.
+      expect(await h.unadmittedPeerCancel(operationId)).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
+      expect(await h.readOperation(operationId)).toMatchObject({ kind: 'found', operation: { setupReview: {
+        code: 'project_setup_consent_required' } } });
       const stop = await h.run({ serverId: h.ref.serverId, machineId: h.ref.machineId, operationId }, 'ui', 'unsigned-ui',
         'present_user', 'action.operations.cancel', 'stop-request');
       expect(stop).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
@@ -125,17 +145,31 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       await h.close();
     }
   });
-  it('admits approved Machine Service Start replay before its independent native-effect review', async () => {
-    const h = await createHarness('localServices.launcher.start');
+  it.each([false, true])('admits the first approved Machine Service Start with current requester custody (setup=%s)', async setup => {
+    const h = await createHarness('localServices.launcher.start', 'ask', setup);
     try {
       const input = await h.serviceInput();
-      const proposal = await h.run(input, 'cli', true);
+      const proposal = await h.run(input, 'ui', 'unsigned-ui', 'present_user');
       expect(proposal, JSON.stringify(proposal)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
       expect(requiresExactDaemonApprovalReplay(await h.approval())).toBe(true);
       expect(await h.decide('approve')).toMatchObject({ ok: true });
       const execution = (await h.approval()).execution;
       expect(execution, JSON.stringify(execution)).toMatchObject({ ok: true,
-        result: { status: 'denied', reasonCode: 'project_service_effect_review_required' } });
+        result: { status: 'denied', reasonCode: setup ? 'project_setup_consent_required' : 'project_service_effect_review_required' } });
+      if (!execution?.ok) throw new Error('Missing real Service execution');
+      assertActionOutputContract('localServices.launcher.start', execution.result);
+      const response = DaemonLocalServiceLauncherStartResponseV1Schema.parse(execution.result);
+      expect(response).toMatchObject({ machineId: h.ref.machineId, targetId: input.targetId,
+        reviewedEffectDigest: expect.any(String), reviewedEffect: { purpose: setup ? 'setup' : 'service' } });
+      const succeeded = vi.fn();
+      const failed = vi.fn();
+      const continuation = createActionApprovalContinuation({ artifactId: 'approval-seam', actionId: 'localServices.launcher.start',
+        scope: { serverId: 'srv_n2', accountId: 'account' }, expectedInput: input, onSucceeded: succeeded, onFailed: failed });
+      const receipt = await h.approval();
+      expect(await continuation.onExecuted({ id: 'approval-seam', title: null, header: buildApprovalRequestArtifactHeaderV1(receipt),
+        body: JSON.stringify(receipt), headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 2, isDecrypted: true })).toBe('consumed');
+      expect(failed.mock.calls).toEqual([]);
+      expect(succeeded).toHaveBeenCalledWith(response);
       expect(h.finiteIngress).toMatchObject([{ accountId: 'account', homeId: 'srv_n2', current: true }]);
     } finally { await h.close(); }
   });
@@ -268,6 +302,12 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       if (approval === 'ask') expect(await h.decide('approve')).toMatchObject({ ok: true, result: { status: 'executed' } });
       expect(JSON.stringify(h.rows)).toBe(accepted);
       expect(await readFile(join(h.rootPath, 'original'))).toEqual(bytes);
+      if (approval === 'allowed') {
+        h.disconnectInstalledMachine();
+        expect(await h.run(input, surface, false, 'account_automation', 'projects.open', 'disconnected-open'))
+          .toMatchObject({ ok: true, result: { kind: 'outcomeUnknown' } });
+        expect(JSON.stringify(h.rows)).toBe(accepted);
+      }
     } finally { await h.close(); }
   });
 

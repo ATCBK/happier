@@ -105,10 +105,10 @@ type BrowserRuntimeActionId = Extract<RuntimeActionIdV1, `browser.${string}`>;
 function createBrowserAutomationActionInputSchema<
   const TActionKind extends BrowserAutomationActionKindV1,
 >(actionKind: TActionKind) {
-  return z.intersection(
+  return lazyZodSchema(() => z.intersection(
     BrowserAutomationActionRequestV1Schema,
     z.object({ actionKind: z.literal(actionKind) }).passthrough(),
-  );
+  ));
 }
 
 const RuntimeBrowserViewInputSchema = lazyZodSchema(() => z

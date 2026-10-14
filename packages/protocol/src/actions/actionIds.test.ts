@@ -77,7 +77,6 @@ describe('ActionIdSchema', () => {
     expect(ActionIdSchema.parse('session.usageLimit.checkNow')).toBe('session.usageLimit.checkNow');
     expect(ActionIdSchema.parse('session.usageLimit.consumeResetCredit')).toBe('session.usageLimit.consumeResetCredit');
     expect(ActionIdSchema.parse('session.terminalComposer.clear')).toBe('session.terminalComposer.clear');
-    expect(ActionIdSchema.parse('prompt_asset.export')).toBe('prompt_asset.export');
     expect(ActionIdSchema.parse('prompt_registry.install')).toBe('prompt_registry.install');
     expect(ActionIdSchema.parse('skills.found.list')).toBe('skills.found.list');
     expect(ActionIdSchema.parse('bugreport.collectDiagnostics')).toBe('bugreport.collectDiagnostics');

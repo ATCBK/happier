@@ -412,7 +412,8 @@ describe('actionToolExposure', () => {
     const pluginProvenanceOnlyActionIds = new Set(PLUGIN_PROVENANCE_ONLY_API_EXCLUSION_ACTION_IDS);
     const pluginSurfaceExcludedActionIds = new Set(PLUGIN_SURFACE_EXCLUSION_ACTION_IDS);
 
-    expect(INTERNAL_ACTION_IDS).toContain('plugin.webhook.delivery.movePending');
+    expect(INTERNAL_ACTION_IDS).not.toContain('plugin.webhook.delivery.movePending');
+    expect(getActionSpec('plugin.webhook.delivery.movePending').surfaces).toMatchObject({ agent: true, mcp: true, api: false, plugin: false });
     for (const actionId of INTERNAL_ACTION_IDS) {
       expect(INTERNAL_ACTION_REASONS[actionId]).toMatch(/\S/);
     }
@@ -426,7 +427,8 @@ describe('actionToolExposure', () => {
         expect(spec.surfaces.plugin).toBe(false);
       } else {
         expect(spec.surfaces.api, spec.id).toBe(
-          !pluginProvenanceOnlyActionIds.has(spec.id)
+          spec.id !== 'plugin.webhook.delivery.movePending'
+            && !pluginProvenanceOnlyActionIds.has(spec.id)
             && !humanSecretApiExcludedActionIds.has(spec.id)
             && (spec.requiredAuthority === 'account_automation'
               || ['approval.request.decide', 'session.permission.respond', 'session.user_action.answer'].includes(spec.id)),

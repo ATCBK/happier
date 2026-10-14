@@ -1,14 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse, createActionExecutor } from '@happier-dev/protocol';
-import type { PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema, PromptLibraryRowMutationV1Schema, type PromptLibraryRowMutationV1, type PromptStackRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import type { PromptInvocationEntryV1 } from '@happier-dev/protocol/prompts/library/promptInvocationsV1';
 import type { PromptExternalLinkEntryV1 } from '@happier-dev/protocol/prompts/library/promptExternalLinksV1';
-import type { PromptAssetWriteDocRequest } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
 import { AccountSettingsV2UpdateRequestSchema, type AccountSettingsV2UpdateRequest } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { computeGitBlobShaV1, computeGitTreeShaV1, type RegistrySourceV1 } from '@happier-dev/protocol/registries';
+import type { RegistrySourceV1 } from '@happier-dev/protocol/registries';
 import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { removeTempDir } from '@/testkit/fs/tempDir';
@@ -192,77 +190,6 @@ describe('CLI Action prompt catalog admission', () => {
     const publish = () => publication.setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse(rawSettings), rawSettings,
         settingsVersion, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: scope.resolveAccountSettingsScopeKey(credentials) });
     const createDeps = () => factory.createCliActionDeps({ token, credentials, sessionId: 'session', serverId: 'alpha', serverHttpBaseUrl: url });
-    const createExportDeps = (externalWrites: PromptAssetWriteDocRequest[], onExternalWrite?: () => void) => {
-        // Registered SDK adapters are the external plugin service boundary. All
-        // catalog selection, Artifact decoding, export and persistence stay real.
-        const adapter: PromptAssetAdapter = {
-            descriptor: { id: 'external.prompt', providerId: 'external', title: 'External prompt', description: 'External service',
-                libraryKind: 'doc', supportsScope: { user: true, project: false }, supportsFiles: false,
-                formatId: 'markdown', defaultRoots: [], capabilities: {} },
-            discover: async () => [],
-            read: async () => { throw new Error('Unexpected external read'); },
-            writeDoc: async request => {
-                externalWrites.push(request);
-                onExternalWrite?.();
-                return { ok: true, externalRef: { id: 'current-external' }, digest: 'exported-digest' };
-            },
-            writeBundle: async () => { throw new Error('Unexpected bundle export'); },
-            delete: async () => { throw new Error('Unexpected external delete'); },
-        };
-        return factory.createCliActionDeps({ token, credentials, sessionId: 'session', serverId: 'alpha', serverHttpBaseUrl: url,
-            readRegisteredPromptAssetAdapters: () => new Map([[adapter.descriptor.id, adapter]]) });
-    };
-    const exportRequest = { artifactId: 'body', machineId: 'local-machine', assetTypeId: 'external.prompt', scope: 'user' as const,
-        targetPath: 'exported.md' };
-
-    it('installs and persists external links in the captured originating Account while the daemon Account differs', async () => {
-        externalLinks = [];
-        registrySources = { v: 2, disabledSourceIds: [], sources: [{ id: 'origin-source', title: 'Origin', format: 'git', kinds: ['skill'],
-            url: 'https://github.com/origin/skills', enabled: true, addedAt: 0 }] };
-        publish();
-        const snapshot = publication.getActiveAccountSettingsSnapshot();
-        if (!snapshot) throw new Error('Expected originating Account snapshot');
-        const operation = createInvocationSavedSecretOperationContextV1({ credentials, snapshot, serverHttpBaseUrl: url, isCurrent: async () => true });
-        const ambient = { ...snapshot, scopeKey: 'other-daemon-account' };
-        publication.setActiveAccountSettingsSnapshot(ambient);
-        const installs: unknown[] = [];
-        const adapter: PromptAssetAdapter = {
-            descriptor: { id: 'external.skill', providerId: 'external', title: 'External skill', description: 'External service',
-                libraryKind: 'bundle', supportsScope: { user: true, project: false }, supportsFiles: true,
-                formatId: 'skills.skill_md_v1', defaultRoots: [], capabilities: { supportsCatalogInstall: true } },
-            discover: async () => [], read: async () => { throw new Error('Unused external read'); },
-            writeDoc: async () => { throw new Error('Unused external document'); }, delete: async () => { throw new Error('Unused external delete'); },
-            writeBundle: async request => { installs.push(request); return { ok: true, externalRef: { id: 'origin-installed' }, digest: 'observed-install-digest' }; },
-        };
-        const skillBytes = new TextEncoder().encode('---\nname: origin-skill\n---\nOrigin instructions\n');
-        const treeSha = computeGitTreeShaV1([{ path: 'SKILL.md', unixMode: 0o644, bytes: skillBytes }]);
-        const fetchBoundary = vi.spyOn(globalThis, 'fetch').mockImplementation(async remote => {
-            if (String(remote).startsWith('https://raw.githubusercontent.com/')) return new Response(skillBytes);
-            return Response.json(String(remote).includes('/commits/') ? { sha: '1'.repeat(40) } : { sha: '2'.repeat(40), tree: [
-                { path: 'review', mode: '040000', type: 'tree', sha: treeSha },
-                { path: 'review/SKILL.md', mode: '100644', type: 'blob', sha: computeGitBlobShaV1(skillBytes), size: skillBytes.length },
-            ] });
-        });
-        try {
-            const deps = factory.createCliActionDeps({ token, credentials, sessionId: 'plugin-global', serverId: 'alpha', serverHttpBaseUrl: url,
-                serverIdentityId: 'srv_library_a', savedSecretOperationContext: operation,
-                actionsSettingsProvider: createActionSettingsProvider({ scopeKey: snapshot.scopeKey, getAccountSettings: () => operation.readSnapshot()?.settings ?? null }),
-                readRegisteredPromptAssetAdapters: () => new Map([[adapter.descriptor.id, adapter]]) });
-            const result = await createActionExecutor(deps).execute('prompt_registry.install', { machineId: 'local-machine', sourceId: 'origin-source', itemId: 'review',
-                installTarget: { assetTypeId: 'external.skill', scope: 'user', targetName: 'installed-origin' } },
-            { surface: 'api', authority: 'account_automation', actionCaller: { kind: 'host' }, bypassApprovals: true });
-            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { exported: true, externalLinkPersistence: { status: 'applied', version: 8 } } });
-            expect(installs).toHaveLength(1);
-            expect(externalLinkWrites).toMatchObject([{ expectedRevision: 7, content: { t: 'plain', v: { key: 'external-links', value: {
-                links: [expect.objectContaining({ machineId: 'local-machine', serverIdentityId: 'srv_library_a', externalRef: { id: 'origin-installed' } })],
-            } } } }]);
-            expect(publication.getActiveAccountSettingsSnapshot()).toBe(ambient);
-            expect(operation.readSnapshot()?.promptLibraryCatalog).toMatchObject({ rows: expect.arrayContaining([
-                expect.objectContaining({ revision: 8, record: expect.objectContaining({ key: 'external-links' }) }),
-            ]) });
-        } finally { fetchBoundary.mockRestore(); }
-    });
-
     it('F8 routes Account stack Actions through the real captured keyless catalog transport and refuses stale edits', async () => {
         const retained = { id: 'skill', ref: { kind: 'bundle' as const, artifactId: 'body' }, enabled: true,
             placement: 'skill_instructions' as const };
@@ -316,111 +243,4 @@ describe('CLI Action prompt catalog admission', () => {
         expect(requests).not.toContain('/v1/artifacts/body');
     });
 
-    it('exports using the current external-link destination and acknowledges its row CAS without restoring the Settings source', async () => {
-        expect((await getServerProfile('alpha')).homeConnectionDescriptor?.homeServerIdentityId).toBe('srv_library_a');
-        const selected: PromptExternalLinkEntryV1 = { id: 'current', artifactId: 'body', assetTypeId: 'external.prompt',
-            scope: 'user', machineId: 'local-machine', externalRef: { id: 'current-external' },
-            lastExternalDigest: 'current-digest' };
-        const neighbor: PromptExternalLinkEntryV1 = { ...selected, id: 'neighbor', artifactId: 'neighbor-doc',
-            externalRef: { id: 'neighbor-external' }, lastExternalDigest: 'neighbor-digest' };
-        const foreign: PromptExternalLinkEntryV1 = { ...selected, id: 'foreign-home', serverIdentityId: 'srv_machine_b',
-            externalRef: { id: 'foreign-external' }, lastExternalDigest: 'foreign-digest' };
-        externalLinks = [selected, neighbor, foreign];
-        rawSettings = { promptExternalLinksV1: { v: 1, links: [{ ...selected, id: 'stale',
-            externalRef: { id: 'stale-external' }, lastExternalDigest: 'stale-digest' }] } };
-        publish();
-        const externalWrites: PromptAssetWriteDocRequest[] = [];
-        const deps = createExportDeps(externalWrites);
-        if (!deps.promptAssetExport) throw new Error('Missing export Action owner');
-        const result = await deps.promptAssetExport(exportRequest);
-        expect(externalWrites, JSON.stringify({ result, requests })).toMatchObject([
-            { externalRef: { id: 'current-external' }, expectedDigest: 'current-digest' },
-        ]);
-        expect(result).toMatchObject({ ok: true, exported: true, externalLinkPersistence: { status: 'applied', version: 8 } });
-        expect(externalLinkWrites).toHaveLength(1);
-        expect(externalLinkWrites[0]).toMatchObject({ expectedRevision: 7,
-            content: { t: 'plain', v: { key: 'external-links', value: { v: 1, links: [neighbor, foreign,
-                { ...selected, serverIdentityId: 'srv_library_a', lastExternalDigest: 'exported-digest' }] } } } });
-        expect(settingsWrites.every(write => write.content?.t !== 'plain'
-            || !Object.hasOwn(write.content.v, 'promptExternalLinksV1'))).toBe(true);
-    });
-
-    it('refuses an external export before effects when the captured host Home has no observed portable identity', async () => {
-        const profile = (await readSettings()).servers?.alpha;
-        if (!profile) throw new Error('Missing real host profile fixture');
-        await updateSettings(current => {
-            const { homeConnectionDescriptor: _removed, ...unobserved } = profile;
-            return { ...current, servers: { ...current.servers, alpha: unobserved } };
-        });
-        try {
-            externalLinks = [];
-            publish();
-            const externalWrites: PromptAssetWriteDocRequest[] = [];
-            const result = await createExportDeps(externalWrites).promptAssetExport?.(exportRequest);
-            expect(result).toMatchObject({ ok: false, errorCode: 'prompt_catalog_unavailable' });
-            expect(externalWrites).toEqual([]);
-            expect(externalLinkWrites).toEqual([]);
-        } finally {
-            await updateSettings(current => ({ ...current, servers: { ...current.servers, alpha: profile } }));
-        }
-    });
-
-    it('preserves the successful external effect while a competing link row wins the exact CAS', async () => {
-        const selected: PromptExternalLinkEntryV1 = { id: 'current', artifactId: 'body', assetTypeId: 'external.prompt',
-            scope: 'user', machineId: 'local-machine', externalRef: { id: 'current-external' }, lastExternalDigest: 'current-digest' };
-        externalLinks = [selected];
-        publish();
-        const externalWrites: PromptAssetWriteDocRequest[] = [];
-        const winner = { ...selected, lastExternalDigest: 'other-client-digest' };
-        const deps = createExportDeps(externalWrites, () => { externalLinks = [winner]; externalLinkRevision = 8; });
-        if (!deps.promptAssetExport) throw new Error('Missing export Action owner');
-        const result = await deps.promptAssetExport(exportRequest);
-        expect(result, JSON.stringify(requests)).toMatchObject({ ok: true, exported: true,
-            externalLinkPersistence: { status: 'conflict', currentVersion: 8 } });
-        expect(externalWrites).toHaveLength(1);
-        expect(externalLinkWrites).toHaveLength(1);
-        expect(externalLinkWrites[0]?.expectedRevision).toBe(7);
-        expect(externalLinks).toEqual([winner]);
-    });
-
-    it.each(['artifact-failure', 'account-retirement'] as const)('retains the observed registry install ACK through the public Action failure envelope after %s', async failure => {
-        externalLinks = [];
-        artifactCreationFails = failure === 'artifact-failure';
-        gitFixture.enabled = true;
-        publish();
-        const installed = { ok: true as const, externalRef: { id: 'installed-registry-skill' }, digest: 'committed-install-digest' };
-        let observedInstalls = 0;
-        const adapter: PromptAssetAdapter = {
-            descriptor: { id: 'external.skill', providerId: 'external', title: 'External skill', description: 'External service',
-                libraryKind: 'bundle', supportsScope: { user: true, project: false }, supportsFiles: true,
-                formatId: 'skills.skill_md_v1', defaultRoots: [], capabilities: { supportsCatalogInstall: true } },
-            discover: async () => [],
-            read: async () => { throw new Error('Unexpected external read'); },
-            writeDoc: async () => { throw new Error('Unexpected document install'); },
-            writeBundle: async () => {
-                observedInstalls += 1;
-                if (failure === 'account-retirement') publication.clearActiveAccountSettingsSnapshot();
-                return installed;
-            },
-            delete: async () => { throw new Error('Unexpected external delete'); },
-        };
-        const deps = factory.createCliActionDeps({ token, credentials, sessionId: 'session', serverId: 'alpha', serverHttpBaseUrl: url,
-            readRegisteredPromptAssetAdapters: () => new Map([[adapter.descriptor.id, adapter]]) });
-        const result = await createActionExecutor(deps).execute('prompt_registry.install', {
-            machineId: 'local-machine', sourceId: 'git:fixture', itemId: 'git:fixture:skill',
-            configuredSources: [{ id: 'fixture', adapterId: 'git', title: 'Fixture registry', enabled: true,
-                config: { repositoryUrl: 'https://registry-fixture.invalid/source.git' } }],
-            installTarget: { assetTypeId: 'external.skill', scope: 'user', targetName: 'installed-skill' },
-        // The shipped machine ingress stamps PAT calls as API/Account
-        // automation, not terminal CLI (executeExternalAction.ts). Exercise
-        // this owner after host approval/policy admission, not surface policy.
-        }, { surface: 'api', authority: 'account_automation', actionCaller: { kind: 'host' }, bypassApprovals: true });
-        expect(observedInstalls, JSON.stringify(result)).toBe(1);
-        expect(result).toMatchObject({ ok: false, details: { exported: true, response: installed } });
-        expect(JSON.stringify(result)).not.toContain('Private registry title');
-        expect(JSON.stringify(result)).not.toContain('Private registry instructions');
-        expect(externalLinkWrites).toEqual([]);
-        if (failure === 'artifact-failure') expect(requests).toContain('/v1/artifacts');
-        else expect(requests).not.toContain('/v1/artifacts');
-    });
 });

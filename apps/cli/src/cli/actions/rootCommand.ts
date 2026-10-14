@@ -9,9 +9,9 @@ import { actionCliCommandUsagePath, listCompiledActionCliCommands, type Compiled
 import { actionCliEnvelopeKind } from './commandPresentation';
 import { ACTION_CLI_HELP_FLAGS } from './parseCommandInput';
 
-function commandsUnderRoot(root: string): readonly CompiledActionCliCommand[] {
+function commandsUnderRoot(prefix: readonly string[]): readonly CompiledActionCliCommand[] {
   return listCompiledActionCliCommands().filter((command) => (
-    command.path[0] === root && command.visibility !== 'hidden'
+    prefix.every((part, index) => command.path[index] === part) && command.visibility !== 'hidden'
   ));
 }
 
@@ -20,10 +20,10 @@ function commandsUnderRoot(root: string): readonly CompiledActionCliCommand[] {
  * comes from a compiled descriptor, so a listed subcommand is always a
  * dispatchable one.
  */
-export function renderActionCliRootHelp(root: string): string {
-  const commands = commandsUnderRoot(root);
+export function renderActionCliRootHelp(root: string, prefix: readonly string[] = [root]): string {
+  const commands = commandsUnderRoot(prefix);
   return renderHelpPage({
-    title: `happier ${root}`,
+    title: `happier ${prefix.join(' ')}`,
     subtitle: `Action-backed ${root} commands`,
     usage: [...commands.map((command) => ({
       label: `happier ${actionCliCommandUsagePath(command)}${

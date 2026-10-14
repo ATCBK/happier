@@ -82,11 +82,11 @@ export const DEFAULT_PENDING_REQUESTED_ACTION_V1 = Object.freeze({
   kind: 'enqueue',
 } satisfies PendingRequestedActionV1);
 
-export function normalizePendingRequestedActionV1(value: unknown): PendingRequestedActionV1 {
+export function normalizePendingRequestedActionV1(value: unknown, source: 'input' | 'stored' = 'input'): PendingRequestedActionV1 {
   if (value === null || value === undefined) {
     return DEFAULT_PENDING_REQUESTED_ACTION_V1;
   }
-  const parsed = PendingRequestedActionV1Schema.safeParse(value);
+  const parsed = (source === 'stored' ? PendingRequestedActionV1StoredSchema : PendingRequestedActionV1Schema).safeParse(value);
   if (!parsed.success) {
     throw new Error('Malformed non-null Pending requested action');
   }

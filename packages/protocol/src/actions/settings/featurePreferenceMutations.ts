@@ -324,9 +324,6 @@ export const UI_FEATURE_REGISTRY = {
     'prompts.library': {
         settingsToggle: undefined,
     },
-    'prompts.assets.external': {
-        settingsToggle: undefined,
-    },
     'sessions.direct': {
         settingsToggle: {
             showInSettings: true,
@@ -509,9 +506,6 @@ export const UI_FEATURE_REGISTRY = {
         settingsToggle: undefined,
     },
     'terminal.renderer.androidTermux': {
-        settingsToggle: undefined,
-    },
-    'mcp.servers': {
         settingsToggle: undefined,
     },
     'files.editor': {

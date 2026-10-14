@@ -3,8 +3,7 @@ import { PEER_MACHINE_RPC_DIRECT_PATH_V2 } from '@happier-dev/protocol/machines/
 import { PEER_MEDIATION_RECEIPTS } from '@happier-dev/protocol/machines/peer/mediation/receipts';
 import { createPeerMachineRpcResultHashV1 } from '@happier-dev/protocol/machines/peer/mediation/rpc/commandReceiptV1';
 import type { PeerMachineRpcCommandReceiptSuccessV1, PeerMachineRpcDirectResponseV2 } from '@happier-dev/protocol';
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_ERROR_CODES, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import type { DaemonPeerMediationDirectFlowObserver } from '../observability/events';
 import type { DirectRouteGrantTrustRoot } from '../verifyDirectRouteGrant';
@@ -30,7 +29,12 @@ export type PeerMachineRpcDirectHandlerManager = Readonly<{
     invokeLocal(
         method: string,
         params: unknown,
-        options?: Readonly<{ signal?: AbortSignal; verifiedPeerAuthority?: 'present_user' | 'account_automation' }>,
+        options?: Readonly<{
+            signal?: AbortSignal;
+            /** Only the verified Home-signed route grant supplies these host-side facts. */
+            verifiedPeerAccountId?: string;
+            verifiedPeerAuthority?: 'present_user' | 'account_automation';
+        }>,
     ): Promise<unknown>;
 }>;
 
@@ -189,29 +193,21 @@ export function registerPeerMediationMachineRpcDirectRoutes(
         try {
             reservation?.commit();
             let result: unknown;
+            let handlerFailureCode: string | undefined;
             try {
                 result = await options.rpcHandlerManager.invokeLocal(
                     validation.request.method,
                     validation.request.params,
-                    { signal, ...(validation.request.method === RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE
-                        ? { verifiedPeerAuthority: validation.grant.callerAuthority ?? 'account_automation' } : {}) },
+                    { signal, verifiedPeerAccountId: validation.grant.accountId,
+                        verifiedPeerAuthority: validation.grant.callerAuthority ?? 'account_automation' },
                 );
             } catch (error) {
-                observe({
-                    flowId: validation.request.requestId,
-                    kind: 'flow.errored',
-                    reasonCode: 'handler_unavailable',
-                });
-                return {
-                    v: 2,
-                    ok: false,
-                    receipt: PEER_MEDIATION_RECEIPTS.rpcFellBackToServer,
-                    requestId: validation.request.requestId,
-                    method: validation.request.method,
-                    reasonCode: 'handler_unavailable',
-                };
+                // The route was available and dispatch already happened. Preserve
+                // the handler's typed failure in the ordinary RPC result.
+                handlerFailureCode = readRpcErrorCode(error) ?? 'handler_failed';
+                result = { error: 'Direct RPC handler failed', errorCode: handlerFailureCode };
             }
-            if (isMethodNotFoundResult(result)) {
+            if (!handlerFailureCode && isMethodNotFoundResult(result)) {
                 observe({
                     flowId: validation.request.requestId,
                     kind: 'flow.errored',
@@ -227,7 +223,8 @@ export function registerPeerMediationMachineRpcDirectRoutes(
                 };
             }
 
-            observe({ flowId: validation.request.requestId, kind: 'flow.closed' });
+            observe({ flowId: validation.request.requestId, kind: handlerFailureCode ? 'flow.errored' : 'flow.closed',
+                ...(handlerFailureCode ? { reasonCode: handlerFailureCode } : {}) });
             return {
                 v: validation.request.v,
                 ok: true,

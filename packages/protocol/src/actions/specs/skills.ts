@@ -79,7 +79,7 @@ export const SKILL_ACTION_SPECS_V1 = [
     bindings: { rpcMethod: 'skills.found.list', mcpToolName: 'skills_found_list' },
     inputSchema: machineInputs['skills.found.list'], outputSchema: machineOutputs['skills.found.list'], inputHints: { fields: [] },
     cli: { acceptsServerId: true, flagAliases: [{ path: 'machineId', aliases: ['--machine'] }, { path: 'directory', aliases: ['--dir'] }],
-      commands: [{ path: ['skills', 'found'], visibility: 'canonical' }] } },
+      commands: [{ path: ['skills', 'found', 'list'], visibility: 'canonical' }] } },
   { ...skillSpec('skills.found.read', 'Read a skill found on a machine', true), cli: { acceptsServerId: true,
     inputSchema: z.object({ itemId: z.string().min(1), machineId: z.string().min(1) }).strict(),
     bindInput: (raw: unknown) => { const input = readRecord(raw); return { machineId: input.machineId, path: input.itemId }; },

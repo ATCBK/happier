@@ -43,6 +43,30 @@ const leaf = (facts: AgentStartFactsV1 = {}): MaterializedWorkflowLeafV1 => ({ b
 const spawn = (facts: AgentStartFactsV1 = {}): AgentStartRequestV1 => ({ kind: 'spawn_new', facts });
 
 describe('admitAgentStartV1', () => {
+  it('admits a Workflow Run without an Agent leaf while enforcing its real placement, ceiling and depth', () => {
+    const context = { ...baseline, baseline: { machineId: 'machine', directory: '/workspace' } };
+    const request = { kind: 'workflow_run', facts: { machineId: 'machine', directory: '/workspace', permissionMode: 'default' } } as const;
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, request, context))
+      .toEqual({ ok: true, stamped: { workDepth: 1 } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, request, { ...context,
+      allowLists: { v: 1, allowedRoleIds: [], allowedAgentTargetKeys: [] } }))
+      .toEqual({ ok: true, stamped: { workDepth: 1 } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
+      { ...request, targetSessionId: 'unrelated' }, context))
+      .toMatchObject({ ok: false, refusal: { code: 'subtree_denied' } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, request, { ...context,
+      caller: { kind: 'session', sessionId: 'lead', starterDepth: 4, turnDepth: 4 } }))
+      .toMatchObject({ ok: false, refusal: { code: 'work_depth_exceeded' } });
+    expect(admitAgentStartV1({ ...DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, allowCustomDirectory: false },
+      { ...request, facts: { ...request.facts, directory: '/different' } }, context))
+      .toMatchObject({ ok: false, refusal: { code: 'policy_denied_field', field: 'directory' } });
+    expect(admitAgentStartV1({ ...DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, allowCrossMachine: false },
+      { ...request, facts: { ...request.facts, machineId: 'different' } }, context))
+      .toMatchObject({ ok: false, refusal: { code: 'policy_denied_field', field: 'executionTarget.machineId' } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
+      { ...request, facts: { ...request.facts, permissionMode: 'yolo' } }, context))
+      .toMatchObject({ ok: false, refusal: { code: 'permission_exceeds_ceiling' } });
+  });
   it('applies the released MCP override policy to the whole capability selection', () => {
     const policy = { ...DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, allowMcpSelectionOverride: false };
     const capabilitySelection = {
@@ -320,8 +344,8 @@ describe('admitAgentStartV1', () => {
   });
 
   it('fails closed on unresolved choices even under unrestricted policy', () => {
-    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, spawn({ machineId: { kind: 'unresolved' } }), baseline)).toMatchObject({ ok: false, refusal: { code: 'target_unavailable' } });
-    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, spawn(), { ...baseline, baseline: { machineId: 'machine', directory: '/workspace' } })).toMatchObject({ ok: false, refusal: { code: 'target_unavailable' } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, spawn({ machineId: { kind: 'unresolved' } }), baseline)).toMatchObject({ ok: false, refusal: { code: 'target_unavailable', reason: 'selection_unavailable' } });
+    expect(admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, spawn(), { ...baseline, baseline: { machineId: 'machine', directory: '/workspace' } })).toMatchObject({ ok: false, refusal: { code: 'target_unavailable', reason: 'selection_unavailable' } });
   });
 
   it('derives engine overrides from every actual execution target, not just facts', () => {

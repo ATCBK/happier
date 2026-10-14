@@ -55,17 +55,23 @@ describe('project definition exact Machine transport', () => {
   });
   it('carries the qualified workspace, admitted authority and cancellation to the exact Machine, validates output and refuses another Home', async () => {
     const token = 'project-token';
+    // Already-admitted host transport is the network boundary. Original
+    // Account inspection is covered through Home and installed ingress.
+    const boundary = vi.fn(async (_method: string, _request: unknown,
+      _options?: Parameters<NonNullable<Parameters<typeof createCliActionDeps>[0]['machineActionDirectTargetTransport']>['invoke']>[2]): Promise<unknown> => ({
+      definition: { basis: { kind: 'absent' }, document: null },
+      detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
+    }));
     const deps = createCliActionDeps({ token, credentials: { token, encryption: null }, sessionId: 'cli-global', mode: 'plain', ctx: null,
-      serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.test' });
+      serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.test',
+      machineActionDirectTargetTransport: { machineId: 'machine-a', invoke: boundary } });
     const fallback = vi.spyOn(machineTransport, 'callMachineRpc').mockRejectedValue(new Error('wrong_machine_transport'));
-    const boundary = vi.spyOn(machineTransport, 'callExactMachineRpc').mockResolvedValue({ definition: { basis: { kind: 'absent' }, document: null },
-      detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [] });
     const workspace = { serverId: 'home-a', workspaceId: 'workspace-a', machineId: 'machine-a', rootPath: '/work/project' };
     const signal = new AbortController().signal;
     expect(deps.projectDefinitionAction).toBeTypeOf('function');
     expect(await deps.projectDefinitionAction!({ actionId: 'projects.inspect', input: { workspace }, context: { signal } }))
       .toMatchObject({ definition: { basis: { kind: 'absent' } }, detection: { coverage: 'complete' } });
-    expect(boundary).toHaveBeenCalledWith(expect.objectContaining({ machineId: workspace.machineId, method: 'daemon.projects.inspect.v1', request: { workspace }, signal }));
+    expect(boundary).toHaveBeenCalledWith('daemon.projects.inspect.v1', { workspace }, expect.objectContaining({ signal }));
     expect(fallback).not.toHaveBeenCalled();
     const sourceDefinition = { basis: { kind: 'present' as const, hash: 'a'.repeat(64) },
       document: readProjectManifestDocument(JSON.stringify({ version: 1,
@@ -79,9 +85,8 @@ describe('project definition exact Machine transport', () => {
       authority: 'account_automation', surface: 'api', signal, serverId: workspace.serverId,
       externalActionTarget: { kind: 'machine', machineId: workspace.machineId },
     })).toMatchObject({ ok: true, result: { definition: sourceDefinition } });
-    expect(boundary).toHaveBeenLastCalledWith(expect.objectContaining({
-      machineId: workspace.machineId, method: 'daemon.projects.inspect.v1', request: { workspace },
-      authorityCeiling: 'account_automation', credentials: { token, encryption: null }, signal,
+    expect(boundary).toHaveBeenLastCalledWith('daemon.projects.inspect.v1', { workspace }, expect.objectContaining({ signal,
+      localActionContext: expect.objectContaining({ authority: 'account_automation' }),
     }));
     boundary.mockClear();
     expect(await deps.projectDefinitionAction!({ actionId: 'projects.inspect', input: { workspace: { ...workspace, serverId: 'home-b' } }, context: {} }))

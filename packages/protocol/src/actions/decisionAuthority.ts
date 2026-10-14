@@ -129,7 +129,8 @@ export function resolveCredentialActionAdmissionV1(input: Readonly<{
   }
   if (!requiresPresentUserExecutionAuthorityForActionInputV1(input.spec, input.actionInput) || input.authority === 'present_user') return { ok: true };
   // Admission here permits requesting consent, never automatic execution.
-  // The approval owner enforces a mandatory floor, including persisted waivers.
+  // Approval defaults are user-waivable. The executor still proves human
+  // authority before preparation/effects when no approval proposal is requested.
   if (isAutomationApprovalRequestSurface(input.surface, input.spec, input.actionInput) && !input.hasExternalCredential && !input.grant
     && canRequestPresentUserApprovalForActionInputV1(input.spec, input.actionInput)) return { ok: true };
   if ((DECISION_ACTION_IDS as readonly string[]).includes(input.spec.id) && canCredentialDecideV1(input)) return { ok: true };

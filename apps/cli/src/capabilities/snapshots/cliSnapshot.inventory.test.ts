@@ -74,7 +74,7 @@ describe('machine agent inventory on the daemon', () => {
                     agentIds: readInstalledMachineAgentIds(publication.agentInventory, undefined) }],
             });
             expect(projection[0]?.agents.map(({ agentId, enabled }) => ({ agentId, enabled }))).toEqual([
-                { agentId: 'codex', enabled: true }, { agentId: 'custom-acp', enabled: true },
+                { agentId: 'codex', enabled: true },
             ]);
             expect(projectMachineAgentInventoryFromCliSnapshot({
                 snapshot: { ...snapshot, clis: { ...snapshot.clis, codex: { available: true } } },

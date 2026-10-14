@@ -152,7 +152,6 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "daemon.filesystem.transfer.cancel",
   "daemon.filesystem.upload",
   "daemon.filesystem.writeFile",
-  "daemon.promptAssets.delete",
   "devices.simulator.input.button",
   "devices.simulator.input.key",
   "devices.simulator.input.pinch",
@@ -351,7 +350,6 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "projects.worker.preferences.set",
   "projects.workspace.forget",
   "projects.workspace.update",
-  "prompt_asset.export",
   "prompt_bundle.update",
   "prompt_doc.create",
   "prompt_doc.favorite.set",
@@ -1154,9 +1152,6 @@ export type GeneratedActions = Readonly<{
       readonly upload: (input: PublicActionInputById["daemon.filesystem.upload"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"daemon.filesystem.upload">>;
       readonly writeFile: (input: PublicActionInputById["daemon.filesystem.writeFile"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"daemon.filesystem.writeFile">>;
     }> ;
-    readonly promptAssets: Readonly<{
-      readonly delete: (input: PublicActionInputById["daemon.promptAssets.delete"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"daemon.promptAssets.delete">>;
-    }> ;
   }> ;
   readonly devices: Readonly<{
     readonly simulator: Readonly<{
@@ -1794,9 +1789,6 @@ export type GeneratedActions = Readonly<{
       readonly forget: (input: PublicActionInputById["projects.workspace.forget"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"projects.workspace.forget">>;
       readonly update: (input: PublicActionInputById["projects.workspace.update"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"projects.workspace.update">>;
     }> ;
-  }> ;
-  readonly promptAsset: Readonly<{
-    readonly export: (input: PublicActionInputById["prompt_asset.export"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"prompt_asset.export">>;
   }> ;
   readonly promptBundle: Readonly<{
     readonly update: (input: PublicActionInputById["prompt_bundle.update"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"prompt_bundle.update">>;
@@ -3384,9 +3376,6 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         upload: (input: PublicActionInputById["daemon.filesystem.upload"], options?: ActionExecutionOptions) => execute("daemon.filesystem.upload", input, options),
         writeFile: (input: PublicActionInputById["daemon.filesystem.writeFile"], options?: ActionExecutionOptions) => execute("daemon.filesystem.writeFile", input, options),
       },
-      promptAssets: {
-        delete: (input: PublicActionInputById["daemon.promptAssets.delete"], options?: ActionExecutionOptions) => execute("daemon.promptAssets.delete", input, options),
-      },
     },
     devices: {
       simulator: {
@@ -4024,9 +4013,6 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         forget: (input: PublicActionInputById["projects.workspace.forget"], options?: ActionExecutionOptions) => execute("projects.workspace.forget", input, options),
         update: (input: PublicActionInputById["projects.workspace.update"], options?: ActionExecutionOptions) => execute("projects.workspace.update", input, options),
       },
-    },
-    promptAsset: {
-      export: (input: PublicActionInputById["prompt_asset.export"], options?: ActionExecutionOptions) => execute("prompt_asset.export", input, options),
     },
     promptBundle: {
       update: (input: PublicActionInputById["prompt_bundle.update"], options?: ActionExecutionOptions) => execute("prompt_bundle.update", input, options),

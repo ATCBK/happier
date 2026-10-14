@@ -1032,27 +1032,39 @@ describe('shared Account workflow run owner', () => {
       context: { surface: 'ui', authority: 'present_user', callerPermissionMode: 'default' } }))
       .resolves.toMatchObject({ run: { id: runId } });
   });
-  it.each(['agent', 'ui'] as const)('requires materialized agent-start leaves only for an %s run', async (surface) => {
+  it.each(['agent', 'ui'] as const)('admits a Wait-only %s run without an Agent leaf and stamps its actual Run depth', async (surface) => {
     let writes = 0;
+    let runDepth = 1;
+    let envelope: unknown;
     const owner = createWorkflowAccountRunActionOwner({
       ...ownerDeps({ execute: async (operation) => {
         if (operation.operation === 'get') throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+        envelope = operation.acceptedEnvelope;
         writes += 1;
         return { kind: 'created', run: runSnapshot().run };
       } }),
       prepareWorkspace: async () => ({ ok: true, workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } } }),
       resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true } }),
-      resolveAgentStartContext: async () => ({ caller: { kind: 'originless', runId: 'calling-run', runDepth: 1 },
+      resolveAgentStartContext: async () => ({ caller: { kind: 'originless', runId: 'calling-run', runDepth },
         baseline: { machineId: 'machine-a', directory: '/repo' },
         roles: {}, callerPermissionCeiling: 'safe-yolo', ledSubtreeSessionIds: [], workDepthLimit: 4 }),
     });
-    const result = owner.execute({ actionId: 'workflow.run.start', input: { runId, source: { kind: 'inline', definition: {
+    const args = { actionId: 'workflow.run.start' as const, input: { runId, source: { kind: 'inline' as const, definition: {
       version: 1, blocks: [{ kind: 'wait', id: 'wait', document: { text: 'Choose', references: [], attachments: [] } }],
-    } } }, context: { surface, ...(surface === 'ui' ? { authority: 'present_user' as const } : {}), callerPermissionMode: 'safe-yolo',
-      externalActionTarget: { kind: 'machine', machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } } } });
-    if (surface === 'agent') await expect(result).rejects.toMatchObject({ code: 'target_unavailable' });
-    else await expect(result).resolves.toMatchObject({ admission: 'created' });
-    expect(writes).toBe(surface === 'agent' ? 0 : 1);
+    } } }, context: { surface, ...(surface === 'ui' ? { authority: 'present_user' as const } : {}), callerPermissionMode: 'safe-yolo' as const,
+      externalActionTarget: { kind: 'machine' as const, machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } } } };
+    await expect(owner.execute(args)).resolves.toMatchObject({ admission: 'created' });
+    expect(writes).toBe(1);
+    expect(openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      envelope: parseWorkflowStoredContentEnvelopeV1(envelope),
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId } }))
+      .toMatchObject({ kind: 'available', content: { workDepth: surface === 'agent' ? 2 : 0,
+        materializedLeaves: [{ kind: 'wait' }] } });
+    runDepth = 4;
+    if (surface === 'agent') {
+      await expect(owner.execute(args)).rejects.toMatchObject({ code: 'work_depth_exceeded' });
+      expect(writes).toBe(1);
+    } else await expect(owner.execute(args)).resolves.toMatchObject({ admission: 'created' });
   });
 
   it('records boundary Resume without opening encrypted content or checking private authority', async () => {

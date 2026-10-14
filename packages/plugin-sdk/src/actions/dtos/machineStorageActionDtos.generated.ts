@@ -381,6 +381,7 @@ export type MachineStorageActionResultById = {
         }[];
         inTrashBytes: number;
         freedBytes: number;
+        trashEntryIds?: string[] | undefined;
     };
     readonly "machines.storage.deleteNow": {
         batchId: string;
@@ -395,6 +396,7 @@ export type MachineStorageActionResultById = {
         }[];
         inTrashBytes: number;
         freedBytes: number;
+        trashEntryIds?: string[] | undefined;
     };
     readonly "machines.storage.trash.empty": {
         outcomes: {

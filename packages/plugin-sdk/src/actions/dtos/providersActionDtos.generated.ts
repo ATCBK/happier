@@ -543,6 +543,7 @@ export type ProvidersActionInputById = {
             model?: {
                 id: string;
                 name: string;
+                costTier?: 'low' | 'standard' | 'premium' | undefined;
                 aliases?: string[] | undefined;
                 description?: string | undefined;
                 contextWindowTokens?: number | undefined;
@@ -3099,6 +3100,7 @@ export type ProvidersActionResultById = {
                 descriptor: {
                     id: string;
                     name: string;
+                    costTier?: 'low' | 'standard' | 'premium' | undefined;
                     aliases?: string[] | undefined;
                     description?: string | undefined;
                     contextWindowTokens?: number | undefined;
@@ -3187,6 +3189,7 @@ export type ProvidersActionResultById = {
                     descriptor: {
                         id: string;
                         name: string;
+                        costTier?: 'low' | 'standard' | 'premium' | undefined;
                         aliases?: string[] | undefined;
                         description?: string | undefined;
                         contextWindowTokens?: number | undefined;
@@ -3379,6 +3382,7 @@ export type ProvidersActionResultById = {
                 descriptor: {
                     id: string;
                     name: string;
+                    costTier?: 'low' | 'standard' | 'premium' | undefined;
                     aliases?: string[] | undefined;
                     description?: string | undefined;
                     contextWindowTokens?: number | undefined;
@@ -3467,6 +3471,7 @@ export type ProvidersActionResultById = {
                     descriptor: {
                         id: string;
                         name: string;
+                        costTier?: 'low' | 'standard' | 'premium' | undefined;
                         aliases?: string[] | undefined;
                         description?: string | undefined;
                         contextWindowTokens?: number | undefined;

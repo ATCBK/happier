@@ -67,7 +67,7 @@ export async function tryHandleSkillsCliCommand(params: Readonly<{ argv: readonl
   if (command.actionId === 'skills.found.read' || command.actionId === 'skills.found.adopt') {
     if (typeof caller.machineId !== 'string') throw new Error('Supply --machine.');
     let found: ReturnType<typeof SkillFoundListResultV1Schema.parse> | undefined;
-    await runRead(['skills', 'found'], { machineId: caller.machineId }, value => { found = SkillFoundListResultV1Schema.parse(value); });
+    await runRead(['skills', 'found', 'list'], { machineId: caller.machineId }, value => { found = SkillFoundListResultV1Schema.parse(value); });
     if (!found) return true;
     const resolveFound = (name: string) => {
       const byPath = found!.items.find(item => item.path === name); if (byPath) return byPath;

@@ -14,7 +14,6 @@ export const INTERNAL_ACTION_REASONS = Object.freeze({
   'sessions.subagents.updateStatus': 'Host lifecycle projection maintenance; user operations use the planning/delegation Actions.',
   'sessions.subagents.complete': 'Host lifecycle projection maintenance; user operations use the planning/delegation Actions.',
   'sessions.external.takeover': 'Released direct-session compatibility stub; current clients use sessions.external.takeover.start.',
-  'plugin.webhook.delivery.movePending': 'Private webhook delivery plumbing owned by the webhook worker.',
   'devices.simulator.input.orientation': 'Stock scrcpy has no absolute-orientation producer; the simulator backing owner marks this Action statically unbacked.',
   'sessions.runner.activation.create': 'Creator-local package custody and endpoint consent make this an interactive Happier client operation.',
   'sessions.runner.activation.get': 'Creator-local Runner activation projection; external API exposure is intentionally withheld in v1.',
@@ -73,6 +72,7 @@ export function isHumanSecretApiExcludedActionId(
  */
 export const PLUGIN_SURFACE_EXCLUSION_REASONS = Object.freeze({
   ...INTERNAL_ACTION_REASONS,
+  'plugin.webhook.delivery.movePending': 'Host-requestable delivery control through UI/CLI/Agent/MCP; direct plugin admission stays withheld.',
   'sessions.external.candidates.list': 'Machine/source-scoped discovery seam; authors use SessionsService.external.list, which delegates to this same candidate-query owner.',
   'sessions.external.candidate.delete': 'Host-synthesized destructive control over an Agent-owned session record; the External Sessions contribution deliberately owns discovery and transcripts only, never Agent session lifecycle.',
   'sessions.external.link.ensure': 'Machine/source-scoped linking seam; authors use SessionsService.external.attach, which delegates to this same idempotent link operation.',

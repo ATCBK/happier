@@ -786,7 +786,7 @@ export type InventoryActionResultById = {
                 target?: 'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64' | 'win32-x64' | 'win32-arm64' | undefined;
             } | {
                 kind: 'cant_run';
-                reason: 'no_build_for_platform' | 'archive_type_unsupported' | 'managed_uv_unavailable';
+                reason: 'no_build_for_platform' | 'archive_type_unsupported';
             } | {
                 kind: 'unknown';
                 reason: 'platform_unknown' | 'arch_unknown';

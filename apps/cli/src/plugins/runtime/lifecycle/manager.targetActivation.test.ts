@@ -1966,7 +1966,7 @@ describe('target activation publication', () => {
         expect(fact?.required).toEqual([{ family: 'actions', localId: 'run' }]);
         expect(fact?.bound).toEqual([]);
         expect(JSON.stringify(fact?.required)).not.toMatch(
-            /target|realm|artifactId|requiredFields|promptAssetDescriptor/,
+            /target|realm|artifactId|requiredFields/,
         );
         await activated.dispose();
     });

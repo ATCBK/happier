@@ -1060,6 +1060,18 @@ export type WorkflowsActionInputById = {
                 machineId: string;
                 runId: string;
                 sessionId?: string | undefined;
+                observation?: {
+                    kind: 'review_walkthrough';
+                    comparisonId: string;
+                    resultId?: string | undefined;
+                    afterRevision?: number | undefined;
+                } | {
+                    comparisonId: string;
+                    kind: 'scm_diff_summary';
+                    output: 'summary' | 'walkthrough' | 'commitPlan';
+                    resultId?: string | undefined;
+                    afterRevision?: number | undefined;
+                } | undefined;
             } | {
                 kind: 'workflow_run';
                 runId: string;
@@ -1857,6 +1869,18 @@ export type WorkflowsActionInputById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -2058,6 +2082,18 @@ export type WorkflowsActionInputById = {
                 machineId: string;
                 runId: string;
                 sessionId?: string | undefined;
+                observation?: {
+                    kind: 'review_walkthrough';
+                    comparisonId: string;
+                    resultId?: string | undefined;
+                    afterRevision?: number | undefined;
+                } | {
+                    comparisonId: string;
+                    kind: 'scm_diff_summary';
+                    output: 'summary' | 'walkthrough' | 'commitPlan';
+                    resultId?: string | undefined;
+                    afterRevision?: number | undefined;
+                } | undefined;
             } | {
                 kind: 'workflow_run';
                 runId: string;
@@ -2871,6 +2907,18 @@ export type WorkflowsActionInputById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -3337,6 +3385,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -3519,6 +3579,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -3745,6 +3817,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -5878,6 +5962,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -6063,6 +6159,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -6248,6 +6356,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -6433,6 +6553,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -6617,6 +6749,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -6802,6 +6946,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -6984,6 +7140,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -7166,6 +7334,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -7636,6 +7816,12 @@ export type WorkflowsActionResultById = {
                         observation?: {
                             kind: 'review_walkthrough';
                             comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
                             resultId?: string | undefined;
                             afterRevision?: number | undefined;
                         } | undefined;
@@ -8297,6 +8483,12 @@ export type WorkflowsActionResultById = {
                             comparisonId: string;
                             resultId?: string | undefined;
                             afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
                         } | undefined;
                     }[] | undefined;
                     awaitedOperations?: {
@@ -8680,6 +8872,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -9154,6 +9358,12 @@ export type WorkflowsActionResultById = {
                             comparisonId: string;
                             resultId?: string | undefined;
                             afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
                         } | undefined;
                     }[] | undefined;
                     awaitedOperations?: {
@@ -9537,6 +9747,18 @@ export type WorkflowsActionResultById = {
                             machineId: string;
                             runId: string;
                             sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
                         } | {
                             kind: 'workflow_run';
                             runId: string;
@@ -12460,6 +12682,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -13317,6 +13551,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -14176,6 +14422,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -15035,6 +15293,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -15825,6 +16095,18 @@ export type WorkflowsActionResultById = {
                         machineId: string;
                         runId: string;
                         sessionId?: string | undefined;
+                        observation?: {
+                            kind: 'review_walkthrough';
+                            comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | undefined;
                     } | {
                         kind: 'workflow_run';
                         runId: string;
@@ -16033,6 +16315,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -16902,6 +17196,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -17761,6 +18067,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;
@@ -18620,6 +18938,18 @@ export type WorkflowsActionResultById = {
                     machineId: string;
                     runId: string;
                     sessionId?: string | undefined;
+                    observation?: {
+                        kind: 'review_walkthrough';
+                        comparisonId: string;
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | {
+                        comparisonId: string;
+                        kind: 'scm_diff_summary';
+                        output: 'summary' | 'walkthrough' | 'commitPlan';
+                        resultId?: string | undefined;
+                        afterRevision?: number | undefined;
+                    } | undefined;
                 } | {
                     kind: 'workflow_run';
                     runId: string;

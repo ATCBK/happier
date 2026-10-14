@@ -80,7 +80,7 @@ it('scans, reads, adopts and installs through registered Actions and transfers w
   registerMachineSkillsRpcHandlers({ rpcHandlerManager: manager, actionExecutor: {
     execute: (id, input, context) => executor.execute(id, input, { ...context, ...(confirmation ? { presentUserConfirmation: confirmation } : {}) }),
   } });
-  const transfers = registerMachinePromptAssetTransferRpcHandlers({ rpcHandlerManager: manager, adapterRegistry: new Map(),
+  const transfers = registerMachinePromptAssetTransferRpcHandlers({ rpcHandlerManager: manager,
     foundSkills: { home, agents } });
   const accountExecutor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
     serverId: 'srv_seam', serverIdentityId: 'srv_seam', serverHttpBaseUrl: serverUrl,

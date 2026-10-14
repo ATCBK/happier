@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from './approvalRequestV1.js';
 import { decideApprovalRequestTransition } from './approvalRequestTransition.js';
+import { PileApplyResultV1Schema } from '../storage/storageV1.js';
 
 const target = { kind: 'window', displayId: ':73', pid: 42, windowId: 123 } as const;
 
@@ -60,5 +61,59 @@ describe('computer selection approval transition', () => {
     expect(decideApprovalRequestTransition(existing, {
       ...approved, actionArgs: { ...existing.actionArgs as object, ...selection },
     })).toMatchObject({ ok: false, errorCode: 'subject_mismatch' });
+  });
+});
+
+describe('settled storage proposal retry receipts', () => {
+  const first = PileApplyResultV1Schema.parse({ batchId: 'first', mode: 'trash', inTrashBytes: 0,
+    freedBytes: 0, trashEntryIds: [], outcomes: [{ itemId: 'item', status: 'failed', reason: { code: 'operation_failed' } }] });
+  const retry = PileApplyResultV1Schema.parse({ batchId: 'retry', mode: 'trash', inTrashBytes: 4096,
+    freedBytes: 0, trashEntryIds: ['retry-entry'], outcomes: [{ itemId: 'item', status: 'moved' }] });
+  function executed(): ApprovalRequestV2 {
+    const base = openRequest();
+    const actionId = 'machines.storage.trash.move' as const;
+    return ApprovalRequestV2Schema.parse({ ...base, actionId,
+      actionArgs: { machineId: 'machine', items: [{ ref: { itemId: 'item', path: '/cache/item',
+        identity: { dev: '1', ino: '2', kind: 'file' }, collectedAt: 1,
+        collectedBy: { accountId: 'account', kind: 'agent' } }, expect: 'checked', claimedVerdict: 'safe' }] },
+      executionOriginV1: { ...base.executionOriginV1, actionId }, status: 'executed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true, result: first } });
+  }
+  it('admits an append-only strict retry result for an initially failed item without rewriting the execution', () => {
+    const existing = executed();
+    const next = { ...existing, updatedAtMs: 4, storageRetryResults: [retry] };
+    expect(ApprovalRequestV2Schema.safeParse(next).success).toBe(true);
+    expect(decideApprovalRequestTransition(existing, next)).toEqual({ ok: true, changed: true });
+    expect(decideApprovalRequestTransition(next, next)).toEqual({ ok: true, changed: false });
+    for (const edit of [{ actionArgs: {} }, { execution: { ...existing.execution!, result: retry } },
+      { status: 'executing' as const }, { storageRetryResults: [] }]) {
+      expect(decideApprovalRequestTransition(next, { ...next, ...edit }).ok).toBe(false);
+    }
+  });
+  it('rejects malformed, unrelated, duplicate and already-successful retry correlation', () => {
+    const existing = executed();
+    for (const result of [
+      { ...retry, batchId: first.batchId },
+      { ...retry, outcomes: [{ itemId: 'foreign', status: 'moved' }] },
+      { ...retry, trashEntryIds: undefined },
+      { ...retry, extraAuthority: true },
+    ]) {
+      const next = { ...existing, updatedAtMs: 4, storageRetryResults: [result] };
+      expect(ApprovalRequestV2Schema.safeParse(next).success).toBe(false);
+      expect(decideApprovalRequestTransition(existing, next as ApprovalRequestV2).ok).toBe(false);
+    }
+    const settled = { ...existing, updatedAtMs: 4, storageRetryResults: [retry] };
+    expect(decideApprovalRequestTransition(settled, { ...settled, updatedAtMs: 5,
+      storageRetryResults: [retry, { ...retry, batchId: 'another', trashEntryIds: ['another-entry'] }] }).ok).toBe(false);
+    expect(ApprovalRequestV2Schema.safeParse({ ...openRequest(), storageRetryResults: [retry] }).success).toBe(false);
+  });
+  it('retains a failed retry before admitting a later successful retry for the same item', () => {
+    const existing = executed();
+    const failedRetry = PileApplyResultV1Schema.parse({ ...first, batchId: 'retry-failed' });
+    const failed = ApprovalRequestV2Schema.parse({ ...existing, updatedAtMs: 4, storageRetryResults: [failedRetry] });
+    const succeeded = ApprovalRequestV2Schema.parse({ ...failed, updatedAtMs: 5, storageRetryResults: [failedRetry, retry] });
+    expect(decideApprovalRequestTransition(existing, failed)).toEqual({ ok: true, changed: true });
+    expect(decideApprovalRequestTransition(failed, succeeded)).toEqual({ ok: true, changed: true });
+    expect(decideApprovalRequestTransition(failed, { ...succeeded, storageRetryResults: [retry] }).ok).toBe(false);
   });
 });

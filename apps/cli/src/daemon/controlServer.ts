@@ -17,6 +17,8 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
 import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpointError';
 import { createDaemonControlAuthGuard } from './controlAuth';
+import { PROCESS_LAUNCH_NOTIFICATION_PATH, ProcessLaunchNotificationRequestSchema,
+  ProcessLaunchNotificationResultSchema, invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import { resolveTrackedSessionRunnerIdentity } from './sessions/sessionReportCorrelation';
 import { registerSkillControlRoutes } from '@/prompts/skills/store/controlRoutes';
 import { SessionStartedSuccessReportSchema } from './sessions/sessionStartedReportSchema';
@@ -1157,6 +1159,13 @@ export function createDaemonControlApp({
   });
 
   const requireAuth = createDaemonControlAuthGuard(normalizedControlToken);
+  typed.post(PROCESS_LAUNCH_NOTIFICATION_PATH, {
+    onRequest: requireAuth,
+    schema: { body: ProcessLaunchNotificationRequestSchema, response: { 200: ProcessLaunchNotificationResultSchema } },
+  }, async () => {
+    invalidateProcessLaunchDiscovery();
+    return { accepted: true as const };
+  });
   typed.post('/doctor/vitals', {
     onRequest: requireAuth,
     schema: { body: z.object({}).strict(), response: { 200: DoctorSnapshotResourceVitalsSchema.nullable() } },
@@ -2980,6 +2989,7 @@ export function createDaemonControlApp({
       };
     }
     const releasesNewWork = request.body.operation.kind === 'turn.admission.authorize'
+      || request.body.operation.kind === 'execution_run.snapshot.acquire_v1'
       || request.body.operation.kind === 'mcp.request_auth.open'
       || request.body.operation.kind === 'session.input.admit'
       || request.body.operation.kind === 'managed_server.supervision.authorize';
@@ -3080,8 +3090,13 @@ export function createDaemonControlApp({
       );
     };
     const isCurrent = async (): Promise<boolean> => {
+      // The exact turn witness admitted this Action above. Native completion
+      // may precede a slow MCP result; it does not revoke an accepted effect.
+      // Runner replacement, source retirement and request cancellation still
+      // own its lifetime, and a new request still needs a live turn witness.
+      const acceptedAction = request.body.operation.kind === 'action.execute';
       if (trackedAuthorityAtDispatch) {
-        return await trackedAuthorityRemainsCurrent() && turnWitnessIsCurrent();
+        return await trackedAuthorityRemainsCurrent() && (acceptedAction || turnWitnessIsCurrent());
       }
       if (getChildren().some((candidate) => candidate.happySessionId === request.body.context.sessionId)) {
         return false;
@@ -3097,7 +3112,7 @@ export function createDaemonControlApp({
         && isDeepStrictEqual(current.runner, foregroundSubject.runner)
         && isDeepStrictEqual(current.retainedAgent, foregroundSubject.retainedAgent)
         && isDeepStrictEqual(current.invocationContext, foregroundSubject.invocationContext)
-        && turnWitnessIsCurrent(current),
+        && (acceptedAction || turnWitnessIsCurrent(current)),
       );
     };
     const admissionCustodyUnavailable = () => {

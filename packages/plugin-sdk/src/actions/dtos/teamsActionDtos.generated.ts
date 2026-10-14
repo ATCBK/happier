@@ -354,7 +354,7 @@ export type TeamsActionInputById = {
         startMs: number;
         endMs: number;
         granularity?: 'day' | 'week' | 'month' | 'hour' | undefined;
-        costMode?: 'auto' | 'reported' | 'estimated' | undefined;
+        costMode?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
         breakdown?: 'member' | 'external_api_key' | 'model' | 'session' | 'source_member' | 'worker_machine' | 'broker_machine' | 'delivery_mode' | undefined;
         cursor?: string | undefined;
     };
@@ -384,7 +384,7 @@ export type TeamsActionInputById = {
             startMs: number;
             endMs: number;
             granularity?: 'day' | 'week' | 'month' | 'hour' | undefined;
-            costMode?: 'auto' | 'reported' | 'estimated' | undefined;
+            costMode?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             breakdown?: 'member' | 'external_api_key' | 'model' | 'session' | 'source_member' | 'worker_machine' | 'broker_machine' | 'delivery_mode' | undefined;
             cursor?: string | undefined;
         };
@@ -1127,6 +1127,7 @@ export type TeamsActionResultById = {
             descriptor: {
                 id: string;
                 name: string;
+                costTier?: 'low' | 'standard' | 'premium' | undefined;
                 aliases?: string[] | undefined;
                 description?: string | undefined;
                 contextWindowTokens?: number | undefined;
@@ -1447,6 +1448,7 @@ export type TeamsActionResultById = {
                 descriptor: {
                     id: string;
                     name: string;
+                    costTier?: 'low' | 'standard' | 'premium' | undefined;
                     aliases?: string[] | undefined;
                     description?: string | undefined;
                     contextWindowTokens?: number | undefined;

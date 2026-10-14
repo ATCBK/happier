@@ -4,15 +4,6 @@
 import type { JsonValue } from '../../identity.js';
 
 export type DaemonAdminActionInputById = {
-    readonly "daemon.promptAssets.delete": {
-        [x: string]: unknown;
-        assetTypeId: string;
-        scope: 'user' | 'project';
-        externalRef: Record<string, unknown>;
-        directory?: string | null | undefined;
-        previewOnly?: boolean | undefined;
-        expectedDigest?: string | null | undefined;
-    };
     readonly "daemon.filesystem.listRoots": Record<string, never>;
     readonly "daemon.filesystem.browseDirectory": {
         [x: string]: unknown;
@@ -35,9 +26,6 @@ export type DaemonAdminActionInputById = {
     };
 };
 export type DaemonAdminActionResultById = {
-    readonly "daemon.promptAssets.delete": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
     readonly "daemon.filesystem.listRoots": string | number | boolean | readonly JsonValue[] | {
         readonly [key: string]: JsonValue;
     } | null;

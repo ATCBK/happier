@@ -81,6 +81,8 @@ export function readHappierActionToolResultCandidates(result: unknown, input?: u
         candidates.push(maybeParseJson(parsed.value));
     }
     if (isRecord(parsed) && parsed.structuredContent !== undefined) candidates.push(parsed.structuredContent);
+    // Claude ACP stores a single-text MCP result as the text itself (`content: "<json>"`).
+    if (isRecord(parsed) && typeof parsed.content === 'string') candidates.push(maybeParseJson(parsed.content));
     const blocks = Array.isArray(parsed) ? parsed : isRecord(parsed) && Array.isArray(parsed.content) ? parsed.content : null;
     if (blocks?.length) {
         const texts: string[] = [];

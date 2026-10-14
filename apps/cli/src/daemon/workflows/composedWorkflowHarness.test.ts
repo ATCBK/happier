@@ -19,6 +19,7 @@ import {
   getActionSpec,
   ActionIdSchema,
   AcpConfigOptionOverridesV1Schema,
+  ConnectedServiceBindingsV2IngressSchema,
   StrictJsonValueSchema,
   zodSchemaToJsonSchemaObject,
   deriveAutomationOccurrenceKeyV1,
@@ -53,18 +54,26 @@ import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
-const nativeLaunchBoundary = vi.hoisted(() => ({ child: null as ChildProcess | null }));
+const nativeLaunchBoundary = vi.hoisted(() => ({ child: null as ChildProcess | null,
+  cancel: null as import('../spawn/startupLaunchCancellation').CancelStartupLaunch | null }));
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return { ...actual, spawn: (...args: Parameters<typeof actual.spawn>) =>
     nativeLaunchBoundary.child && args[0] === '/bin/sh'
       ? nativeLaunchBoundary.child : actual.spawn(...args) };
 });
+vi.mock('../platform/windows/spawnHappyCliVisibleConsole', () => ({
+  startHappySessionInVisibleWindowsConsole: async () => {
+    if (!nativeLaunchBoundary.child?.pid || !nativeLaunchBoundary.cancel) throw new Error('missing_windows_os_boundary');
+    return { ok: true, pid: nativeLaunchBoundary.child.pid, processStartTimeMs: 1,
+      cancel: nativeLaunchBoundary.cancel };
+  },
+}));
 
 // Machine RPC is the process-launch boundary. Keep authorization, persisted
 // Agent resume selection and readiness-before-input ownership real.
 vi.mock('@/session/transport/rpc/machineRpc', () => {
-  return { callMachineRpc: async ({ method, request }: {
+  const launch = async ({ method, request }: {
     method: string; request: { sessionId?: string; spawnNonce?: string };
   }) => {
     if (method === RPC_METHODS.SPAWN_HAPPY_SESSION && !request.sessionId && freshSessionBoundary) {
@@ -83,7 +92,8 @@ vi.mock('@/session/transport/rpc/machineRpc', () => {
       return await resume(request);
     }
     return { status: 'not_found' };
-  } };
+  };
+  return { callMachineRpc: launch, callExactMachineRpc: launch };
 });
 
 import { executeClaimedRun } from '@/daemon/automation/automationRunExecutor';
@@ -106,6 +116,10 @@ import { createWorkflowSessionStepExecutor } from './sessionStepExecutor';
 import * as cliSpawn from '@/utils/spawnHappyCLI';
 import { spawnRegularProcessAndWaitForWebhook } from '../spawn/spawnRegularProcessAndWaitForWebhook';
 import { waitForTerminalHostedSessionWebhook } from '../spawn/waitForTerminalHostedSessionWebhook';
+import { TmuxUtilities } from '@/integrations/tmux/TmuxUtilities';
+import { spawnWindowsHostedSessionAndWaitForWebhook } from '../spawn/spawnWindowsHostedSessionAndWaitForWebhook';
+import { createExactWindowsProcessCancellation } from '../platform/windows/windowsProcessCustody';
+import { hashProcessCommand } from '../sessionRegistry';
 import { createSpawnLifecycleCallbacks } from '../spawn/createSpawnLifecycleCallbacks';
 import { createOnChildExited } from '../sessions/onChildExited';
 import type { TrackedSession } from '../types';
@@ -116,6 +130,9 @@ import { SessionLaunchRetiredV1Schema } from '@happier-dev/protocol/spawnSession
 import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sessions/spawnSessionNonce';
 import { reloadConfiguration } from '@/configuration';
 import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { captureSessionLaunchControlMetadata, createSessionMetadata } from '@/agent/runtime/createSessionMetadata';
+import { resolveSpawnChildEnvironment } from '../spawn/resolveSpawnChildEnvironment';
+import { buildSpawnChildProcessEnv } from '../spawn/buildSpawnChildProcessEnv';
 import {
   createWorkflowRunStorageTestkit,
   type WorkflowRunStorageTestkit,
@@ -426,7 +443,7 @@ function fanOutDefinition(failurePolicy: 'collect_outcomes' | 'fail_stop'): Work
 }
 
 describe('composed Workflow front door and claimed execution', () => {
-  it.skipIf(process.platform === 'win32').each(['direct', 'nonce', 'foreign_nonce', 'hosted', 'hosted_incomplete', 'hosted_foreign_nonce', 'hosted_miswired'] as const)('requires exact retired launch custody before failing an Agent leaf (%s)', async transport => {
+  it.skipIf(process.platform === 'win32').each(['direct', 'nonce', 'foreign_nonce', 'hosted', 'hosted_incomplete', 'hosted_window_only', 'hosted_runner_alive', 'hosted_foreign_nonce', 'hosted_miswired', 'windows', 'windows_incomplete', 'windows_foreign_nonce', 'windows_miswired'] as const)('requires exact retired launch custody before failing an Agent leaf (%s)', async transport => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
     const runId = '71717171-7171-4171-8171-717171717171';
     const directory = await projectDirectory();
@@ -447,7 +464,21 @@ describe('composed Workflow front door and claimed execution', () => {
       detached: true, stdio: ['ignore', 'pipe', 'pipe'], cwd: directory,
     });
     const wrapperPid = child.pid!;
+    const runner = transport === 'hosted_runner_alive' ? spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true, stdio: 'ignore', cwd: directory,
+    }) : null;
     nativeLaunchBoundary.child = child;
+    nativeLaunchBoundary.cancel = createExactWindowsProcessCancellation({ pid: wrapperPid,
+      processStartTimeMs: 1, processCommandHash: hashProcessCommand('scratch-windows-runner'),
+      readProcessIdentityByPidFn: async pid => isPidPresent(pid)
+        ? { pid, processStartTimeMs: 1, command: 'scratch-windows-runner' } : null,
+      isPidAliveFn: isPidPresent,
+      terminateProcessTreeFn: async ({ pid }) => {
+        if (transport === 'windows_incomplete') return;
+        const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+        process.kill(-pid, 'SIGTERM');
+        await exited;
+      } });
     const entrypoint = join(directory, 'index.mjs');
     await writeFile(entrypoint, 'export {};\n');
     vi.stubEnv('HAPPIER_CLI_SUBPROCESS_ENTRYPOINT', entrypoint);
@@ -475,21 +506,40 @@ describe('composed Workflow front door and claimed execution', () => {
         // scratch host. A refused disposition deliberately leaves it running.
         cancelOwnedHost: async () => {
           if (transport === 'hosted_incomplete') return false;
+          if (transport === 'hosted_window_only') {
+            const tmux = new TmuxUtilities('scratch-owned-window');
+            // Successful terminal disposition is an OS boundary, not process-exit proof.
+            vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async argv => {
+              if (argv[0] === 'kill-window' || argv[0] === 'list-windows') return { command: argv, returncode: 0, stdout: '', stderr: '' };
+              throw new Error('unexpected_os_command');
+            });
+            return await tmux.killWindow('@777');
+          }
+          if (runner?.pid) wrappers.get(wrapperPid)!.sessionRunnerPid = runner.pid;
           const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
           process.kill(-wrapperPid, 'SIGTERM');
           await exited;
           return !isPidPresent(wrapperPid);
         },
+      }) : transport.startsWith('windows') ? await spawnWindowsHostedSessionAndWaitForWebhook({
+        windowsLaunchMode: 'console', args: [], agentCommand: 'fixture', directory,
+        options: { directory, spawnNonce: raw.spawnNonce }, trackedSpawnOptions: { directory, spawnNonce: raw.spawnNonce },
+        normalizedExistingSessionId: '', effectiveResume: '', directoryCreated: false, extraEnvForChildWithMessage: {},
+        processEnv: { NODE_ENV: 'test', PATH: process.env.PATH }, happyHomeDir: directory,
+        pidToTrackedSession: wrappers, pidToAwaiter: awaiters, pidToSpawnResultResolver: resolvers,
+        pidToSpawnWebhookTimeout: timeouts, resolveCanonicalTrackedSessionId: () => '', onChildExited,
+        spawnLifecycleCallbacks: lifecycle, cleanupSpawnResources: async () => {}, logDebug: () => {}, warn: () => {},
       }) : await spawnRegularProcessAndWaitForWebhook({ args: [], directory,
         options: { directory, spawnNonce: raw.spawnNonce }, trackedSpawnOptions: { directory, spawnNonce: raw.spawnNonce },
         normalizedExistingSessionId: '', effectiveResume: '', directoryCreated: false, extraEnvForChildWithMessage: {},
-        processEnv: { PATH: process.env.PATH, HAPPIER_DAEMON_STARTUP_SOURCE: 'test' },
+        processEnv: { NODE_ENV: 'test', PATH: process.env.PATH, HAPPIER_DAEMON_STARTUP_SOURCE: 'test' },
         pidToTrackedSession: wrappers, pidToAwaiter: awaiters, pidToSpawnResultResolver: resolvers,
         pidToSpawnWebhookTimeout: timeouts, resolveCanonicalTrackedSessionId: () => '', onChildExited,
         spawnLifecycleCallbacks: lifecycle, cleanupSpawnResources: async () => {}, logDebug: () => {}, warn: () => {} });
       if (result.type !== 'error') throw new Error('expected_startup_failure');
-      if (transport === 'hosted_incomplete') {
+      if (transport === 'hosted_incomplete' || transport === 'hosted_window_only' || transport === 'hosted_runner_alive' || transport === 'windows_incomplete') {
         expect(result.errorDetail).toBeUndefined();
+        if (transport !== 'hosted_incomplete') expect(result.errorMessage).toBe('startup_retirement_incomplete:process_still_running');
         return SpawnSessionControlErrorResponseSchema.parse(projectSpawnSessionControlErrorResponse(result));
       }
       expect(SessionLaunchRetiredV1Schema.parse(result.errorDetail)).toEqual({ kind: 'launch_retired',
@@ -499,9 +549,9 @@ describe('composed Workflow front door and claimed execution', () => {
         return { type: 'success', spawnNonce: raw.spawnNonce, sessionIdStatus: 'pending' };
       }
       return SpawnSessionControlErrorResponseSchema.parse(projectSpawnSessionControlErrorResponse(
-        transport === 'foreign_nonce' || transport === 'hosted_foreign_nonce'
+        transport === 'foreign_nonce' || transport === 'hosted_foreign_nonce' || transport === 'windows_foreign_nonce'
           ? { ...result, errorDetail: { ...SessionLaunchRetiredV1Schema.parse(result.errorDetail), spawnNonce: 'another-launch' } }
-          : transport === 'hosted_miswired' ? { ...result, errorDetail: undefined } : result));
+          : transport === 'hosted_miswired' || transport === 'windows_miswired' ? { ...result, errorDetail: undefined } : result));
     };
     try {
       const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null }, blocks: [step('launch')] };
@@ -510,7 +560,7 @@ describe('composed Workflow front door and claimed execution', () => {
       const sessionInput = sessionInputBoundary();
       const coordination = workflowDaemonProcess({ storage: kit, sessionInput, directory })({ runId, attempt: 0,
         expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope });
-      if (transport === 'foreign_nonce' || transport === 'hosted_incomplete' || transport === 'hosted_foreign_nonce' || transport === 'hosted_miswired') {
+      if (transport === 'foreign_nonce' || transport === 'hosted_incomplete' || transport === 'hosted_window_only' || transport === 'hosted_runner_alive' || transport === 'hosted_foreign_nonce' || transport === 'hosted_miswired' || transport === 'windows_incomplete' || transport === 'windows_foreign_nonce' || transport === 'windows_miswired') {
         await expect(coordination).rejects.toMatchObject({ code: 'SPAWN_FAILED' });
         const unknown = openRowProgress(kit, rowFor(kit, 'launch')!);
         expect(rowFor(kit, 'launch')!.lifecycle).not.toBe('failed');
@@ -518,8 +568,19 @@ describe('composed Workflow front door and claimed execution', () => {
           actionExecutor: { execute: async () => { throw new Error('must_not_launch_or_observe_an_input'); } } });
         expect(await observe({ progress: unknown, terminalParent: true, cancellationRequested: true }))
           .toEqual({ kind: 'unresolved', code: 'workflow_execution_correspondence_missing' });
-        expect(wrappers.size).toBe(transport === 'hosted_incomplete' ? 1 : 0);
-        expect(isPidPresent(wrapperPid)).toBe(transport === 'hosted_incomplete');
+        const owner = createWorkflowRunActionOwner({ resolveAccountId: async () => accountId, storage: kit,
+          definitions: { get: async () => { throw new Error('unexpected_definition_read'); } },
+          resolveEncryption: async () => ({ kind: 'available', witness: currentness }) });
+        await owner.execute({ actionId: 'workflow.run.cancel', input: { runId, expectedRevision: kit.run().revision },
+          context: { surface: 'ui', authority: 'present_user' } });
+        await createWorkflowRunRecoveryReader({ accountId, machineId,
+          storage: { execute: async (operation, options) => operation.operation === 'recovery.list'
+            ? { candidates: [{ run: kit.run(), parentAttempt: 0 }] } : kit.execute(operation, options) },
+          resolveAccountEncryption: async () => ({ kind: 'available', witness: currentness }), reconcileInvocation: observe })('reconnect');
+        expect(kit.run().workflowCustodyState).not.toBe('settled');
+        expect(wrappers.size).toBe(transport === 'hosted_incomplete' || transport === 'hosted_window_only' || transport === 'hosted_runner_alive' || transport === 'windows_incomplete' ? 1 : 0);
+        expect(isPidPresent(wrapperPid)).toBe(transport === 'hosted_incomplete' || transport === 'hosted_window_only' || transport === 'windows_incomplete');
+        if (runner?.pid) expect(isPidPresent(runner.pid)).toBe(true);
         expect(sessionInput.enqueue).not.toHaveBeenCalled();
         return;
       }
@@ -548,9 +609,14 @@ describe('composed Workflow front door and claimed execution', () => {
         .toEqual({ kind: 'unresolved', code: 'workflow_execution_correspondence_missing' });
     } finally {
       nativeLaunchBoundary.child = null;
+      nativeLaunchBoundary.cancel = null;
       if (isPidPresent(wrapperPid)) {
         process.kill(-wrapperPid, 'SIGKILL');
         await new Promise<void>(resolve => child.once('exit', () => resolve()));
+      }
+      if (runner?.pid && isPidPresent(runner.pid)) {
+        process.kill(-runner.pid, 'SIGKILL');
+        await new Promise<void>(resolve => runner.once('exit', () => resolve()));
       }
       for (const timeout of timeouts.values()) clearTimeout(timeout);
       vi.unstubAllEnvs();
@@ -590,23 +656,45 @@ describe('composed Workflow front door and claimed execution', () => {
             ...(effort ? { engine: { agentTarget, effort } } : {}) } } : {}) })],
     };
     // R31's saved-source.json pins the authored Haiku/profile choices above.
-    // Its private child controls were not captured; this fixture proves the
-    // current owner-layout path, not the historical mismatch or its repair.
+    // R37b's private child was deleted before diagnosis. Exercise the actual
+    // native metadata producer below rather than reconstructing its controls.
     // Native process launch and Home HTTP are the only substituted boundaries.
     // Native Claude publishes no applied ACP mode. A concrete default in an
     // authenticated Agent mode catalog must instead match applied mode evidence.
     const titles = new Map<string, string>();
-    freshSessionBoundary = raw => {
+    freshSessionBoundary = async raw => {
       const request = raw as { initialTitle?: string; connectedServices?: unknown; sessionConfigOptionOverrides?: unknown };
       const id = `fresh-${freshSessionRecords.size + 1}`;
       titles.set(id, request.initialTitle ?? '');
       const launchConfig = request.sessionConfigOptionOverrides === undefined ? undefined
         : AcpConfigOptionOverridesV1Schema.parse(request.sessionConfigOptionOverrides);
       if (effort) expect(launchConfig?.overrides.reasoning_effort?.value).toBe(effort);
-      const published = { path: directory, machineId, permissionMode: 'default',
+      const retainedConfig = retainedEffort && launchConfig ? { ...launchConfig,
+        overrides: { ...launchConfig.overrides, reasoning_effort: { value: retainedEffort, updatedAt: 2 } } } : launchConfig;
+      const runtimeDescriptorV1 = { v: 1 as const, agentId: 'claude', agent: {} };
+      const launch = nativeMetadata ? await resolveSpawnChildEnvironment({
+        options: { directory, runtimeDescriptorV1,
+          connectedServices: ConnectedServiceBindingsV2IngressSchema.parse(request.connectedServices),
+          ...(retainedConfig ? { sessionConfigOptionOverrides: retainedConfig } : {}) },
+        processEnv: { NODE_ENV: 'test' }, profileEnvironmentVariables: {}, daemonSpawnHooks: null,
+        logDebug() {}, logInfo() {}, logWarn() {},
+      }) : null;
+      if (launch && !launch.ok) throw new Error(launch.errorMessage);
+      const captured = launch?.ok ? captureSessionLaunchControlMetadata({ processEnvironment: {
+        ...buildSpawnChildProcessEnv({ processEnv: { NODE_ENV: 'test' }, extraEnv: launch.extraEnvForChild }),
+        NODE_ENV: 'test',
+      } }) : null;
+      if (nativeMetadata) expect(captured?.sessionConfigOptionOverrides).toEqual(retainedConfig ?? null);
+      // Exercise the actual fresh native Session producer, rather than placing
+      // the expected retained intent directly into a hand-written HTTP record.
+      const produced = captured ? createSessionMetadata({
+        flavor: 'claude', machineId, directory, startedBy: 'daemon',
+        permissionMode: 'default', runtimeDescriptorV1,
+        launchControlMetadata: captured,
+      }).metadata : null;
+      const published = { ...(produced ?? { path: directory, machineId, permissionMode: 'default',
         runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} }, connectedServices: request.connectedServices,
-        ...(launchConfig ? { sessionConfigOptionOverridesV1: retainedEffort ? { ...launchConfig,
-          overrides: { ...launchConfig.overrides, reasoning_effort: { value: retainedEffort, updatedAt: 2 } } } : launchConfig } : {}),
+        ...(retainedConfig ? { sessionConfigOptionOverridesV1: retainedConfig } : {}) }),
         ...(catalog ? { sessionModesV2: { v: 2, agentId: 'claude', updatedAt: 1, currentModeId: appliedMode,
           availableModes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan' }],
         } } : {}),

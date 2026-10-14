@@ -8,7 +8,6 @@ export const ActionApprovalPolicySchema = lazyZodSchema(() => z.object({
   uiConfirmationForInput: z.custom<(input: unknown) => boolean>((value) => typeof value === 'function').optional(),
   agentDefault: z.enum(['egress', 'authority']).optional(),
   requiredSurfaces: z.array(ActionSurfaceSchema.keyof()).readonly().optional(),
-  mandatoryAgent: z.literal(true).optional(),
   scopeAdmissionOwnsConfirmation: z.literal(true).optional(),
   pluginCaptureWaiver: z.literal(true).optional(),
   computerConsent: z.literal(true).optional(),

@@ -34,6 +34,10 @@ import { createActivityLog } from '@/daemon/guard/activityLog';
 import { createGuardRuntime } from '@/daemon/guard/guardRuntime';
 import { createGuardWatch } from '@/daemon/guard/view/guardWatch';
 import { createManagedActivityInventory } from '@/daemon/lifecycle/managedActivity';
+import { createSessionLiveWorkProducer } from '@/daemon/lifecycle/sessionLiveWorkProducer';
+import { requestSessionInputLiveWork, SessionInputLiveWorkSchema } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { createDeferred } from '@/testkit/async/deferred';
+import type { TrackedSession } from '@/daemon/types';
 import { createDaemonStorageRoutes } from '@/rpc/handlers/storage';
 
 const io = vi.hoisted(() => vi.fn());
@@ -117,7 +121,17 @@ describe('CLI machine Processes Action transport', () => {
           rows: [{ pid: process.pid, ppid: 1, pgid: process.pid, name: 'daemon',
             start: { startTimeMs: 1, native: 'darwin-proc:1:0:1' }, principal: { kind: 'uid', value: '501' },
             memory: { bytes: 1024, kind: 'rss' }, cpuTimeUs: 0 }] }) }) } });
-    const inventory = createManagedActivityInventory({ producers: [] });
+    const retiredActivity = createDeferred<unknown>();
+    const retiredRequest = createDeferred();
+    let observedSessions: TrackedSession[] = [];
+    const sessionActivity = createSessionLiveWorkProducer({ readSessions: () => observedSessions,
+      // This fixture withholds one remote runner response, keeping the real Session
+      // decoder, inventory, Guard projection, registration and Action executor composed.
+      readActivity: () => requestSessionInputLiveWork({ callRpc: async () => {
+        retiredRequest.resolve();
+        return await retiredActivity.promise;
+      } }) });
+    const inventory = createManagedActivityInventory({ producers: family === 'guard' ? [sessionActivity] : [] });
     const readFacts = async () => ({ ownership: await ownership.readOwners({ freshness: 'fresh' }),
       inventory: await inventory.read(), targets: [] });
     const readPolicy = () => {
@@ -149,9 +163,15 @@ describe('CLI machine Processes Action transport', () => {
     let admitted: RpcHandlerContext = { signal: new AbortController().signal,
       machineAdmission: { ...identity, actorAccountId: 'custodian', role: 'manage', encryptionMode: 'plain' },
       verifyMachineAdmissionCurrent: async () => true };
+    let delayGuardRead = family === 'guard';
     receive = async (method, input) => {
       const handler = handlers.get(method);
       if (!handler) throw new Error(`Missing installed machine resource route: ${method}`);
+      if (delayGuardRead && method === `selected:${RPC_METHODS.MACHINES_GUARD_GET}`) {
+        delayGuardRead = false;
+        // A valid composed census/Session read can exceed the generic 20-second RPC acknowledgement budget.
+        await new Promise(resolve => setTimeout(resolve, 20_050));
+      }
       return handler(input, admitted);
     };
     const executor = createCliActionExecutor({ ...params,
@@ -219,10 +239,24 @@ describe('CLI machine Processes Action transport', () => {
         const kept = await executor.execute('machines.guard.idleStop.keepRunning', { machineId: 'selected', sessionId: 'no-warning' }, context);
         expect(kept).toEqual({ ok: true, result: { status: 'not_pending' } });
         assertActionOutputContract('machines.guard.idleStop.keepRunning', kept.ok ? kept.result : null);
-        const agentView = await executor.execute('machines.guard.get', { machineId: 'selected' },
-          { ...context, surface: 'agent', authority: 'account_automation' });
+        observedSessions = [{ pid: 42, startedBy: 'daemon', happySessionId: 'retired-session' }];
+        sessionActivity.notifyChanged();
+        const retiredRead = inventory.read();
+        await retiredRequest.promise;
+        observedSessions = [];
+        sessionActivity.notifyChanged();
+        let agentView: Awaited<ReturnType<typeof executor.execute>> | undefined;
+        const agentRead = executor.execute('machines.guard.get', { machineId: 'selected' },
+          { ...context, surface: 'agent', authority: 'account_automation' }).then(result => { agentView = result; });
+        try {
+          await vi.waitFor(() => expect(agentView).toMatchObject({ ok: true }), { timeout: 1_000 });
+        } finally {
+          retiredActivity.resolve(SessionInputLiveWorkSchema.parse({ session: 'unknown', input: 'unknown' }));
+          await retiredRead;
+          await agentRead;
+        }
         expect(agentView, JSON.stringify(agentView)).toMatchObject({ ok: true, result: { policy: { keepAwake: 'on' } } });
-        if (!agentView.ok) throw new Error(agentView.error);
+        if (!agentView?.ok) throw new Error(agentView?.error ?? 'Guard Action did not settle');
         assertActionOutputContract('machines.guard.get', agentView.result);
         admitted = { ...admitted, verifyMachineAdmissionCurrent: async () => false };
         expect(await executor.execute('machines.guard.get', { machineId: 'selected' }, context)).toMatchObject({ ok: false });

@@ -31,7 +31,7 @@ export const SpawnCapabilitiesPreviewInputV1Schema = lazyZodSchema(() => z.objec
 }).strict());
 export type SpawnCapabilitiesPreviewInputV1 = z.infer<typeof SpawnCapabilitiesPreviewInputV1Schema>;
 export const SpawnCapabilitiesPreviewSuccessV1Schema = lazyZodSchema(() => z.object({
-  ok: z.literal(true), machinePlatform: z.enum(['win32', 'posix']),
+  ok: z.literal(true), machinePlatform: z.enum(['win32', 'posix']).nullable(),
   mcp: z.object({ strictMode: z.boolean(), items: z.array(CapabilityMcpPreviewItemV1Schema), detected: z.array(DetectedMcpPreviewEntryV1Schema) }).strict(),
   skills: skillsOutput, applyTiming: CapabilityApplyTimingPairV1Schema,
 }).strict());

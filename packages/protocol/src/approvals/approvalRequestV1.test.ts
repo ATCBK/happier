@@ -1124,6 +1124,20 @@ describe('requiresExactDaemonApprovalReplay', () => {
     }))).toBe(false);
   });
 
+  it('replays a durable host Agent Account effect after its originating Session is gone', () => {
+    const request = hostCliRequest('session.delete', { sessionId: 'stopped-session' });
+    const agentRequest = ApprovalRequestV2Schema.parse({
+      ...request,
+      createdBy: { surface: 'agent', sessionId: 'stopped-session' },
+      requestedSurface: 'agent',
+      executionOriginV1: {
+        ...request.executionOriginV1,
+        surface: 'agent',
+      },
+    });
+    expect(requiresExactDaemonApprovalReplay(agentRequest)).toBe(false);
+  });
+
   it('uses reviewed input placement rather than an Account default for host CLI custody', () => {
     expect(requiresExactDaemonApprovalReplay(hostCliRequest('providers.connections.describe', {}))).toBe(false);
     expect(requiresExactDaemonApprovalReplay(hostCliRequest('providers.connections.describe', {
@@ -1305,7 +1319,7 @@ describe('requiresExactDaemonApprovalReplay', () => {
     expect(requiresExactDaemonApprovalReplay(automationRun)).toBe(true);
   });
 
-  it('replays host CLI Account requests while retaining exact-daemon custody for other autonomous surfaces', () => {
+  it('replays durable host Account requests while retaining exact-daemon custody for RPC and API origins', () => {
     for (const surface of ['agent', 'mcp', 'cli', 'rpc'] as const) {
       const request = ApprovalRequestV2Schema.parse({
         ...approvalWithCaller({ kind: 'host' }) as Record<string, unknown>,
@@ -1316,7 +1330,7 @@ describe('requiresExactDaemonApprovalReplay', () => {
           surface,
         },
       });
-      expect(requiresExactDaemonApprovalReplay(request), surface).toBe(surface !== 'cli');
+      expect(requiresExactDaemonApprovalReplay(request), surface).toBe(surface === 'rpc');
     }
 
     const apiRequest = ApprovalRequestV2Schema.parse({

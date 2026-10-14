@@ -13,7 +13,9 @@ export async function executeMachineGuardAction(input: Readonly<{
   if (request.serverId && request.serverId !== input.serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
   const raw = await executeCapturedMachineAction({ actionId: input.actionId, assertCurrent: input.assertCurrent,
     invoke: options => input.call({ machineId: request.machineId, method: getActionSpec(input.actionId).bindings!.rpcMethod!,
-      input: { ...request, serverId: input.serverId }, ...options }) });
+      input: { ...request, serverId: input.serverId }, ...options,
+      // The composed census and live Session reads follow caller cancellation, not a generic acknowledgement cutoff.
+      ...(input.actionId === 'machines.guard.get' ? { timeoutMs: null } : {}) }) });
   const failure = ActionExecuteFailureSchema.safeParse(raw);
   if (failure.success) return failure.data;
   const deferred = ActionApprovalRequestCreatedResultSchema.safeParse(raw);

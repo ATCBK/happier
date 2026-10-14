@@ -39,7 +39,7 @@ export type SessionCapabilitiesActionInputById = {
 export type SessionCapabilitiesActionResultById = {
     readonly "sessions.spawn.capabilities.preview": {
         ok: true;
-        machinePlatform: 'win32' | 'posix';
+        machinePlatform: 'win32' | 'posix' | null;
         mcp: {
             strictMode: boolean;
             items: {

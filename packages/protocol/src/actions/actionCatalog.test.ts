@@ -222,6 +222,18 @@ describe('actionCatalog action-definition adapter', () => {
     });
   });
 
+  it('retains the ranked, limited definitions and output schemas for an empty search', () => {
+    const ids = new Set(['execution.run.permission.respond', 'action.spec.get', 'session.message.send']);
+    const isActionEnabled = (id: string) => ids.has(id);
+    const expected = [...listActionSpecsForCatalogSurface({ surface: 'mcp', isActionEnabled })]
+      .sort((left, right) => left.title.localeCompare(right.title))
+      .slice(0, 2)
+      .map(spec => serializeActionSpec(spec, { surface: 'mcp' }));
+    for (const query of [undefined, '']) {
+      expect(searchSerializedActionSpecsForSurface({ surface: 'mcp', query, limit: 2, isActionEnabled })).toEqual(expected);
+    }
+  });
+
   it.each(['agent', 'mcp', 'cli'] as const)('searches the real %s catalog without unrelated schema failures', (surface) => {
     expect(searchSerializedActionSpecsForSurface({
       surface,

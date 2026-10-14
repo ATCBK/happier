@@ -19,6 +19,7 @@ import { createRoleSourceReader, type RoleSourceReader } from '@/session/roles/r
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveWorkflowAuthorizedSession } from '@/daemon/workflows/invocationRecoveryObserver';
 import type { WorkflowTargetUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
 type Materialization = Pick<Parameters<typeof materializeWorkflowAcceptedSnapshotV1>[0], 'roleSelection' | 'effects'>;
 type RoleSelection = Omit<ResolveRoleSelectionV1Input, 'roleId' | 'workflowRoles' | 'runOverrides'>;
@@ -134,7 +135,9 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
         target.signal?.throwIfAborted();
         const schemas = DaemonPluginActionSchemasReadResponseSchema.safeParse(response);
         return schemas.success && schemas.data.ok && schemas.data.outputSchema !== undefined
-          ? { inputSchema: schemas.data.inputSchema, outputSchema: schemas.data.outputSchema } : null;
+          // Frozen workflow contracts describe canonical JSON values, not the
+          // plugin invocation ABI's omitted-input grammar.
+          ? { inputSchema: schemas.data.inputSchema ?? {}, outputSchema: schemas.data.outputSchema } : null;
       } catch {
         target.signal?.throwIfAborted();
         return null;
@@ -215,6 +218,7 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
   accountId?: string;
   serverHttpBaseUrl?: string;
   readRoleSources?: RoleSourceReader;
+  savedSecretOperationContext?: SavedSecretOperationContextV1;
 }>) {
   const artifactStore = createCredentialedAccountArtifactStore(params.credentials);
   return async (target: MachineTarget): Promise<Materialization & Readonly<{ agentStartPolicySnapshot: {
@@ -223,13 +227,27 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
   } }>> => {
     const resolve = async () => {
       target.signal?.throwIfAborted();
-      const current = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force',
-        honorAccountSettingsModeEnv: false });
+      const operation = params.savedSecretOperationContext;
+      const scopeKey = resolveAccountSettingsScopeKeyForToken(params.credentials.token);
+      if (operation && (operation.credentials.token !== params.credentials.token || !await operation.isCurrent())) {
+        throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+      }
+      const current = operation ? operation.readSnapshot()
+        : await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force',
+          honorAccountSettingsModeEnv: false });
       target.signal?.throwIfAborted();
-      if (current.source === 'none') throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+      if (!current || current.source === 'none' || current.scopeKey !== scopeKey) throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
       const roleAccount = { credentials: params.credentials,
-        scopeKey: resolveAccountSettingsScopeKeyForToken(params.credentials.token),
+        scopeKey, operationContext: operation,
         lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), ...(target.signal ? { signal: target.signal } : {}) };
+      const readSnapshot = () => operation ? operation.readSnapshot() : getActiveAccountSettingsSnapshot();
+      const assertCurrent = async (signal?: AbortSignal) => {
+        signal?.throwIfAborted();
+        if (operation && !await operation.isCurrent() || readSnapshot()?.scopeKey !== scopeKey
+          || !operation && getActiveAccountSettingsSnapshotLifetimeToken() !== roleAccount.lifetimeToken) {
+          throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+        }
+      };
       const sourceReader = params.readRoleSources ?? createRoleSourceReader({ artifactStore,
         accountId: params.accountId ?? readAccountIdFromToken(params.credentials.token) ?? undefined,
         readRawAccountSettings: async () => {
@@ -240,24 +258,17 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
       const roleSources = await sourceReader(target.signal);
       let launchProfiles: ReturnType<typeof readAccountLaunchProfiles> | undefined;
       const readLaunchProfile = async (profileId: string) => {
-        launchProfiles ??= readAccountLaunchProfiles(current.settings, params.credentials, target.signal);
+        launchProfiles ??= readAccountLaunchProfiles(current.settings, params.credentials, target.signal, undefined, operation);
         const matching = (await launchProfiles).visibleProfiles.filter((candidate) => candidate.id === profileId);
         return matching.length === 1 && matching[0]!.enabled !== false ? matching[0]! : null;
       };
       const materialization = await createWorkflowMaterializationHostV1({ ...params,
-        acpCatalogSnapshot: getActiveAccountSettingsSnapshot()?.acpCatalog,
+        acpCatalogSnapshot: readSnapshot()?.acpCatalog,
         readAcpCatalog: async (signal) => {
-          if (getActiveAccountSettingsSnapshot()?.scopeKey !== roleAccount.scopeKey
-            || getActiveAccountSettingsSnapshotLifetimeToken() !== roleAccount.lifetimeToken) {
-            throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
-          }
-          const catalog = getActiveAccountSettingsSnapshot()?.acpCatalog;
-          const prepared = catalog?.status === 'ready' ? catalog : await refreshActiveAcpCatalog({ credentials: params.credentials, signal });
-          if (getActiveAccountSettingsSnapshot()?.scopeKey !== roleAccount.scopeKey
-            || getActiveAccountSettingsSnapshotLifetimeToken() !== roleAccount.lifetimeToken) {
-            throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
-          }
-          signal?.throwIfAborted();
+          await assertCurrent(signal);
+          const catalog = readSnapshot()?.acpCatalog;
+          const prepared = catalog?.status === 'ready' ? catalog : await refreshActiveAcpCatalog({ credentials: params.credentials, signal, operationContext: operation });
+          await assertCurrent(signal);
           return prepared;
         },
         callMachineAction: (input) => params.serverHttpBaseUrl

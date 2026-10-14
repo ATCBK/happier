@@ -12,7 +12,7 @@ import {
 } from '../sessions/creation/sessionCreationTargetPreparationV1.js';
 import { HandoffTargetReplacementApprovalV1Schema } from '../sessions/control/handoff/handoffTargetReplacementApprovalV1.js';
 import { ActionRequiredAuthoritySchema } from '../actions/metadata.js';
-import { isAutomationApprovalRequestSurface, canRequestPresentUserApprovalForActionInputV1 } from '../actions/decisionAuthority.js';
+import { isAutomationApprovalRequestSurface } from '../actions/decisionAuthority.js';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '../actions/actionSpecs.js';
 import {
   ExternalActionTargetV1Schema,
@@ -32,6 +32,7 @@ import { AgentStartSessionCallerV1Schema } from '../account/settings/admitAgentS
 import { ComputerSecretFillRequestV1Schema, SecretFillSettlementV1Schema } from '../computer/v1.js';
 import { BrowserAutomationSecretFillRequestV1Schema } from '../browser/automation/v1.js';
 import { sameStrictJsonValue, StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import { MachineStorageTrashMoveInputV1Schema, PileApplyResultStoredV1Schema, PileApplyResultV1Schema } from '../storage/storageV1.js';
 
 export const ApprovalRequestStatusSchema = lazyZodSchema(() => z.enum(['open', 'approved', 'rejected', 'executed', 'failed', 'canceled']));
 export type ApprovalRequestStatus = z.infer<typeof ApprovalRequestStatusSchema>;
@@ -328,6 +329,40 @@ function validateApprovalRequestLifecycle(
   validateConfidentialApprovalRequest(value, ctx);
 }
 
+/** Read-only retry receipts belong to the original failed items, never to replay authority. */
+function validateStorageRetryResults(value: Readonly<Record<string, unknown>>, ctx: z.RefinementCtx): void {
+  if (value.storageRetryResults === undefined) return;
+  const issue = () => ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['storageRetryResults'],
+    message: 'Storage retry receipts require distinct settled batches for the proposal’s unsuccessful items' });
+  const original = PileApplyResultStoredV1Schema.safeParse((value.execution as ApprovalExecutionV2 | undefined)?.result);
+  const args = MachineStorageTrashMoveInputV1Schema.safeParse(value.actionArgs);
+  const retries = z.array(PileApplyResultV1Schema).min(1).safeParse(value.storageRetryResults);
+  if (value.v !== 2 || value.status !== 'executed' || value.actionId !== 'machines.storage.trash.move'
+    || !original.success || !args.success || !retries.success) { issue(); return; }
+  const requested = new Set(args.data.items.map(item => item.ref.itemId));
+  const unsuccessful = new Set(original.data.outcomes.filter(outcome => requested.has(outcome.itemId)
+    && outcome.status !== 'moved' && outcome.status !== 'deleted').map(outcome => outcome.itemId));
+  const batches = new Set([original.data.batchId]);
+  const entries = new Set(original.data.trashEntryIds ?? []);
+  for (const retry of retries.data) {
+    const items = new Set<string>();
+    if (retry.mode !== 'trash' || batches.has(retry.batchId) || retry.trashEntryIds === undefined
+      || retry.outcomes.length === 0 || retry.trashEntryIds.length > retry.outcomes.filter(outcome => outcome.status === 'moved').length) {
+      issue(); return;
+    }
+    batches.add(retry.batchId);
+    for (const outcome of retry.outcomes) {
+      if (!unsuccessful.has(outcome.itemId) || items.has(outcome.itemId)) { issue(); return; }
+      items.add(outcome.itemId);
+      if (outcome.status === 'moved' || outcome.status === 'deleted') unsuccessful.delete(outcome.itemId);
+    }
+    for (const entryId of retry.trashEntryIds) {
+      if (entries.has(entryId)) { issue(); return; }
+      entries.add(entryId);
+    }
+  }
+}
+
 const ConfidentialApprovalFailureCodeSchema = lazyZodSchema(() => z.enum([
   'approval_stale', 'approval_context_unavailable', 'approval_execution_outcome_unknown',
   'confidential_choice_required', 'unsupported_action', 'invalid_parameters', 'present_user_required',
@@ -422,8 +457,11 @@ export const ApprovalRequestV2Schema = lazyZodSchema(() => z.object({
   handoffTargetReplacementApproval: HandoffTargetReplacementApprovalV1Schema.optional(),
   decision: ApprovalDecisionV2Schema.optional(),
   execution: ApprovalExecutionV2Schema.optional(),
+  /** Settled results of new UI retries; original execution and approval authority stay immutable. */
+  storageRetryResults: z.array(PileApplyResultV1Schema).min(1).optional(),
 }).strict().superRefine((value, ctx) => {
   validateApprovalRequestLifecycle(value, ctx);
+  validateStorageRetryResults(value, ctx);
   if (value.executionOriginV1.actionId !== value.actionId) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['executionOriginV1', 'actionId'], message: 'execution origin Action must match the approved Action' });
   }
@@ -499,7 +537,7 @@ const SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD = {
  * True when this durable approval carries authority facts a client cannot
  * verify itself, so its replay belongs to the exact daemon named by the origin.
  * Unsigned host-caused Account/client approvals on a present-user surface remain
- * locally replayable, as do host-CLI Account effects with durable input custody and,
+ * locally replayable, as do durable host-origin Account effects and,
  * by the 2026-10-12 owner ruling, signed Agent-Session proposals whose reviewed
  * effect is Account/client-only: the approving app runs that effect while the signed
  * carrier stays immutable proposal provenance. Other signed external origins
@@ -536,12 +574,8 @@ export function requiresExactDaemonApprovalReplay(approval: ApprovalRequest): bo
   // Plugin and other external provenance still belongs to its original executor.
   if (spec && origin.caller.kind === 'host'
     && spec.approvalInputCustody !== 'live_only') {
-    if (origin.surface === 'cli') {
-      if (accountEffect) return false;
-    }
-    if (isAutomationApprovalRequestSurface(origin.surface, spec, approval.actionArgs)
-      && spec.executionPlacement === 'account'
-      && canRequestPresentUserApprovalForActionInputV1(spec, approval.actionArgs)) return false;
+    if (accountEffect && (origin.surface === 'cli'
+      || isAutomationApprovalRequestSurface(origin.surface, spec, approval.actionArgs))) return false;
   }
   return SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD[origin.surface]
     || CALLER_REQUIRES_EXACT_DAEMON_REPLAY_RECORD[origin.caller.kind];

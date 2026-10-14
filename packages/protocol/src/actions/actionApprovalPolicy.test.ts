@@ -201,16 +201,17 @@ describe('isApprovalRequiredByActionsSettings', () => {
       expect(isApprovalRequiredByActionsSettings(actionId, settings, { surface: 'agent' }), actionId).toBe(true);
     }
   });
-  it('requires exact legacy-conversion consent even when settings and a host policy waive approval', () => {
+  it('resolves legacy-conversion approval defaults and waivers without granting execution consent', () => {
     const actionId = 'workflow.trigger.update' as const;
     const spec = getActionSpec(actionId);
     for (const surface of ['agent', 'mcp', 'cli'] as const) {
       const settings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
       const args = { actionId, spec, settings, context: { surface, authority: 'account_automation' as const },
         input: { confirmLegacyConversion: true } };
-      expect(isApprovalRequiredByActionsSettings(actionId, settings, args.context, undefined, undefined, args.input)).toBe(true);
+      expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, args.context, undefined, undefined, args.input)).toBe(true);
+      expect(isApprovalRequiredByActionsSettings(actionId, settings, args.context, undefined, undefined, args.input)).toBe(false);
       expect(resolveActionApprovalRouting({ ...args, requiredByPolicy: false }))
-        .toMatchObject({ required: true, flow: 'deferred' });
+        .toMatchObject({ required: false });
       if (surface !== 'agent') {
         expect(resolveActionApprovalRouting({ ...args, requiredByPolicy: false,
           input: { confirmLegacyConversion: false } }).required).toBe(false);
@@ -219,7 +220,7 @@ describe('isApprovalRequiredByActionsSettings', () => {
     expect(resolveActionApprovalRouting({ actionId, spec, requiredByPolicy: false,
       input: { confirmLegacyConversion: true }, context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } }).required).toBe(false);
   });
-  it('requires present-user approval on every Teams parity request even when requester settings waive approval', () => {
+  it('defaults Teams parity requests to approval and honors requester surface waivers', () => {
     for (const actionId of ['teams.invitations.create', 'teams.invitations.reissue', 'teams.credentials.test',
       'teams.directory.sources.remove', 'teams.directory.sources.remove.preview'] as const) {
       const settings = normalizeActionsSettingsV1({ v: 1,
@@ -227,9 +228,11 @@ describe('isApprovalRequiredByActionsSettings', () => {
         approvalWaivedSurfaces: { [actionId]: ['agent', 'mcp'] },
       });
       for (const surface of ['agent', 'mcp'] as const) {
+        expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), settings: EMPTY_SETTINGS,
+          context: { surface, authority: 'account_automation' } }).required).toBe(true);
         expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), settings,
           requiredByPolicy: false, context: { surface, authority: 'account_automation' },
-        }), `${actionId}:${surface}`).toEqual({ required: true, flow: 'deferred', result: 'required' });
+        }), `${actionId}:${surface}`).toMatchObject({ required: false, result: 'required' });
       }
     }
   });
@@ -457,7 +460,7 @@ describe('isApprovalRequiredByActionsSettings', () => {
     });
     expect(isApprovalRequiredByActionsSettings(actionId, required, context, undefined, false)).toBe(true);
   });
-  it('keeps fresh-folder consent mandatory on agent and MCP without flooring ordinary session open', () => {
+  it('defaults fresh-folder consent on Agent/MCP through settings without flooring ordinary session open', () => {
     for (const surface of ['agent', 'mcp'] as const) {
       const context = { surface, authority: 'account_automation' as const };
       const args = {
@@ -465,7 +468,11 @@ describe('isApprovalRequiredByActionsSettings', () => {
         settings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'session.open': [surface] } }),
         requiredByPolicy: false, input: { sessionId: 's1', approvedNewDirectoryCreation: true },
       };
-      expect(resolveActionApprovalRouting(args)).toMatchObject({ required: true, flow: 'deferred' });
+      expect(resolveActionApprovalRouting({ ...args, settings: EMPTY_SETTINGS, requiredByPolicy: undefined }))
+        .toMatchObject({ required: true, flow: 'deferred' });
+      expect(resolveActionApprovalRouting({ ...args, settings: undefined, requiredByPolicy: undefined,
+        defaultSafety: 'safe' }).required).toBe(true);
+      expect(resolveActionApprovalRouting(args).required).toBe(false);
       expect(resolveActionApprovalRouting({ ...args, input: { sessionId: 's1', approvedNewDirectoryCreation: false } }).required).toBe(false);
     }
   });
@@ -484,16 +491,23 @@ describe('isApprovalRequiredByActionsSettings', () => {
         { surface: 'ui', authority: 'present_user' }), actionId).toBe(false);
     }
   });
-  it('never waives agent workflow trigger writes, including an explicit host policy false', () => {
+  it('defaults Workflow trigger writes to approval and honors Agent/MCP waivers and explicit requirements', () => {
     for (const actionId of ['workflow.trigger.add', 'workflow.trigger.update', 'workflow.trigger.remove'] as const) {
+      for (const surface of ['agent', 'mcp'] as const) {
       const settings = normalizeActionsSettingsV1({ v: 1, actions: {},
-        approvalWaivedSurfaces: { [actionId]: ['agent', 'ui'] } });
-      const context = { surface: 'agent' as const, authority: 'account_automation' as const };
-      expect.soft(isApprovalRequiredByActionsSettings(actionId, settings, context), actionId).toBe(true);
+        approvalWaivedSurfaces: { [actionId]: [surface, 'ui'] } });
+      const context = { surface, authority: 'account_automation' as const };
+      expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, context), actionId).toBe(true);
+      expect.soft(isApprovalRequiredByActionsSettings(actionId, settings, context), actionId).toBe(false);
       expect.soft(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), settings, context,
-        requiredByPolicy: false }).required, actionId).toBe(true);
+        requiredByPolicy: false }).required, actionId).toBe(false);
+      expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), settings, context }).required).toBe(false);
+      const required = normalizeActionsSettingsV1({ ...settings,
+        actions: { [actionId]: { approvalRequiredSurfaces: [surface] } } });
+      expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), settings: required, context }).required).toBe(true);
       expect(isApprovalRequiredByActionsSettings(actionId, settings,
         { surface: 'ui', authority: 'present_user' }), actionId).toBe(false);
+      }
     }
     expect(resolveActionApprovalRouting({ actionId: 'workflow.trigger.list', spec: getActionSpec('workflow.trigger.list'),
       context: { surface: 'agent' }, requiredByPolicy: false }).required).toBe(false);

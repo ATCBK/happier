@@ -26,7 +26,6 @@ import {
     getActiveAccountSettingsSnapshot,
     setActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createDeferred } from '@/testkit/async/deferred';
@@ -401,7 +400,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             spawnSession: async () => ({ type: 'success', sessionId: 'unused' }), stopSession: async () => ({ status: 'stopped' }),
             isSessionAlreadyRunning: async () => false, loadLocalSessionMetadataForHandoff: async () => null,
             beforeShutdown: async () => {}, requestShutdown: () => {}, directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(), directTransferRegistryHost: createCliRegistryHostV1(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,
         });
         try {
@@ -1314,7 +1313,6 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,

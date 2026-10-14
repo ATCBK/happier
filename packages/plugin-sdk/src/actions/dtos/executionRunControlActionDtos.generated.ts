@@ -582,6 +582,12 @@ export type ExecutionRunControlActionInputById = {
             comparisonId: string;
             resultId?: string | undefined;
             afterRevision?: number | undefined;
+        } | {
+            comparisonId: string;
+            kind: 'scm_diff_summary';
+            output: 'summary' | 'walkthrough' | 'commitPlan';
+            resultId?: string | undefined;
+            afterRevision?: number | undefined;
         } | undefined;
     };
     readonly "execution.run.send": {

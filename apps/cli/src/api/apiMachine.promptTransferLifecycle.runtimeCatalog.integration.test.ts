@@ -3,7 +3,12 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+const { fixtureHome } = vi.hoisted(() => ({ fixtureHome: vi.fn<() => string | undefined>() }));
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: () => fixtureHome() ?? actual.homedir() };
+});
 
 import type { Machine } from '@/api/types';
 import { createTransferRecipientKeyPair } from '@happier-dev/transfers/node';
@@ -63,58 +68,37 @@ function getMachineRpcLifecycleRegistration(client: ApiMachineClient): any {
 }
 
 describe('ApiMachineClient prompt transfer lifecycle', () => {
-  it('disposes abandoned prompt asset upload and download resources on shutdown', async () => {
-    const homeDir = await mkdtemp(join(tmpdir(), 'happier-machine-prompt-assets-home-'));
+  it('disposes abandoned scanner-backed Found download resources on shutdown', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-machine-found-home-'));
+    fixtureHome.mockReturnValue(homeDir);
     const client = new ApiMachineClient('token', createMachine());
-
     try {
       await mkdir(join(homeDir, '.agents', 'skills', 'reviewer'), { recursive: true });
-      await writeFile(join(homeDir, '.agents', 'skills', 'reviewer', 'SKILL.md'), '# Reviewer\n', 'utf8');
-
+      await writeFile(join(homeDir, '.agents', 'skills', 'reviewer', 'SKILL.md'), '---\nname: reviewer\n---\n# Reviewer\n', 'utf8');
       client.setRPCHandlers({
-        spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'not implemented' }) as any,
-        stopSession: async () => true,
-        requestShutdown: () => {},
-      }, {
-        promptAssetsHomedir: () => homeDir,
+        spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'Unavailable fixture Agent' }),
+        stopSession: async () => true, requestShutdown: () => {},
       });
-
       const lifecycle = getMachineRpcLifecycleRegistration(client);
       expect(lifecycle).toBeTruthy();
-      const store = lifecycle.promptAssetTransfers.transferSessionStore;
-      const rpc = (client as any).rpcHandlerManager as RpcInvoker;
-
-      const upload = await rpc.invokeLocal(RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, { sizeBytes: 4 });
-      expect(upload).toMatchObject({ success: true, uploadId: expect.any(String) });
-      const uploadSession = store.getUploadSession(upload.uploadId);
-      expect(uploadSession).toBeTruthy();
-      const uploadTempPath = uploadSession.tempPath;
-      await expect(access(uploadTempPath)).resolves.toBeUndefined();
-
+      const store = lifecycle.promptAssetTransfers.downloadStore;
+      const rpc = (client as unknown as { rpcHandlerManager: RpcInvoker }).rpcHandlerManager;
       const recipient = createTransferRecipientKeyPair();
       const download = await rpc.invokeLocal(RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT, {
-        assetTypeId: 'agents.skill',
-        scope: 'user',
-        externalRef: { skillName: 'reviewer' },
+        path: join(homeDir, '.agents', 'skills', 'reviewer'),
         recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
       });
       expect(download).toMatchObject({ success: true, downloadId: expect.any(String) });
-      const downloadSession = store.getDownloadSession(download.downloadId);
-      expect(downloadSession).toBeTruthy();
-      const downloadTempPath = downloadSession.filePath;
-      await expect(access(downloadTempPath)).resolves.toBeUndefined();
-
+      const session = store.getDownloadSession(download.downloadId);
+      expect(session).toBeTruthy();
+      await expect(access(session.filePath)).resolves.toBeUndefined();
       await client.shutdown();
       await client.shutdown();
-
-      expect(store.getUploadSession(upload.uploadId)).toBeNull();
       expect(store.getDownloadSession(download.downloadId)).toBeNull();
-      await expectPathMissing(uploadTempPath);
-      await expectPathMissing(downloadTempPath);
-      await expect(rpc.invokeLocal(RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, { sizeBytes: 1 }))
-        .rejects.toThrow('Transfer session store is disposed');
+      await expectPathMissing(session.filePath);
     } finally {
       await client.shutdown().catch(() => undefined);
+      fixtureHome.mockReset();
       await rm(homeDir, { recursive: true, force: true });
     }
   });
@@ -136,7 +120,6 @@ describe('ApiMachineClient prompt transfer lifecycle', () => {
         stopSession: async () => true,
         requestShutdown: () => {},
       }, {
-        promptAssetsHappierHomeDir: () => happierHomeDir,
       });
 
       const lifecycle = getMachineRpcLifecycleRegistration(client);

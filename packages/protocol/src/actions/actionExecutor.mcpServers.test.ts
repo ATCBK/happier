@@ -19,10 +19,10 @@ describe('MCP catalog Actions', () => {
     expect(create.executionPlacement).toBe('account');
     expect(create.inputSchema.safeParse({ entry: { id: 'one', name: 'one', transport: 'stdio',
       stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 },
-      bindings: [], expectedRevision: 3 }).success).toBe(true);
+      where: { kind: 'replace', rules: [] }, expectedRevision: 3 }).success).toBe(true);
     expect(create.inputSchema.safeParse({ entry: { id: 'one', name: 'one', transport: 'stdio',
       stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 },
-      bindings: [], expectedRevision: 'absent' }).success).toBe(true);
+      where: { kind: 'replace', rules: [] }, expectedRevision: 'absent' }).success).toBe(true);
     expect(create.inputSchema.safeParse({ entry: {}, bindings: [] }).success).toBe(false);
     expect(getActionSpec('mcp.servers.delete').safety).toBe('danger');
     const test = getActionSpec('mcp.servers.test');
@@ -31,10 +31,13 @@ describe('MCP catalog Actions', () => {
     expect(create.projectObservationInput?.({ entry: { id: 'one', env: { TOKEN: { t: 'literal', v: 'private' } } },
       expectedRevision: 3 })).toEqual({ serverId: 'one', expectedRevision: 3 });
   });
-  it('keeps credential configuration, process tests and destructive deletion Ask-first on present-user UI', () => {
+  it('asks CLI and Agent callers while applying reversible UI taps directly under D22', () => {
     for (const actionId of MCP_SERVER_ACTION_IDS_V1.filter(id => getActionSpec(id).safety === 'danger')) {
       const args = { actionId, spec: getActionSpec(actionId), context: { surface: 'ui', authority: 'present_user' } as const };
-      expect(resolveActionApprovalRouting(args).required, actionId).toBe(true);
+      expect(resolveActionApprovalRouting(args).required, actionId).toBe(getActionSpec(actionId).approvalPolicy?.uiConfirmation === 'policy');
+      for (const surface of ['cli', 'agent', 'mcp'] as const) {
+        expect(resolveActionApprovalRouting({ ...args, context: { surface, authority: 'account_automation' } }).required, `${actionId}:${surface}`).toBe(true);
+      }
       expect(resolveActionApprovalRouting({ ...args, settings: normalizeActionsSettingsV1({ v: 1,
         approvalWaivedSurfaces: { [actionId]: ['ui'] } }) }).required, actionId).toBe(false);
     }

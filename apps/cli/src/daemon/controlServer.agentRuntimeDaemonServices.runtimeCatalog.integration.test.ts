@@ -833,7 +833,9 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       });
       expect(await actionIsCurrent?.()).toBe(true);
       tracked.agentRuntimeDaemonServiceAdmittedInputId = 'next-input';
-      expect(await actionIsCurrent?.()).toBe(false);
+      // Already-admitted work keeps runner custody; changing the active turn
+      // only prevents admission of another request with the old witness.
+      expect(await actionIsCurrent?.()).toBe(true);
       expect((await executeAction('input-1')).statusCode).toBe(403);
       tracked.agentRuntimeDaemonServiceAdmittedInputId = 'input-1';
       expect((await executeAction('input-1', { sessionId: 'foreign-session' })).statusCode).toBe(403);
@@ -1084,8 +1086,10 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       expect(await actionIsCurrent?.()).toBe(true);
       expect((await executeAction('foreign-input')).statusCode).toBe(403);
       admission = null;
-      expect(await actionIsCurrent?.()).toBe(false);
+      expect(await actionIsCurrent?.()).toBe(true);
       expect((await executeAction()).statusCode).toBe(403);
+      authorizeDaemonServiceRequest.mockReturnValue(null);
+      expect(await actionIsCurrent?.()).toBe(false);
     } finally {
       await app.close();
     }

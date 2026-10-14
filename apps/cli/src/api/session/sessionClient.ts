@@ -10,6 +10,7 @@ import {
     type SessionActionConfirmationRuntimeBinding,
 } from '@/session/actions/approvals/sessionActionConfirmation';
 import { EventEmitter } from 'node:events'
+import { isDeepStrictEqual } from 'node:util';
 import { Socket } from 'socket.io-client'
 import { AgentState, ClientToServerEvents, Metadata, ServerToClientEvents, Session, Update, UserMessage } from '../types'
 import { AsyncLock } from '@/utils/lock';
@@ -184,7 +185,9 @@ import {
     applyAccountSettingsV2Update,
     refreshActiveAccountSettingsFromServer,
 } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { refreshActivePromptLibraryCatalogAfterChange } from '@/settings/prompts/hydratePromptLibraryCatalog';
 import {
     supportsRuntimeActivityV2,
     supportsSessionPublisherAuthorityCheckV1,
@@ -523,6 +526,8 @@ export class ApiSessionClient extends EventEmitter {
         lastErrorMessage: null,
     };
     private userSocketDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private presenceTimer: ReturnType<typeof setTimeout> | null = null;
+    private presenceStopped = false;
     private closed = false;
     private pendingWakeSeq = 0;
     private accountSettingsSyncBarrier: Promise<boolean> | null = null;
@@ -1026,6 +1031,14 @@ export class ApiSessionClient extends EventEmitter {
                 token: this.token,
                 transport: options.transport,
                 getSessionMetadata: () => this.metadata,
+                ...(metadataAuthority.kind === 'owner' && options.localMachineId ? {
+                    projectContext: {
+                        machineId: options.localMachineId,
+                        deviceLocalSecretKeyFile: configuration.deviceLocalSecretKeyFile,
+                        signal: this.socketAckAbortController.signal,
+                        readCredentials: () => this.readCurrentOwnerCredentials(),
+                    },
+                } : {}),
                 getSocket: () => ({
                     connected: this.socket?.connected ?? false,
                     emit: (event, report) => {
@@ -1160,7 +1173,7 @@ export class ApiSessionClient extends EventEmitter {
                 }
             },
             reconcilePendingExecutionRunTarget: (runId) => this.notifyExecutionRunPendingTarget(runId),
-            refreshDemandedMcpCatalog: () => this.sessionHandlersRegistration.refreshDemandedMcpCatalog(),
+            refreshDemandedAccountCatalogs: () => this.refreshDemandedAccountCatalogs(),
         });
         this.commitQueueRuntime = createSessionClientCommitQueueRuntime({
             signal: this.socketAckAbortController.signal,
@@ -1494,6 +1507,7 @@ export class ApiSessionClient extends EventEmitter {
             ...(options.actionsSettingsProvider ? { actionsSettingsProvider: options.actionsSettingsProvider } : {}),
             metadataPath: this.metadata?.path ?? process.cwd(),
             metadata: this.metadata,
+            localMachineId: options.localMachineId,
             sessionId: this.sessionId,
             session: this,
             getSessionMetadata: () => this.getMetadataSnapshot(),
@@ -1670,7 +1684,7 @@ export class ApiSessionClient extends EventEmitter {
             },
             rpcHandlerManager: this.rpcHandlerManager,
             handleUserScopedUpdate: (data, socket) => this.handleUserScopedUpdate(data, socket),
-            onAccountCatalogInvalidated: () => this.sessionHandlersRegistration.refreshDemandedMcpCatalog(),
+            onAccountCatalogInvalidated: () => this.refreshDemandedAccountCatalogs(),
             installSessionSocketEventHandlers: (socket) => this.interactionApi.installSessionSocketEventHandlers(socket),
             classifyTransportErrorToProbeResult,
             onStateChange: (state) => {
@@ -1908,6 +1922,29 @@ export class ApiSessionClient extends EventEmitter {
         });
     }
 
+    private async refreshDemandedAccountCatalogs(): Promise<void> {
+        if (this.closed || !this.hasOwnerMetadataAuthority()) return;
+        // Both socket invalidation and recovery re-observe the admitted Home's
+        // existing Account holders. Prompt hydration joins its in-flight read
+        // and publishes to the captured host observer used by live selection.
+        await runWithServerHttpBaseUrl(this.transport.serverUrl, async () => {
+            await Promise.all([
+                this.sessionHandlersRegistration.refreshDemandedMcpCatalog(),
+                (async () => {
+                    const account = getActiveAccountSettingsSnapshot();
+                    const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+                    const credentials = await this.readCurrentOwnerCredentials();
+                    if (!account?.scopeKey || credentials?.token !== this.token
+                        || resolveAccountSettingsScopeKey(credentials) !== account.scopeKey) return;
+                    // Runner admission may have hydrated only its private
+                    // operation. A missing global catalog is not absent demand.
+                    await refreshActivePromptLibraryCatalogAfterChange({ credentials,
+                        scopeKey: account.scopeKey, lifetimeToken });
+                })(),
+            ]);
+        });
+    }
+
     private async refreshAccountSettingsForMinimumVersion(settingsVersion: number | null): Promise<void> {
         // Account settings are Account-owner state. A shared editor neither
         // reads nor persists them, so reconnect stays a transport concern.
@@ -2081,12 +2118,10 @@ export class ApiSessionClient extends EventEmitter {
                         this.agentStateVersion = version;
                     },
                     setMetadataEnvelopeTupleSnapshot: (snapshot) => {
-                        this.applyMetadataEnvelopeTupleSnapshot(snapshot);
-                        this.emit('metadata-updated');
+                        if (this.applyMetadataEnvelopeTupleSnapshot(snapshot)) this.emit('metadata-updated');
                     },
                     setSharedMetadataTupleSnapshot: (snapshot) => {
-                        this.applySharedMetadataSnapshot(snapshot);
-                        this.emit('metadata-updated');
+                        if (this.applySharedMetadataSnapshot(snapshot)) this.emit('metadata-updated');
                     },
                     applyPendingQueueState: (state) => {
                         if (this.materializationRuntime.applyPendingQueueState(state)) {
@@ -2506,7 +2541,17 @@ export class ApiSessionClient extends EventEmitter {
      * Send a ping message to keep the connection alive
      */
     keepAlive(thinking: boolean, mode: 'local' | 'remote') {
+        if (this.closed || this.presenceStopped) return;
         this.transcriptApi.keepAlive(thinking, mode);
+        if (this.presenceTimer !== null) clearTimeout(this.presenceTimer);
+        // Publisher presence must survive Account/native preparation as well as
+        // the prompt loop. The exact Session transport owns one renewal lifetime.
+        this.presenceTimer = setTimeout(() => {
+            this.presenceTimer = null;
+            this.keepAlive(thinking, mode);
+        }, thinking ? configuration.sessionKeepAliveThinkingMs : configuration.sessionKeepAliveIdleMs);
+        // The shared source graph can expose DOM timer types; this CLI boundary is Node.
+        (this.presenceTimer as unknown as NodeJS.Timeout).unref();
     }
 
     /**
@@ -2878,11 +2923,15 @@ export class ApiSessionClient extends EventEmitter {
 
     private applySharedMetadataSnapshot(
         snapshot: SessionMetadataSharedEditorSnapshot,
-    ): void {
+    ): boolean {
+        const changed = this.metadataLayoutVersion !== snapshot.metadataLayoutVersion
+            || this.metadataVersion !== snapshot.metadataVersion
+            || !isDeepStrictEqual(this.metadata, snapshot.value.metadata);
         this.openedSharedMetadata = TranscriptOpenedSharedMetadataV1Schema.parse({ version: snapshot.metadataVersion, value: snapshot.value.sharedMetadata });
         this.metadataLayoutVersion = snapshot.metadataLayoutVersion;
         this.metadata = snapshot.value.metadata;
         this.metadataVersion = snapshot.metadataVersion;
+        return changed;
     }
 
     private async acquireMetadataTupleWriterSnapshot(
@@ -2909,7 +2958,14 @@ export class ApiSessionClient extends EventEmitter {
 
     private applyMetadataEnvelopeTupleSnapshot(
         snapshot: SessionMetadataEnvelopeTupleSnapshot,
-    ): void {
+    ): boolean {
+        // Fresh tuple admission still runs on every read. Only a changed input wakes the runner.
+        const changed = this.metadataLayoutVersion !== snapshot.metadataLayoutVersion
+            || this.metadataVersion !== snapshot.metadataVersion
+            || this.agentStateVersion !== snapshot.agentStateVersion
+            || !isDeepStrictEqual(this.metadata, snapshot.value.metadata)
+            || !isDeepStrictEqual(this.ownerMetadata, snapshot.value.ownerMetadata)
+            || !isDeepStrictEqual(this.agentState, snapshot.value.agentState);
         this.openedSharedMetadata = TranscriptOpenedSharedMetadataV1Schema.parse({ version: snapshot.metadataVersion, value: snapshot.value.sharedMetadata });
         this.metadataLayoutVersion = snapshot.metadataLayoutVersion;
         this.metadata = snapshot.value.metadata;
@@ -2917,6 +2973,7 @@ export class ApiSessionClient extends EventEmitter {
         this.ownerMetadata = snapshot.value.ownerMetadata;
         this.agentState = snapshot.value.agentState;
         this.agentStateVersion = snapshot.agentStateVersion;
+        return changed;
     }
 
     private getTranscriptQueryContext(): Readonly<
@@ -3139,6 +3196,7 @@ export class ApiSessionClient extends EventEmitter {
                 // predate the exact current-publisher check. Ordinary startup
                 // remains compatible, while transition/process effects fail
                 // closed before attempting the absent socket operation.
+                this.keepAlive(false, 'remote');
                 return {
                     status: 'unsupported',
                     reason: 'publisher_authority_check_unsupported',
@@ -3187,6 +3245,7 @@ export class ApiSessionClient extends EventEmitter {
             this.applyRuntimeActivityProjectionFromServer(
                 acknowledged.projection,
             );
+            this.keepAlive(false, 'remote');
             return { status: 'claimed' };
         }
     }
@@ -3855,6 +3914,9 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     async close() {
+        this.presenceStopped = true;
+        if (this.presenceTimer !== null) clearTimeout(this.presenceTimer);
+        this.presenceTimer = null;
         const closingSocket = this.socket;
         const cancelDisconnectedWrites = () => this.socketAckAbortController.abort();
         closingSocket.on('disconnect', cancelDisconnectedWrites);

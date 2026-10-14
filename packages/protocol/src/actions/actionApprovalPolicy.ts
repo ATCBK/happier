@@ -25,7 +25,7 @@ export type ResolveActionApprovalRoutingArgs = Readonly<{
   settings?: ActionsSettingsV1 | null;
   context?: Pick<ActionExecutorContext, 'surface' | 'authority' | 'presentUserConfirmation' | 'bypassApprovals' | 'actionCaller' | 'isPluginSettingsIntentCurrent'> | null;
   requiredByPolicy?: boolean;
-  /** Host-proved contextual classification; overrides cannot waive mandatory Agent trigger approval. */
+  /** Host-proved contextual classification, resolved through the same settings/waiver owner. */
   defaultSafety?: ActionSpec['safety'];
   /** Fresh computer-owner consent, never a caller-authored grant. */
   computerConsentGranted?: boolean;
@@ -44,15 +44,6 @@ export const AGENT_INITIATED_APPROVAL_REQUIRED_ACTION_IDS: readonly ActionId[] =
   const spec = getActionSpec(id);
   return spec.approvalPolicy?.agentDefault !== undefined || (spec.safety === "danger" && spec.surfaces.agent && spec.approvalPolicy?.scopeAdmissionOwnsConfirmation !== true);
 });
-
-/** Account-level trigger writes always require human approval for agent callers (FIN 03 §5.4). */
-function requiresWorkflowTriggerAgentApproval(
-  actionId: ActionSettingsActionId,
-  ctx?: Pick<ActionExecutorContext, 'surface'> | null,
-): boolean {
-  const parsed = ActionIdSchema.safeParse(actionId);
-  return isAgentOrUnresolvedSurface(ctx) && parsed.success && getActionSpec(parsed.data).approvalPolicy?.mandatoryAgent === true;
-}
 
 /**
  * True when an Action result leaving the host on this surface must be redacted before it can
@@ -142,7 +133,6 @@ function requiresDefaultApprovalFloor(
  * - It does not decide enablement (use `isActionEnabledByActionsSettings` separately).
  * - Missing/unknown surfaces fail closed by applying the danger/egress floor. Known exposed
  *   surfaces use the dangerous default unless a persisted waiver explicitly opts out.
- * - Agent Workflow trigger writes require approval independently of that default policy.
  */
 export function isApprovalRequiredByActionsSettings(
   actionId: ActionSettingsActionId,
@@ -154,9 +144,6 @@ export function isApprovalRequiredByActionsSettings(
   input?: unknown,
 ): boolean {
   const requestActionId = ActionIdSchema.safeParse(actionId);
-  if (requestActionId.success && isAutomationApprovalRequestSurface(ctx?.surface, getActionSpec(requestActionId.data), input)
-    && canRequestPresentUserApprovalForActionInputV1(getActionSpec(requestActionId.data), input)) return true;
-  if (requiresWorkflowTriggerAgentApproval(actionId, ctx)) return true;
   const surface = resolveApprovalSurface(ctx);
   const rawSurface = ctx?.surface;
   const override: ActionSettingsOverride | undefined = settings.actions?.[actionId];
@@ -170,6 +157,8 @@ export function isApprovalRequiredByActionsSettings(
     ? settings.approvalWaivedSurfaces[actionId]
     : [];
   if (surface.kind !== 'ambiguous' && waived.includes(surface.surface)) return false;
+  if (requestActionId.success && isAutomationApprovalRequestSurface(ctx?.surface, getActionSpec(requestActionId.data), input)
+    && canRequestPresentUserApprovalForActionInputV1(getActionSpec(requestActionId.data), input)) return true;
 
   const builtInActionId = ActionIdSchema.safeParse(actionId);
   return builtInActionId.success
@@ -209,16 +198,13 @@ export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingA
     ? args.requiredByPolicy
     : args.settings
       ? isApprovalRequiredByActionsSettings(args.actionId, args.settings, args.context, args.defaultSafety, undefined, args.input)
-      : args.defaultSafety !== undefined
+      : presentUserRequest || (args.defaultSafety !== undefined
         ? requiresDefaultApprovalFloor(args.actionId, args.context, args.defaultSafety, args.input)
-        : resolveUnwiredApprovalDefault(args.actionId, args.context, args.input);
-  // Only the incumbent host-stamped approved replay bypass avoids creating a
-  // second request. A waived setting or a bare policy false is not that proof.
+        : resolveUnwiredApprovalDefault(args.actionId, args.context, args.input));
+  // Waivers choose whether to request approval; execution authority remains
+  // independently enforced by the executor before preparation or effects.
   const required = !isApprovalAction(args.actionId)
-    && ((args.context?.bypassApprovals !== true && (
-      requiresWorkflowTriggerAgentApproval(args.actionId, args.context)
-      || presentUserRequest
-    )) || requiredByPolicy);
+    && requiredByPolicy;
 
   // The public Action API reports a created approval artifact to its caller;
   // it cannot retain an HTTP or server-relay request as the blocking waiter.
