@@ -342,7 +342,7 @@ async function acquirePreparedDirectTransferRoute(params: Readonly<{
         return {
             ok: true,
             endpointCandidates,
-            ...(carrier?.kind === 'browser_stream' ? { request: carrier.request } : {}),
+            ...(carrier && carrier.kind !== 'native_http' ? { request: carrier.request } : {}),
             ...(carrier ? { releaseCarrier: carrier.release } : {}),
         };
     } catch (error) {

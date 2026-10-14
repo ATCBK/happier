@@ -3,9 +3,10 @@ import { readMachineIrohEndpointAuthorityV1, supportsMachineOperationProtocolCap
 import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import type { FeaturesResponse as ServerFeatures } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import type { HomeApplicationCarrierEligibility } from '@happier-dev/cli-common/homeEnrollment';
+import type { BrowserIrohHostDecision } from '@/sync/runtime/browserIroh/hostEligibility';
 
 export type MachineCarrierHostEligibility =
-    | Readonly<{ kind: 'browser' }>
+    | Readonly<{ kind: 'browser'; lifecycleAvailable?: boolean }>
     | Readonly<{ kind: 'native'; lifecycleAvailable: boolean }>;
 
 export type MachineCarrierPreselection =
@@ -14,7 +15,18 @@ export type MachineCarrierPreselection =
         carrierKind: 'browser_stream' | 'native_http';
         targetEndpoint: IrohEndpointDescriptorV1;
     }>
+    | Readonly<{ kind: 'server_rpc' }>
     | Readonly<{ kind: 'unavailable' }>;
+
+/** Browser identity survives an unavailable Iroh lifecycle so Home RPC remains eligible. */
+export function resolveMachineCarrierHostEligibility(input: Readonly<{
+    browserIroh: BrowserIrohHostDecision;
+    nativeLifecycleAvailable: boolean;
+}>): MachineCarrierHostEligibility {
+    if (input.browserIroh.eligible) return { kind: 'browser', lifecycleAvailable: true };
+    if (input.browserIroh.reason === 'shared_worker_unsupported') return { kind: 'browser', lifecycleAvailable: false };
+    return { kind: 'native', lifecycleAvailable: input.nativeLifecycleAvailable };
+}
 
 /**
  * The one reader for a Machine's declared finite-transfer RPC ingress. The
@@ -67,8 +79,10 @@ export function resolveMachineCarrierPreselection(input: Readonly<{
     host: MachineCarrierHostEligibility;
     /** Exact current finite-transfer application support for this Machine role. */
     finiteTransferApplicationSupported: boolean;
+    /** The current Machine supports Iroh's finite application, independently of Home RPC. */
+    irohApplicationSupported: boolean;
 }>): MachineCarrierPreselection {
-    if (!input.serverFeatures || readServerEnabledBit(input.serverFeatures, 'machines.transfer') !== true) {
+    if (!input.finiteTransferApplicationSupported || !input.serverFeatures || readServerEnabledBit(input.serverFeatures, 'machines.transfer') !== true) {
         return { kind: 'unavailable' };
     }
 
@@ -76,10 +90,11 @@ export function resolveMachineCarrierPreselection(input: Readonly<{
     if (
         input.applicationCarrierEligibility !== 'standard_only'
         && input.finiteTransferApplicationSupported
+        && input.irohApplicationSupported
         && endpoint.success
         && isIrohMachineCarrierFeatureEnabled(input.serverFeatures)
     ) {
-        if (input.host.kind === 'browser' && (endpoint.data.relayUrls?.length ?? 0) > 0) {
+        if (input.host.kind === 'browser' && input.host.lifecycleAvailable !== false && (endpoint.data.relayUrls?.length ?? 0) > 0) {
             return { kind: 'iroh_peer', carrierKind: 'browser_stream', targetEndpoint: endpoint.data };
         }
         if (input.host.kind === 'native' && input.host.lifecycleAvailable) {
@@ -87,5 +102,5 @@ export function resolveMachineCarrierPreselection(input: Readonly<{
         }
     }
 
-    return { kind: 'unavailable' };
+    return input.host.kind === 'browser' ? { kind: 'server_rpc' } : { kind: 'unavailable' };
 }

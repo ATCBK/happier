@@ -1,4 +1,4 @@
-import { mintFiniteAccountClientTransferHandshake } from '@happier-dev/sync-client';
+import { mintFiniteAccountClientTransferHandshake, readRpcRequestDisposition } from '@happier-dev/sync-client';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getRandomBytes } from '@/platform/cryptoRandom';
@@ -9,12 +9,13 @@ import { createServerAccountScope, areServerAccountScopesEqual, type ServerAccou
 import { storage } from '@/sync/domains/state/storage';
 import { serverFetch } from '@/sync/http/client';
 import { getIrohApplicationEndpoint, probeIrohMachineTransferLifecycleAvailability, startIrohMachineTransferTunnel } from '@/sync/runtime/nativeIrohTunnels/machineTransferLifecycle';
-import { isBrowserIrohHost } from '@/sync/runtime/browserIroh/hostEligibility';
+import { resolveBrowserIrohHostDecision } from '@/sync/runtime/browserIroh/hostEligibility';
 import { readHomeApplicationCarrierEligibility } from '@/sync/runtime/homeCarrierPolicy';
 import { captureServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { parseToken } from '@/utils/auth/parseToken';
-import { isMachineDaemonFiniteTransferApplicationSupported } from '../availability/machineDaemonTransferState';
-import { isMachineFiniteTransferRpcDeclared, readCurrentMachineIrohEndpoint, resolveMachineCarrierPreselection } from '../routing/resolveMachineCarrierPreselection';
+import { isMachineDaemonFiniteTransferApplicationSupported, isMachineDaemonIrohTransferApplicationSupported } from '../availability/machineDaemonTransferState';
+import { isMachineFiniteTransferRpcDeclared, readCurrentMachineIrohEndpoint, resolveMachineCarrierHostEligibility, resolveMachineCarrierPreselection } from '../routing/resolveMachineCarrierPreselection';
+import { createMachineCarrierServerRpcRequester } from './machineCarrierServerRpc';
 
 /** Stable user-facing failure copy for an operation pinned to machine/1. */
 export const MACHINE_CARRIER_REQUIRED_TRANSFER_ERROR = 'A direct machine connection is required for this transfer.';
@@ -53,6 +54,11 @@ export type MachineCarrierHttpLease = Readonly<
         request: MachineCarrierHttpRequester;
         release: () => Promise<void>;
     }
+    | {
+        kind: 'server_rpc';
+        request: MachineCarrierHttpRequester;
+        release: () => Promise<void>;
+    }
 >;
 
 export type AcquireMachineCarrierHttpLease = (input: Readonly<{
@@ -80,9 +86,7 @@ function readTargetIrohEndpoint(serverId: string, machineId: string) {
 
 export type MachineCarrierRoute = Readonly<
     | { kind: 'unavailable'; error: string; errorCode: typeof MACHINE_CARRIER_UNAVAILABLE_ERROR_CODE }
-    | {
-        kind: 'iroh_peer';
-        carrierKind: 'native_http' | 'browser_stream';
+    | ({
         /** The Home already selected by this canonical route decision. */
         serverId: string;
         acquire: (input: Readonly<{
@@ -90,7 +94,10 @@ export type MachineCarrierRoute = Readonly<
             signal?: AbortSignal;
             accountLifetime?: ServerAccountScopeLifetime;
         }>) => Promise<MachineCarrierHttpLease>;
-    }
+    } & (
+        | { kind: 'iroh_peer'; carrierKind: 'native_http' | 'browser_stream' }
+        | { kind: 'server_rpc'; carrierKind: 'server_rpc' }
+    ))
 >;
 
 /** Reads the captured route without giving downstream callers a second decision. */
@@ -100,7 +107,7 @@ export function isIrohMachineCarrierRoute(
     return route?.kind === 'iroh_peer';
 }
 
-/** One route decision for the whole transfer. Callers never reselect after prepare. */
+/** The canonical route owner alone may fall back before any transfer phase is sent. */
 export async function resolveMachineCarrierRoute(machineId: string, serverId?: string | null): Promise<MachineCarrierRoute> {
     const applicationCarrierEligibility = readHomeApplicationCarrierEligibility();
     const server = resolveTargetServer(serverId);
@@ -137,16 +144,10 @@ export async function resolveMachineCarrierRoute(machineId: string, serverId?: s
     if (!finiteTransferApplicationSupported) {
         return { kind: 'unavailable', error: MACHINE_CARRIER_REQUIRED_TRANSFER_ERROR, errorCode: MACHINE_CARRIER_UNAVAILABLE_ERROR_CODE };
     }
-    const browserHost = isBrowserIrohHost();
-    const host = browserHost
-        ? { kind: 'browser' as const }
-        : {
-            kind: 'native' as const,
-            lifecycleAvailable: targetEndpoint
-                && applicationCarrierEligibility !== 'standard_only'
-                ? await probeIrohMachineTransferLifecycleAvailability()
-                : false,
-        };
+    let host = resolveMachineCarrierHostEligibility({ browserIroh: resolveBrowserIrohHostDecision(), nativeLifecycleAvailable: false });
+    if (host.kind === 'native' && targetEndpoint && applicationCarrierEligibility !== 'standard_only') {
+        host = { kind: 'native', lifecycleAvailable: await probeIrohMachineTransferLifecycleAvailability() };
+    }
     const serverFeatures = await getReadyServerFeatures({ serverId: server.serverId });
     const preselection = resolveMachineCarrierPreselection({
         applicationCarrierEligibility,
@@ -154,9 +155,21 @@ export async function resolveMachineCarrierRoute(machineId: string, serverId?: s
         targetEndpoint,
         host,
         finiteTransferApplicationSupported,
+        irohApplicationSupported: machineProjection?.kind === 'ephemeral_session_runner'
+            ? runnerFiniteTransferRpcDeclared : isMachineDaemonIrohTransferApplicationSupported(machineDaemonState),
     });
-    if (preselection.kind !== 'iroh_peer') {
+    if (preselection.kind === 'unavailable') {
         return { kind: 'unavailable', error: MACHINE_CARRIER_REQUIRED_TRANSFER_ERROR, errorCode: MACHINE_CARRIER_UNAVAILABLE_ERROR_CODE };
+    }
+    if (preselection.kind === 'server_rpc') {
+        return {
+            kind: 'server_rpc', carrierKind: 'server_rpc', serverId: server.serverId,
+            acquire: async input => ({
+                kind: 'server_rpc',
+                request: createMachineCarrierServerRpcRequester({ ...input, machineId, serverId: server.serverId }),
+                release: async () => {},
+            }),
+        };
     }
     if (preselection.carrierKind === 'browser_stream') {
         return {
@@ -171,6 +184,15 @@ export async function resolveMachineCarrierRoute(machineId: string, serverId?: s
                         serverId: server.serverId,
                     });
                 } catch (error) {
+                    if (readRpcRequestDisposition(error) === 'notSent') {
+                        input.signal?.throwIfAborted();
+                        if (input.accountLifetime && !input.accountLifetime.isCurrent()) throw new Error('action_account_scope_changed');
+                        return {
+                            kind: 'server_rpc',
+                            request: createMachineCarrierServerRpcRequester({ ...input, machineId, serverId: server.serverId }),
+                            release: async () => {},
+                        };
+                    }
                     throw createMachineCarrierTransportFailure(error);
                 }
             },

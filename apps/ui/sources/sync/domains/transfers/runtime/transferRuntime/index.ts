@@ -2,7 +2,7 @@ export * from './families/workspaceFileTransfers';
 export * from './families/sessionAttachmentTransfers';
 export * from './families/composerMediaStageTransfers';
 export * from './families/foundSkillTransfers';
-export * from './families/promptRegistryTransfers';
+export * from './families/registryTransfers';
 export * from './availability/resolveSessionFileTransferAvailability';
 export * from './routing/resolveTransferRouteDecision';
 export * from './availability/transferAvailability';

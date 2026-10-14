@@ -1,38 +1,37 @@
-import { Platform } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
-import { storage } from '@/sync/domains/state/storage';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { resolveMachineCarrierRoute } from './machineCarrierHttpLease';
 
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
 const socketMachineRpc = vi.hoisted(() => vi.fn());
 
 // Socket.IO is the genuine active-Home machine-RPC network boundary. The
 // finite-transfer families below stay real so this records any preparation or
 // legacy bulk RPC that escapes admission.
-vi.mock('@/sync/api/session/apiSocket', () => ({
-    apiSocket: {
-        machineRPC: (...args: unknown[]) => socketMachineRpc(...args),
-    },
-}));
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary(socket => {
+    socket.connected = true;
+    vi.spyOn(socket, 'timeout').mockReturnValue(socket);
+    vi.spyOn(socket, 'emitWithAck').mockImplementation(socketMachineRpc);
+});
 
-// Actual optional native-module discovery is the hardware boundary. All
-// endpoint lookup, scoped state, preselection and transfer policy remain real.
-vi.mock('@happier-dev/iroh-native', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@happier-dev/iroh-native')>(),
-    getOptionalHappierIrohNativeModule: () => null,
-}));
+const { storage } = await import('@/sync/domains/state/storage');
+const { resolveMachineCarrierRoute } = await import('./machineCarrierHttpLease');
 
 describe('mandatory finite machine carrier admission', () => {
     let serverId: string;
-    const previousPlatform = Platform.OS;
+    let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
     const networkRequests: string[] = [];
 
     beforeEach(async () => {
-        const profile = await upsertAndActivateServer({ serverUrl: 'https://machine-admission.example.test', scope: 'device' });
-        serverId = profile.id;
+        installHomeGovernanceBoundaries(homes);
+        serverId = await homes.addHome({ name: 'Admission Home', serverUrl: 'https://machine-admission.example.test', accountId: 'account-a' });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://machine-admission.example.test', accountId: 'account-a', request: homes.request });
         expect(serverId).not.toBe('');
         networkRequests.length = 0;
         socketMachineRpc.mockReset();
@@ -44,35 +43,20 @@ describe('mandatory finite machine carrier admission', () => {
         });
     });
 
-    afterEach(() => {
-        Object.defineProperty(Platform, 'OS', { value: previousPlatform, configurable: true });
-        vi.unstubAllGlobals();
+    afterEach(async () => {
         resetRuntimeFetch();
+        await connection?.dispose();
+        await homes.reset();
+        vi.restoreAllMocks();
     });
 
-    function publishMachine(relayUrls: string[] = []) {
-        const machine = createMachineFixture({
-            id: 'machine-admission',
-            daemonState: { peerMediation: { iroh: { endpoint: {
-                endpointId: 'a'.repeat(64), directAddresses: ['127.0.0.1:41101'], relayUrls,
-            } } } },
+    it('refuses an unknown Machine before feature, grant, or transfer network work', async () => {
+        await expect(resolveMachineCarrierRoute('machine-admission', serverId)).resolves.toMatchObject({
+            kind: 'unavailable', errorCode: 'machine_carrier_unavailable',
         });
-        storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
-    }
-
-    it.each(['missing endpoint', 'unavailable native lifecycle', 'browser without a relay'] as const)(
-        'refuses %s without feature, grant, or transfer network work', async (reason) => {
-            if (reason !== 'missing endpoint') publishMachine();
-            if (reason === 'browser without a relay') {
-                Object.defineProperty(Platform, 'OS', { value: 'web', configurable: true });
-                vi.stubGlobal('SharedWorker', class SharedWorker {});
-            }
-            await expect(resolveMachineCarrierRoute('machine-admission', serverId)).resolves.toMatchObject({
-                kind: 'unavailable', errorCode: 'machine_carrier_unavailable',
-            });
-            expect(networkRequests).toEqual([]);
-        },
-    );
+        expect(networkRequests).toEqual([]);
+        expect(socketMachineRpc).not.toHaveBeenCalled();
+    });
 
     it('refuses a running daemon without a current transfer declaration before network work', async () => {
         const machine = createMachineFixture({

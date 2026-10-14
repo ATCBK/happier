@@ -23,10 +23,16 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc', () => 
 
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { isTransferFinalizeRecoveryFailure } from './directTransferFinalizeRecovery';
-import { uploadBulkPayloadFromFileViaDirectImport } from './directTransferImportUpload';
+import { uploadBulkPayloadFromFileViaDirectImport as uploadAdmittedBytes } from './directTransferImportUpload';
+import { callAdmittedFilesystemTransferActionRpc } from './filesystemTransferActionClient';
 import {
     createTransferRecipientKeyPair,
 } from './transferChunkEncryption';
+
+// These byte/transport vectors begin after containing Action admission, as the
+// export vectors do. Real UI admission is covered by workspaceFileSystem/actionAdmission.test.ts.
+const uploadBulkPayloadFromFileViaDirectImport = <TResponse>(params: Parameters<typeof uploadAdmittedBytes<TResponse>>[0]) =>
+    uploadAdmittedBytes<TResponse>({ ...params, callAdmittedAction: callAdmittedFilesystemTransferActionRpc });
 
 describe('uploadBulkPayloadFromFileViaDirectImport', () => {
     afterEach(() => {
@@ -873,91 +879,6 @@ describe('uploadBulkPayloadFromFileViaDirectImport', () => {
             'https://machine.example.test/machine-transfers/direct/imports/upload-safe/finalize',
         ]);
         expect(prepareImportSessionMock).toHaveBeenCalledTimes(1);
-    });
-
-    it('can parse a non-file finalize response from direct import', async () => {
-        prepareImportSessionMock.mockResolvedValue({
-            success: true,
-            uploadId: 'upload-1',
-            destDisplayPath: 'prompt-asset-upload.json',
-            expectedSizeBytes: 5,
-            chunkSizeBytes: 5,
-            recipientPublicKeyBase64: Buffer.alloc(32, 7).toString('base64'),
-            expiresAt: 5_000,
-            endpointCandidates: [
-                {
-                    kind: 'http',
-                    url: 'http://127.0.0.1:46001/machine-transfers/direct/imports/upload-1',
-                    expiresAt: 5_000,
-                },
-            ],
-        });
-
-        setRuntimeFetch(async (input, init) => {
-            const url = input instanceof URL ? input.toString() : String(input);
-            const method = String(init?.method ?? 'GET');
-
-            if (url.includes('/chunks/') && method === 'PUT') {
-                return new Response(JSON.stringify({ success: true }), {
-                    status: 200,
-                    headers: { 'content-type': 'application/json' },
-                });
-            }
-
-            if (url.endsWith('/finalize') && method === 'POST') {
-                return new Response(JSON.stringify({
-                    success: true,
-                    finalized: {
-                        success: true,
-                        path: 'prompt-asset-upload.json',
-                        sizeBytes: 5,
-                        result: {
-                            ok: true,
-                            externalRef: { skillName: 'writer' },
-                            digest: 'digest-a',
-                        },
-                    },
-                    sha256: 'sha256:test',
-                }), {
-                    status: 200,
-                    headers: { 'content-type': 'application/json' },
-                });
-            }
-
-            throw new Error(`unexpected request: ${method} ${url}`);
-        });
-
-        const result = await uploadBulkPayloadFromFileViaDirectImport({
-            machineId: 'machine-1',
-            serverId: 'server-1',
-            fileReader: {
-                sizeBytes: 5,
-                readBytes: async (offset, length) => new TextEncoder().encode('hello').subarray(offset, offset + length),
-                close: async () => {},
-            },
-            request: {
-                t: 'prompt_asset_upload_v1',
-                workingDirectory: '/repo',
-                sizeBytes: 5,
-            } as any,
-            parseFinalizeResponse: (response) => {
-                const result = response.finalized.result as Record<string, unknown> | undefined;
-                if (!result || result.ok !== true) {
-                    return null;
-                }
-                return {
-                    ok: true,
-                    externalRef: result.externalRef,
-                    digest: result.digest,
-                };
-            },
-        });
-
-        expect(result).toEqual({
-            ok: true,
-            externalRef: { skillName: 'writer' },
-            digest: 'digest-a',
-        });
     });
 
     it('does not retry another endpoint after an application-level chunk rejection', async () => {

@@ -4,6 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+// Compile the real export graph during collection rather than spending the
+// behavior assertion's budget on cold module transforms.
+const transferRuntime = await import('./index');
+
 async function listFilesRecursively(directory: string): Promise<string[]> {
     const entries = await readdir(directory, { withFileTypes: true });
     const results: string[] = [];
@@ -20,17 +24,15 @@ async function listFilesRecursively(directory: string): Promise<string[]> {
 
 describe('transferRuntime (public API)', () => {
     it('freezes the transferRuntime index runtime exports', async () => {
-        const transferRuntime = await import(new URL('./index.ts', import.meta.url).href);
-
         expect(Object.keys(transferRuntime).sort()).toEqual([
             'callDaemonWorkspaceStatFileRpc',
             'callDaemonWorkspaceWriteFileRpc',
             'claimComposerContent',
             'createSessionAttachmentTransferRouting',
-            'downloadDaemonPromptRegistryItem',
             'downloadDaemonSessionAttachmentToDestination',
             'downloadDaemonWorkspaceFileToBase64',
             'downloadDaemonWorkspaceFileToDestination',
+            'downloadRegistrySkillFiles',
             'getComposerMediaContentAvailability',
             'inspectComposerContent',
             'isTransferFinalizeRecoveryFailure',

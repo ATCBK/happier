@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DirectRouteGrantRequestV2Schema, IrohMachineHandshakeV1Schema, type IrohEndpointDescriptorV1 } from '@happier-dev/protocol';
+import { DirectRouteGrantRequestV2Schema, IrohMachineHandshakeV1Schema, SignedDirectRouteGrantV2Schema, type IrohEndpointDescriptorV1 } from '@happier-dev/protocol';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storage';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { parseToken } from '@/utils/auth/parseToken';
 import { MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR } from './machineCarrierHttpLease';
 import {
     MACHINE_CARRIER_STREAM_PREAMBLE_BYTE,
@@ -45,11 +46,11 @@ function publishEndpoint(endpoint: IrohEndpointDescriptorV1 | null) {
 function grantedResponse(request: ReturnType<typeof DirectRouteGrantRequestV2Schema.parse>) {
     return {
         ok: true as const,
-        value: {
+        value: SignedDirectRouteGrantV2Schema.parse({
             payload: {
                 v: 2,
                 grantId: 'grant-v2-browser',
-                accountId: 'account-from-signed-grant',
+                accountId: parseToken(targetToken),
                 machineId: request.machineId,
                 flowKind: 'bounded_transfer',
                 routeKind: 'iroh_peer',
@@ -67,7 +68,7 @@ function grantedResponse(request: ReturnType<typeof DirectRouteGrantRequestV2Sch
                 alg: 'Ed25519',
                 valueBase64Url: Buffer.from(new Uint8Array(64).fill(4)).toString('base64url'),
             },
-        },
+        }),
     };
 }
 
@@ -244,7 +245,7 @@ describe('acquireBrowserMachineCarrierStreamLease', () => {
         expect(handshake.target).toEqual({ machineId: 'machine-1', endpointId: TARGET_ENDPOINT_ID });
         expect(handshake.flow).toBe('finite_transfer');
         expect(handshake).not.toHaveProperty('operationId');
-        expect(handshake.accountId).toBe('account-from-signed-grant');
+        expect(handshake.accountId).toBe(parseToken(targetToken));
 
         // The one admission decision byte is consumed before any payload write.
         expect(machineStream.events.indexOf('decisionRead'))

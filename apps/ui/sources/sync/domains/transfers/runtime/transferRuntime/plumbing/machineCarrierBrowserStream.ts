@@ -25,10 +25,10 @@
  * rejected) read before any payload byte moves. The proven remote EndpointId
  * is checked against the signed target before that first byte.
  *
- * After the signed grant is minted, every failure is the existing
- * machine-carrier transport failure. There is no standard/user-socket
- * fallback, and there is no local origin: browsers cannot bind one, and none
- * is fabricated.
+ * Acquisition moves no transfer HTTP bytes. Once failed acquisition custody
+ * is released, the canonical route owner may select Home before delivery.
+ * After acquisition, the HTTP requester never replays through another carrier.
+ * There is no local origin: browsers cannot bind one, and none is fabricated.
  */
 
 import {
@@ -38,6 +38,7 @@ import {
     MAX_MACHINE_HANDSHAKE_BYTES,
     TUNNEL_PREAMBLE,
 } from '@happier-dev/iroh-native';
+import { markRpcRequestDisposition } from '@happier-dev/sync-client';
 import {
     MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR,
     mintSignedMachineCarrierHandshake,
@@ -194,7 +195,7 @@ export async function acquireBrowserMachineCarrierStreamLease(input: Readonly<{
                 return release;
             },
         };
-    } finally {
+    } catch (error) {
         if (custody.endpointLease !== null) {
             // Custody taken during acquisition is released on every failure
             // path, and a failed release is never swallowed behind the
@@ -202,6 +203,10 @@ export async function acquireBrowserMachineCarrierStreamLease(input: Readonly<{
             // the caller must see that release outcome.
             await Promise.resolve(custody.endpointLease.release());
         }
+        // The HTTP requester has not been returned, so no transfer phase could
+        // be delivered. A failed custody release escapes above without this
+        // classification; the route owner must not hide that failure.
+        throw markRpcRequestDisposition(error, 'notSent');
     }
 }
 
@@ -215,8 +220,8 @@ type AdmittedStream = Readonly<{
  * Opens the machine/1 stream, proves the remote identity against the signed
  * target before any byte, writes the canonical handshake frame exactly once,
  * and consumes the one admission decision byte. Every failure is the typed
- * machine-carrier transport failure and leaves nothing behind for a caller to
- * fall back with.
+ * machine-carrier transport failure. The acquisition owner releases endpoint
+ * custody before classifying it as a not-sent transfer phase.
  */
 async function openAdmittedMachineStream(params: Readonly<{
     input: Readonly<{

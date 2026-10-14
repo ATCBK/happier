@@ -147,7 +147,7 @@ vi.mock('@/sync/domains/state/storage', async () => {
                                 transfer: {
                                     supported: { import: true, export: true },
                                     listenerClasses: {
-                                        loopback_http: { enabled: false, configured: false, active: false },
+                                        loopback_http: { enabled: true, configured: true, active: false },
                                         tailscale_serve_https: { enabled: false, configured: false, active: false },
                                     },
                                     lifecycle: { mode: 'lazy_idle_shutdown', version: 1 },
@@ -184,7 +184,7 @@ vi.mock('@/sync/domains/state/storage', async () => {
                                 transfer: {
                                     supported: { import: true, export: true },
                                     listenerClasses: {
-                                        loopback_http: { enabled: false, configured: false, active: false },
+                                        loopback_http: { enabled: true, configured: true, active: false },
                                         tailscale_serve_https: { enabled: false, configured: false, active: false },
                                     },
                                     lifecycle: { mode: 'lazy_idle_shutdown', version: 1 },
@@ -212,6 +212,8 @@ vi.mock('@/sync/runtime/nativeIrohTunnels/machineTransferLifecycle', () => ({
 }));
 vi.mock('@/sync/runtime/browserIroh/hostEligibility', () => ({
     isBrowserIrohHost: () => boundaries.browserHostEligible(),
+    resolveBrowserIrohHostDecision: () => boundaries.browserHostEligible()
+        ? { eligible: true } : { eligible: false, reason: 'not_web' },
 }));
 vi.mock('@/sync/runtime/browserIroh', () => ({
     resolvePackagedBrowserIrohEndpointClient: () => boundaries.resolvePackagedClient(),
@@ -254,7 +256,7 @@ describe('resolveMachineCarrierRoute', () => {
         boundaries.getReadyServerFeatures.mockClear();
     });
 
-    it('refuses a finite transfer when a browser target has no configured relay', async () => {
+    it('selects the server route when a browser target has no configured relay', async () => {
         boundaries.browserHostEligible.mockReturnValue(true);
         await expect(resolveMachineCarrierRoute('machine-1', 'server-1')).resolves.toMatchObject({
             kind: 'iroh_peer',
@@ -270,7 +272,7 @@ describe('resolveMachineCarrierRoute', () => {
         boundaries.omitCurrentEndpointHints('server-1');
 
         await expect(resolveMachineCarrierRoute('machine-1', 'server-1')).resolves.toMatchObject({
-            kind: 'unavailable', errorCode: 'machine_carrier_unavailable',
+            kind: 'server_rpc', carrierKind: 'server_rpc', serverId: 'server-1',
         });
         expect(boundaries.acquireBrowserStream).not.toHaveBeenCalled();
     });
@@ -279,7 +281,7 @@ describe('resolveMachineCarrierRoute', () => {
         boundaries.browserHostEligible.mockReturnValue(true);
         boundaries.omitCurrentEndpointHints('server-1');
         await expect(resolveMachineCarrierRoute('machine-1', 'server-1')).resolves.toMatchObject({
-            kind: 'unavailable', errorCode: 'machine_carrier_unavailable',
+            kind: 'server_rpc', carrierKind: 'server_rpc',
         });
         expect(boundaries.acquireBrowserStream).not.toHaveBeenCalled();
     });

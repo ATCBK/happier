@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { installPromptAssetsCommonModuleMocks } from '@/components/settings/prompts/assets/promptAssetsScreenTestHelpers';
+import { installPromptLibrarySettingsCommonModuleMocks } from '@/components/settings/prompts/promptLibrarySettingsTestHelpers';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('@happier-dev/iroh-native', async original => (await import('@/dev/testkit/harness/promptMachineTransferBoundary')).createPromptNativeTransferModuleBoundary(original));
-installPromptAssetsCommonModuleMocks({ storage: original => original(), reactNative: async () => {
+installPromptLibrarySettingsCommonModuleMocks({ storage: original => original(), reactNative: async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'ios', select: ({ ios, default: fallback }: { ios?: unknown; default?: unknown }) => ios ?? fallback } });
 } });
@@ -22,7 +22,7 @@ let fixture: Awaited<ReturnType<typeof createPromptMachineTransferFixture>>;
 let previousState: ReturnType<typeof storage.getState>;
 beforeEach(async () => { previousState = storage.getState(); const catalog = createPromptLibraryCatalogBoundary();
     fixture = await createPromptMachineTransferFixture({ serverUrl: 'https://found-transfer.test', serverIdentityId: 'srv_found_transfer',
-        selectionKey: 'prompts.assets', types: [], foundSkill: found, handleHomeRequest: catalog.handle }); });
+        selectionKey: 'skills.found', foundSkill: found, handleHomeRequest: catalog.handle }); });
 afterEach(async () => { await fixture?.dispose(); storage.setState(previousState, true); });
 
 describe('Found reader and real Action mount', () => {
