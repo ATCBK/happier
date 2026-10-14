@@ -12,7 +12,6 @@ import {
 import {
     MAX_CONVERSATION_RECEIVE_BATCH_ENTRIES,
     MAX_CONVERSATION_RECEIVE_WAIT_MS,
-    MAX_CONVERSATION_RETRY_AFTER_MS,
     MAX_CONVERSATION_PROVIDER_MESSAGE_ID_UTF8_BYTES,
 } from '../bounds.js';
 import { ConversationIngressObservedEntryV1ProtocolSchema } from '../core/ingress.js';
@@ -61,7 +60,7 @@ const retryHintV1 = defineProtocolObject({
     retryAfterMs: defineProtocolNumber({
         integer: true,
         minimum: 0,
-        maximum: MAX_CONVERSATION_RETRY_AFTER_MS,
+        maximum: Number.MAX_SAFE_INTEGER,
     }),
 }, { policy: 'closed' });
 

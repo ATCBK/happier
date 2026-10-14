@@ -9,17 +9,19 @@ import {
 
 import { ConversationBindingIdV1ProtocolSchema } from '../identity.js';
 
+export const ConversationSessionLastDeliveryOutcomeV1Schema = defineProtocolUnion([
+    defineProtocolLiteral('delivered'),
+    defineProtocolLiteral('notDelivered'),
+    defineProtocolLiteral('pending'),
+    defineProtocolLiteral('unknown'),
+]);
+
 /** A read-only custody summary; resolution never proves complete provider delivery. */
 export const ConversationSessionLastDeliveryV1Schema = defineProtocolObject({
     bindingId: ConversationBindingIdV1ProtocolSchema,
     /** Existing custody row update time, not an exact provider send time. */
     atMs: defineProtocolNumber({ integer: true, minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-    outcome: defineProtocolUnion([
-        defineProtocolLiteral('delivered'),
-        defineProtocolLiteral('notDelivered'),
-        defineProtocolLiteral('pending'),
-        defineProtocolLiteral('unknown'),
-    ]),
+    outcome: ConversationSessionLastDeliveryOutcomeV1Schema,
 }, { policy: 'closed' });
 export type ConversationSessionLastDeliveryV1 = ReturnType<typeof ConversationSessionLastDeliveryV1Schema.parse>;
 export type ConversationSessionLastDeliveryOutcomeV1 = ConversationSessionLastDeliveryV1['outcome'];

@@ -16,7 +16,6 @@ import {
     CONVERSATION_DELIVERY_MENTION_POLICIES_V1,
     CONVERSATION_DELIVERY_RETRY_KINDS_V1,
     MAX_CONVERSATION_PROVIDER_MESSAGE_ID_UTF8_BYTES,
-    MAX_CONVERSATION_RETRY_AFTER_MS,
     MAX_CONVERSATION_SESSION_IDEMPOTENCY_KEY_UTF8_BYTES,
 } from '../bounds.js';
 import { ConversationProviderConnectionInputV1Fields } from './connection.js';
@@ -150,7 +149,7 @@ const conversationNotDeliveredV1 = defineProtocolObject({
     retryAfterMs: defineProtocolNumber({
         integer: true,
         minimum: 0,
-        maximum: MAX_CONVERSATION_RETRY_AFTER_MS,
+        maximum: Number.MAX_SAFE_INTEGER,
     }).optional(),
 }, { policy: 'closed' });
 

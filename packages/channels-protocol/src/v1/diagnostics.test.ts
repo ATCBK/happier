@@ -11,8 +11,24 @@ import {
     ConversationProviderFailureV1Schema,
     ConversationProviderHistoryUnavailableV1ProtocolSchema,
 } from './diagnostics.js';
+import { ConversationDeliveryResultV1Schema } from './provider/delivery.js';
+import { ConversationPollResultV1Schema } from './provider/observations.js';
 
 describe('Channels V1 diagnostics', () => {
+    it('preserves provider retry delays above one day across every strict consumer', () => {
+        for (const retryAfterMs of [86_400_001, 90_000_000, Number.MAX_SAFE_INTEGER]) {
+            const results = [
+                { schema: ConversationProviderFailureV1Schema, value: { kind: 'notReady', reason: 'rateLimited', retryAfterMs } },
+                { schema: ConversationDeliveryResultV1Schema, value: { kind: 'notDelivered', retry: 'after', retryAfterMs } },
+                { schema: ConversationPollResultV1Schema, value: { kind: 'checkpointOnly', checkpointAfterBatch: {}, retryHint: { retryAfterMs } } },
+            ];
+            for (const { schema, value } of results) {
+                expect(schema.parse(value)).toEqual(value);
+                expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(schema.jsonSchema), value)).toBe(true);
+            }
+        }
+    });
+
     it('owns the bounded provider failure diagnostic as a closed public protocol value', () => {
         const failure = {
             kind: 'notReady',
@@ -36,7 +52,7 @@ describe('Channels V1 diagnostics', () => {
             required: ['kind', 'reason'],
             properties: {
                 kind: { const: 'notReady' },
-                retryAfterMs: { minimum: 0, maximum: 86_400_000 },
+                retryAfterMs: { minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
             },
         });
     });

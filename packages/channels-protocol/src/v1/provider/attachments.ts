@@ -1,4 +1,5 @@
 import {
+    defineProtocolArray,
     defineProtocolLiteral,
     defineProtocolNumber,
     defineProtocolObject,
@@ -19,20 +20,23 @@ export const ConversationMessageAttachmentV1Schema = defineProtocolObject({
 export type ConversationMessageAttachmentV1 = ReturnType<typeof ConversationMessageAttachmentV1Schema.parse>;
 export const ConversationMessageAttachmentV1JsonSchema = ConversationMessageAttachmentV1Schema.jsonSchema;
 
-/** The core fetches only the referenced attachment on the admitted connection. */
+/** One consuming operation fetches its referenced files from one admitted message. */
 export const ConversationAttachmentFetchInputV1Schema = defineProtocolObject({
     ...ConversationProviderConnectionInputV1Fields,
     messageId: defineProtocolString({ minLength: 1 }),
-    attachmentId: defineProtocolString({ minLength: 1 }),
+    attachmentIds: defineProtocolArray(defineProtocolString({ minLength: 1 }), { minItems: 1 }),
 }, { policy: 'closed' });
 export type ConversationAttachmentFetchInputV1 = ReturnType<typeof ConversationAttachmentFetchInputV1Schema.parse>;
 export const ConversationAttachmentFetchInputV1JsonSchema = ConversationAttachmentFetchInputV1Schema.jsonSchema;
 
-/** Trusted provider-owned local file; the Session transfer owner places it in the workspace. */
+/** Live bytes only: the consumer owns temporary files until Session transfer completes. */
 export const ConversationAttachmentFetchResultV1Schema = defineProtocolUnion([
     defineProtocolObject({
         kind: defineProtocolLiteral('fetched'),
-        path: defineProtocolString({ minLength: 1 }),
+        attachments: defineProtocolArray(defineProtocolObject({
+            attachmentId: defineProtocolString({ minLength: 1 }),
+            base64: defineProtocolString(),
+        }, { policy: 'closed' })),
     }, { policy: 'closed' }),
     ConversationProviderFailureV1ProtocolSchema,
 ]);

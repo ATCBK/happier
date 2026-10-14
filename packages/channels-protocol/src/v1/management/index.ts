@@ -13,6 +13,14 @@ import {
     ConversationBindingUpdateInputV1Schema,
     ConversationBindingUpdateResultV1Schema,
 } from './bindings.js';
+export * from './reads.js';
+import {
+    ConversationConnectionListInputV1Schema, ConversationConnectionListResultV1Schema,
+    ConversationBindingListInputV1Schema, ConversationBindingListResultV1Schema,
+    ConversationIngressAttentionInputV1Schema, ConversationIngressAttentionResultV1Schema,
+    ConversationDeliveryAttentionInputV1Schema, ConversationDeliveryAttentionResultV1Schema,
+    ConversationDeliveryReadInputV1Schema, ConversationDeliveryReadResultV1Schema,
+} from './reads.js';
 export * from './sessionPullRequestBindings.js';
 export * from './conversationStart.js';
 import { ConversationStartInputV1Schema, ConversationStartResultV1Schema } from './conversationStart.js';
@@ -59,6 +67,7 @@ import type {
 } from '../actionDeclarations.js';
 
 export {
+    ConversationSessionLastDeliveryOutcomeV1Schema,
     ConversationSessionLastDeliveryV1Schema,
     ConversationSessionLastDeliveryV1JsonSchema,
     ConversationSessionLastDeliveriesV1Schema,
@@ -394,6 +403,11 @@ export const ConversationDeliveryResolveManagementActionDeclarationV1: Conversat
  * its strict continuation arm.
  */
 export const CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1: ConversationManagementActionDeclarationsV1 = Object.freeze({
+    connectionList: { inputSchema: ConversationConnectionListInputV1Schema.jsonSchema, resultSchema: ConversationConnectionListResultV1Schema.jsonSchema },
+    bindingList: { inputSchema: ConversationBindingListInputV1Schema.jsonSchema, resultSchema: ConversationBindingListResultV1Schema.jsonSchema },
+    ingressAttention: { inputSchema: ConversationIngressAttentionInputV1Schema.jsonSchema, resultSchema: ConversationIngressAttentionResultV1Schema.jsonSchema },
+    deliveryAttention: { inputSchema: ConversationDeliveryAttentionInputV1Schema.jsonSchema, resultSchema: ConversationDeliveryAttentionResultV1Schema.jsonSchema },
+    deliveryRead: { inputSchema: ConversationDeliveryReadInputV1Schema.jsonSchema, resultSchema: ConversationDeliveryReadResultV1Schema.jsonSchema },
     conversationStart: {
         inputSchema: ConversationStartInputV1Schema.jsonSchema,
         resultSchema: ConversationStartResultV1Schema.jsonSchema,

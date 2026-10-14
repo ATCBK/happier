@@ -18,6 +18,11 @@ export type ConversationCoreProviderActionDeclarationsV1 = Readonly<{
 
 /** The finite present-user/core management Action declaration map for Channels V1. */
 export type ConversationManagementActionDeclarationsV1 = Readonly<{
+    connectionList: ConversationActionDeclarationV1;
+    bindingList: ConversationActionDeclarationV1;
+    ingressAttention: ConversationActionDeclarationV1;
+    deliveryAttention: ConversationActionDeclarationV1;
+    deliveryRead: ConversationActionDeclarationV1;
     conversationStart: ConversationActionDeclarationV1;
     connectionCreate: ConversationActionDeclarationV1;
     connectionTransfer: ConversationActionDeclarationV1;
