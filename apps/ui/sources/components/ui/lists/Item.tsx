@@ -1073,7 +1073,12 @@ export const Item = React.memo<ItemProps>((props) => {
                 </ItemRowHoverProvider>
             </ItemRowAccessibleNameProvider>
         );
-        if (!measuresRowWidth) return <View style={stackAccessory ? styles.accessoryMeasureStacked : styles.accessoryInline}>{named}</View>;
+        // A stacked control is never measured, but its field still needs to know it spans the row.
+        if (!measuresRowWidth) return (
+            <View style={stackAccessory ? styles.accessoryMeasureStacked : styles.accessoryInline}>
+                <HappierPageRowFieldLayoutContext.Provider value={fieldLayout}>{named}</HappierPageRowFieldLayoutContext.Provider>
+            </View>
+        );
         return (
             <View onLayout={handleAccessoryLayout} style={stackAccessory ? styles.accessoryMeasureStacked : styles.accessoryMeasure}>
                 <HappierPageRowFieldLayoutContext.Provider value={fieldLayout}>{named}</HappierPageRowFieldLayoutContext.Provider>
