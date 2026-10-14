@@ -36,6 +36,8 @@ import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/proto
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import type { RpcHandlerContext } from '../rpc/types';
+import type { IssueMcpTestRequestAuth, McpTestRequestAuthAttachment } from '@/daemon/connectedServices/requestAuth/createDaemonMcpRequestAuthForTest';
+import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
 
 function redactErrorText(raw: unknown): string {
   return redactMcpServerProbeError(raw);
@@ -143,6 +145,7 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
     bootstrapAccountSettingsContext?: typeof bootstrapAccountSettingsContext;
     detectProviderMcpServers?: typeof detectProviderMcpServers;
     probeMcpStdioServerTools?: typeof probeMcpStdioServerTools;
+    issueRequestAuth?: IssueMcpTestRequestAuth;
   }>;
 }>): void {
   const { rpcHandlerManager } = params;
@@ -154,7 +157,8 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
 
   rpcHandlerManager.registerHandler(
     RPC_METHODS.DAEMON_MCP_SERVERS_TEST,
-    async (raw: unknown): Promise<DaemonMcpServersTestResponse> => {
+    async (raw: unknown, context?: RpcHandlerContext): Promise<DaemonMcpServersTestResponse> => {
+      context?.signal.throwIfAborted();
       const parsed = DaemonMcpServersTestRequestSchema.safeParse(raw);
       if (!parsed.success) {
         return { ok: false, errorCode: 'invalid_request', error: 'invalid_request', durationMs: 0 };
@@ -223,17 +227,26 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
         isCurrent: () => operationContext !== null && operationContext.readSnapshot() === materialSnapshot,
       });
 
-      let mcpConfig: { serverName: string; config: McpServerConfig; cleanup: () => void;
+      let requestAuth: McpTestRequestAuthAttachment | undefined;
+      let mcpConfig: { serverName: string; config: McpServerConfig; cleanup: () => Promise<void>;
         sanitizeDiagnosticText: (value: string) => string;
         createDiagnosticStreamingSanitizer: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>>['createDiagnosticStreamingSanitizer'];
       };
       try {
+        const selected = resolution.resolved.serversByName[resolution.serverName]?.config;
+        const remote = selected?.remote;
+        if (selected && selected.transport !== 'stdio' && remote?.auth?.kind === 'oauth'
+          && params.deps?.issueRequestAuth) {
+          requestAuth = await params.deps.issueRequestAuth({ serverId: selected.id,
+            resource: canonicalMcpOAuthResourceUrlV1(remote.url), materializationId: randomUUID() }, operationContext, context);
+        }
         const materialized = await materializeMcpServerConfigRecord({
           resolved: resolution.resolved,
           savedSecretMaterializer,
           processEnv: depsEnv,
           tmpDir: null,
           strictMode: true,
+          ...(requestAuth && selected ? { requestAuthByServerId: { [selected.id]: requestAuth } } : {}),
         });
         const config = materialized.mcpServers[resolution.serverName];
         if (!config) {
@@ -244,10 +257,13 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
           materialized.cleanup();
           throw new McpServerCatalogUnavailableError('scope-retired');
         }
-        mcpConfig = { serverName: resolution.serverName, config, cleanup: materialized.cleanup,
+        mcpConfig = { serverName: resolution.serverName, config, cleanup: async () => {
+          try { materialized.cleanup(); } finally { await requestAuth?.cleanup(); }
+        },
           sanitizeDiagnosticText: materialized.sanitizeDiagnosticText,
           createDiagnosticStreamingSanitizer: materialized.createDiagnosticStreamingSanitizer };
       } catch (error) {
+        await requestAuth?.cleanup();
         const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
         return { ok: false, errorCode: 'materialization_failed', error: redactErrorText(error), durationMs };
       }
@@ -255,6 +271,7 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
       let probeCompleted = false;
       try {
         const probe = await probeMcpStdioServerToolsImpl({ config: mcpConfig.config, baseEnv: depsEnv,
+          signal: context?.signal,
           sanitizeDiagnosticText: mcpConfig.sanitizeDiagnosticText,
           createDiagnosticStreamingSanitizer: mcpConfig.createDiagnosticStreamingSanitizer });
         probeCompleted = true;
@@ -305,7 +322,7 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
         return { ok: false, errorCode: code, error: message, durationMs,
           ...(runtimeMissing ? { runtimeMissing } : {}), ...(stderrTail ? { stderrTail } : {}) };
       } finally {
-        mcpConfig.cleanup();
+        await mcpConfig.cleanup();
       }
     },
   );
