@@ -1382,7 +1382,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             getStringSpy.mockRestore();
 
             expect(submitResult).toEqual(attempt === 'initial'
-                ? { localId, accepted: true }
+                ? { localId, accepted: true, didWrite: true }
                 : { accepted: true });
             expect(requestCalls).toEqual([
                 { path: `/v2/sessions/${sessionId}/pending`, method: 'POST' },

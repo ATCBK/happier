@@ -140,7 +140,7 @@ it('routes admitted authentication to the captured Home and refuses retired Acco
         return { status: 'awaitingManual', attemptId: 'attempt-1' };
     });
     try {
-        const execute = () => createUiConnectedServiceAction(account)({ actionId: ActionIdSchema.parse('connectedServices.authentication.submitManual'),
+        const execute = () => createUiConnectedServiceAction(account)({ actionId: 'connectedServices.authentication.submitManual',
             input: { machineId: 'controller', attemptId: 'attempt-1', fields: command.fields }, context: { surface: 'ui', authority: 'present_user' } });
         expect(await execute()).toEqual({ status: 'awaitingManual', attemptId: 'attempt-1' });
         expect(issued).toBe(true);

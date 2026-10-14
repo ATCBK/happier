@@ -27,6 +27,8 @@ export function buildMachineDisplayRenderableFromCacheEntry(entry: MachineDispla
             displayName: entry.displayName ?? null,
             host: entry.host ?? null,
             homeDir: entry.homeDir ?? null,
+            platform: entry.platform ?? null,
+            arch: entry.arch ?? null,
         },
     };
 }
@@ -61,6 +63,8 @@ export function buildMachineDisplayCacheEntryFromRenderable(
         displayName: preserveMetadata ? previousEntry.displayName ?? null : machine.metadata?.displayName ?? null,
         host: preserveMetadata ? previousEntry.host ?? null : machine.metadata?.host ?? null,
         homeDir: preserveMetadata ? previousEntry.homeDir ?? null : machine.metadata?.homeDir ?? null,
+        platform: preserveMetadata ? previousEntry.platform ?? null : machine.metadata?.platform ?? null,
+        arch: preserveMetadata ? previousEntry.arch ?? null : machine.metadata?.arch ?? null,
         ...(agentInventory ? { agentInventory } : {}),
     };
 
@@ -87,6 +91,8 @@ function areMachineDisplayCacheEntriesEqual(
         && nextEntry.displayName === previousEntry.displayName
         && nextEntry.host === previousEntry.host
         && nextEntry.homeDir === previousEntry.homeDir
+        && (nextEntry.platform ?? null) === (previousEntry.platform ?? null)
+        && (nextEntry.arch ?? null) === (previousEntry.arch ?? null)
         && JSON.stringify(nextEntry.agentInventory ?? null) === JSON.stringify(previousEntry.agentInventory ?? null)
     );
 }

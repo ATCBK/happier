@@ -69,7 +69,7 @@ export function createUiFilesystemAction(account?: LazyActionAccountContext, del
                     // Both exact Home/Account routes are captured before either
                     // endpoint admits bytes; approval cannot reselect a requester.
                     const result = await copyPreparedFilesystemFile({ input: copy, sourceAccount, destinationAccount: account,
-                        callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId }),
+                        callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId ?? undefined }),
                         acquireSourceCarrier: sourceRoute.acquire, acquireDestinationCarrier: destinationRoute.acquire,
                         signal: context.signal });
                     account.assertResultCurrent(spec.sideEffectClass);
@@ -84,7 +84,7 @@ export function createUiFilesystemAction(account?: LazyActionAccountContext, del
         const result = await callGuardedMachineRpcWithPolicy<unknown, unknown>({
             machineId: target.machineId, serverId: account?.serverId ?? context.serverId,
             accountId: account?.accountId ?? context.runtimeAccountId, method, payload: input, signal: context.signal,
-            requestId: context.actionRequestId,
+            requestId: context.actionRequestId ?? undefined,
         });
         account?.assertResultCurrent(spec.sideEffectClass);
         return result;

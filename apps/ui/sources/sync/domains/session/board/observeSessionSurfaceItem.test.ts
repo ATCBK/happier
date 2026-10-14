@@ -16,7 +16,7 @@ function record(itemId: string, content: unknown = { t: 'plain', v: item }) {
 const capabilities = { readTranscript: true, editSessionRecords: false };
 
 describe('addressed Session surface item observation', () => {
-    it('reads only demanded addresses, shares in-flight reads, and releases hidden items', async () => {
+    it('reads only demanded addresses, shares in-flight reads, and stops work while retaining hidden items', async () => {
         const reads: string[] = [];
         let decryptions = 0;
         let settle: (() => void) | undefined;
@@ -54,7 +54,11 @@ describe('addressed Session surface item observation', () => {
         repository.invalidate(session);
         await flushHookEffects({ cycles: 20 });
         expect(reads).toEqual(['visible', 'near']);
-        expect(repository.getSnapshot(session, { type: 'read', address: record('visible').address }).data).toBeNull();
+        expect(repository.getSnapshot(session, { type: 'read', address: {
+            owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'visible',
+        } })).toMatchObject({
+            data: { id: 'visible' }, freshness: 'stale', loading: 'idle',
+        });
     });
 
     it('keeps locked and mode mismatch states explicit and makes revoked content unavailable synchronously', async () => {

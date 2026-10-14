@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { sealProviderAccountUsageSnapshot, openSealedProviderAccountUsageSnapshot } from '@happier-dev/protocol/connect/accountUsage';
 import { isServerFetchConnectivityProbeRequest } from '@/dev/testkit/mocks/serverFetch';
 import {
     ProviderAccountUsageSnapshotV1Schema,
@@ -331,7 +332,11 @@ describe('apiProviderAccountUsage', () => {
     });
     it.each([false, true])('gets a plaintext provider account usage snapshot by record id (retained extras: %s)', async retainedExtras => {
         await activateTestHome();
-        const snapshot = makeSnapshot();
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const snapshot = openSealedProviderAccountUsageSnapshot({ material, sealed: sealProviderAccountUsageSnapshot({
+            material, snapshot: makeSnapshot(), randomBytes: length => new Uint8Array(length).fill(9),
+        }) });
+        if (!snapshot) throw new Error('Canonical usage writer did not produce readable content');
         let servedSnapshot = false;
         const fetchMock = vi.fn(async (input: unknown) => {
             if (isServerFetchConnectivityProbeRequest(input)) {

@@ -3,6 +3,7 @@ import { Buffer } from 'buffer';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { PromptLibraryRecordV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { storage } from '@/sync/domains/state/storage';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { applyPromptLibraryCatalogSnapshot, resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { createArtifactStoreBoundary, createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -41,13 +42,13 @@ describe('Account-bound prompt invocations', () => {
     expect(listPromptInvocationsForActions({ limit: 1 })).toMatchObject({ coverage: 'truncated', items: [{ id: 'prompt-0' }] });
   });
   it('does not resurrect stale Settings when the destination catalog is empty', async () => {
-    storage.setState({ settings: { ...storage.getState().settings, promptInvocationsV1: { v: 1, entries: entries(2) } } });
+    storage.setState({ settings: settingsParse({ ...storage.getState().settings, promptInvocationsV1: { v: 1, entries: entries(2) } }) });
     admit(0);
     expect(listPromptInvocationsForActions({})).toEqual({ items: [], coverage: 'complete' });
     await expect(resolvePromptInvocationForActions({ invocationId: 'prompt-1' })).resolves.toMatchObject({ status: 'unknownInvocation' });
   });
   it('keeps unavailable Account catalog state distinct from deletion', async () => {
-    storage.setState({ settings: { ...storage.getState().settings, promptInvocationsV1: { v: 1, entries: entries(2) } } });
+    storage.setState({ settings: settingsParse({ ...storage.getState().settings, promptInvocationsV1: { v: 1, entries: entries(2) } }) });
     expect(listPromptInvocationsForActions({})).toEqual({ items: [], coverage: 'unavailable' });
     await expect(resolvePromptInvocationForActions({ invocationId: 'prompt-1' })).resolves.toMatchObject({ status: 'unavailable' });
   });

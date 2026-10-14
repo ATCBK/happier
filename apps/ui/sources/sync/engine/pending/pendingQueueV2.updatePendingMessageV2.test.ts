@@ -106,7 +106,7 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
         expect(decrypted?.meta?.displayText).toBe('Old display');
     });
 
-    it('marks encrypted pending update payloads as user messages', async () => {
+    it('marks encrypted pending updates as user messages and preserves producer metadata', async () => {
         const sessionId = 's_test_update_message_role';
         const encryption = await createPendingQueueEncryption({ sessionId });
 
@@ -130,7 +130,7 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
             rawRecord: {
                 role: 'user',
                 content: { type: 'text', text: 'old' },
-                meta: {},
+                meta: { claudeRemoteMaxThinkingTokens: 4096 },
             },
         });
 
@@ -151,6 +151,13 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
             ciphertext: expect.any(String),
             messageRole: 'user',
         }));
+        const payload = bodies[0];
+        if (!payload || typeof payload !== 'object' || !('ciphertext' in payload)
+            || typeof payload.ciphertext !== 'string') throw new Error('Expected encrypted Pending update');
+        const opened = await getSessionEncryptionOrThrow({ encryption, sessionId }).decryptRaw(payload.ciphertext);
+        expect(opened).toMatchObject({
+            role: 'user', content: { text: 'new text' }, meta: { claudeRemoteMaxThinkingTokens: 4096 },
+        });
     });
 
     it('serializes an edited contentless composer attachment selection in the pending PATCH', async () => {

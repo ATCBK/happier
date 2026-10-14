@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProjectManifestUpdateInputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
-import { ExternalActionMachineBootstrapV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { readProjectManifestDocument } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -25,20 +25,29 @@ const initialBytes = '{ "version": 1, "future": {"keep":true} }\n';
 const present = (bytes: string, hash: string) => ({ basis: { kind: 'present' as const, hash }, document: readProjectManifestDocument(bytes) });
 const detection = { entries: [], environments: [], devcontainers: [], coverage: 'complete' as const, diagnostics: [] };
 let workspace = { serverId: 'home', workspaceId: 'workspace', machineId: 'machine', rootPath: '/project' };
+let inspectionReply: unknown;
 
 describe('Project definition Actions through the UI executor', () => {
     beforeEach(async () => {
         await harness.reset();
         rpc.machine.mockReset();
-        const serverId = await harness.addHome({ name: 'Project Home', serverUrl: 'https://project.test', accountId: 'alice' });
+        const serverId = await harness.addHome({ name: 'Project Home', serverUrl: 'https://project.test', serverIdentityId: 'srv_project_home', accountId: 'alice', currentAccount: true });
         workspace = { ...workspace, serverId };
+        inspectionReply = { definition: present(initialBytes, 'a'.repeat(64)), detection, importCandidates: [] };
+        harness.answer(serverId, '/v1/actions/projects.inspect', { select: body => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect', requestId: envelope.requestId,
+                execution: { ok: true, result: inspectionReply } }) };
+        } });
         // The real Action root discovers custody before retaining the own-Machine RPC path.
-        harness.answer(serverId, '/v1/machines', { body: [ExternalActionMachineBootstrapV1Schema.parse({
+        const machine = ExternalActionMachineBootstrapV1Schema.parse({
             id: workspace.machineId, kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
             installationId: 'project-machine-installation', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
             runnerContentKeyBinding: null,
             access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-        })] });
+        });
+        harness.answer(serverId, '/v1/machines', { body: [machine] });
+        harness.answer(serverId, 'GET /v1/machines/machine', { body: { machine } });
         // These cases exercise direct guarded editor outcomes, not Ask-first's mounted continuation.
         // Admit that invocation through the real Account-owned settings boundary.
         harness.answer(serverId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
@@ -50,10 +59,25 @@ describe('Project definition Actions through the UI executor', () => {
         standardCleanup();
     });
 
+    it('reads target setup readiness through original Account admission even on the own Machine', async () => {
+        const { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } = await import('@happier-dev/protocol/actions/externalActionApi');
+        rpc.machine.mockResolvedValue({ definition: present(initialBytes, 'a'.repeat(64)), detection, importCandidates: [],
+            setupReadiness: { kind: 'unknown', code: 'project_setup_requester_review_unavailable' } });
+        harness.answer(workspace.serverId, '/v1/actions/projects.inspect', { select: body => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect', requestId: envelope.requestId,
+                execution: { ok: true, result: { definition: present(initialBytes, 'a'.repeat(64)), detection, importCandidates: [],
+                    setupReadiness: { kind: 'current', reviewedEffectDigest: 'reviewed', completedAtMs: 123 } } } }) };
+        } });
+        const client = createProjectManifestActionClient({ workspace, expectedAccountId: 'alice', execute: createFrontDoorActionExecute(createDefaultActionExecutor()) });
+        expect(await client.inspect()).toMatchObject({ setupReadiness: { kind: 'current', completedAtMs: 123 } });
+        expect(rpc.machine).not.toHaveBeenCalled();
+    });
+
     it('inspects, imports qualified references and saves exact draft bytes in the addressed Home without a Session', async () => {
         const signal = new AbortController().signal;
         const definition = present(initialBytes, 'a'.repeat(64));
-        rpc.machine.mockResolvedValueOnce({ definition, detection, importCandidates: [] });
+        inspectionReply = { definition, detection, importCandidates: [] };
         const client = createProjectManifestActionClient({ workspace, expectedAccountId: 'alice', signal, execute: createFrontDoorActionExecute(createDefaultActionExecutor()) });
         const inspected = await client.inspect();
         const model = createProjectManifestEditorModel({ workspace, expectedAccountId: 'alice', definition: inspected.definition, actions: client });
@@ -67,10 +91,11 @@ describe('Project definition Actions through the UI executor', () => {
         expect(model.getSnapshot().dirty).toBe(false);
         expect(rpc.machine.mock.calls.map(([request]) => ({ method: request.method, payload: request.payload, serverId: request.serverId,
             machineId: request.machineId, accountId: request.accountId, signal: request.signal }))).toEqual([
-            { method: 'daemon.projects.inspect.v1', payload: { workspace }, serverId: workspace.serverId, machineId: 'machine', accountId: 'alice', signal },
             { method: 'daemon.projects.manifest.update.v1', payload: { workspace, expectedBasis: definition.basis, bytes }, serverId: workspace.serverId, machineId: 'machine', accountId: 'alice', signal },
         ]);
-        expect(ProjectManifestUpdateInputSchema.parse(rpc.machine.mock.calls[1][0].payload).bytes).toBe(bytes);
+        expect(ProjectManifestUpdateInputSchema.parse(rpc.machine.mock.calls[0][0].payload).bytes).toBe(bytes);
+        expect(ExternalActionRequestEnvelopeV1Schema.parse(harness.requestsFor('/v1/actions/projects.inspect')[0].input).input)
+            .toEqual({ workspace: { ...workspace, serverId: 'srv_project_home' } });
     });
 
     it('rejects extra mutation authority fields before transport and retains real conflict and refusal outcomes', async () => {
@@ -98,7 +123,7 @@ describe('Project definition Actions through the UI executor', () => {
     it('retains the draft and refuses another Account before it reaches the daemon', async () => {
         const client = createProjectManifestActionClient({ workspace, expectedAccountId: 'alice', execute: createFrontDoorActionExecute(createDefaultActionExecutor()) });
         const definition = present(initialBytes, 'a'.repeat(64));
-        rpc.machine.mockResolvedValueOnce({ definition, detection, importCandidates: [] });
+        inspectionReply = { definition, detection, importCandidates: [] };
         const inspected = await client.inspect();
         const model = createProjectManifestEditorModel({ workspace, expectedAccountId: 'alice', definition: inspected.definition, actions: client });
         model.setRaw('{"version":1,"future":"Alice draft"}');
@@ -106,6 +131,7 @@ describe('Project definition Actions through the UI executor', () => {
         expect(await model.save()).toBeNull();
         expect(model.getSnapshot()).toMatchObject({ draft: { bytes: '{"version":1,"future":"Alice draft"}' },
             dirty: true, error: { code: 'action_account_scope_changed' } });
-        expect(rpc.machine.mock.calls.map(([request]) => request.method)).toEqual(['daemon.projects.inspect.v1']);
+        expect(rpc.machine).not.toHaveBeenCalled();
+        expect(harness.requestsFor('/v1/actions/projects.inspect')).toHaveLength(1);
     });
 });

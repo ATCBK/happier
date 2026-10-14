@@ -87,12 +87,14 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
     const inFlight = new Map<string, Promise<void>>();
     const maintenance = new Map<string, { result: ScopedSnapshotLoadMaintenance; reloadAfterMaintenance: boolean }>();
     /**
-     * A target that crossed zero observers cannot remain trusted as current:
+     * A target read without observers, or returning after its observers left, cannot remain trusted as current:
      * the wake subscription is deliberately absent during that interval. Keep
      * the domain's last-known-good rows, but force the next first observer to
      * revalidate them even when the store still reports a fresh snapshot.
+     * Finite settlement requests that later revalidation without retroactively
+     * retiring the read; an actual observer gap also withdraws its currentness.
      */
-    const revalidateOnNextObserve = new Set<string>();
+    const revalidateOnNextObserve = new Map<string, 'observer-gap' | 'finite-read'>();
     /**
      * Targets woken while their own load was already in flight. That request was
      * issued before the mutation committed, so its answer cannot contain the
@@ -115,10 +117,12 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                     try {
                         // Enter the load through a microtask so `inFlight` is registered before a
                         // domain reader can either resolve or throw synchronously.
-                        const isCurrent = () => !reloadAfterInFlight.has(target.key) && !revalidateOnNextObserve.has(target.key);
+                        const isCurrent = () => !reloadAfterInFlight.has(target.key)
+                            && revalidateOnNextObserve.get(target.key) !== 'observer-gap';
                         // Only cleanup that preceded this read can suppress it. After
                         // publication the live map may contain this read's own cleanup.
                         const incumbentMaintenance = maintenance.get(target.key);
+                        let joinedIncumbentMaintenance = false;
                         const hasPendingMaintenance = () => {
                             const incumbent = incumbentMaintenance;
                             if (incumbent?.result.isMaintenanceCurrent() !== true
@@ -128,6 +132,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                                 if (incumbent) incumbent.reloadAfterMaintenance = false;
                                 return false;
                             }
+                            joinedIncumbentMaintenance = true;
                             return true;
                         };
                         const result = await Promise.resolve().then(async () => await params.load(observed.get(target.key)?.target ?? target, {
@@ -153,6 +158,14 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                                 if (capturedCurrent) return { maintenance: completion, isMaintenanceCurrent: capturedCurrent };
                             },
                         }));
+                        // An independent foreground pass already serves the demand
+                        // retained on older cleanup. Replaying it after this pass
+                        // would mark the new cleanup dirty and self-trigger forever.
+                        // A reader that joined the incumbent still owes that pass;
+                        // wakes during this read remain in reloadAfterInFlight.
+                        if (result && incumbentMaintenance && !joinedIncumbentMaintenance) {
+                            incumbentMaintenance.reloadAfterMaintenance = false;
+                        }
                         // A foreground reread can join cleanup already owned by this
                         // captured Account. Its short completion must not replace the
                         // original, still-running cleanup promise.
@@ -187,7 +200,14 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                 // Delete the single-flight registration before this exact promise settles.
                 // A wake/remount can then either mark the still-running loop for a trailing
                 // read or start a new read; it cannot join a request that already chose to exit.
-                if (inFlight.get(target.key) === pending) inFlight.delete(target.key);
+                if (inFlight.get(target.key) === pending) {
+                    inFlight.delete(target.key);
+                    // A finite borrower can refresh without any wake subscription. Its answer
+                    // stays valid for that invocation, but a later first observer must revalidate.
+                    if (!observed.has(target.key) && !revalidateOnNextObserve.has(target.key)) {
+                        revalidateOnNextObserve.set(target.key, 'finite-read');
+                    }
+                }
             }
         })();
         inFlight.set(target.key, pending);
@@ -271,7 +291,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
     return {
         observe(target) {
             const entry = observed.get(target.key);
-            const returnedAfterObserverGap = !entry && revalidateOnNextObserve.delete(target.key);
+            const returnedAfterObserverGap = !entry && (revalidateOnNextObserve.delete(target.key) || inFlight.has(target.key));
             if (entry) {
                 entry.count += 1;
             } else {
@@ -304,7 +324,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                 tracked.count -= 1;
                 if (tracked.count <= 0) {
                     observed.delete(target.key);
-                    revalidateOnNextObserve.add(target.key);
+                    revalidateOnNextObserve.set(target.key, 'observer-gap');
                     // Once the last observer leaves, this device also stops
                     // listening for wakes for the target when no sibling keeps
                     // the shared lifecycle alive. Retain the rows for continuity,

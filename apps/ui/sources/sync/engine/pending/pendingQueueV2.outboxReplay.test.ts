@@ -4,6 +4,10 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 beforeAll(loadSyncSingletonForTests);
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 import { Platform } from 'react-native';
+import { pendingDeliveryStatusV1ToPersistedFields, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
+import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { AccountDisplayProfileV1Schema } from '@happier-dev/protocol/account/accountDisplayProfileV1';
+import { buildLocalOutboundAccountActor } from '@/sync/domains/messages/outgoingUserMessage';
 
 import { storage } from '@/sync/domains/state/storage';
 import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
@@ -36,6 +40,80 @@ describe('pendingQueueV2 requested-action replay', () => {
 
   beforeEach(async () => await resetPendingQueueState(outboxScope));
 
+  it('retains external handoff enqueue custody until its acknowledgement even when a snapshot lists it', async () => {
+    const sessionId = 'pending-handoff-before-ack';
+    const localId = 'handoff-before-ack';
+    storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+    let custodyAtSnapshot: Awaited<ReturnType<typeof loadPendingOutboxForSession>> = [];
+    const result = await enqueuePendingMessageV2({
+      sessionId, localId, text: 'hello', encryption: null, outboxScope,
+      deliveryMode: 'external_handoff', serverWireMode: 'pending_input_v1',
+      request: async (_path, init) => {
+        const body = JSON.parse(String(init?.body));
+        await fetchAndApplyPendingMessagesV2({
+          sessionId, encryption: null, outboxScope, isOutboxScopeCurrent: () => true,
+          request: async () => Response.json({ pending: [{
+            localId, content: body.content, messageRole: 'user',
+            requestedAction: body.requestedAction,
+            ...pendingDeliveryStatusV1ToPersistedFields({ status: 'external_handoff' }),
+            deliveryStatus: { status: 'external_handoff' },
+            position: 1, createdAt: 1, updatedAt: 1,
+          }] }),
+        });
+        custodyAtSnapshot = await loadPendingOutboxForSession(sessionId, outboxScope);
+        return currentPendingAck('enqueue', { localId, deliveryStatus: { status: 'external_handoff' } });
+      },
+    });
+    expect(custodyAtSnapshot).toEqual([expect.objectContaining({ localId, operation: 'enqueue' })]);
+    expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
+      expect.objectContaining({ localId, source: 'server_pending', pendingDeliveryStatus: 'external_handoff' }),
+    ]);
+    expect(result).toMatchObject({ accepted: true, externalHandoffClaimed: true });
+    expect(result.settled).toBeUndefined();
+    expect(await loadPendingOutboxForSession(sessionId, outboxScope)).toEqual([]);
+  });
+
+  it.each(['external_handoff', 'blocked', 'discarded'] as const)(
+    'reconciles durable external handoff recovery with a %s server snapshot', async (status) => {
+      const sessionId = `pending-handoff-recovery-${status}`;
+      const localId = 'handoff-recovery';
+      storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+      let body: Record<string, unknown> = {};
+      await enqueuePendingMessageV2({
+        sessionId, localId, text: 'hello', encryption: null, outboxScope,
+        deliveryMode: 'external_handoff', serverWireMode: 'pending_input_v1',
+        request: async (_path, init) => {
+          body = JSON.parse(String(init?.body));
+          throw new TypeError('Failed to fetch');
+        },
+      });
+      const deliveryStatus: PendingDeliveryStatusV1 = status === 'blocked'
+        ? { status, reason: 'delivery_outcome_uncertain' }
+        : status === 'discarded' ? { status, reason: 'manual' } : { status };
+      await fetchAndApplyPendingMessagesV2({
+        sessionId, encryption: null, outboxScope, isOutboxScopeCurrent: () => true,
+        request: async () => Response.json({ pending: [{
+          localId, content: body.content, messageRole: 'user', requestedAction: body.requestedAction,
+          ...pendingDeliveryStatusV1ToPersistedFields(deliveryStatus), deliveryStatus,
+          position: 1, createdAt: 1, updatedAt: 1,
+          ...(status === 'discarded' ? { discardedAt: 2, discardedReason: 'manual' } : {}),
+        }] }),
+      });
+      expect(await replayPersistedPendingOutboxForSession(sessionId, outboxScope)).toEqual(
+        status === 'discarded' ? [] : [localId],
+      );
+      expect(await loadPendingOutboxForSession(sessionId, outboxScope)).toEqual(
+        status === 'discarded' ? [] : [expect.objectContaining({ localId, operation: 'enqueue' })],
+      );
+      if (status === 'external_handoff') {
+        await retryPendingOutboxOperationV2({ sessionId, localId, outboxScope, serverWireMode: 'pending_input_v1',
+          request: async () => currentPendingAck('enqueue', { localId, deliveryStatus: { status: 'external_handoff' } }),
+        });
+        expect(await loadPendingOutboxForSession(sessionId, outboxScope)).toEqual([]);
+      }
+    },
+  );
+
   it('keeps scoped optimistic authorship through omission and accepts authoritative object/null', async () => {
     await resetPendingQueueState(outboxScope);
     const sessionId = 'pending-actor';
@@ -44,8 +122,7 @@ describe('pendingQueueV2 requested-action replay', () => {
       sessionId, localId: 'actor-local', text: 'hello', encryption: null, outboxScope,
       serverWireMode: 'pending_input_v1', request: async () => { throw new TypeError('Failed to fetch'); },
     });
-    const actor = { v: 1, accountId: outboxScope.accountId, serverId: outboxScope.serverId,
-      profile: { firstName: null, lastName: null, username: null, avatarUrl: null } };
+    const actor = buildLocalOutboundAccountActor(outboxScope);
     expect(storage.getState().sessionPending[sessionId]?.messages[0]?.accountActor).toEqual(actor);
     const row = { localId: 'actor-local', messageRole: 'user',
       content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello' } } },
@@ -56,7 +133,9 @@ describe('pendingQueueV2 requested-action replay', () => {
     });
     await refresh({});
     expect(storage.getState().sessionPending[sessionId]?.messages[0]?.accountActor).toEqual(actor);
-    const wireActor = { v: 1, accountId: 'other-account', profile: { ...actor.profile, firstName: 'Bob' } };
+    const wireActor = { v: 1, accountId: 'other-account', profile: AccountDisplayProfileV1Schema.parse({
+      firstName: 'Bob', lastName: null, username: null, avatarUrl: null,
+    }) };
     await refresh({ accountActor: wireActor });
     expect(storage.getState().sessionPending[sessionId]?.messages[0]?.accountActor).toEqual({ ...wireActor, serverId: outboxScope.serverId });
     await refresh({ accountActor: { ...wireActor, profile: { ...wireActor.profile, email: 'private@example.test' } } });
@@ -67,7 +146,9 @@ describe('pendingQueueV2 requested-action replay', () => {
     expect(storage.getState().sessionPending[sessionId]?.discarded[0]?.accountActor).toEqual({ ...wireActor, serverId: outboxScope.serverId });
   });
 
-  it.each([null, { v: 1, accountId: 'account-1', profile: { firstName: 'Alice', lastName: null, username: null, avatarUrl: null } }])(
+  it.each([null, { v: 1, accountId: 'account-1', profile: AccountDisplayProfileV1Schema.parse({
+    firstName: 'Alice', lastName: null, username: null, avatarUrl: null,
+  }) }])(
     'accepts authoritative actor metadata from the enqueue acknowledgement %#', async (accountActor) => {
       await resetPendingQueueState(outboxScope);
       const sessionId = 'pending-actor-ack';
@@ -309,9 +390,17 @@ describe('pendingQueueV2 requested-action replay', () => {
     'projects a retained requested action without changing current-wire custody bytes on %s', async (serverWireMode) => {
       const sessionId = `retained-action-${serverWireMode}`;
       const localId = 'retained-action-local';
-      const content = { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retained' } } };
-      const body = JSON.stringify({ localId, content, messageRole: 'user',
-        requestedAction: { v: 1, kind: 'enqueue', retired: true } });
+      storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+      await enqueuePendingMessageV2({ sessionId, localId, text: 'retained', encryption: null, outboxScope,
+        serverWireMode: 'pending_input_v4', requestedAction: { v: 1, kind: 'enqueue' },
+        request: async () => { throw new TypeError('Failed to fetch'); },
+      });
+      const written = (await loadPendingOutboxForSession(sessionId, outboxScope))[0]!;
+      const produced = JSON.parse(written.request.body) as Record<string, unknown>;
+      const producedAction = PendingRequestedActionV1Schema.parse(produced.requestedAction);
+      const content = produced.content;
+      const body = JSON.stringify({ ...produced, requestedAction: { ...producedAction, retired: true } });
+      await removePendingOutboxMessage(sessionId, localId, outboxScope);
       await rewritePersistedRow({ sessionId, localId, requestBody: body });
       await replayPersistedPendingOutboxForSession(sessionId, outboxScope);
       expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingRequestedAction)

@@ -73,8 +73,8 @@ describe('default Action Computer Account publication', () => {
             storage.getState().activateProfileScope({ serverId: homeA.id, accountId: homeA.accountId });
             storage.getState().applyProfile({ ...storage.getState().profile, id: homeA.accountId });
             storage.getState().applyMachines([createMachineFixture({ id: machineId, storageMode: 'plain' })], false, { sourceServerId: homeB.id });
-            storage.getState().applySessions([{ ...sessionB, metadata: { ...sessionB.metadata, name: 'Home B Session', path: '/workspace/project-b', machineId } }]);
-            storage.getState().applySessions([{ ...sessionA, metadata: { ...sessionA.metadata, name: 'Home A Session', path: '/workspace/project-a' } }]);
+            storage.getState().applySessions([{ ...sessionB, metadata: { ...sessionB.metadata, host: 'tester.local', name: 'Home B Session', path: '/workspace/project-b', machineId } }]);
+            storage.getState().applySessions([{ ...sessionA, metadata: { ...sessionA.metadata, host: 'tester.local', name: 'Home A Session', path: '/workspace/project-a' } }]);
             expect(storage.getState().sessions[sessionId]?.serverId).toBe(homeA.id);
             const { findSessionListLookupSession } = await import('@/sync/domains/session/listing/sessionListLookupState');
             expect(findSessionListLookupSession(storage.getState(), { serverId: homeB.id, sessionId })?.session.metadata?.name).toBe('Home B Session');
@@ -133,7 +133,7 @@ describe('default Action Computer Account publication', () => {
         const readyB = createDeferred<void>();
         const pickerRead = createDeferred<void>();
         let readerA: RenderHookResult<ComputerSessionControl, void> | null = null;
-        let readerB: typeof readerA = null;
+        let readerB: RenderHookResult<ComputerSessionControl, void> | null = null;
         let borrowedB: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | null = null;
         let approvalScreen: Awaited<ReturnType<typeof renderScreen>> | null = null;
         let executorBridge: Awaited<ReturnType<typeof loadVitestModuleForNodeRequire>> | null = null;
@@ -182,7 +182,7 @@ describe('default Action Computer Account publication', () => {
             storage.getState().applyProfile({ ...storage.getState().profile, id: home.accountId });
             storage.getState().applyMachines([createMachineFixture({ id: scope.machineId, storageMode: 'plain' })], false, { sourceServerId: home.id });
             const sessionFixture = createSessionFixture({ id: scope.sessionId, serverId: home.id, thinking: false });
-            storage.getState().applySessions([{ ...sessionFixture, metadata: { ...sessionFixture.metadata, machineId: scope.machineId } }]);
+            storage.getState().applySessions([{ ...sessionFixture, metadata: { ...sessionFixture.metadata, path: '/repo', host: 'tester.local', machineId: scope.machineId } }]);
             publishAppliedActiveServerSnapshot({ serverId: home.id, serverUrl: home.serverUrl, generation: 1 });
             apiSocket.initialize({ endpoint: home.serverUrl, token: home.token, serverId: home.id, generation: 1 }, null);
             const connected = createDeferred<void>();

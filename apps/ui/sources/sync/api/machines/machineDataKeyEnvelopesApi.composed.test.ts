@@ -1,0 +1,253 @@
+import { describe, expect, it, vi } from 'vitest';
+import nacl from 'tweetnacl';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { encodeBase64, decodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { sealEncryptedDataKeyEnvelopeV1, openEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
+import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
+import { computeMachineOwnerEnvelopeFingerprintV1 } from '@happier-dev/protocol/machines/machineOwnerEnvelopeFingerprintV1';
+import { MachineContentKeyTransitionInputV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { MachineRecipientKeyEnvelopeCommitInputV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { AES256Encryption } from '@/sync/encryption/encryptor';
+import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { encryptLegacy } from '../../../../../cli/src/api/encryption';
+import { prepareMachineDataKeyEnvelopesForScope, prepareMachineDataKeyEnvelopesForMachines } from './machineDataKeyEnvelopesApi';
+import { createMachineFixture, createDeferred } from '@/dev/testkit';
+import { executeMachineAccessHttpAction } from './machineAccessApi';
+import * as network from '@/utils/system/runtimeFetch';
+
+describe('captured Machine recipient preparation transport', () => {
+    it.each(['replaced', 'revoked'] as const)('does not prepare a %s Machine despite a stale Manage-ready projection', async retirement => {
+        const secret = new Uint8Array(32).fill(27);
+        const terminal = retirement === 'replaced' ? { replacedByMachineId: 'replacement', revokedAt: null }
+            : { replacedByMachineId: null, revokedAt: 0 };
+        const access = { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage' as const,
+            resourceMode: 'e2ee' as const, accessState: 'ready' as const };
+        const row = { id: 'retired-machine', ...terminal, storageMode: 'e2ee', dataEncryptionKey: null,
+            metadata: encodeBase64(encryptLegacy({ host: 'host', platform: 'linux', happyCliVersion: '0.2',
+                homeDir: '/home/owner', happyHomeDir: '/home/owner/.happier' }, secret)),
+            metadataVersion: 1, daemonState: null, daemonStateVersion: 0, access };
+        const home = await serveAccountHomes({ homes: [{ key: 'resource', serverUrl: `https://retired-${retirement}.test`,
+            accountId: 'alice', accountMode: 'e2ee', credentials: { token: 'replaced-by-fixture-subject', secret: encodeBase64(secret) } }],
+            route: request => request.path === '/v1/machines/retired-machine'
+                ? Response.json({ machine: row }) : Response.json({ kind: 'refused', code: 'machine_unavailable' }) });
+        const scope = { serverId: home.homes.resource!.id, accountId: 'alice' };
+        const machine = createMachineFixture({ id: row.id, ...terminal, access });
+        try {
+            for (let pass = 0; pass < 3; pass++) {
+                await prepareMachineDataKeyEnvelopesForMachines({ scope, machines: [{ ...machine, activeAt: pass }],
+                    recipientChangeCursors: new Map([[machine.id, pass]]), isCurrent: () => true });
+            }
+            expect.soft(home.requests).toEqual([]);
+            const beforeExplicit = home.requests.length;
+            expect(await prepareMachineDataKeyEnvelopesForScope({ scope, machineId: machine.id }))
+                .toEqual({ kind: 'unavailable', code: 'machine_unavailable' });
+            expect(home.requests.slice(beforeExplicit).map(request => [request.method, request.path]))
+                .toEqual([['GET', '/v1/machines/retired-machine']]);
+        } finally { await home.dispose(); }
+    });
+
+    it.each(['dataKey', 'legacy', 'mixed-legacy', 'malformed-present', 'lost-ack'] as const)('prepares %s custody under the resource Home and preserves edited content', async variant => {
+        const secret = new Uint8Array(32).fill(27);
+        const usesDataKey = variant === 'dataKey' || variant === 'lost-ack';
+        const owner = usesDataKey ? nacl.box.keyPair() : nacl.box.keyPair.fromSecretKey(deriveAccountMachineKeyFromRecoverySecret(secret));
+        const recipient = nacl.box.keyPair();
+        const signing = nacl.sign.keyPair();
+        // Observed ../0.2 f2dd8f01185784676b639cec5cf8a5ed79973301 legacy factory:
+        // recovery-secret ciphertext, encryptionVariant='legacy', dataEncryptionKey=null.
+        let ownerEnvelope: string | null = usesDataKey ? encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: owner.secretKey, recipientPublicKey: owner.publicKey, randomBytes: nacl.randomBytes }))
+            : variant === 'malformed-present' ? encodeBase64(new Uint8Array([0, 1, 2])) : null;
+        const editedMetadata = { host: 'host', platform: 'linux', happyCliVersion: '0.2', homeDir: '/home/owner', happyHomeDir: '/home/owner/.happier', displayName: 'Edited workstation', username: 'alice' };
+        const editedState = { status: 'running', pid: 42, httpPort: 4321 };
+        let metadata = encodeBase64(usesDataKey ? (await new AES256Encryption(owner.secretKey).encrypt([editedMetadata]))[0]! : encryptLegacy(editedMetadata, secret));
+        let daemonState = encodeBase64(usesDataKey ? (await new AES256Encryption(owner.secretKey).encrypt([editedState]))[0]! : encryptLegacy(editedState, secret));
+        let revision = 3;
+        let delivered: Uint8Array | null = null;
+        let recipientBindingAvailable = true;
+        let censusGate: Promise<void> | undefined;
+        let censusEntered: (() => void) | undefined;
+        const fingerprint = computeContentPublicKeyFingerprint(recipient.publicKey);
+        const row = () => ({ id: 'machine', dataEncryptionKey: ownerEnvelope, metadata, metadataVersion: revision, daemonState, daemonStateVersion: revision,
+            keyBasis: { dataEncryptionKey: ownerEnvelope, metadataVersion: revision, daemonStateVersion: revision },
+            access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage' as const, resourceMode: 'e2ee' as const, accessState: 'ready' as const } });
+        const home = await serveAccountHomes({ homes: [
+            { key: 'resource', serverUrl: 'https://machine-custodian.test', accountId: 'alice', accountMode: 'e2ee',
+                credentials: usesDataKey ? { token: 'replaced-by-fixture-subject', encryption: { publicKey: encodeBase64(owner.publicKey), machineKey: encodeBase64(owner.secretKey) } }
+                    : { token: 'replaced-by-fixture-subject', secret: encodeBase64(secret) } },
+            { key: 'focused', serverUrl: 'https://machine-focused-custodian.test', accountId: 'cara' },
+        ], route: async request => {
+            if (request.home !== 'resource') return undefined;
+            if (request.path.endsWith('/data-key-envelopes') && request.method === 'GET' && censusGate) {
+                censusEntered?.();
+                await censusGate;
+            }
+            if (request.path === '/v1/machines/machine/access' && request.method === 'PUT') return Response.json({
+                kind: 'saved', grant: { machineId: 'machine', principal: { kind: 'team', teamId: 'mixed-team' }, level: 'view' },
+                readiness: 'refused', canPrepareKeys: true,
+            });
+            if (request.path === '/v1/machines/machine') return Response.json({ machine: row() });
+            if (request.path.endsWith('/content-key/transition')) {
+                const input = MachineContentKeyTransitionInputV1Schema.parse(request.body);
+                expect(input.expected).toEqual(row().keyBasis);
+                ownerEnvelope = input.next.dataEncryptionKey;
+                metadata = input.next.metadata;
+                daemonState = input.next.daemonState!;
+                revision++;
+                if (variant === 'lost-ack') throw new TypeError('Connection lost after commit');
+                return Response.json({ kind: 'committed', machine: row() });
+            }
+            if (request.path.endsWith('/data-key-envelopes') && request.method === 'PATCH') {
+                const input = MachineRecipientKeyEnvelopeCommitInputV1Schema.parse({ machineId: 'machine',
+                    ...MachineRecipientKeyEnvelopeCommitInputV1Schema.omit({ machineId: true }).parse(request.body) });
+                expect(input.expectedCallerDataEncryptionKey).toBe(ownerEnvelope);
+                expect(input.expectedMachineOwnerEnvelopeFingerprint).toBe(computeMachineOwnerEnvelopeFingerprintV1(decodeBase64(ownerEnvelope!)));
+                expect(input.expectedMetadataVersion).toBe(revision);
+                delivered = openEncryptedDataKeyEnvelopeV1({ envelope: decodeBase64(input.recipientKeyEnvelopes[0]!.encryptedDataKey), recipientSecretKeyOrSeed: recipient.secretKey });
+                return Response.json({ appliedRecipientAccountIds: ['bob'], skippedRecipientAccountIds: [] });
+            }
+            if (request.path.endsWith('/data-key-envelopes') && (!ownerEnvelope || variant === 'malformed-present')) return Response.json({ kind: 'refused', code: 'encryption_material_unavailable' }, { status: 409 });
+            if (request.path.endsWith('/data-key-envelopes')) return Response.json({ machineId: 'machine', custodianAccountId: 'alice', encryptionMode: 'e2ee',
+                machineOwnerEnvelopeFingerprint: computeMachineOwnerEnvelopeFingerprintV1(decodeBase64(ownerEnvelope!)), callerDataEncryptionKey: ownerEnvelope, nextCursor: null,
+                content: { metadata, metadataVersion: revision, daemonState, daemonStateVersion: revision }, recipients: [...(delivered ? [] : [{ recipientAccountId: 'bob',
+                    contentKey: recipientBindingAvailable ? { status: 'available', accountSigningPublicKey: Buffer.from(signing.publicKey).toString('hex'), contentPublicKey: encodeBase64(recipient.publicKey),
+                        contentPublicKeySignature: encodeBase64(signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey: recipient.publicKey })) }
+                        : { status: 'unavailable', reason: 'encryption_setup_required' },
+                    contentPublicKeyFingerprint: recipientBindingAvailable ? fingerprint : null, encryptedDataKey: null, recipientContentPublicKeyFingerprint: null }]),
+                    ...(variant === 'mixed-legacy' ? [{ recipientAccountId: 'plain-member', contentKey: { status: 'unavailable', reason: 'plain_account' },
+                        contentPublicKeyFingerprint: null, encryptedDataKey: null, recipientContentPublicKeyFingerprint: null }] : [])] });
+            return undefined;
+        } });
+        // Observe the real HTTP boundary, including the harness's mode route.
+        const fetches = vi.spyOn(network, 'runtimeFetch');
+        try {
+            if (variant === 'malformed-present') {
+                expect(await prepareMachineDataKeyEnvelopesForScope({ scope: { serverId: home.homes.resource!.id, accountId: 'alice' }, machineId: 'machine' })).toMatchObject({ kind: 'unavailable' });
+                expect(home.requests.some(request => request.method === 'POST' || request.method === 'PATCH')).toBe(false);
+                expect(delivered).toBeNull();
+                return;
+            }
+            const scope = { serverId: home.homes.resource!.id, accountId: 'alice' };
+            if (variant === 'mixed-legacy') {
+                expect(await executeMachineAccessHttpAction({ scope, actionId: 'machines.access.grant.set',
+                    input: { serverId: scope.serverId, machineId: 'machine', principal: { kind: 'team', teamId: 'mixed-team' }, level: 'view' },
+                })).toMatchObject({ kind: 'saved', readiness: 'refused', canPrepareKeys: true });
+            } else {
+                const fromList = { scope, machineId: 'machine', initialMachineRow: row() };
+                expect(await prepareMachineDataKeyEnvelopesForScope(fromList)).toEqual({ kind: 'prepared' });
+                // The authenticated list already supplied the owner observation. Only
+                // unknown transition outcomes may require another physical row read.
+                expect(home.requests.filter(request => request.path === '/v1/machines/machine'))
+                    .toHaveLength(variant === 'lost-ack' ? 1 : 0);
+            }
+            const currentKey = openEncryptedDataKeyEnvelopeV1({ envelope: decodeBase64(ownerEnvelope!), recipientSecretKeyOrSeed: owner.secretKey });
+            expect(delivered).toEqual(currentKey);
+            expect(delivered).not.toBeNull();
+            expect(delivered).not.toEqual(owner.secretKey);
+            expect(delivered).not.toEqual(secret);
+            expect((await new AES256Encryption(currentKey!).decrypt([decodeBase64(metadata)]))[0]).toEqual(editedMetadata);
+            expect((await new AES256Encryption(currentKey!).decrypt([decodeBase64(daemonState)]))[0]).toEqual(editedState);
+            const physical = home.requests.filter(request => request.path.startsWith('/v1/machines/'));
+            expect(physical.every(request => request.home === 'resource' && request.accountId === 'alice')).toBe(true);
+            expect(physical.filter(request => request.method === 'POST')).toHaveLength(1);
+            if (variant === 'lost-ack') {
+                expect(physical.filter(request => request.path === '/v1/machines/machine')).toHaveLength(1);
+            }
+            if (variant === 'dataKey') {
+                const staleListRow = row();
+                revision++;
+                delivered = null;
+                const staleListPreparation = { scope, machineId: 'machine', initialMachineRow: staleListRow };
+                expect(await prepareMachineDataKeyEnvelopesForScope(staleListPreparation))
+                    .toEqual({ kind: 'unavailable', code: 'machine_key_changed' });
+                expect(delivered).toBeNull();
+                // The fresh census fences a stale list observation before disclosure.
+                // A later unseeded attempt still uses the ordinary fresh owner path.
+                expect(await prepareMachineDataKeyEnvelopesForScope({ scope, machineId: 'machine' })).toEqual({ kind: 'prepared' });
+                for (let pass = 0; pass < 3; pass += 1) {
+                    expect(await prepareMachineDataKeyEnvelopesForScope({ scope, machineId: 'machine' })).toEqual({ kind: 'prepared' });
+                }
+                // Explicit current Machine mode owns these resource reads. Repeated
+                // invalidation must not perform an unrelated Account-mode N+1.
+                expect(fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/account/encryption')).toHaveLength(0);
+                expect(fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/machines/machine')).toHaveLength(4);
+                expect(home.requests.filter(request => request.method === 'POST')).toHaveLength(1);
+                const machine = createMachineFixture({ id: 'machine', active: false, dataEncryptionKey: ownerEnvelope,
+                    keyBasis: row().keyBasis, metadataVersion: revision, daemonStateVersion: revision, access: { ...row().access, role: 'manage',
+                        resourceMode: 'e2ee', accessState: 'ready' } });
+                const recipientChangeCursors = new Map<string, number>();
+                let lifetimeCurrent = true;
+                const refresh = (activeAt: number) => prepareMachineDataKeyEnvelopesForMachines({ scope,
+                    machines: [{ ...machine, activeAt, active: activeAt % 2 === 0 }], publishedRows: [{ ...machine, ...row() }],
+                    recipientChangeCursors, isCurrent: () => lifetimeCurrent });
+                const rowReadsBeforeRefresh = home.requests.filter(request => request.path === '/v1/machines/machine').length;
+                await refresh(1);
+                expect(home.requests.filter(request => request.path === '/v1/machines/machine')).toHaveLength(rowReadsBeforeRefresh);
+                const censusReads = () => home.requests.filter(request => request.path.endsWith('/data-key-envelopes') && request.method === 'GET').length;
+                const before = censusReads();
+                for (let presence = 2; presence <= 6; presence++) await refresh(presence);
+                expect(censusReads() - before).toBe(0);
+                recipientChangeCursors.set(machine.id, 1);
+                const preparedKey = delivered;
+                delivered = null; // A newly admitted recipient needs real delivery, not just a census.
+                await refresh(7);
+                expect(censusReads() - before).toBe(2); // Admission plus the existing final empty census.
+                expect(delivered).toEqual(preparedKey);
+                expect(home.requests.filter(request => request.method === 'PATCH')).toHaveLength(3);
+                await refresh(8);
+                expect(censusReads() - before).toBe(2);
+                const entered = createDeferred<void>();
+                const release = createDeferred<void>();
+                censusGate = release.promise;
+                censusEntered = () => entered.resolve();
+                recipientChangeCursors.set(machine.id, 2);
+                const oldPass = refresh(9);
+                await entered.promise;
+                recipientChangeCursors.set(machine.id, 3);
+                const changedWhileRunning = refresh(10);
+                release.resolve();
+                await Promise.all([oldPass, changedWhileRunning]);
+                expect(censusReads() - before).toBe(6);
+                const revokedEntered = createDeferred<void>();
+                const revokedRelease = createDeferred<void>();
+                censusGate = revokedRelease.promise;
+                censusEntered = () => revokedEntered.resolve();
+                recipientChangeCursors.set(machine.id, 4);
+                const beforeAccessChange = refresh(11);
+                await revokedEntered.promise;
+                await prepareMachineDataKeyEnvelopesForMachines({ scope,
+                    machines: [{ ...machine, access: { ...machine.access!, role: 'use' } }], recipientChangeCursors,
+                    isCurrent: () => lifetimeCurrent });
+                const afterAccessChange = refresh(12);
+                revokedRelease.resolve();
+                await Promise.all([beforeAccessChange, afterAccessChange]);
+                expect(censusReads() - before).toBe(10);
+                censusGate = undefined;
+                revision++;
+                machine.keyBasis = row().keyBasis;
+                await refresh(13); // Warm display still has the previous decrypted content versions.
+                expect(censusReads() - before).toBe(12);
+                machine.metadataVersion = revision;
+                machine.daemonStateVersion = revision;
+                await refresh(14);
+                expect(censusReads() - before).toBe(12); // Hydrating that same published basis is not another input change.
+                recipientChangeCursors.set(machine.id, 5);
+                delivered = null;
+                recipientBindingAvailable = false;
+                await refresh(15);
+                expect(delivered).toBeNull();
+                recipientBindingAvailable = true;
+                await refresh(16); // Missing binding is repaired without a Machine edit or cursor change.
+                expect(delivered).toEqual(preparedKey);
+                const beforeNewLifetime = censusReads();
+                lifetimeCurrent = false;
+                await prepareMachineDataKeyEnvelopesForMachines({ scope, machines: [machine], recipientChangeCursors, isCurrent: () => true });
+                expect(censusReads() - beforeNewLifetime).toBe(2); // A retired crypto/Home lifetime cannot suppress new work.
+                const beforeRetiredScope = home.requests.length;
+                const retiredScopePreparation = { scope, machineId: 'machine', initialMachineRow: row(), isCurrent: () => false };
+                expect(await prepareMachineDataKeyEnvelopesForScope(retiredScopePreparation))
+                    .toMatchObject({ kind: 'unavailable' });
+                expect(home.requests.slice(beforeRetiredScope)).toEqual([]);
+            }
+        } finally { fetches.mockRestore(); await home.dispose(); }
+    });
+});

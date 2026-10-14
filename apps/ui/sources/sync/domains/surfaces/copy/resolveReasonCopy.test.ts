@@ -62,6 +62,18 @@ const LOCAL_SERVICE_LAUNCHER_CODES = [
 ] as const;
 
 describe('resolveReasonCopy', () => {
+    it('uses a bounded Resource diagnostic under a generic transport envelope for copy and recovery', () => {
+        const presentation = resolvePluginSurfaceStatePresentation({
+            state: 'unavailable',
+            reasonCode: 'unavailable',
+            diagnostics: ['private detail must not render', 'plugin_collection_contract_conflict'],
+        });
+        expect(presentation.card?.reason).not.toBe(t('pluginRuntime.unavailableGeneric'));
+        expect(presentation.card?.reason).not.toContain('private detail');
+        expect(presentation.diagnosticCode).toBe('plugin_collection_contract_conflict');
+        expect(presentation.recoveryAction?.kind).toBe('managePlugin');
+    });
+
     it('keeps host widget failures in widget vocabulary without changing pending state', () => {
         const unavailable = resolvePluginSurfaceStatePresentation({ state: 'unavailable', reasonKind: 'widget', reasonCode: 'widget_scope_unavailable' });
         expect(unavailable.card).toMatchObject({ kind: 'unavailable', title: t('widgetAdd.areaUnavailableTitle'), reason: t('common.unavailable') });
@@ -243,7 +255,7 @@ const PLUGIN_RUNTIME_CODES = [
     { code: 'required_permission_missing', expected: () => t('pluginRuntime.missingRequirement') },
     { code: 'entry_missing', expected: () => t('pluginRuntime.missingRequirement') },
     { code: 'runtime_mismatch', expected: () => t('pluginRuntime.missingRequirement') },
-    { code: 'transport_unavailable', expected: () => t('pluginRuntime.unavailableGeneric') },
+    { code: 'transport_unavailable', expected: () => t('pluginRuntime.transportUnavailable') },
 ] as const;
 
 // These are pane-local terminal facts produced after the projection and

@@ -1,0 +1,117 @@
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { pendingDeliveryStatusV1ToPersistedFields } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
+import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../../server/sources/testkit/lightSqliteHarness';
+import { createAuthenticatedTestApp } from '../../../../../server/sources/app/api/testkit/sqliteFastify';
+import { sessionPendingRoutes } from '../../../../../server/sources/app/api/routes/session/pendingRoutes';
+import { enqueuePendingMessage } from '../../../../../server/sources/app/session/pending/pendingMessageService';
+import { createPresentUserSessionAccessAuthentication } from '../../../../../server/sources/app/session/access/sessionAccessAuthentication.testkit';
+import { db } from '../../../../../server/sources/storage/db';
+import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { storage } from '@/sync/domains/state/storage';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { getPendingMessageVisualState } from '@/components/sessions/pending/pendingMessageVisualState';
+import { enqueuePendingMessageV2, fetchAndApplyPendingMessagesV2 } from './pendingQueueV2';
+import { loadPendingOutboxForSession } from '@/sync/domains/state/pendingOutboxPersistence';
+
+let database: LightSqliteHarness;
+beforeAll(async () => {
+    database = await createLightSqliteHarness({ tempDirPrefix: 'happier-r42-pending-', initAuth: true,
+        env: { HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional' } });
+}, 180_000);
+afterAll(async () => { if (database) await database.close(); });
+
+it('projects real pending receipts and retains external enqueue custody until acknowledgement', async () => {
+    const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+    const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(),
+        encryptionMode: 'plain', metadata: '{}' } });
+    const localId = randomUUID();
+    expect(await enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId,
+        authentication: createPresentUserSessionAccessAuthentication(),
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'queued input' }, meta: {} } },
+        requestedAction: { v: 1, kind: 'enqueue' } })).toMatchObject({ ok: true });
+    const app = createAuthenticatedTestApp();
+    sessionPendingRoutes(app);
+    await app.ready();
+    // Only Home HTTP and device credentials are adapted. Route registration,
+    // admission, schema, storage, scoped client, projection and policy stay real.
+    const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: `https://${owner.id}.r42-pending.test`,
+        accountId: owner.id, currentAccount: true }], route: async request => {
+        const response = await app.inject({ method: request.method, url: request.url.pathname + request.url.search,
+            headers: { 'x-test-user-id': request.accountId ?? '', 'x-happier-account-stored-content-protocol': '4' },
+            ...(request.body === undefined ? {} : { payload: request.body }) });
+        return new Response(response.body, { status: response.statusCode, headers: { 'Content-Type': 'application/json' } });
+    } });
+    const home = homes.homes.home!;
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    const account = await captureLazyActionAccountContext(home.id);
+    const request = (path: string, init?: RequestInit) => account.request(path, init, { includeAuth: true });
+    try {
+        storage.getState().applySessions([createSessionFixture({ id: session.id, serverId: home.id,
+            encryptionMode: 'plain', pendingVersion: 1, metadata: null })]);
+        const refresh = () => fetchAndApplyPendingMessagesV2({ sessionId: session.id, encryption: null, request,
+            outboxScope: account.accountLifetime.scope, isOutboxScopeCurrent: account.accountLifetime.isCurrent });
+        await refresh();
+        expect(storage.getState().sessionPending[session.id]?.messages).toEqual([
+            expect.objectContaining({ localId, text: 'queued input', pendingDeliveryStatus: 'server_queued' }),
+        ]);
+        const actionPath = `/v2/sessions/${session.id}/pending/${localId}/action`;
+        const actionBody = JSON.stringify({ requestedAction: { v: 1, kind: 'send_now' } });
+        const sent = await request(actionPath, { method: 'PATCH', body: actionBody });
+        expect(sent.status).toBe(200);
+        expect(PendingRequestedActionV1Schema.parse((await sent.json()).requestedAction)).toEqual({ v: 1, kind: 'send_now' });
+        const stored = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } });
+        expect(stored.requestedAction).toEqual({ v: 1, kind: 'send_now' });
+        // A DB fixture publishes the canonical provider-custody fields; the
+        // unchanged route must reject edits even without a concurrent user edit.
+        await db.sessionPendingMessage.update({ where: { id: stored.id },
+            data: { ...pendingDeliveryStatusV1ToPersistedFields({ status: 'delivering' }), providerAction: 'interrupt_and_send' } });
+        await refresh();
+        const delivering = storage.getState().sessionPending[session.id]?.messages[0];
+        expect(delivering).toMatchObject({ localId, pendingDeliveryStatus: 'server_delivering' });
+        if (!delivering) throw new Error('Expected real provider-custody projection');
+        expect(getPendingMessageVisualState(delivering)).toMatchObject({ kind: 'delivering', deliveryMutationPolicy: 'effect_possible' });
+        const stale = await request(actionPath, { method: 'PATCH', body: actionBody });
+        expect(stale.status).toBe(409);
+        expect(await stale.json()).toEqual({ error: 'action-conflict' });
+
+        const handoffLocalId = randomUUID();
+        let outboxAtSnapshot: Awaited<ReturnType<typeof loadPendingOutboxForSession>> = [];
+        const handoff = await enqueuePendingMessageV2({
+            sessionId: session.id, localId: handoffLocalId, text: 'external input', encryption: null,
+            outboxScope: account.accountLifetime.scope, serverWireMode: 'pending_input_v1',
+            deliveryMode: 'external_handoff', requestedAction: { v: 1, kind: 'send_now' },
+            metaOverrides: { claudeRemoteMaxThinkingTokens: 4096 },
+            request: async (path, init) => {
+                // The actual registered POST commits to SQLite before its ACK
+                // reaches the client. A real GET then exposes that reservation.
+                const acknowledgement = await request(path, init);
+                await refresh();
+                outboxAtSnapshot = await loadPendingOutboxForSession(session.id, account.accountLifetime.scope);
+                return acknowledgement;
+            },
+        });
+        expect(outboxAtSnapshot).toEqual([expect.objectContaining({ localId: handoffLocalId, operation: 'enqueue' })]);
+        expect(handoff).toMatchObject({ accepted: true, externalHandoffClaimed: true });
+        expect(handoff.settled).toBeUndefined();
+        expect(await loadPendingOutboxForSession(session.id, account.accountLifetime.scope)).toEqual([]);
+        expect(storage.getState().sessionPending[session.id]?.messages).toContainEqual(
+            expect.objectContaining({ localId: handoffLocalId, text: 'external input', pendingDeliveryStatus: 'external_handoff' }),
+        );
+        const reserved = await db.sessionPendingMessage.findUniqueOrThrow({
+            where: { sessionId_localId: { sessionId: session.id, localId: handoffLocalId } },
+        });
+        expect(reserved.deliveryState).toBe('external_handoff');
+        expect(reserved.content).toMatchObject({
+            t: 'plain', v: { meta: { claudeRemoteMaxThinkingTokens: 4096 } },
+        });
+    } finally {
+        account.dispose();
+        await homes.dispose();
+        await app.close();
+    }
+}, 180_000);

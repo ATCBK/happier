@@ -5,7 +5,7 @@ import { ExternalActionAccountAuthenticationV1Schema, ExternalActionHttpErrorSch
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { openExternalActionResponseV2, sealExternalActionRequestV2, type ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
-import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ActionExecuteFailure, ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
@@ -25,7 +25,7 @@ type MachineCustody = Readonly<{
 }>;
 
 type Material = Readonly<{ type: 'dataKey'; machineKey: Uint8Array }>;
-const failure = (errorCode: string): ActionExecuteResult => ({ ok: false, errorCode, error: errorCode });
+const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
 
 export function readOriginalAccountActionAuthentication(token: string) {
     const claims = parseTokenPayload(token);

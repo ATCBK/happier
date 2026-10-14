@@ -13,7 +13,8 @@ export async function executeApiTokenAction(transport: ApiTokenActionTransport, 
     let body: unknown;
     try {
         const projection = actionId === 'session.spawn_new' ? projectSessionSpawnNewApiRequest(input) : { input, target: transport.target };
-        const parsedInput = PUBLIC_ACTION_INPUT_SCHEMAS[publicId.data].safeParse(projection.input);
+        const inputSchema: z.ZodType<unknown> = PUBLIC_ACTION_INPUT_SCHEMAS[publicId.data];
+        const parsedInput = inputSchema.safeParse(projection.input);
         if (!parsedInput.success) return { ok: false, errorCode: 'invalid_parameters',
             error: parsedInput.error.issues.map((issue) => issue.message).join('; ') };
         const validatedInput = parsedInput.data;

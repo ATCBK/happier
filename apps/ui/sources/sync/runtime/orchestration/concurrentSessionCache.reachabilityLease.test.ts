@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 let cleanup: (() => Promise<void>) | null = null;
 
-async function installHarness() {
+async function installHarness(options: Readonly<{ includeMachineInventory?: boolean; realClock?: boolean }> = {}) {
     const network = await installSessionOpsNetworkBoundary();
     const homeA = await network.addHome('https://lease-a.example.test', 'account-a');
     const homeB = await network.addHome('https://lease-b.example.test', 'account-b');
@@ -36,8 +37,11 @@ async function installHarness() {
         if (path === '/v1/account/encryption/currentness') {
             return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         }
-        if (path === '/v2/sessions') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
-        if (path === '/v1/machines') return Response.json([]);
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+        if (path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v2/sessions/attention') {
+            return Response.json(V2SessionListResponseSchema.parse({ sessions: [], nextCursor: null, hasNext: false }));
+        }
+        if (path === '/v1/machines' && !options.includeMachineInventory) return Response.json([]);
         return null;
     });
     const pool = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
@@ -46,7 +50,7 @@ async function installHarness() {
     cleanup = async () => {
         cache.stopConcurrentSessionCacheSync();
         for (const ping of pendingPings) ping.respond();
-        await vi.advanceTimersByTimeAsync(1);
+        if (!options.realClock) await vi.advanceTimersByTimeAsync(1);
         await pool.resetServerReachabilitySupervisors();
         pool.setServerReachabilityNetworkAllowed(true);
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
@@ -59,7 +63,7 @@ async function installHarness() {
         }
     };
     cache.startConcurrentSessionCacheSync();
-    await vi.advanceTimersByTimeAsync(1);
+    if (!options.realClock) await vi.advanceTimersByTimeAsync(1);
     await vi.waitFor(() => expect(pendingPings).toHaveLength(1));
     return { ...cache, network, homeB, profiles, pool, pendingPings, io };
 }
@@ -79,6 +83,30 @@ afterEach(async () => {
 });
 
 describe('concurrent session cache reachability lease fencing', () => {
+    it('persists a secondary Home inventory only under its captured credential Account', async () => {
+        vi.useRealTimers();
+        const { prepareWarmCacheStorage, loadMachineDisplayWarmCacheEntries, setWarmCacheAccountScope } = await import('@/sync/domains/state/warmCachePersistence');
+        await prepareWarmCacheStorage();
+        setWarmCacheAccountScope('account-a');
+        const h = await installHarness({ includeMachineInventory: true, realClock: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        const secondaryHomeId = h.profiles.resolveServerProfileScopeIdForIdentifier(h.homeB.id);
+        storage.setState({ profile: { ...storage.getState().profile, id: 'account-a' },
+            profileScope: { serverId: h.profiles.getActiveServerId(), accountId: 'account-a' } });
+        h.pendingPings[0].respond();
+        await vi.waitFor(() => expect(h.pool.peekServerReachabilityState(h.homeB.serverUrl, h.homeB.token)?.phase).toBe('online'));
+        await h.refreshConcurrentOrdinarySessionList(secondaryHomeId);
+        expect(storage.getState().machineListByServerId[secondaryHomeId], JSON.stringify({
+            paths: h.network.httpRequests.map(request => new URL(request.url).pathname),
+            status: storage.getState().machineListStatusByServerId[secondaryHomeId],
+        })).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'machine-1' })]));
+        await vi.waitFor(() => {
+            expect(loadMachineDisplayWarmCacheEntries(secondaryHomeId, 'account-b')['machine-1'])
+                .toMatchObject({ machineId: 'machine-1', host: 'tester.local' });
+        });
+        expect(loadMachineDisplayWarmCacheEntries(secondaryHomeId, 'account-a')['machine-1']).toBeUndefined();
+    });
+
     it('retires a held authenticated probe after the cache stops without constructing a socket', async () => {
         const h = await installHarness();
         h.stopConcurrentSessionCacheSync();

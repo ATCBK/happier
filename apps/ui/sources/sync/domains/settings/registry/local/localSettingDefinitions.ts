@@ -176,6 +176,12 @@ const localSettingInputs = {
         description: 'When this device chose or dismissed the initial Skills checklist',
         storageScope: 'local',
     },
+    mcpFirstVisitDismissedAt: {
+        schema: z.number().nullable().catch(null),
+        default: null,
+        description: 'When this device dismissed the MCP servers first-visit line ("Your servers now follow you")',
+        storageScope: 'local',
+    },
     hasCompletedAuthOnce: {
         schema: z.boolean().catch(false),
         default: false,

@@ -2,7 +2,6 @@ import type { SessionModelOptionsContext } from '@/sync/domains/models/modelOpti
 import type { TodoState } from '@/sync/domains/todos/todoOps';
 
 import type { DecryptedArtifact } from '../domains/artifacts/artifactTypes';
-import type { AutomationDefinition, AutomationDefinitionRun } from '../domains/automations/automationTypes';
 import type { FeedItem } from '../domains/social/feedTypes';
 import type { RelationshipUpdatedEvent, UserProfile } from '../domains/social/friendTypes';
 import type { LocalSettings } from '../domains/settings/localSettings';
@@ -284,54 +283,7 @@ export interface ArtifactsDomainSlice {
  */
 export type WorkflowRunsDomainSlice = WorkflowRunsDomain;
 
-export interface AutomationsDomainSlice extends Pick<AutomationsDomain,
-    'workflowTriggerSetsById' | 'workflowTriggerSetIdsByQuery' | 'applyWorkflowTriggerSetPage' | 'upsertWorkflowTriggerSet'> {
-    automations: Record<string, AutomationDefinition>;
-    automationDefinitionNextCursor: string | null;
-    automationDefinitionWindowExtended: boolean;
-    automationDefinitionTraversal: Readonly<{
-        nextCursor: string;
-        automations: Record<string, AutomationDefinition>;
-    }> | null;
-    /**
-     * Ordered newest-first Run membership for one Automation's query. The Run
-     * bodies live once in `workflowRunsById`, so an Automation list and an
-     * exact Run read cannot render two versions of the same Run.
-     */
-    automationRunIdsByAutomationId: Record<string, string[]>;
-    automationRunNextCursorByAutomationId: Record<string, string | null>;
-    automationRunTraversalsByAutomationId: Record<string, Readonly<{
-        nextCursor: string;
-        runIds: string[];
-    }>>;
-    applyAutomations: (automations: AutomationDefinition[], nextCursor?: string | null) => number | null;
-    appendAutomations: (
-        expectedCursor: string,
-        expectedTraversalToken: number,
-        automations: AutomationDefinition[],
-        nextCursor: string | null,
-    ) => boolean;
-    upsertAutomation: (automation: AutomationDefinition) => void;
-    removeAutomation: (automationId: string) => void;
-    setAutomationRuns: (
-        automationId: string,
-        runs: AutomationDefinitionRun[],
-        nextCursor: string | null,
-    ) => number | null;
-    refreshAutomationRunsWindow: (
-        automationId: string,
-        runs: AutomationDefinitionRun[],
-        nextCursor: string | null,
-    ) => void;
-    appendAutomationRuns: (
-        automationId: string,
-        expectedCursor: string,
-        expectedTraversalToken: number,
-        runs: AutomationDefinitionRun[],
-        nextCursor: string | null,
-    ) => boolean;
-    upsertAutomationRun: (run: AutomationDefinitionRun) => void;
-}
+export type AutomationsDomainSlice = AutomationsDomain;
 
 export interface PetsDomainSlice {
     accountPetsById: Record<string, AccountPetMetadata>;

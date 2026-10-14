@@ -10,6 +10,7 @@ import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profil
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { loadConnectedAccountCatalogV1, type ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
 
 type HomeCredentialMutationListener = (event: Readonly<{
     kind: 'credentials_set' | 'credentials_removed';
@@ -44,6 +45,126 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
 }));
 
 describe('createScopedSnapshotLoader', () => {
+    it.each([false, true])('settles finite Connected Account maintenance after first observation (wake during reread: %s)', async wakeDuringReread => {
+        const target = { key: 'connected-account:finite-maintenance', serverId: 'finite-home' };
+        let revision = 4;
+        let reads = 0;
+        let publication: ConnectedAccountCatalogSnapshotV1 = { status: 'loading' };
+        let releaseInitialCleanup!: () => void;
+        const initialCleanup = new Promise<void>(resolve => { releaseInitialCleanup = resolve; });
+        let releaseReread!: () => void;
+        const reread = new Promise<void>(resolve => { releaseReread = resolve; });
+        let sourceReads = 0;
+        const expectedReads = wakeDuringReread ? 3 : 2;
+        const loader = createScopedSnapshotLoader({
+            load: async (_target, context) => context.readWithMaintenance<ConnectedAccountCatalogSnapshotV1>({
+                read: ({ onReady }) => loadConnectedAccountCatalogV1({ key: 'purposes', mode: 'plain', material: null,
+                    readRow: async () => {
+                        reads += 1;
+                        // Stop an unexpected self-trigger at the HTTP boundary so RED
+                        // reports the extra read rather than starving the test runner.
+                        if (reads > expectedReads) throw new Error('Unrequested catalog reread');
+                        const capturedRevision = revision;
+                        if (reads === 2) await reread;
+                        return { status: 'deleted', revision: capturedRevision };
+                    },
+                    onReadyBeforeCleanup: async value => { onReady(value, () => true); },
+                    transfer: {
+                        readSourceSnapshot: async () => {
+                            if (++sourceReads === 1) await initialCleanup;
+                            return { raw: {}, version: 1 };
+                        },
+                        initializeRecord: async () => { throw new Error('Deleted row already owns authority'); },
+                        replaceSource: async () => { throw new Error('No source to replace'); },
+                        normalizeHistory: async () => ({ status: 'complete' }),
+                    },
+                }),
+                publish: (value, current) => { if (current) publication = value; },
+                getPublication: () => publication,
+            }),
+            shouldLoadOnObserve: () => publication.status !== 'ready',
+            invalidateServer: () => {},
+            invalidateTarget: () => {},
+        });
+        let release: (() => void) | undefined;
+        try {
+            await loader.refresh(target);
+            expect(publication).toMatchObject({ status: 'ready', revision: 4 });
+            revision = 5;
+            release = loader.observe(target);
+            await vi.waitFor(() => expect(reads).toBe(2));
+            if (wakeDuringReread) {
+                revision = 6;
+                publishHomeAccountChange(target.serverId);
+            }
+            const finishedRead = loader.refresh(target);
+            releaseInitialCleanup();
+            releaseReread();
+            await finishedRead;
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(reads).toBe(expectedReads);
+            expect(publication).toMatchObject({ status: 'ready', revision: wakeDuringReread ? 6 : 5,
+                cleanup: { status: 'complete' } });
+        } finally {
+            releaseInitialCleanup();
+            releaseReread();
+            release?.();
+            loader.resetForTests();
+        }
+    });
+    it.each(['settled', 'in-flight'] as const)('revalidates an unobserved finite read when its first consumer arrives (%s)', async phase => {
+        const target = { key: 'mcp:finite-observation', serverId: 'finite-home' };
+        let revision = 4;
+        let reads = 0;
+        let stale = true;
+        let publication: McpServerCatalogSnapshotV1 = { status: 'loading' };
+        let releaseInitial!: () => void;
+        const initialResponse = new Promise<void>(resolve => { releaseInitial = resolve; });
+        const loader = createScopedSnapshotLoader({
+            load: async (_target, context) => context.readWithMaintenance<McpServerCatalogSnapshotV1>({
+                read: () => loadMcpServerCatalogV1({ mode: 'plain', material: null,
+                    // The remote row is captured when HTTP starts, before an unobserved write.
+                    readRow: async () => {
+                        const capturedRevision = revision;
+                        reads += 1;
+                        if (reads === 1) await initialResponse;
+                        return { status: 'deleted', revision: capturedRevision };
+                    },
+                }),
+                publish: (value, current) => { if (current) { publication = value; stale = false; } },
+                getPublication: () => publication,
+            }),
+            shouldLoadOnObserve: () => stale,
+            invalidateServer: () => { stale = true; },
+            invalidateTarget: () => { stale = true; },
+        });
+        let release: (() => void) | undefined;
+        try {
+            const finite = loader.refresh(target);
+            await vi.waitFor(() => expect(reads).toBe(1));
+            if (phase === 'settled') {
+                releaseInitial();
+                await finite;
+                expect(publication).toMatchObject({ status: 'ready', revision: 4 });
+                expect(stale).toBe(false);
+            }
+            revision = 5;
+            publishHomeAccountChange(target.serverId);
+            release = loader.observe(target);
+            expect(stale).toBe(true);
+            const observedRead = loader.refresh(target);
+            releaseInitial();
+            await Promise.all([finite, observedRead]);
+            expect(publication).toMatchObject({ status: 'ready', revision: 5 });
+            expect(stale).toBe(false);
+            expect(reads).toBe(2);
+        } finally {
+            releaseInitial();
+            release?.();
+            loader.resetForTests();
+        }
+    });
+
     it.each(['refresh', 'invalidate', 'wake', 'early-wake', 'early-wake-fast-cleanup', 'observer-gap', 'retired'] as const)(
         'only repeats MCP history maintenance for a changed demand (%s)', async demand => {
             const target = { key: 'mcp:home-account', serverId: 'home' };
@@ -56,7 +177,7 @@ describe('createScopedSnapshotLoader', () => {
             let releaseDetail!: () => void;
             const heldDetail = new Promise<void>(resolve => { releaseDetail = resolve; });
             const loader = createScopedSnapshotLoader({
-                load: async (_target, context) => context.readWithMaintenance({
+                load: async (_target, context) => context.readWithMaintenance<McpServerCatalogSnapshotV1>({
                     read: ({ onReady, hasPendingCleanup }) => loadMcpServerCatalogV1({ mode: 'plain', material: null,
                         readRow: async () => ({ status: 'deleted', revision }), hasPendingCleanup,
                         onReadyBeforeCleanup: async snapshot => {
@@ -196,7 +317,7 @@ describe('createScopedSnapshotLoader', () => {
         let releaseCleanup!: () => void;
         const cleanupAdmission = new Promise<void>(resolve => { releaseCleanup = resolve; });
         const loader = createScopedSnapshotLoader({
-            load: async (_target, context) => context.readWithMaintenance({
+            load: async (_target, context) => context.readWithMaintenance<McpServerCatalogSnapshotV1>({
                 read: ({ onReady, hasPendingCleanup }) => loadMcpServerCatalogV1({ mode: 'plain', material: null,
                     readRow: async () => {
                         reads += 1;

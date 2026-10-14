@@ -133,22 +133,34 @@ const profileResponseGate = vi.hoisted(() => vi.fn<() => Promise<void>>());
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let authScreen: RenderScreenResult | undefined;
 
-async function restoreTestAccount(options: { mountAuth?: boolean } = {}): Promise<void> {
+async function restoreTestAccount(options: {
+    mountAuth?: boolean;
+    credentials?: AuthCredentials;
+    accountMode?: 'plain' | 'e2ee';
+    draftsEnabled?: boolean;
+    onRequest?: (path: string) => void;
+} = {}): Promise<void> {
     await loadSyncSingletonForTests();
     const { profileDefaults } = await import('./domains/profiles/profile');
     let bootstrapping = true;
     account = await restoreServerAccountForTest({
         serverUrl: 'http://localhost:53288',
         accountId: ACCOUNT_ID,
-        credentials: { token: ACCOUNT_TOKEN },
+        credentials: options.credentials ?? { token: ACCOUNT_TOKEN },
         request: async (url, init) => {
             const path = new URL(String(url)).pathname;
+            options.onRequest?.(path);
             if (path === '/health') return jsonResponse({});
-            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
-            if (path === '/v1/account/encryption') return jsonResponse({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({
+                features: { sessions: { drafts: { enabled: options.draftsEnabled === true } } },
+            }));
+            if (path === '/v1/account/encryption') return jsonResponse({ mode: options.accountMode ?? 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return jsonResponse({
-                mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null,
-                updatedAt: 1, recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+                mode: options.accountMode ?? 'plain', version: 1,
+                signingKeyFingerprint: options.accountMode === 'e2ee' ? 'fixture-signing' : null,
+                contentKeyFingerprint: options.accountMode === 'e2ee' ? 'fixture-content' : null,
+                updatedAt: 1, recipientEnvelopeReadiness: options.accountMode === 'e2ee'
+                    ? { status: 'available' } : { status: 'unavailable', reason: 'plain_account' },
             });
             if (path === '/v2/account/settings') return jsonResponse({ content: null, version: 0 });
             if (path === '/v1/account/profile') {
@@ -156,7 +168,8 @@ async function restoreTestAccount(options: { mountAuth?: boolean } = {}): Promis
                 return jsonResponse({ ...profileDefaults, id: ACCOUNT_ID });
             }
             if (path === AUTHORING_MEMORY_ROUTE_V1) return jsonResponse(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
-            if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return jsonResponse(createPlainProjectAccountRowListFixture());
+            if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return jsonResponse(options.accountMode === 'e2ee'
+                ? { status: 'listed', coverage: 'complete', rows: [] } : createPlainProjectAccountRowListFixture());
             if (path === SESSION_DRAFT_V2_ROUTE_LIST) return jsonResponse(SessionDraftListResponseV2Schema.parse({ items: [] }));
             if (path === '/v2/sessions' || path === '/v2/sessions/active') return jsonResponse({ sessions: [], nextCursor: null, hasNext: false });
             if (path === '/v1/machines' || path === '/v1/artifacts') return jsonResponse([]);
@@ -628,6 +641,139 @@ describe('sync AccountChange catch-up projection', () => {
         settingsWatch.dispose();
         pager.dispose();
         syncHarness.disconnectServer();
+    });
+
+    it.each(['present', 'malformed', 'absent', 'deleted'] as const)('materializes a cold Session draft from one change page without transcript or Account collection reads (%s)', async status => {
+        await loadSyncSingletonForTests();
+        // Prior cases retain device-local drafts. The restored empty Home census
+        // confirms those rows absent through the genuine exact-read boundary.
+        domainHttp.mockImplementation(async ({ url }) => new URL(url).pathname === '/v2/account/session-drafts/read'
+            ? jsonResponse({ status: 'absent' }) : Response.json({}, { status: 404 }));
+        const { Encryption } = await import('./encryption/encryption');
+        const { decodeBase64, encodeBase64 } = await import('@happier-dev/protocol/crypto/base64');
+        const { createSessionDraftCipher } = await import('./encryption/sessionDraftEncryption');
+        const { createSessionDraftRepository, getSessionDraftSnapshot } = await import('./ops/sessionDrafts/sessionDraftRepository');
+        const { SESSION_DRAFT_V2_ROUTE_READ } = await import('@happier-dev/protocol/drafts/sessionDraftsV2');
+        const { SessionCurrentProjectionRecordV1Schema } = await import('@happier-dev/protocol/sessions/listing/response');
+        const { storage } = await import('./domains/state/storage');
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const { createSessionListRenderableSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+        const secret = new Uint8Array(32).fill(42);
+        const authorEncryption = await Encryption.create(secret);
+        const address = { kind: 'session' as const, sessionId: 'cold-draft-session' };
+        await authorEncryption.initializeSessions(new Map([[address.sessionId, null]]));
+        const sessionEncryption = authorEncryption.getSessionEncryption(address.sessionId)!;
+        const cipher = createSessionDraftCipher({ accountMode: 'e2ee', accountCryptoMaterial: { type: 'legacy', secret },
+            getSessionContext: () => ({ mode: 'e2ee', encryption: sessionEncryption }), randomBytes: length => new Uint8Array(length) });
+        const values = new Map<string, string>();
+        const author = createSessionDraftRepository({ cipher, syncEnabled: false,
+            storage: { getString: key => values.get(key), set: (key, value) => values.set(key, value), delete: key => values.delete(key) } });
+        const paths: string[] = [];
+        await restoreTestAccount({ credentials: { token: ACCOUNT_TOKEN, secret: encodeBase64(secret, 'base64url') },
+            accountMode: 'e2ee', draftsEnabled: true, onRequest: path => paths.push(path) });
+        const scope = getActiveServerAccountScope();
+        if (!scope) throw new Error('Restoration must establish the Account scope');
+        const { sync } = await import('./syncEngine');
+        const syncHarness = sync as unknown as SyncAccountChangeCatchUpHarness & {
+            encryption: InstanceType<typeof Encryption>;
+            ensureSessionDraftRepositoryRuntimeReady(): Promise<void>;
+        };
+        // Complete the real Account draft bootstrap before measuring one change page.
+        await syncHarness.ensureSessionDraftRepositoryRuntimeReady();
+        await syncHarness.encryption.initializeSessions(new Map([[address.sessionId, null]]), {
+            accountId: scope.accountId, serverId: scope.serverId,
+        });
+        storage.getState().applyServerScopedSessionListRows(scope.serverId, [createSessionListRenderableSessionFixture({
+            id: address.sessionId, encryptionMode: 'e2ee', serverId: scope.serverId,
+        })], { source: 'ordinary', mode: 'append' });
+        expect(storage.getState().sessions[address.sessionId]).toBeUndefined();
+        expect(syncHarness.encryption.getSessionEncryption(address.sessionId)).not.toBeNull();
+        author.writeExistingSessionDraft({ scope, sessionId: address.sessionId, patch: { text: 'retained draft' } });
+        const document = author.getSessionDraftSnapshot(scope, address)!.document;
+        const content = await cipher.seal(address, document);
+        if (content.t !== 'encrypted') throw new Error('The E2EE Session fixture must seal encrypted content');
+        const tamperedBytes = decodeBase64(content.c);
+        tamperedBytes[tamperedBytes.length - 1] ^= 1;
+        const tamperedContent = { ...content, c: encodeBase64(tamperedBytes) };
+        const sessionRecord = SessionCurrentProjectionRecordV1Schema.parse({
+            id: address.sessionId, seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 0,
+            encryptionMode: 'e2ee', dataEncryptionKey: null, metadataLayoutVersion: 0,
+            metadataVersion: 1, metadata: await sessionEncryption.encryptRaw({ path: '/fixture', host: 'fixture' }),
+            agentStateVersion: 0, agentState: null, share: null, responsibleAccountId: null, responsibleAccount: null,
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+                capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }) },
+        });
+        domainHttp.mockImplementation(async ({ url }) => {
+            const path = new URL(url).pathname;
+            if (path === SESSION_DRAFT_V2_ROUTE_READ) return jsonResponse(status === 'absent' ? { status } : {
+                status: status === 'malformed' ? 'present' : status,
+                record: { address, revision: 0, createdAt: 1, updatedAt: 1,
+                    content: status === 'deleted' ? null : status === 'malformed' ? tamperedContent : content },
+            });
+            if (path === `/v2/sessions/${address.sessionId}`) return jsonResponse({ session: sessionRecord });
+            return Response.json({}, { status: 404 });
+        });
+        changesResponse.mockResolvedValue({ changes: [{ cursor: 1, kind: 'account',
+            entityId: `session-draft:session/${address.sessionId}`, changedAt: 1,
+            hint: { v: 1, sessionDraft: true, address, revision: 0, status: status === 'deleted' ? 'deleted' : 'present' },
+        }], nextCursor: '1' });
+        paths.length = 0;
+        changesResponse.mockClear();
+        const previousCursor = syncHarness.changesCursor;
+        await syncHarness.resumeViaChanges({ accountId: ACCOUNT_ID });
+        expect(changesResponse).toHaveBeenCalledOnce();
+        if (status === 'malformed') {
+            expect(syncHarness.changesCursor).toBe(previousCursor);
+            expect(getSessionDraftSnapshot(scope, address)).toBeNull();
+        } else {
+            expect(syncHarness.changesCursor).toBe('1');
+            if (status === 'present') expect(getSessionDraftSnapshot(scope, address)).toMatchObject({
+                status: 'clean', document: { composer: { text: { value: 'retained draft' } } },
+            });
+            else expect(getSessionDraftSnapshot(scope, address)).toBeNull();
+        }
+        expect(paths.filter(path => path === SESSION_DRAFT_V2_ROUTE_READ)).toHaveLength(1);
+        expect(paths.filter(path => path === `/v2/sessions/${address.sessionId}`)).toHaveLength(status === 'present' || status === 'malformed' ? 1 : 0);
+        expect(paths.every(path => ['/v2/changes', SESSION_DRAFT_V2_ROUTE_READ, `/v2/sessions/${address.sessionId}`].includes(path))).toBe(true);
+        expect(storage.getState().sessionMessages[address.sessionId]?.isLoaded).not.toBe(true);
+    });
+
+    it('keeps the applied Account lifetime and in-flight reads through same-Home auth refreshes', async () => {
+        await restoreTestAccount({ mountAuth: true });
+        const { captureActiveServerAccountScopeLifetime } = await import('./domains/scope/activeServerAccountScope');
+        const { getCurrentAuth } = await import('@/auth/context/currentAuth');
+        const { serverFetch } = await import('./http/client');
+        const { profileParse } = await import('./domains/profiles/profile');
+        const { storage } = await import('./domains/state/storage');
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        const auth = getCurrentAuth();
+        if (!lifetime || !auth) throw new Error('Restoration must establish the mounted Account');
+        const requestIssued = createDeferred<void>();
+        const releaseProfile = createDeferred<void>();
+        profileResponseGate.mockImplementationOnce(async () => {
+            requestIssued.resolve();
+            await releaseProfile.promise;
+        });
+        const pendingProfile = serverFetch('/v1/account/profile', { method: 'GET' }, { retry: 'none' })
+            .then(async response => profileParse(await response.json()));
+        // Keep rejected transport promises observed while the held HTTP boundary is released.
+        void pendingProfile.catch(() => undefined);
+        try {
+            await requestIssued.promise;
+            await act(async () => {
+                await auth.refreshFromActiveServer();
+                await auth.refreshFromActiveServer();
+                storage.getState().activateProfileScope({ ...lifetime.scope });
+            });
+            expect(captureActiveServerAccountScopeLifetime()).toBe(lifetime);
+            expect(lifetime.isCurrent()).toBe(true);
+            releaseProfile.resolve();
+            await expect(pendingProfile).resolves.toMatchObject({ id: ACCOUNT_ID });
+            expect(storage.getState().isDataReady).toBe(true);
+        } finally {
+            releaseProfile.resolve();
+            await pendingProfile.catch(() => undefined);
+        }
     });
 
     it('keeps mounted Account-mode disclosure through Settings and Connected Service changes', async () => {

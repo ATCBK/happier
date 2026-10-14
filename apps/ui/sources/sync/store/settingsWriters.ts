@@ -159,12 +159,15 @@ export function useApplyProfileSave(options?: ProfileActionExecutionOptions): (i
   expectedRevision?: number | 'absent';
   legacyCloneSource?: ProfileLegacyCloneSourceV1;
   builtinNames?: readonly string[];
+  /** Library skills added to sessions with this Profile; sent only when the caller changed them. */
+  skillSeeds?: readonly string[];
 }>) => Promise<ProfileOperationResult> {
   const execute = useProfileActionExecute(options);
   return React.useCallback(async input => PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.save'].parse(
     await execute({ actionId: 'launch_profiles.save', input: { id: input.profile.id, profile: input.profile,
       expectedRevision: input.expectedRevision ?? input.profile.profileRecordRevision ?? 'absent',
       ...(input.secretBindings ? { secretBindings: { ...input.secretBindings } } : {}),
+      ...(input.skillSeeds ? { skillSeeds: [...input.skillSeeds] } : {}),
       ...(input.legacyCloneSource ? { legacyCloneSource: input.legacyCloneSource } : {}),
       ...(input.profile.revision ? { expectedArtifactRevision: input.profile.revision } : {}),
     } })), [execute]);
@@ -173,7 +176,7 @@ export function useApplyProfileSave(options?: ProfileActionExecutionOptions): (i
 /** One thin mounted ingress; Profile decisions remain in the admitted domain owner. */
 export function useProfileActionExecute(options?: ProfileActionExecutionOptions) {
   const scope = useAccountSettingsScope();
-  const { execute } = useMountedActionExecution(scope, options);
+  const { execute } = useMountedActionExecution(scope, { ...options, openOnRequest: options?.onApprovalPending === undefined });
   return React.useCallback(async (request: ProfileActionRequestV1): Promise<unknown> => {
     const result = await execute(request.actionId, request.input);
     if (!result.ok) throw Object.assign(new Error(result.errorCode), { code: result.errorCode, result });

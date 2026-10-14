@@ -7,6 +7,8 @@ import { createDefaultActionExecutor, type UiActionExecutorContext } from './def
 type ActionExecutorLike = Pick<ReturnType<typeof createDefaultActionExecutor>, 'execute'> &
   Partial<Pick<ReturnType<typeof createDefaultActionExecutor>, 'prepare'>>;
 export type FrontDoorActionExecute = ActionExecutorLike['execute'] & Pick<ReturnType<typeof createDefaultActionExecutor>, 'prepare'>;
+export type UiActionOperation = Pick<UiActionExecutorContext,
+  'signal' | 'presentUserConfirmation' | 'defaultSessionId' | 'actionRequestId' | 'onTransportIssued'>;
 
 /** Retain typed refusal and pending-approval custody for callers with a void effect contract. */
 export function requireActionSuccess(result: ActionExecuteResult): void {
@@ -62,14 +64,20 @@ export function createFrontDoorUiActionExecutor(
 ): (
   actionId: ActionId,
   input: unknown,
-  options?: Readonly<{ signal?: AbortSignal }>,
+  options?: UiActionOperation,
 ) => Promise<unknown> {
   const execute = createFrontDoorActionExecute(executor);
   return async (actionId, input, options) => {
     const result = await execute(actionId, input, {
       surface: 'ui',
+      authority: options?.presentUserConfirmation ? 'present_user' : undefined,
+      actionCaller: options?.presentUserConfirmation ? { kind: 'host' } : undefined,
       ...scopeContext,
-      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+      ...(options?.signal ? { signal: options.signal } : {}),
+      ...(options?.presentUserConfirmation ? { presentUserConfirmation: options.presentUserConfirmation } : {}),
+      ...(options?.defaultSessionId ? { defaultSessionId: options.defaultSessionId } : {}),
+      ...(options?.actionRequestId ? { actionRequestId: options.actionRequestId } : {}),
+      ...(options?.onTransportIssued ? { onTransportIssued: options.onTransportIssued } : {}),
     });
     if (!result.ok) {
       throw new Error(result.error);

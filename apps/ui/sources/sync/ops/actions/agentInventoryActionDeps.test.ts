@@ -1,62 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { storage } from '@/sync/domains/state/storage';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema, PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { CONNECTED_PRESENTATION_ROWS_ROUTE_V1, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
-type MachineCapabilitiesInvokeFn =
-  typeof import('@/sync/ops/capabilities').machineCapabilitiesInvoke;
-type MachineContributionRegistryProjectionDescribeFn =
-  typeof import('@/sync/ops/machineContributionRegistryProjection').machineContributionRegistryProjectionDescribe;
+const daemonRpc = vi.hoisted(() => vi.fn<(request: Readonly<{
+  machineId: string; serverId?: string | null; method: string; payload: unknown;
+}>) => Promise<unknown>>());
+// The daemon network port is the system boundary. Capability codecs and projection admission remain real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: daemonRpc }));
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+const { storage } = await import('@/sync/domains/state/storage');
+const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+let serverId = '';
+let projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {}, familiesById: {} });
+let capabilityResult: unknown;
 
-const { machineCapabilitiesInvoke, machineContributionRegistryProjectionDescribe } = vi.hoisted(() => ({
-  machineCapabilitiesInvoke: vi.fn<MachineCapabilitiesInvokeFn>(
-    async () => ({ supported: false, reason: 'not-supported' }),
-  ),
-  machineContributionRegistryProjectionDescribe: vi.fn<MachineContributionRegistryProjectionDescribeFn>(
-    async () => ({ supported: false, reason: 'not-supported' }) as never,
-  ),
-}));
-
-vi.mock('@/sync/ops/capabilities', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/sync/ops/capabilities')>();
-  return {
-    ...actual,
-    machineCapabilitiesInvoke,
-  };
-});
-
-vi.mock('@/sync/ops/machineContributionRegistryProjection', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/sync/ops/machineContributionRegistryProjection')>();
-  return { ...actual, machineContributionRegistryProjectionDescribe };
-});
-
-import { createDefaultActionExecutor } from './defaultActionExecutor';
-
-const original = (() => {
-  const state = storage.getState();
-  return {
-    settings: state.settings,
-    settingsVersion: state.settingsVersion,
-    profile: state.profile,
-  };
-})();
-
-beforeEach(() => {
-  machineCapabilitiesInvoke.mockReset();
-  machineCapabilitiesInvoke.mockResolvedValue({ supported: false, reason: 'not-supported' });
-  machineContributionRegistryProjectionDescribe.mockReset();
-  machineContributionRegistryProjectionDescribe.mockResolvedValue({ supported: false, reason: 'not-supported' } as never);
-  const state = storage.getState();
-  storage.setState({
-    settings: {
-      ...state.settings,
-      acpCatalogSettingsV1: { v: 2 as const, backends: [] },
-      backendEnabledByTargetKey: {},
-    },
-    profile: {
-      ...(state.profile ?? {}),
+beforeEach(async () => {
+  await homes.reset();
+  clearDaemonMergedProjectionCacheForTests();
+  serverId = await homes.addHome({ name: 'Agent inventory', serverUrl: 'https://agent-inventory.test', accountId: 'inventory-account' });
+  const profile = AccountProfileSchema.parse({ id: 'inventory-account',
       connectedAccountsV4: [{
         ref: {
-          service: { pluginId: 'openai', localId: 'chatgpt' },
+          service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
           accountId: 'acct-work',
         },
         status: 'connected',
@@ -66,23 +40,36 @@ beforeEach(() => {
         configurationRevision: null,
         revisionSemantics: 'revisioned',
         credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
-        displayName: 'Work account',
         scopes: [],
       }],
       connectedAccountGroupsV4: [],
-    },
+  });
+  storage.getState().activateProfileScope({ serverId, accountId: profile.id });
+  storage.getState().applyProfile(profile);
+  homes.answer(serverId, '/v1/account/profile', { body: profile });
+  homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+  homes.answer(serverId, CONNECTED_PRESENTATION_ROWS_ROUTE_V1, { body: { status: 'present', revision: 1,
+    content: { t: 'plain', v: { v: 1, entries: [{ v: 1, subject: { kind: 'account', account: profile.connectedAccountsV4[0]!.ref }, label: 'Work account' }] } } } });
+  homes.answer(serverId, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, { body: { status: 'present', revision: 1,
+    content: { t: 'plain', v: { v: 1, entries: [] } } } });
+  projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {}, familiesById: {} });
+  capabilityResult = { ok: false, error: { code: 'UNSUPPORTED', message: 'No probe installed' } };
+  daemonRpc.mockReset();
+  daemonRpc.mockImplementation(async request => {
+    expect(request).toMatchObject({ machineId: 'machine-1', serverId });
+    if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+      return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection });
+    }
+    if (request.method === RPC_METHODS.CAPABILITIES_INVOKE) return capabilityResult;
+    throw new Error(`Unexpected Machine RPC: ${request.method}`);
   });
 });
 
-afterEach(() => {
-  storage.setState(original);
-});
+afterEach(async () => { await homes.reset(); clearDaemonMergedProjectionCacheForTests(); });
 
 describe('defaultActionExecutor canonical agent inventory corridor', () => {
   it('answers sessions.spawn.connected_services.list for a novel external qualified Agent instead of unsupported_action', async () => {
-    machineContributionRegistryProjectionDescribe.mockResolvedValueOnce({
-      supported: true,
-      projection: {
+    projection = PluginProjectionV2Schema.parse({
         v: 2,
         generation: 1,
         agentsById: {
@@ -92,47 +79,35 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
             title: 'Acme Voice Agent',
             connectedAccounts: [{
               purpose: 'models',
-              service: { pluginId: 'openai', localId: 'chatgpt' },
+              service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
               credentialKinds: ['oauth'],
             }],
           },
         },
         familiesById: {},
-      },
-    } as never);
+    });
     const executor = createDefaultActionExecutor();
 
     const res = await executor.execute(
       'sessions.spawn.connected_services.list',
       { agentId: 'acme-voice-agent', backendTargetKey: 'agent:acme.voice/agent', machineId: 'machine-1' },
-      { surface: 'voice', serverId: 'server-remote' },
+      { surface: 'voice', serverId },
     );
 
-    expect(res.ok).toBe(true);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
     if (!res.ok) return;
-    const result = res.result as {
-      agentId?: string;
-      supportedServiceIds: readonly string[];
-      items: readonly Readonly<{ value: string; label: string }>[];
-    };
-    expect(result.agentId).toBe('acme-voice-agent');
-    expect(result.supportedServiceIds).toEqual(['openai/chatgpt']);
-    expect(result.items).toEqual([
+    expect(res.result).toMatchObject({ agentId: 'acme-voice-agent', supportedServiceIds: ['happier.agent.codex/openai-codex'], items: [
       expect.objectContaining({
-        value: 'openai/chatgpt:profile:acct-work',
+        value: 'happier.agent.codex/openai-codex:profile:acct-work',
         label: 'Work account',
       }),
-    ]);
-    expect(machineContributionRegistryProjectionDescribe).toHaveBeenCalledWith(
-      'machine-1',
-      { serverId: 'server-remote' },
-    );
+    ] });
+    expect(daemonRpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1', serverId,
+      method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE }));
   });
 
   it('answers agents.session_modes.list by probing the selected machine instead of unsupported_action', async () => {
-    machineCapabilitiesInvoke.mockResolvedValue({
-      supported: true,
-      response: {
+    capabilityResult = {
         ok: true,
         result: {
           agentId: 'acme-voice-agent',
@@ -142,17 +117,16 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
           ],
           source: 'dynamic',
         },
-      },
-    } as never);
+    };
     const executor = createDefaultActionExecutor();
 
     const res = await executor.execute(
       'agents.session_modes.list',
       { agentId: 'acme-voice-agent', backendTargetKey: 'agent:acme.voice/agent', machineId: 'machine-1' },
-      { surface: 'voice', serverId: 'server-remote' },
+      { surface: 'voice', serverId },
     );
 
-    expect(res.ok).toBe(true);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
     if (!res.ok) return;
     expect(res.result).toEqual({
       agentId: 'acme-voice-agent',
@@ -162,17 +136,12 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
       ],
       source: 'dynamic',
     });
-    expect(machineCapabilitiesInvoke).toHaveBeenCalledWith(
-      'machine-1',
-      expect.objectContaining({ method: 'probeModes' }),
-      { serverId: 'server-remote' },
-    );
+    expect(daemonRpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1', serverId,
+      method: RPC_METHODS.CAPABILITIES_INVOKE, payload: expect.objectContaining({ method: 'probeModes' }) }));
   });
 
   it('answers agents.config_options.list by probing the selected machine instead of unsupported_action', async () => {
-    machineCapabilitiesInvoke.mockResolvedValue({
-      supported: true,
-      response: {
+    capabilityResult = {
         ok: true,
         result: {
           agentId: 'acme-voice-agent',
@@ -189,17 +158,16 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
           ],
           source: 'dynamic',
         },
-      },
-    } as never);
+    };
     const executor = createDefaultActionExecutor();
 
     const res = await executor.execute(
       'agents.config_options.list',
       { agentId: 'acme-voice-agent', backendTargetKey: 'agent:acme.voice/agent', machineId: 'machine-1' },
-      { surface: 'voice', serverId: 'server-remote' },
+      { surface: 'voice', serverId },
     );
 
-    expect(res.ok).toBe(true);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
     if (!res.ok) return;
     expect(res.result).toEqual({
       agentId: 'acme-voice-agent',
@@ -216,17 +184,12 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
       ],
       source: 'dynamic',
     });
-    expect(machineCapabilitiesInvoke).toHaveBeenCalledWith(
-      'machine-1',
-      expect.objectContaining({ method: 'probeConfigOptions' }),
-      { serverId: 'server-remote' },
-    );
+    expect(daemonRpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1', serverId,
+      method: RPC_METHODS.CAPABILITIES_INVOKE, payload: expect.objectContaining({ method: 'probeConfigOptions' }) }));
   });
 
   it('resolves the connected-services options source through the same canonical action options owner', async () => {
-    machineContributionRegistryProjectionDescribe.mockResolvedValue({
-      supported: true,
-      projection: {
+    projection = PluginProjectionV2Schema.parse({
         v: 2,
         generation: 1,
         agentsById: {
@@ -235,14 +198,13 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
             identity: { pluginId: 'acme.voice', localId: 'agent' },
             connectedAccounts: [{
               purpose: 'models',
-              service: { pluginId: 'openai', localId: 'chatgpt' },
+              service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
               credentialKinds: ['oauth'],
             }],
           },
         },
         familiesById: {},
-      },
-    } as never);
+    });
     const executor = createDefaultActionExecutor();
 
     const res = await executor.execute(
@@ -251,23 +213,21 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
         actionId: 'session.spawn_new',
         fieldPath: 'connectedServices',
         optionsSourceId: 'sessions.spawn.connected_services.available',
-        executionTarget: { serverId: 'local', machineId: 'machine-1' },
+        executionTarget: { serverId, machineId: 'machine-1' },
         agentTarget: {
           kind: 'agent',
           identity: { pluginId: 'acme.voice', localId: 'agent' },
         },
       },
-      { surface: 'voice' },
+      { surface: 'voice', serverId },
     );
 
-    expect(res.ok).toBe(true);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
     if (!res.ok) return;
     expect(res.result).toMatchObject({
-      options: [expect.objectContaining({ value: 'openai/chatgpt:profile:acct-work' })],
+      options: [expect.objectContaining({ value: 'happier.agent.codex/openai-codex:profile:acct-work' })],
     });
-    expect(machineContributionRegistryProjectionDescribe).toHaveBeenCalledWith(
-      'machine-1',
-      { serverId: 'local' },
-    );
+    expect(daemonRpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1', serverId,
+      method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE }));
   });
 });

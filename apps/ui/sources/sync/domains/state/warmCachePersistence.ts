@@ -22,6 +22,7 @@ import { DaemonMcpServersDetectResponseSchema } from '@happier-dev/protocol/mcp/
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 import { prepareWarmCacheEncryptionKey, readResolvedWarmCacheEncryptionKey } from './warmCacheEncryptionKey';
 import { SESSION_CONTENT_AVAILABILITIES } from '@/sync/domains/session/encryptedContentAvailability';
+import { MachineLockedReasonSchema } from './storageTypes';
 
 /**
  * The same predicate the rest of this corridor uses (`state/persistence.ts`,
@@ -343,14 +344,12 @@ export const MachineDisplayCacheEntryV1Schema = z.object({
     replacementReason: z.string().nullable().optional(),
     replacementSource: z.string().nullable().optional(),
     replacementActorUserId: z.string().nullable().optional(),
-    lockedReason: z.enum([
-        'encryption_material_unavailable',
-        'decryption_failed',
-        'content_unreadable',
-    ]).nullable().optional(),
+    lockedReason: MachineLockedReasonSchema.nullable().optional(),
     displayName: z.string().nullable().optional(),
     host: z.string().nullable().optional(),
     homeDir: z.string().nullable().optional(),
+    platform: z.string().nullable().optional(),
+    arch: z.string().nullable().optional(),
 });
 
 export type MachineDisplayCacheEntryV1 = z.infer<typeof MachineDisplayCacheEntryV1Schema>;

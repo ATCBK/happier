@@ -25,6 +25,7 @@ import { PROFILE_RECORDS_ROUTE_V1, PROFILE_RECORD_READ_ROUTE_V1, ProfileRowReadR
     ProfileRecordV1Schema, ProfileRowMutationV1Schema, type ProfileRecordV1, type ProfileRowMutationV1,
     type ProfileRowV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { PROFILE_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/profiles/profileActionsV1';
+import { PromptBundleArtifactHeaderV1Schema, PromptBundleBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
@@ -46,7 +47,10 @@ import { importLegacyAuthoringMemorySetting } from '@happier-dev/protocol/accoun
 import { LegacyLastUsedProfileSchema } from '@happier-dev/protocol/account/settings/legacyAuthoringMemorySettingsV1';
 import { useApplyProfileSave, useDeleteAiLaunchProfile, useProfileFavoriteIdsMutable } from '@/sync/store/settingsWriters';
 import { useProfilesCollection } from '@/components/settings/profiles/useProfilesCollection';
+import { useSaveLaunchProfile } from '@/components/profiles/edit/useSaveLaunchProfile';
 import { useProfilePromptStack } from '@/sync/store/useProfilePromptStack';
+import { Modal } from '@/modal';
+import { StoredApprovalRequestSchema } from '@happier-dev/protocol';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 installDisconnectedServerSocketBoundary();
@@ -356,6 +360,7 @@ async function fixture() {
             approvalEnabled = true;
             settings = { ...settings, actionsSettingsV1: { v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } } };
         },
+        enableApprovalTransport: () => { approvalEnabled = true; },
         advanceProfileRevision() { rows = rows.map(row => ({ ...row, revision: row.revision + 1 })); },
         conflictFavorite: () => { conflictFavorite = true; },
         async mountHome() {
@@ -398,13 +403,24 @@ async function fixture() {
 }
 
 describe('UI Profile Action front door', () => {
+    it('lists launch profiles from the captured Account catalog rather than legacy settings', async () => {
+        const f = await fixture();
+        f.setProfile();
+        const result = await f.executor.execute('sessions.spawn.profiles.list', {}, f.context);
+        expect(result).toMatchObject({ ok: true, result: {
+            coverage: 'complete', totalCount: 1, items: [{ id: 'editable' }],
+        } });
+    });
+
     it('settles a referenced Profile deletion while the post-ACK Settings refresh is pending', async () => {
         const f = await fixture();
         f.setProfile(undefined, 'existing');
         await f.mountHome();
         f.settingsAfterWrite.pending = true;
         let settled: Awaited<ReturnType<typeof f.executor.execute>> | undefined;
-        const running = f.executor.execute('launch_profiles.delete', { id: 'existing', expectedRevision: 4 }, f.context)
+        const running = f.executor.execute('launch_profiles.delete', { id: 'existing', expectedRevision: 4 }, {
+            ...f.context, presentUserConfirmation: { actionId: 'launch_profiles.delete' },
+        })
             .then(result => { settled = result; });
         try {
             await vi.waitFor(() => expect(f.settingsAfterWrite.readStarted).toBe(true));
@@ -431,7 +447,9 @@ describe('UI Profile Action front door', () => {
             profile: { ...definition.profile, name: 'Earlier save' } }, f.context);
         try {
             await vi.waitFor(() => expect(f.delayedProfileReceipt.committed).toBe(true));
-            const deleted = await f.executor.execute('launch_profiles.delete', { id: 'editable', expectedRevision: 5 }, f.context);
+            const deleted = await f.executor.execute('launch_profiles.delete', { id: 'editable', expectedRevision: 5 }, {
+                ...f.context, presentUserConfirmation: { actionId: 'launch_profiles.delete' },
+            });
             expect(deleted).toMatchObject({ ok: true, result: { status: 'updated', revision: 6 } });
             // Hold only the reread following the delayed receipt. The deletion is already committed and acknowledged.
             f.catalogAfterWrite.pending = true;
@@ -498,7 +516,9 @@ describe('UI Profile Action front door', () => {
         const revision = operation === 'create' ? 1 : 5;
         const running = f.executor.execute(operation === 'delete' ? 'launch_profiles.delete' : 'launch_profiles.save', operation !== 'delete'
             ? { id, profile: { ...profile.profile, id, name: 'Saved draft' }, expectedRevision: operation === 'create' ? 'absent' : 4 }
-            : { id: 'editable', expectedRevision: 4 }, f.context).then(result => { settled = result; });
+            : { id: 'editable', expectedRevision: 4 }, { ...f.context,
+                ...(operation === 'delete' ? { presentUserConfirmation: { actionId: 'launch_profiles.delete' as const } } : {}),
+            }).then(result => { settled = result; });
         try {
             await vi.waitFor(() => expect(f.catalogAfterWrite.readStarted).toBe(true));
             await vi.waitFor(() => expect(settled).toMatchObject({ ok: true, result: { status: 'updated', revision } }));
@@ -579,6 +599,86 @@ describe('UI Profile Action front door', () => {
         await hook.unmount();
     });
 
+    it('saves the Skills a Profile adds through the mounted editor save, keeps them when the library later lacks one, and removes them', async () => {
+        const f = await fixture();
+        f.setProfile();
+        await f.mountHome();
+        const header = PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2', title: 'lint', bundleSchemaId: 'skills.skill_md_v1' });
+        const body = PromptBundleBodyV1Schema.parse({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+            contentBase64: encodeBase64(new TextEncoder().encode('---\nname: lint\n---\nRun the linter.')) }] });
+        f.artifacts().set('lint-skill', { id: 'lint-skill', header: encodePlainArtifactStoredContent(header),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(body) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } as Artifact);
+        const hook = await renderHook(() => ({ save: useSaveLaunchProfile(), collection: useProfilesCollection() }));
+        const profile = hook.getCurrent().collection.resolveProfile('editable');
+        if (!profile) throw new Error('Fixture Profile unavailable');
+        let saved: Awaited<ReturnType<ReturnType<typeof useSaveLaunchProfile>>> = null;
+        await act(async () => { saved = await hook.getCurrent().save({ ...profile, skillSeeds: ['lint-skill'] }); });
+        expect(f.profileRows()[0]).toMatchObject({ revision: 5, content: { t: 'plain', v: { skillSeeds: ['lint-skill'] } } });
+        // An unrelated edit does not send the seeds, so a skill that has since left the library cannot block it.
+        f.artifacts().delete('lint-skill');
+        const renamed = { ...hook.getCurrent().collection.resolveProfile('editable')!, name: 'Renamed' };
+        expect(renamed.skillSeeds).toEqual(['lint-skill']);
+        await act(async () => { saved = await hook.getCurrent().save(renamed); });
+        expect(saved).not.toBeNull();
+        expect(f.profileRows()[0]?.content).toMatchObject({ t: 'plain', v: { skillSeeds: ['lint-skill'], definition: { profile: { name: 'Renamed' } } } });
+        await act(async () => { saved = await hook.getCurrent().save({ ...hook.getCurrent().collection.resolveProfile('editable')!, skillSeeds: [] }); });
+        expect(f.profileRows()[0]?.content).toMatchObject({ t: 'plain', v: { skillSeeds: [] } });
+        await hook.unmount();
+    });
+
+    it('returns a direct Profile tombstone receipt after the present-user confirm while Agent delete still asks', async () => {
+        const f = await fixture();
+        f.setProfile();
+        f.enableApprovalTransport();
+        await f.mountHome();
+        const controller = new AbortController();
+        const agent = f.executor.execute('launch_profiles.delete', { id: 'editable', expectedRevision: 4 }, {
+            ...f.context, surface: 'agent', authority: 'account_automation',
+            defaultSessionId: 'agent-session', defaultSessionMachineId: 'agent-machine', actionRequestId: 'agent-delete-profile',
+            presentUserConfirmation: { actionId: 'launch_profiles.delete' }, signal: controller.signal,
+        });
+        try {
+            await vi.waitFor(() => expect(f.approvalArtifacts.list()).toHaveLength(1));
+            const artifact = f.approvalArtifacts.list()[0]!;
+            expect(StoredApprovalRequestSchema.parse(JSON.parse(f.approvalArtifacts.readPlainBody(artifact.id)!)))
+                .toMatchObject({ status: 'open', actionId: 'launch_profiles.delete', requestedSurface: 'agent' });
+            expect(f.profileMutations).toEqual([]);
+        } finally { controller.abort(); await agent; }
+        const confirm = vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
+        const hook = await renderHook(useDeleteAiLaunchProfile);
+        let deleting: Promise<unknown> | undefined;
+        try {
+            act(() => { deleting = hook.getCurrent()('editable', 4).catch(error => error); });
+            await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+            await vi.waitFor(() => expect(f.profileMutations).toMatchObject([{ operation: 'remove', id: 'editable' }]));
+            let receipt: unknown;
+            await act(async () => { receipt = await deleting; });
+            expect(PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.delete'].parse(receipt)).toMatchObject({ status: 'updated' });
+            expect(f.approvalArtifacts.list()).toHaveLength(1);
+            expect(f.navigation.push).not.toHaveBeenCalled();
+        } finally { await hook.unmount(); await deleting; confirm.mockRestore(); }
+    });
+
+    it('cancels the present-user Profile confirmation without an error, approval or tombstone', async () => {
+        const f = await fixture();
+        f.setProfile();
+        f.enableApprovalTransport();
+        await f.mountHome();
+        const confirm = vi.spyOn(Modal, 'confirm').mockResolvedValue(false);
+        const alert = vi.spyOn(Modal, 'alert').mockImplementation(() => {});
+        const hook = await renderHook(useProfilesCollection);
+        try {
+            let removed = true;
+            await act(async () => { removed = await hook.getCurrent().requestDelete({ id: 'editable', name: 'Editable' }); });
+            expect(removed).toBe(false);
+            expect(confirm).toHaveBeenCalledTimes(1);
+            expect(f.profileMutations).toEqual([]);
+            expect(f.approvalArtifacts.list()).toHaveLength(0);
+            expect(alert).not.toHaveBeenCalled();
+        } finally { await hook.unmount(); confirm.mockRestore(); alert.mockRestore(); }
+    });
+
     it('rejects mounted delete approval without deleting the reviewed Profile', async () => {
         const f = await fixture();
         f.setProfile();
@@ -588,6 +688,7 @@ describe('UI Profile Action front door', () => {
         let removing: Promise<unknown> | undefined;
         act(() => { removing = hook.getCurrent()('editable', 4); });
         await vi.waitFor(() => expect(f.approvalArtifacts.list()).toHaveLength(1));
+        expect(f.navigation.push).toHaveBeenCalledWith(expect.stringContaining('/inbox/approvals/'));
         const rejected = expect(removing).rejects.toThrow('approval_rejected');
         await decideApprovalAsInbox(f.context.serverId, f.approvalArtifacts.list()[0]!.id, 'reject');
         await act(async () => { await rejected; });
@@ -612,7 +713,7 @@ describe('UI Profile Action front door', () => {
             : operation === 'favorite.set' ? hook.getCurrent().collection.setFavoriteProfileIds(['neighbor', 'editable'])
             : operation === 'secrets.select' ? hook.getCurrent().bindings({ editable: {} })
             : hook.getCurrent().collection.setEnabled(hook.getCurrent().collection.profiles.find(entry => entry.id === 'editable')!, false);
-        await expect(Promise.resolve().then(invoke)).rejects.toMatchObject({ message: 'action_disabled' });
+        await expect(Promise.resolve().then(async () => { await invoke(); })).rejects.toMatchObject({ message: 'action_disabled' });
         expect(f.profileMutations).toEqual([]);
         expect(f.profileRows()).toEqual(before);
         expect(f.settings()).toEqual(settingsBefore);
@@ -688,7 +789,9 @@ describe('UI Profile Action front door', () => {
         f.setProfile(undefined, 'private');
         f.seedLegacyRememberedProfile('private');
         const neighbor = f.neighboringMemory();
-        const deleted = await f.executor.execute('launch_profiles.delete', { id: 'private', expectedRevision: 4 }, f.context);
+        const deleted = await f.executor.execute('launch_profiles.delete', { id: 'private', expectedRevision: 4 }, {
+            ...f.context, presentUserConfirmation: { actionId: 'launch_profiles.delete' },
+        });
         expect(deleted).toEqual({ ok: true, result: { status: 'updated', id: 'private', revision: 5 } });
         expect(f.profileRows()).toEqual([{ id: 'private', revision: 5, content: null }]);
         // This is the real destination-first importer, invoked after the actual Action ACK.
@@ -704,7 +807,9 @@ describe('UI Profile Action front door', () => {
         f.setProfile(undefined, 'private');
         f.seedLegacyRememberedProfile('private', 'present');
         f.failMemoryWrites();
-        const result = await f.executor.execute('launch_profiles.delete', { id: 'private', expectedRevision: 4 }, f.context);
+        const result = await f.executor.execute('launch_profiles.delete', { id: 'private', expectedRevision: 4 }, {
+            ...f.context, presentUserConfirmation: { actionId: 'launch_profiles.delete' },
+        });
         expect(result).toEqual({ ok: true, result: { status: 'updated', id: 'private', revision: 5,
             authoringMemoryCleanup: { status: 'unavailable', reason: 'authoring_memory_cleanup_failed' } } });
         expect(f.profileRows()).toEqual([{ id: 'private', revision: 5, content: null }]);
@@ -739,9 +844,9 @@ describe('UI Profile Action front door', () => {
         expect(String(envelope.body)).not.toContain('private-prompt');
         expect(String(envelope.body)).not.toContain(formatSharedSavedSecretRefV1('private-key'));
         expect(String(envelope.body)).not.toContain('private-material-not-for-publication');
-        expect(f.profileRows()).toEqual([{ id: 'editable', revision: 5, content: { t: 'plain', v: {
+        expect(f.profileRows()).toEqual([{ id: 'editable', revision: 5, content: { t: 'plain', v: ProfileRecordV1Schema.parse({
             v: 1, id: 'editable', definition: { kind: 'artifact', artifactId: reference.artifactId }, ...attachments,
-        } } }]);
+        }) } }]);
         expect(f.profileMutations).toMatchObject([{ id: 'editable', operation: 'update', expectedRevision: 4 }]);
         await expect(f.executor.execute('launch_profiles.publish', { profileId: 'editable' }, f.context))
             .resolves.toEqual({ ok: true, result: reference });

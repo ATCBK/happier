@@ -137,8 +137,7 @@ export function createMachineConnectionActionDeps(options: Readonly<{ runner?: S
             } finally { if (!lifecycleOwnsAccount) account.dispose(); }
         },
         machineTerminalAction: async ({ actionId, input, context, signal }) => {
-            if ((actionId === 'machines.terminal.open' || actionId === 'machines.terminal.restart')
-                && options.account && !context.externalActionCredential && !context.externalActionExecutionAuthorization
+            if (options.account && !context.externalActionCredential && !context.externalActionExecutionAuthorization
                 && !context.rpcSessionAuthorization && (!context.actionCaller || context.actionCaller.kind === 'host')) {
                 const account = options.account;
                 const request = MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS[actionId].parse(input);
@@ -148,11 +147,13 @@ export function createMachineConnectionActionDeps(options: Readonly<{ runner?: S
                     return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
                 }
                 const requestId = context.actionRequestId;
-                const execution = await trackPendingMachineTerminalCreation(request.machineId, request.terminalKey,
-                    () => executeOriginalAccountMachineAction({ account, actionId,
+                const run = () => executeOriginalAccountMachineAction({ account, actionId,
                         input: { ...request, serverId: account.serverId }, machineId: request.machineId,
-                        requestId, foreignTargetOnly: true, ...(signal ? { signal } : {}) }),
-                    { serverId: account.serverId, accountId: account.accountId, signal });
+                        requestId, foreignTargetOnly: true, ...(signal ? { signal } : {}) });
+                const execution = 'terminalKey' in request && typeof request.terminalKey === 'string'
+                    ? await trackPendingMachineTerminalCreation(request.machineId, request.terminalKey, run,
+                        { serverId: account.serverId, accountId: account.accountId, signal })
+                    : await run();
                 account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
                 if (execution) return execution.ok ? execution.result : execution;
             }

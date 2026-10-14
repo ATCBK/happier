@@ -10,6 +10,7 @@ import { filterCommittedTranscriptMessageIdsForPendingState } from '@/sync/domai
 
 import { fetchAndApplyPendingMessagesV2 } from './pendingQueueV2';
 import { buildSession, resetPendingQueueState } from './pendingQueueV2.testHelpers';
+import { getPendingMessageVisualState } from '@/components/sessions/pending/pendingMessageVisualState';
 
 const sessionId = 'snapshot-freshness-session';
 const localId = 'first-message';
@@ -82,6 +83,33 @@ describe('pending snapshot freshness on a newly opened session', () => {
         release();
         await oldRefresh;
         expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+    });
+
+    it.each([2, 3])('honors the received Session revision when the list projection advances to %s during a delivering read', async pendingVersion => {
+        storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain', pendingVersion: 2 } })]);
+        storage.getState().applyServerScopedSessionListRows(scope.serverId, [buildSession({ sessionId,
+            overrides: { encryptionMode: 'plain', pendingVersion: 1 } })], { source: 'ordinary', mode: 'replace' });
+        const encryption = await Encryption.create(new Uint8Array(32).fill(6));
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        let started!: () => void;
+        const requestStarted = new Promise<void>(resolve => { started = resolve; });
+        const refresh = fetchAndApplyPendingMessagesV2({ sessionId, encryption, outboxScope: scope,
+            isOutboxScopeCurrent: () => true,
+            request: async () => { started(); await gate; return deliveringResponse(); } });
+        await requestStarted;
+        storage.getState().applyServerScopedSessionListRowPatches(scope.serverId, [{ sessionId,
+            patch: { pendingVersion, pendingCount: 1 } }]);
+        release();
+        await refresh;
+        if (pendingVersion > 2) {
+            expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+            return;
+        }
+        const message = storage.getState().sessionPending[sessionId]?.messages[0];
+        expect(message).toMatchObject({ localId, pendingDeliveryStatus: 'server_delivering' });
+        if (!message) throw new Error('Expected the current provider-delivery projection');
+        expect(getPendingMessageVisualState(message)).toMatchObject({ kind: 'delivering', deliveryMutationPolicy: 'effect_possible' });
     });
 
     it('starts a readable refresh when session encryption becomes available during an older read', async () => {

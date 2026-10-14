@@ -2,11 +2,11 @@ import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDi
 import { buildMachineDisplayRenderableFromMachine } from '@/sync/domains/machines/machineDisplayRenderable';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { normalizeNonEmptyString } from '@/utils/strings/normalizeNonEmptyString';
 
 import { buildMachineDisplayCacheEntriesFromRenderables } from './machineDisplayWarmCacheAdapters';
 import {
     peekMachineDisplayWarmCacheEntries,
-    resolveWarmCacheAccountScope,
     scheduleMachineDisplayWarmCacheEntriesSave,
 } from './warmCachePersistence';
 
@@ -16,7 +16,7 @@ export function scheduleMachineDisplayWarmCacheSave(params: Readonly<{
     machineDisplays: Record<string, MachineDisplayRenderable>;
 }>): void {
     const serverId = resolveServerProfileScopeIdForIdentifier(params.serverId);
-    const accountId = resolveWarmCacheAccountScope(params.accountId);
+    const accountId = normalizeNonEmptyString(params.accountId);
     if (!serverId || !accountId) return;
     // Saved entries are presentation-only and never become execution routing authority.
     const previousEntries = peekMachineDisplayWarmCacheEntries(serverId, accountId) ?? undefined;

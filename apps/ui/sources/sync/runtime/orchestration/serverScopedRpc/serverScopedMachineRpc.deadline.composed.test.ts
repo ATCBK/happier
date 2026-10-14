@@ -19,6 +19,8 @@ import { clearMachineRequestReachabilityForTest, clearMachineRequestReachability
     readMachineRequestReachabilityObservation } from '@/sync/domains/machines/reachability/machineReachability';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { machineWorkspaceFileList } from '@/sync/ops/machineWorkspaceFileList';
+import { DaemonWorkspaceFileListRequestSchema, DaemonWorkspaceFileListResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 
 const credentials = vi.hoisted(() => ({ token: '' }));
 
@@ -56,7 +58,7 @@ async function closeHttp(http: HttpServer) {
     await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
 }
 
-async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<void>) {
+async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<void>, accountReadDelayMs = 0) {
     const features = FeaturesResponseSchema.parse({ features: { machines: {
         enabled: true, rpc: { enabled: true, directPeer: { enabled: true } },
     } }, capabilities: {} });
@@ -64,7 +66,9 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
         response.setHeader('content-type', 'application/json');
         if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
         else if (request.url === '/v1/features') response.end(JSON.stringify(features));
-        else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+        else if (request.url === '/v1/account/encryption') {
+            setTimeout(() => response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 })), accountReadDelayMs);
+        }
         else if (request.url === '/v1/machines/machine-1') {
             response.end(JSON.stringify({ machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }));
         } else if (request.url === '/v1/machines/peer/mediation/route-grants') {
@@ -87,13 +91,16 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
     relay.on('connection', socket => {
         socket.on(SOCKET_RPC_EVENTS.CALL, async (packet: SocketRpcRequestPayload, ack: (response: unknown) => void) => {
             calls.push(packet);
-            if (packet.method !== `machine-1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`) {
+            const fileList = packet.method === `machine-1:${RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST}`;
+            if (!fileList && packet.method !== `machine-1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`) {
                 ack({ ok: false, error: 'RPC method not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
                 return;
             }
             const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, packet.params, packet.method);
             await relayReply;
-            ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, {
+            ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, fileList ? {
+                ok: true, paths: ['tmp/fsp-find-review/target.txt'], truncated: true,
+            } : {
                 route: 'relay', params: decoded.params,
             }, decoded.callId) });
         });
@@ -106,6 +113,9 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
     const machine = createMachineFixture({ daemonState: { peerMediation: { loopback: { endpoint } } } });
     getStorage().setState({ machineListByServerId: { [home.id]: [machine] } });
     return { calls, scope: { serverId: home.id, accountId: 'account-a' },
+        fileList: (timeoutMs: number) => machineWorkspaceFileList(machine.id, { rootPath: '/', query: 'fsp-find-review' }, {
+            serverId: home.id, accountId: 'account-a', timeoutMs,
+        }),
         call: (options: { timeoutMs?: number; signal?: AbortSignal } = {}) => machineRpcWithServerScope({
             serverId: home.id, accountId: 'account-a', machineId: machine.id,
             method: RPC_METHODS.DAEMON_MEMORY_STATUS, payload: { includeWorkers: true }, preferScoped: true,
@@ -115,6 +125,28 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
             await new Promise<void>(resolve => relay.close(() => resolve()));
         } };
 }
+
+it('transfers the remaining filename budget after setup and preserves a partial reply after domain expiry', async () => {
+    const relayReply = createDeferred<void>();
+    const home = await createDirectRelayHome(1, relayReply.promise, 100);
+    const release = setTimeout(() => relayReply.resolve(), 1_100);
+    try {
+        expect(DaemonWorkspaceFileListResponseSchema.parse(await home.fileList(1_000))).toEqual({
+            ok: true, paths: ['tmp/fsp-find-review/target.txt'], truncated: true,
+        });
+        expect(home.calls).toHaveLength(1);
+        expect(home.calls[0]?.timeoutMs).toBeNull();
+        const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, home.calls[0]!.params, home.calls[0]!.method);
+        const deliveredBudget = DaemonWorkspaceFileListRequestSchema.parse(decoded.params).budgetMs;
+        expect(deliveredBudget).toBeGreaterThan(0);
+        expect(deliveredBudget).toBeLessThanOrEqual(900);
+        expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1')?.outcome).toBe('succeeded');
+    } finally {
+        clearTimeout(release);
+        relayReply.resolve();
+        await home.close();
+    }
+});
 
 it('relays an unreachable direct endpoint, skips it after relay success, and retries it after the exact reconnect', async () => {
     const reservation = createServer();
@@ -282,6 +314,7 @@ it('spends the caller deadline through the real Home HTTP and Socket.IO transpor
         expect(error).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT', timeoutMs: deadlineMs });
         expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
         expect(calls).toBe(1);
+        expect(readMachineRequestReachabilityObservation({ serverId: home.id, accountId: 'account-a' }, 'machine-1')).toBeNull();
     } finally {
         await serverScopedRpcSocketPool.stopAll();
         await new Promise<void>(resolve => { server.close(() => resolve()); });

@@ -49,7 +49,14 @@ describe('guardedMachineRpc', () => {
 
     it('recognizes guarded methods', () => {
         expect(isGuardedMachineRpcMethod(RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT)).toBe(true);
-        expect(isGuardedMachineRpcMethod(RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_INIT)).toBe(true);
+        for (const method of [
+            'daemon.promptRegistry.download.init',
+            'daemon.promptRegistry.download.chunk',
+            'daemon.promptRegistry.download.finalize',
+            'daemon.promptRegistry.download.abort',
+        ]) {
+            expect(isGuardedMachineRpcMethod(method)).toBe(true);
+        }
         expect(isGuardedMachineRpcMethod(RPC_METHODS.DAEMON_DIRECT_TRANSFER_IMPORT_PREPARE)).toBe(true);
         expect(isGuardedMachineRpcMethod(RPC_METHODS.DAEMON_DIRECT_TRANSFER_IMPORT_ABORT)).toBe(true);
         expect(isGuardedMachineRpcMethod(RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE)).toBe(true);

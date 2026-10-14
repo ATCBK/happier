@@ -314,7 +314,7 @@ function createServerRequest(
     entry: ManagedConcurrentServer,
     observeResponse: (response: Response) => void,
     signal: AbortSignal,
-): (path: string, init: RequestInit) => Promise<Response> {
+): (path: string, init?: RequestInit) => Promise<Response> {
     const request = createServerFetchAtEndpoint({
         endpointUrl: entry.serverUrl,
         ...(entry.irohLease ? { runtimeOrigin: entry.irohLease.runtimeOrigin } : {}),
@@ -323,7 +323,7 @@ function createServerRequest(
         serverId: entry.id,
         signal,
     });
-    return async (path: string, init: RequestInit) => {
+    return async (path: string, init?: RequestInit) => {
         const requestPath = String(path ?? '').startsWith('/') ? String(path) : `/${String(path ?? '')}`;
         const response = await request(requestPath, init);
         observeResponse(response);
@@ -340,7 +340,7 @@ export function resolveConcurrentTargets(params: Readonly<{
         serverIdentityId?: string | null;
         legacyServerIds?: readonly string[];
         homeConnectionDescriptor?: HomeConnectionDescriptorV1;
-        canonicalServerUrl?: string | null;
+        canonicalServerUrl?: string;
     }>>;
     settings: ConcurrentSelectionSettings;
 }>): ConcurrentTarget[] {
@@ -752,7 +752,10 @@ async function refreshServerSnapshot(
         });
         if (!shouldContinue()) return;
         const previousMachines = storage.getState().machineListByServerId[entry.id] ?? null;
-        storage.getState().applyMachines(machines, true, { sourceServerId: entry.id });
+        storage.getState().applyMachines(machines, true, {
+            sourceServerId: entry.id,
+            sourceAccountId: readCredentialAccountId(entry.credentials),
+        });
         const ownedMachines = storage.getState().machineListByServerId[entry.id] ?? null;
         updateConcurrentMachineListCache({
             serverId: entry.id,
