@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { ApprovalRequestV2Schema, approvalArtifactBodyMatchesHeaderV1, type ApprovalRequest, type ApprovalRequestV2 } from '@happier-dev/protocol';
-import type { MachineStorageTrashMoveInputV1, PileApplyResultV1, TrashEntryV1 } from '@happier-dev/protocol/storage/storageV1';
+import { MachineStorageDeleteNowInputV1Schema, MachineStorageTrashMoveInputV1Schema, type PileApplyResultV1, type TrashEntryV1 } from '@happier-dev/protocol/storage/storageV1';
 
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { writeApprovalRequestArtifact } from '@/sync/ops/actions/approvalArtifactWriter';
@@ -12,6 +12,7 @@ import { fetchMachineGuardActivityViaAction, fetchMachineGuardViewViaAction } fr
 import type { StoragePileBar } from '@/components/machines/storage/storagePileModel';
 import {
   checkMachineStorageItemsViaAction,
+  deleteMachineStorageNowViaAction,
   fetchMachineStorageCategoryViaAction,
   emptyMachineStorageTrashViaAction,
   moveMachineStorageToTrashViaAction,
@@ -151,7 +152,7 @@ async function checkStorage(
       loses: item.loses ?? [],
       changed:
         item.expect !== claim.operand.expect ||
-        item.verdict !== claim.claimedVerdict,
+        (model.storageMode !== 'delete' && item.verdict !== claim.claimedVerdict),
     });
   }
   for (const staying of result.value.staying) {
@@ -317,7 +318,7 @@ export function useResourceProposalCheck(
   const receiptResults = React.useMemo(() => [
     ...(localRun?.kind === 'trashed' ? [localRun.result] : pileResult ? [pileResult] : []),
     ...retryReceipts.map(receipt => receipt.result),
-  ], [localRun, pileResult, retryReceipts]);
+  ].filter(result => result.mode === 'trash'), [localRun, pileResult, retryReceipts]);
   const [trashReceipts, setTrashReceipts] = React.useState<ReadonlyMap<string, ResourceProposalTrashReceipt>>(() => new Map());
   React.useEffect(() => {
     if (!model || receiptResults.length === 0) return;
@@ -398,9 +399,14 @@ export function useResourceProposalCheck(
             })));
             // A changed item keeps its tick only while it is still something the person can approve.
             setSelection(
-              (current) =>
-                new Set(
-                  [...current].filter((key) => {
+              (current) => {
+                // Permanent requests carry no claimed verdict. Only the first current check
+                // establishes Safe defaults; explicit rechecks preserve the person's choices.
+                const selected = model.storageMode === 'delete' && !acknowledged
+                  ? model.items.filter(item => facts.get(item.key)?.verdict === 'safe').map(item => item.key)
+                  : [...current];
+                return new Set(
+                  selected.filter((key) => {
                     const fact = facts.get(key);
                     return (
                       !fact ||
@@ -409,7 +415,8 @@ export function useResourceProposalCheck(
                         fact.verdict !== 'check')
                     );
                   }),
-                ),
+                );
+              },
             );
           }
         },
@@ -423,9 +430,11 @@ export function useResourceProposalCheck(
 
   React.useEffect(() => {
     if (!isOpen) return;
+    setSelection(model ? initialResourceProposalSelection(model) : new Set());
+    setConfirmedKeep(new Set());
     runCheck(false);
     return () => runRef.current?.abort();
-  }, [isOpen, runCheck]);
+  }, [isOpen, model, runCheck]);
 
   const rows = React.useMemo(
     () =>
@@ -481,7 +490,10 @@ export function useResourceProposalCheck(
   if (!approval || !model) return null;
   const settledDeclined = approval.status === 'rejected' || approval.status === 'canceled';
   let display: ResourceProposalDisplay;
-  if (localRun?.kind === 'trashed') display = { kind: 'trashed', result: localRun.result };
+  if (localRun?.kind === 'trashed') display = localRun.result.mode === 'delete'
+    ? { kind: 'emptied', count: localRun.result.outcomes.filter(outcome => outcome.status === 'deleted').length,
+      freedBytes: localRun.result.freedBytes, result: localRun.result }
+    : { kind: 'trashed', result: localRun.result };
   else if (localRun?.kind === 'stopped') display = { kind: 'stopped', result: localRun.result };
   // Reopen (AGW-8): the declined request stays rejected; the person reviews it again and runs it here.
   else if (reopened && settledDeclined) display = { kind: 'ask', stale: false, checking: check.kind === 'checking' };
@@ -541,7 +553,7 @@ export function useResourceProposalCheck(
       // A retried item reports beside the original receipt; the receipt's totals stay the real ones.
       setRetried((current) => new Map([...current, ...readRetriedOutcomes(outcome, keys)]));
       // Its own receipt, from that retry's settled result (its own Trash batch, Undo and Empty now).
-      if (outcome.kind === 'trashed') setRetryReceipts((current) => [...current, { result: outcome.result }]);
+      if (outcome.kind === 'trashed' && outcome.result.mode === 'trash') setRetryReceipts((current) => [...current, { result: outcome.result }]);
       return true;
     }
     setLocalRun(outcome);
@@ -614,11 +626,13 @@ async function runResourceProposalFromUi(
     if (!serverId) return null;
     const account = await captureLazyActionAccountContext(serverId);
     try {
-      const result = await moveMachineStorageToTrashViaAction({
-        ...(input as MachineStorageTrashMoveInputV1), serverId: account.serverId, expectedAccountId: account.accountId,
-      });
+      const result = model.storageMode === 'delete'
+        ? await deleteMachineStorageNowViaAction({ ...MachineStorageDeleteNowInputV1Schema.parse(input),
+          serverId: account.serverId, expectedAccountId: account.accountId })
+        : await moveMachineStorageToTrashViaAction({ ...MachineStorageTrashMoveInputV1Schema.parse(input),
+          serverId: account.serverId, expectedAccountId: account.accountId });
       if (!result.ok) return null;
-      if (retryReceipt) {
+      if (retryReceipt && result.value.mode === 'trash') {
         try {
           const full = await account.fetchArtifact(retryReceipt.artifactId);
           const stored = full?.header && typeof full.body === 'string'
@@ -647,7 +661,7 @@ async function runResourceProposalFromUi(
   const account = await captureLazyActionAccountContext(serverId);
   try {
     const actionId = model.actionId;
-    if (actionId === 'machines.storage.trash.move') return null;
+    if (actionId === 'machines.storage.trash.move' || actionId === 'machines.storage.deleteNow') return null;
     const parsedInput = MACHINE_PROCESSES_ACTION_INPUT_SCHEMAS[actionId].safeParse({ ...input, serverId });
     if (!parsedInput.success) return null;
     const outcome = await executeMachineProcessesActionV1(actionId, parsedInput.data, { serverId, expectedAccountId: account.accountId });

@@ -384,6 +384,7 @@ const ProposalVolume = React.memo(function ProposalVolume(
     paths: readonly string[];
     selectedBytes: number;
     compact: boolean;
+    permanent: boolean;
   }>,
 ) {
   const storage = useMachineStorageSummary({
@@ -416,7 +417,7 @@ const ProposalVolume = React.memo(function ProposalVolume(
     <StorageVolumeRow
       volume={{ ...volume, pileBytes: props.selectedBytes }}
       compact={props.compact}
-      after="trashEmpties"
+      after={props.permanent ? 'cleanup' : 'trashEmpties'}
     />
   );
 });
@@ -476,7 +477,9 @@ function pileNote(controller: ResourceProposalController): string | null {
   if (display.kind === 'ask') {
     if (model.kind === 'processes') return t(model.actionId === 'machines.processes.kill'
       ? 'machineProcesses.kill.treeBody' : 'resourceProposal.note.processes');
-    return model.emptyAfter
+    return model.storageMode === 'delete'
+      ? t('machineStorage.review.whereDeleteNote')
+      : model.emptyAfter
       ? t('resourceProposal.note.emptyAfter')
       : t('resourceProposal.note.trash');
   }
@@ -714,6 +717,7 @@ export const ResourceProposalBody = React.memo(function ResourceProposalBody(
           paths={model.items.map((item) => item.path)}
           selectedBytes={controller.selectedBytes}
           compact={compact}
+          permanent={model.storageMode === 'delete'}
         />
       ) : null}
       {display.kind === 'stopped' ? (

@@ -271,7 +271,7 @@ export type ResourceProposalDisplay =
   | Readonly<{ kind: 'ask'; stale: boolean; checking: boolean }>
   | Readonly<{ kind: 'executing'; count: number; bytes: number }>
   | Readonly<{ kind: 'trashed'; result: PileApplyResultV1; receipt?: ResourceProposalTrashReceipt }>
-  | Readonly<{ kind: 'emptied'; count: number; freedBytes: number }>
+  | Readonly<{ kind: 'emptied'; count: number; freedBytes: number; result?: PileApplyResultV1 }>
   | Readonly<{ kind: 'stopped'; result: MachineProcessesActionResultV1 }>
   | Readonly<{ kind: 'declined' }>
   /** Undo put every moved item back; nothing was removed. */
@@ -416,7 +416,8 @@ export function deriveResourceProposalDisplay(
           (outcome) =>
             outcome.status === 'deleted' || outcome.status === 'moved',
         ).length;
-        return { kind: 'emptied', count: acted, freedBytes: result.freedBytes };
+        return { kind: 'emptied', count: acted, freedBytes: result.freedBytes,
+          ...(result.mode === 'delete' ? { result } : {}) };
       }
       return { kind: 'trashed', result };
     }
@@ -459,9 +460,10 @@ export function resolveResourceProposalOutcomes(
   display: ResourceProposalDisplay,
   approvedKeys: ReadonlySet<string>,
 ): ReadonlyMap<string, ResourceProposalOutcome> | null {
-  if (display.kind === 'trashed') {
+  const storageResult = display.kind === 'trashed' || display.kind === 'emptied' ? display.result : null;
+  if (storageResult) {
     return new Map(
-      display.result.outcomes.map((outcome) => [
+      storageResult.outcomes.map((outcome) => [
         outcome.itemId,
         {
           status:
