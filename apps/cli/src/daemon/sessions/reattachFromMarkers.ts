@@ -579,7 +579,27 @@ export type OrphanedDeadDaemonSession = Readonly<{
   processCommandHash?: string;
   processStartTimeMs?: number;
   recoveredLiveSession?: boolean;
+  requesterWorkAttributionV1?: DaemonSessionMarker['requesterWorkAttributionV1'];
 }>;
+
+function projectOrphanedDeadDaemonSession(marker: DaemonSessionMarker): OrphanedDeadDaemonSession {
+  return { sessionId: normalizeSessionId(marker.happySessionId), pid: marker.pid,
+    ...(marker.activeTurnId ? { activeTurnId: marker.activeTurnId } : {}),
+    ...(marker.processCommandHash ? { processCommandHash: marker.processCommandHash } : {}),
+    ...(marker.processStartTimeMs !== undefined ? { processStartTimeMs: marker.processStartTimeMs } : {}),
+    ...(marker.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: marker.requesterWorkAttributionV1 } : {}) };
+}
+
+/** Reconnect consumes the same dead plain-runner evidence as cold startup. */
+export async function readOrphanedDeadPlainRunnerMarkers(): Promise<readonly OrphanedDeadDaemonSession[]> {
+  const orphans: OrphanedDeadDaemonSession[] = [];
+  for (const marker of await listSessionMarkers({ requireComplete: true })) {
+    if (marker.startedBy !== 'daemon' || !normalizeSessionId(marker.happySessionId) || isPidPresent(marker.pid)) continue;
+    const attachment = await readTerminalHostAttachmentState({ happyHomeDir: marker.happyHomeDir, sessionId: marker.happySessionId });
+    if (attachment.status === 'absent') orphans.push(projectOrphanedDeadDaemonSession(marker));
+  }
+  return orphans;
+}
 
 export type ReattachTrackedSessionsFromMarkersResult = Readonly<{
   inventoryReliable: boolean;
@@ -685,17 +705,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
           continue;
         }
         if (marker.startedBy === 'daemon' && sessionId) {
-          orphanedDeadDaemonSessions.push({
-            sessionId,
-            pid: marker.pid,
-            ...(marker.activeTurnId ? { activeTurnId: marker.activeTurnId } : {}),
-            ...(marker.processCommandHash
-              ? { processCommandHash: marker.processCommandHash }
-              : {}),
-            ...(marker.processStartTimeMs !== undefined
-              ? { processStartTimeMs: marker.processStartTimeMs }
-              : {}),
-          });
+          orphanedDeadDaemonSessions.push(projectOrphanedDeadDaemonSession(marker));
           continue;
         }
         await removeSessionMarker(marker.pid);

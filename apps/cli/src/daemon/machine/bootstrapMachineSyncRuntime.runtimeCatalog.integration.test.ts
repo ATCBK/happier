@@ -78,6 +78,9 @@ import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotFor
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createDirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
 import { reserveEphemeralPort } from '@/testkit/http/portUtils';
+import { withConfiguredDaemonTestHome } from '../testkit/fakeDaemonLifecycle.testkit';
+import { readSessionMarkerForPid, writeSessionMarker } from '../sessionRegistry';
+import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
 
 type ConnectedApiMachineForBootstrap = NonNullable<Awaited<ReturnType<BootstrapMachineSyncRuntimeParams['createConnectedApiMachine']>>>;
 
@@ -2556,6 +2559,26 @@ describe('bootstrapMachineSyncRuntime', () => {
     });
 
     it('publishes CLI update facts and settles startup orphans only on connect, retrying retained evidence on reconnect or resume', async () => {
+        await withConfiguredDaemonTestHome({ prefix: 'bootstrap-orphan-reconnect-' }, async ({ homeDir }) => {
+        const app = fastify();
+        const pid = 999_312_859;
+        const processStartTimeMs = 123;
+        let controlRetired = false;
+        app.get('/v2/sessions', async () => ({ sessions: [], nextCursor: null, hasNext: false }));
+        app.get('/v2/sessions/startup-orphan', async () => ({ session: createSessionRecordFixture({ id: 'startup-orphan',
+            encryptionMode: 'plain', metadataLayoutVersion: 0, metadataVersion: 1,
+            metadata: JSON.stringify({ path: homeDir, hostPid: pid, hostProcessStartTimeMs: processStartTimeMs }) }) }));
+        app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+        app.patch('/v2/sessions/startup-orphan', async request => {
+            const mutation = SessionMetadataTuplePatchV1Schema.parse(request.body);
+            expect(mutation).toMatchObject({ mode: 'owner_migration', target: { ownerMetadata: { t: 'plain', v: {
+                runtime: { terminal: { mode: 'plain', controlServiceabilityV1: { retired: true } } } } } } });
+            controlRetired = true;
+            return { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 2 }, agentState: { version: 0 } };
+        });
+        const restoreHttp = installAxiosFastifyAdapter({ app, origin: new URL(resolveServerHttpBaseUrl()).origin });
+        try {
         const connectOptionsRef: { current: { onConnect?: () => Promise<void> | void } | null } = { current: null };
         let publicationQuiescing = false;
         let orphanSessionActive = true;
@@ -2620,6 +2643,7 @@ describe('bootstrapMachineSyncRuntime', () => {
 
         const result = await bootstrapMachineSyncRuntime({
             cliVersion: '0.3.1',
+            credentials: { token: 'fixture', encryption: null },
             machineId: machine.id,
             machine,
             preferredHost: 'host.local',
@@ -2634,7 +2658,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             takeoverRequested: false,
             isShuttingDown: () => false,
             isPublicationQuiescing: () => publicationQuiescing,
-            orphanedDeadDaemonSessions: [{ sessionId: 'startup-orphan', pid: 999_312_859 }],
+            orphanedDeadDaemonSessions: [],
             createConnectedApiMachine: vi.fn(() => connectedApiMachine),
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
@@ -2654,15 +2678,21 @@ describe('bootstrapMachineSyncRuntime', () => {
         });
         const onConnect = connectOptionsRef.current?.onConnect;
         if (!onConnect) throw new Error('expected machine connect options');
+        // This obligation appears after bootstrap; reconnect must discover the
+        // canonical marker rather than relying on the initial in-memory list.
+        await writeSessionMarker({ pid, happySessionId: 'startup-orphan', startedBy: 'daemon', processStartTimeMs });
         expect(captureMachineSessionTerminal).not.toHaveBeenCalled();
         await onConnect();
         expect(orphanSessionActive).toBe(true);
+        expect(await readSessionMarkerForPid(pid)).not.toBeNull();
         publicationQuiescing = true;
         await result.resumeMachineConnectionPublications();
         expect(captureMachineSessionTerminal).toHaveBeenCalledTimes(1);
         publicationQuiescing = false;
         await result.resumeMachineConnectionPublications();
         expect(orphanSessionActive).toBe(false);
+        expect(controlRetired).toBe(true);
+        expect(await readSessionMarkerForPid(pid)).toBeNull();
         expect(finalizeMachineSessionTerminal).toHaveBeenCalledWith({
             sessionId: 'startup-orphan', authority: { kind: 'generation', publisherGeneration: '1' },
         });
@@ -2683,5 +2713,7 @@ describe('bootstrapMachineSyncRuntime', () => {
 
         result.machineConnectionStateCleanup?.();
         expect(stopWatching).toHaveBeenCalledTimes(1);
+        } finally { restoreHttp(); await app.close(); }
+        });
     });
 });

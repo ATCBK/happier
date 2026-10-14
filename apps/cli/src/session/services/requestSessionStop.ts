@@ -1,7 +1,7 @@
 import type { StoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
 import { stopDaemonSession } from '@/daemon/controlClient';
-import { listSessionMarkers, removeSessionMarker } from '@/daemon/sessionRegistry';
+import { listSessionMarkers, removeSessionMarkerIfOwned } from '@/daemon/sessionRegistry';
 import { createStopSession } from '@/daemon/sessions/stopSession';
 import { SessionStopCleanupIncompleteReasonSchema, SessionStopOutcomeSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { StopSessionResultSchema } from '@happier-dev/protocol/sessionStop';
@@ -260,7 +260,9 @@ async function cleanupStoppedSessionMarkersBestEffort(sessionId: string): Promis
   await Promise.all(
     markers
       .filter((marker) => marker.happySessionId === sessionId)
-      .map((marker) => removeSessionMarker(marker.pid).catch(() => undefined)),
+      .map((marker) => removeSessionMarkerIfOwned({ pid: marker.pid, happySessionId: marker.happySessionId,
+        processStartTimeMs: marker.processStartTimeMs, processCommandHash: marker.processCommandHash,
+        startedBy: 'terminal' }).catch(() => undefined)),
   );
 }
 

@@ -23,6 +23,7 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
   };
   orphanedDeadDaemonSessions: ReadonlyArray<OrphanedDeadDaemonSession>;
   isSessionAlreadyRunning?: (sessionId: string) => Promise<boolean>;
+  retireTerminalControlServiceability?: (marker: OrphanedDeadDaemonSession) => Promise<void>;
   isShuttingDown?: () => boolean;
   now?: () => number;
   removeSessionMarkerFn?: typeof removeSessionMarker;
@@ -54,6 +55,13 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
       });
     }
     return true;
+  };
+  const retireEvidence = async (evidence: readonly OrphanedDeadDaemonSession[]): Promise<boolean> => {
+    for (const marker of evidence) {
+      if (isShuttingDown()) return false;
+      await params.retireTerminalControlServiceability?.(marker);
+    }
+    return !isShuttingDown();
   };
   const stageEvidence = async (evidence: readonly OrphanedDeadDaemonSession[]): Promise<boolean> => {
     for (const marker of evidence) {
@@ -99,6 +107,7 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
       }
       if (!await stageEvidence(evidence)) return;
       if (captured.status === 'already_inactive') {
+        if (!await retireEvidence(evidence)) return;
         if (await removeEvidence(evidence)) settledSessionIds.add(sessionId);
         return;
       }
@@ -122,6 +131,7 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
         return;
       }
       if (isShuttingDown()) return;
+      if (!await retireEvidence(evidence)) return;
       if (await removeEvidence(evidence)) settledSessionIds.add(sessionId);
     } catch (error) {
       logger.debug('[DAEMON] Startup orphan settlement failed; retaining marker evidence', {

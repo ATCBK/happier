@@ -79,7 +79,7 @@ const DaemonSessionMarkerSchema = z.object({
   // Non-secret byte-retention facts for the exact live runner. Destructive
   // managed-dependency owners revalidate the marker's process identity before
   // consulting these pins; effect authority remains in the private document.
-  runnerAgentSourceCustodyV1: PluginSourceCustodyV1Schema.optional(),
+  runnerAgentSourceCustodyV1: z.optional(PluginSourceCustodyV1Schema),
   runnerManagedDependencyRetentionV1:
     RunnerManagedDependencyRetentionV1Schema.optional(),
   // Required startup identity persisted before runtime open; not proof of application.
@@ -940,7 +940,7 @@ export async function readExactSessionMarkerOwnership(
 
 async function removeSessionMarkerUnlocked(
   pid: number,
-  ownership?: SessionMarkerOwnership & Readonly<{ isStillOwned?: () => boolean }>,
+  ownership?: SessionMarkerOwnership & Readonly<{ isStillOwned?: () => boolean; startedBy?: 'terminal' }>,
 ): Promise<boolean> {
   let removed = false;
   for (const dir of daemonSessionMarkerDirs()) {
@@ -959,6 +959,7 @@ async function removeSessionMarkerUnlocked(
       if (ownership) {
         if (
           marker?.happySessionId !== ownership.happySessionId
+          || (ownership.startedBy !== undefined && marker.startedBy !== ownership.startedBy)
           || (
             ownership.processCommandHash !== undefined
             && marker.processCommandHash !== ownership.processCommandHash
@@ -996,12 +997,14 @@ export async function removeSessionMarkerIfOwned(params: Readonly<{
   processCommandHash?: string;
   processStartTimeMs?: number;
   isStillOwned?: () => boolean;
+  startedBy?: 'terminal';
 }>): Promise<boolean> {
   return await runWithSessionMarkerMutationLock(params.pid, () => removeSessionMarkerUnlocked(params.pid, {
     happySessionId: params.happySessionId,
     processCommandHash: params.processCommandHash,
     processStartTimeMs: params.processStartTimeMs,
     isStillOwned: params.isStillOwned,
+    startedBy: params.startedBy,
   }));
 }
 

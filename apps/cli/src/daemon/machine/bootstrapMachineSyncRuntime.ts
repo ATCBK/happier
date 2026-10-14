@@ -55,7 +55,9 @@ import type { RequesterSessionRuntimeContext, ResolveRequesterSessionRuntimeCont
   RequesterSessionCredentialBinding } from '../sessionEncryption/requesterSessionCredentials';
 import { activateInactiveUsageLimitResume } from '@/daemon/sessions/activateInactiveUsageLimitResume';
 import { publishOrphanedStartupSessionEnds } from '@/daemon/sessions/publishOrphanedStartupSessionEnds';
-import type { OrphanedDeadDaemonSession } from '@/daemon/sessions/reattachFromMarkers';
+import { readOrphanedDeadPlainRunnerMarkers, type OrphanedDeadDaemonSession } from '@/daemon/sessions/reattachFromMarkers';
+import { retireExactTerminalControlServiceability } from '@/daemon/sessions/retireTerminalControlServiceability';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { AutomationWorkerHandle } from '../automation/automationWorker';
 import type { MemoryWorkerHandle } from '../memory/memoryWorker';
 import { subscribeMemorySessionRemoval } from '../memory/subscribeMemorySessionRemoval';
@@ -2053,12 +2055,31 @@ export async function bootstrapMachineSyncRuntime(
         if (params.isShuttingDown()) return;
         // connect() starts the transport asynchronously. Settle dead markers only
         // on this connected edge; retain failures for reconnect or handoff resume.
+        if (params.credentials) {
+          const discovered = await readOrphanedDeadPlainRunnerMarkers();
+          const knownPids = new Set(pendingOrphanedSessions.map(marker => marker.pid));
+          pendingOrphanedSessions = [...pendingOrphanedSessions, ...discovered.filter(marker => !knownPids.has(marker.pid))];
+        }
         if (pendingOrphanedSessions.length > 0) {
           pendingOrphanedSessions = await publishOrphanedStartupSessionEnds({
             apiMachine: connectedApiMachine,
             orphanedDeadDaemonSessions: pendingOrphanedSessions,
             isSessionAlreadyRunning: params.isSessionAlreadyRunning,
             isShuttingDown: params.isPublicationQuiescing ?? params.isShuttingDown,
+            ...(params.credentials ? { retireTerminalControlServiceability: async (marker: OrphanedDeadDaemonSession) => {
+              const context = await params.resolveRequesterSessionRuntimeContext?.(marker.sessionId, marker.requesterWorkAttributionV1);
+              if (params.resolveRequesterSessionRuntimeContext && !context) throw new Error('requester_session_context_unavailable');
+              if (marker.requesterWorkAttributionV1 && !context) throw new Error('requester_session_context_unavailable');
+              try {
+                const publish = () => retireExactTerminalControlServiceability({
+                  credentials: context?.bootstrap.credentials ?? params.credentials!, sessionId: marker.sessionId,
+                  terminalMode: 'plain', expectedRunner: { pid: marker.pid, startTimeMs: marker.processStartTimeMs },
+                  ...(context ? { currentness: { verifyCurrent: () => context.isCurrent() } } : {}) });
+                await (context ? runWithServerHttpBaseUrl(context.bootstrap.serverHttpBaseUrl, publish) : publish());
+              } finally {
+                if (context) await params.releaseRequesterSessionRuntimeContext?.(context);
+              }
+            } } : {}),
           });
           if (params.isShuttingDown()) return;
         }

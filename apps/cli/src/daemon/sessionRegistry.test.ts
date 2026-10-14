@@ -43,6 +43,18 @@ describe('sessionRegistry', () => {
   const originalReleaseChannel = process.env.HAPPIER_RELEASE_CHANNEL;
   let happyHomeDir: string;
 
+  it('keeps daemon retirement evidence when a terminal-only caller cleans stopped markers', async () => {
+    const { writeSessionMarker, removeSessionMarkerIfOwned, listSessionMarkers } = await import('./sessionRegistry');
+    await writeSessionMarker({ pid: 123451, happySessionId: 'stopped-session', startedBy: 'daemon', processStartTimeMs: 123 });
+    await writeSessionMarker({ pid: 123452, happySessionId: 'stopped-session', startedBy: 'terminal', processStartTimeMs: 456 });
+    for (const marker of await listSessionMarkers()) {
+      const ownership = { pid: marker.pid, happySessionId: marker.happySessionId,
+        processStartTimeMs: marker.processStartTimeMs, startedBy: 'terminal' as const };
+      await removeSessionMarkerIfOwned(ownership);
+    }
+    expect(await listSessionMarkers()).toMatchObject([{ pid: 123451, startedBy: 'daemon', happySessionId: 'stopped-session' }]);
+  });
+
   beforeEach(() => {
     happyHomeDir = join(tmpdir(), `happier-cli-session-registry-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     process.env.HAPPIER_HOME_DIR = happyHomeDir;

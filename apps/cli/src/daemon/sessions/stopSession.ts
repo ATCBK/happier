@@ -31,7 +31,7 @@ import {
   type StopSessionIncompleteReason,
   type StopSessionResult,
 } from './stopSessionContract';
-import type { ExactTerminalControlServiceabilityRetirement } from './retireTerminalControlServiceability';
+import type { ExactTerminalControlServiceabilityRetirement, RetainedPlainRunnerRetirement } from './retireTerminalControlServiceability';
 import { resolveTrackedSessionTerminalPresentation } from './resolveTrackedSessionTerminalPresentation';
 
 function mapDispositionFailureReason(
@@ -194,7 +194,7 @@ export function createStopSession(params: Readonly<{
   retireAbsentTerminalControlServiceability?: (input: Readonly<{
     sessionId: string;
     trackedSession: TrackedSession;
-  }>) => Promise<ExactTerminalControlServiceabilityRetirement>;
+  }>) => Promise<RetainedPlainRunnerRetirement>;
   recoverStrandedTerminalControlServiceability?: (input: Readonly<{
     sessionId: string;
     expectedAttachmentId?: string;
@@ -827,7 +827,11 @@ export function createStopSession(params: Readonly<{
       try {
         let retired = false;
         for (const trackedSession of expectedTrackedSessionsByPid.values()) {
-          if (await params.retireAbsentTerminalControlServiceability({ sessionId: normalizedSessionId, trackedSession }) === 'retired') {
+          const retirement = await params.retireAbsentTerminalControlServiceability({ sessionId: normalizedSessionId, trackedSession });
+          if (retirement === 'deferred' && [...pidToTrackedSession.values()].includes(trackedSession)) {
+            return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+          }
+          if (retirement === 'retired' || retirement === 'deferred') {
             retired = true;
             break;
           }

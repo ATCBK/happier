@@ -34,7 +34,8 @@ const {
   persistedMetadata: { current: {} as Record<string, unknown> },
 }));
 
-vi.mock('@/daemon/controlClient', () => ({
+vi.mock('@/daemon/controlClient', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/daemon/controlClient')>(),
   stopDaemonSession: stopDaemonSessionMock,
 }));
 
@@ -42,7 +43,8 @@ vi.mock('@/daemon/pidSafety', () => ({
   isPidSafeHappySessionProcess: isPidSafeHappySessionProcessMock,
 }));
 
-vi.mock('@/daemon/sessionRegistry', () => ({
+vi.mock('@/daemon/sessionRegistry', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/daemon/sessionRegistry')>(),
   listSessionMarkers: listSessionMarkersMock,
   removeSessionMarker: removeSessionMarkerMock,
 }));
@@ -73,7 +75,8 @@ vi.mock('@/integrations/terminal/host/defaultAdapters', () => ({
   })),
 }));
 
-vi.mock('@/session/metadata/updateSessionMetadataWithRetry', () => ({
+vi.mock('@/session/metadata/updateSessionMetadataWithRetry', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/session/metadata/updateSessionMetadataWithRetry')>(),
   updateSessionMetadataWithRetry: updateSessionMetadataWithRetryMock,
 }));
 

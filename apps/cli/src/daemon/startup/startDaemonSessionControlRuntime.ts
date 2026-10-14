@@ -801,7 +801,7 @@ import {
   resolveRunnerTerminalControlServiceabilityEvidence,
 } from './terminalControlServiceabilityProjection';
 import { publishReportedTerminalControlServiceability } from './publishReportedTerminalControlServiceability';
-import { retireExactTerminalControlServiceability, type TerminalControlServiceabilityRetirementTarget } from '../sessions/retireTerminalControlServiceability';
+import { retireExactTerminalControlServiceability, retireStoppedPlainRunnerControlServiceability, type TerminalControlServiceabilityRetirementTarget } from '../sessions/retireTerminalControlServiceability';
 import { executeTerminalHostDisposition } from '@/terminal/attachment/terminalHostDisposition';
 import { recoverStrandedTerminalControlServiceability } from '../sessions/recoverStrandedTerminalControlServiceability';
 import { resolveSharedStateRequiredSwitchContinuity } from '../connectedServices/sessionAuthSwitch/sharedStateContinuity';
@@ -4876,14 +4876,15 @@ export async function startDaemonSessionControlRuntime(
     ownerRemainder,
     pidToTrackedSession: params.pidToTrackedSession,
     retireAbsentTerminalControlServiceability: async ({ sessionId, trackedSession }) =>
-      await retireTerminalControlServiceabilityForCurrentAccount({
+      await retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession,
+        publishRetirement: () => retireTerminalControlServiceabilityForCurrentAccount({
         sessionId,
         terminalMode: 'plain',
         expectedRunner: {
           pid: trackedSession.sessionRunnerPid ?? trackedSession.pid,
           startTimeMs: trackedSession.runnerProcessIdentity?.processStartTimeMs ?? trackedSession.processStartTimeMs,
         },
-      }, trackedSession.requesterWorkAttributionV1 ?? trackedSession.spawnOptions?.requesterWorkAttributionV1),
+      }, trackedSession.requesterWorkAttributionV1 ?? trackedSession.spawnOptions?.requesterWorkAttributionV1) }),
     retireUpstreamAuthorityBeforeProcessStop: async (pid) =>
       await retireUpstreamAuthorityBeforeProcessStop({
         pid,
