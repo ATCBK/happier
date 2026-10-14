@@ -127,7 +127,7 @@ function Host(props: Readonly<{ serverId: string }>) {
     fallbackLabel: 'Choose',
   });
   const client = useProviderActionClient(props.serverId);
-  React.useEffect(() => { void client.describeProviderModels({ machineId: 'machine-a', serverId: props.serverId, agentTargetKey, mode: 'picker' }).catch((e: unknown) => { probe = String((e as Error)?.stack ?? e).slice(0, 800); }); }, [client.ready]);
+  React.useEffect(() => { void client.describeProviderModels({ machineId: 'machine-a', serverId: props.serverId, agentTargetKey, mode: 'picker' }).catch((e: unknown) => { probe = JSON.stringify(e).slice(0, 800); }); }, [client.ready]);
   open = choice.open;
   diag = { loading: choice.loading, error: choice.error, providers: useFeatureEnabled('providers', { scopeKind: 'spawn', serverId: props.serverId }) };
   return null;
