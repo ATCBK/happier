@@ -247,6 +247,17 @@ test('union option callbacks inherit member-object and singleton literal lineage
   assert.match(result.output, /z\.core\.clone\(schema, \{ \.\.\.schema\._zod\.def, catchall: z\.never\(\) \}\)/);
 });
 
+test('a const array of proven Mini object variants retains singleton literal callback fields', () => {
+  const source = `import { z } from 'zod/mini';\nfunction lazyZodSchema<T>(factory: () => T): T { return factory(); }\nconst Common = z.strictObject({ id: z.string() });\nconst Variants = [\n  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(Common, { capability: z.literal('one') }))),\n  z.strictObject({ capability: z.literal('two') }),\n] as const;\nconst capabilities = Variants.map(schema => schema.shape.capability.value);\nconst ordinary = [{ shape: { capability: { value: 'ordinary' } } }].map(item => item.shape.capability.value);\n`;
+  const result = convert(source);
+  assert.deepEqual(result.unresolved, []);
+  assert.match(result.output, /schema\.shape\.capability\._zod\.def\.values\[0\]/);
+  assert.match(result.output, /item\.shape\.capability\.value/);
+  const after = evaluate(result.output, mini, '({ capabilities, ordinary })');
+  assert.deepEqual(after, { capabilities: ['one', 'two'], ordinary: ['ordinary'] });
+  assert.equal(convert(result.output).output, result.output);
+});
+
 test('a proven type-guard refinement retains narrowed Mini output without changing parsing', () => {
   classic.config(classic.locales.en());
   mini.config(mini.locales.en());
@@ -1047,6 +1058,17 @@ test('destructured union options retain each member schema kind', () => {
   for (const value of [{ kind: 'one', value: 'ok' }, { kind: 'one', value: 'ok', extra: true }, { kind: 'two' }]) {
     assert.deepEqual(outcome(after.Extended, value), outcome(before.Extended, value));
   }
+});
+
+test('destructured already-Mini core union options retain member object lineage', () => {
+  const source = `import { z } from 'zod/mini';\nconst Choices = z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('one') }), z.strictObject({ kind: z.literal('two') })]);\nconst [One, Two] = Choices._zod.def.options;\nconst Extended = One.extend({ value: z.string() });\nconst Omitted = Two.omit({ kind: true });\n`;
+  const result = convert(source);
+  assert.deepEqual(result.unresolved, []);
+  assert.match(result.output, /z\.extend\(One, \{ value: z\.string\(\) \}\)/);
+  assert.match(result.output, /z\.omit\(Two, \{ kind: true \}\)/);
+  const Extended = evaluate(result.output, mini, 'Extended');
+  assert.deepEqual(outcome(Extended, { kind: 'one', value: 'ok' }), { success: true, data: { kind: 'one', value: 'ok' } });
+  assert.equal(convert(result.output).output, result.output);
 });
 
 test('Mini core-typed reflection under instanceof guards uses core definitions, not Classic accessors', () => {

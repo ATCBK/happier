@@ -280,6 +280,32 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     }
     return null;
   }
+  function shapeFields(shape, seen = new Set()) {
+    if (!shape) return null;
+    if (unwrap(shape)) return shapeFields(shape.expression, seen);
+    if (ts.isPropertyAccessExpression(shape) && shape.name.text === 'shape') {
+      const owner = schema(shape.expression, new Set(seen));
+      return owner?.kind === 'object' ? owner.fields ?? null : null;
+    }
+    if (ts.isIdentifier(shape)) {
+      if (seen.has(shape.text)) return null;
+      return shapeFields(bindingFor(shape)?.initializer, new Set([...seen, shape.text]));
+    }
+    if (!ts.isObjectLiteralExpression(shape)) return null;
+    const fields = Object.create(null);
+    for (const property of shape.properties) {
+      if (ts.isSpreadAssignment(property)) Object.assign(fields, shapeFields(property.expression, seen));
+      else if (ts.isPropertyAssignment(property)
+        && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))) {
+        const proof = schema(property.initializer, new Set(seen));
+        if (proof) fields[property.name.text] = proof;
+      } else if (ts.isShorthandPropertyAssignment(property)) {
+        const proof = schema(property.name, new Set(seen));
+        if (proof) fields[property.name.text] = proof;
+      }
+    }
+    return fields;
+  }
   function schema(node, seen = new Set()) {
     if (unwrap(node)) return schema(node.expression, seen);
     if (ts.isIdentifier(node)) {
@@ -301,8 +327,13 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
           && ts.isPropertyAccessExpression(unionOwner.expression) && unionOwner.expression.name.text === '_zod')
           unionOwner = unionOwner.expression.expression;
         const union = unionOwner && schema(unionOwner, new Set(seen));
-        if (union?.kind === 'union' && union.options?.length
-          && union.options.every(option => option?.kind === 'object')) {
+        let literal = collection;
+        if (ts.isIdentifier(literal)) literal = bindingFor(literal)?.initializer;
+        while (literal && unwrap(literal)) literal = literal.expression;
+        const options = union?.kind === 'union' ? union.options
+          : literal && ts.isArrayLiteralExpression(literal)
+            ? literal.elements.map(option => schema(option, new Set(seen))) : null;
+        if (options?.length && options.every(option => option?.kind === 'object')) {
           const fields = Object.create(null);
           const optionFields = option => {
             if (option.fields) return option.fields;
@@ -316,19 +347,23 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
             }
             return values;
           };
-          const members = union.options.map(optionFields);
+          const members = options.map(optionFields);
           for (const [field, proof] of Object.entries(members[0] ?? {})) {
             if (members.every(member => member?.[field]?.kind === proof.kind))
               fields[field] = { ...proof, literalSingleton: members.every(member => member[field].literalSingleton) };
           }
-          return { alias: union.alias, kind: 'object', fields };
+          return { alias: union?.alias ?? options[0].alias, kind: 'object', fields };
         }
       }
       if (variable && ts.isBindingElement(variable) && !variable.dotDotDotToken
         && ts.isArrayBindingPattern(variable.parent) && ts.isVariableDeclaration(variable.parent.parent)) {
         const source = variable.parent.parent.initializer;
         if (source && ts.isPropertyAccessExpression(source) && source.name.text === 'options') {
-          const union = schema(source.expression, new Set(seen));
+          let owner = source.expression;
+          if (ts.isPropertyAccessExpression(owner) && owner.name.text === 'def'
+            && ts.isPropertyAccessExpression(owner.expression) && owner.expression.name.text === '_zod')
+            owner = owner.expression.expression;
+          const union = schema(owner, new Set(seen));
           const member = union?.kind === 'union' && union.options?.[variable.parent.elements.indexOf(variable)];
           if (member) return { ...member, alias: union.alias };
         }
@@ -516,6 +551,31 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
           factory: true };
       }
     }
+    if (ts.isCallExpression(node) && node.arguments.length === 1) {
+      let invoked = node.expression;
+      while (ts.isParenthesizedExpression(invoked)) invoked = invoked.expression;
+      if (ts.isArrowFunction(invoked) && invoked.parameters.length === 1
+        && invoked.typeParameters?.length === 1
+        && ts.isIdentifier(invoked.parameters[0].name)
+        && invoked.typeParameters[0].constraint
+        && ts.isTypeReferenceNode(invoked.typeParameters[0].constraint)
+        && ts.isQualifiedName(invoked.typeParameters[0].constraint.typeName)
+        && isZ(invoked.typeParameters[0].constraint.typeName.left)
+        && invoked.typeParameters[0].constraint.typeName.right.text === 'ZodMiniObject'
+        && ts.isAsExpression(invoked.body)
+        && ts.isCallExpression(invoked.body.expression)
+        && ts.isPropertyAccessExpression(invoked.body.expression.expression)
+        && invoked.body.expression.expression.name.text === 'clone'
+        && ts.isPropertyAccessExpression(invoked.body.expression.expression.expression)
+        && invoked.body.expression.expression.expression.name.text === 'core'
+        && isZ(invoked.body.expression.expression.expression.expression)
+        && invoked.body.expression.arguments.length >= 1
+        && ts.isIdentifier(invoked.body.expression.arguments[0])
+        && invoked.body.expression.arguments[0].text === invoked.parameters[0].name.text) {
+        const input = schema(node.arguments[0], new Set(seen));
+        if (input?.kind === 'object') return { ...input, kind: 'object' };
+      }
+    }
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return null;
     const method = node.expression.name.text, receiver = node.expression.expression;
     const alias = zOf(receiver);
@@ -535,7 +595,10 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
             || node.arguments[0].kind === ts.SyntaxKind.TrueKeyword || node.arguments[0].kind === ts.SyntaxKind.FalseKeyword),
         wrapper: wrapperMethods.has(method) ? method : undefined,
         shapeNode: kind === 'object' ? node.arguments[0] : undefined,
-        fields: kind === 'object' && node.arguments[0] ? schema(node.arguments[0], new Set(seen))?.fields : undefined,
+        fields: ['object', 'strictObject', 'looseObject'].includes(method) ? shapeFields(node.arguments[0], seen)
+          : ['extend', 'safeExtend'].includes(method)
+            ? { ...schema(node.arguments[0], new Set(seen))?.fields, ...shapeFields(node.arguments[1], seen) }
+            : kind === 'object' && node.arguments[0] ? schema(node.arguments[0], new Set(seen))?.fields : undefined,
         element: kind === 'array' ? schema(node.arguments[0], new Set(seen)) : undefined,
         options: kind === 'union' && ts.isArrayLiteralExpression(method === 'discriminatedUnion' ? node.arguments[1] : node.arguments[0])
           ? (method === 'discriminatedUnion' ? node.arguments[1] : node.arguments[0]).elements.map(option => schema(option, new Set(seen))) : undefined };
