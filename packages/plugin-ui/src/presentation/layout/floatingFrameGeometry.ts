@@ -3,6 +3,11 @@ export type FloatingFrameMode = 'floating' | 'expanded' | 'docked' | 'closed';
 export type FloatingFrameGeometry = Readonly<{ rect: FrameRect; fits: boolean }>;
 export type FloatingFrameCorner = 'tl' | 'tr' | 'bl' | 'br';
 
+export function resolveFloatingFrameAspectRatio(aspectRatio: number): number {
+    'worklet';
+    return aspectRatio > 0 && Number.isFinite(aspectRatio) ? aspectRatio : 16 / 10;
+}
+
 /** Leading-bottom grip resize; the opposite edge stays anchored and the body keeps its aspect. */
 export function resolveFloatingFrameResizeRect(input: Readonly<{
     rect: FrameRect;
@@ -14,7 +19,7 @@ export function resolveFloatingFrameResizeRect(input: Readonly<{
 }>): FrameRect {
     'worklet';
     const right = input.rect.x + input.rect.width;
-    const aspect = input.aspectRatio > 0 && Number.isFinite(input.aspectRatio) ? input.aspectRatio : 16 / 10;
+    const aspect = resolveFloatingFrameAspectRatio(input.aspectRatio);
     const width = Math.max(input.minWidth, Math.min(right - input.availableRect.x, input.rect.width - input.translationX));
     const fitted = resolveFloatingFrameRect({
         rect: { x: right - width, y: input.rect.y, width, height: input.chromeHeight + width / aspect },

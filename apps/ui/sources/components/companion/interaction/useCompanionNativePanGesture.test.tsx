@@ -66,6 +66,25 @@ function flick(gesture: TestGesture, event: Readonly<{
 }
 
 describe('useCompanionNativePanGesture', () => {
+    it('settles geometry from a resize binding without its controlled echo cutting the movement spring', async () => {
+        const hook = await renderHook((initialPoint: CompanionPoint) => useCompanionNativePanGesture({
+            bounds, initialPoint, noDragRegions: [], releaseMotion: VOICE_ORB_RELEASE_MOTION,
+            positionPublication: 'release',
+        }), { initialProps: { x: 20, y: 100 } });
+        await act(async () => {
+            hook.getCurrent().settleToPoint({ x: 100, y: 150 });
+            // The native animation boundary is still between the resized rect and its safe settle.
+            hook.getCurrent().translateX.value = 60;
+            hook.getCurrent().translateY.value = 125;
+        });
+        await hook.rerender({ x: 100, y: 150 });
+        expect([hook.getCurrent().translateX.value, hook.getCurrent().translateY.value]).toEqual([60, 125]);
+        expect(springCalls).toEqual([
+            resolveCompanionReleaseSpringConfig(VOICE_ORB_RELEASE_MOTION, 0),
+            resolveCompanionReleaseSpringConfig(VOICE_ORB_RELEASE_MOTION, 0),
+        ]);
+        await hook.unmount();
+    });
     it('uses the admitted drag geometry for updates and release, and cancels without a throw', async () => {
         const onDragRelease = vi.fn();
         const hook = await renderHook(() => useCompanionNativePanGesture({

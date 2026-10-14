@@ -15,12 +15,13 @@ for (const dialect of ['zod', 'zod/mini']) test(`tuple-backed ${dialect} Action 
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const actions = resolve(root, 'packages/protocol/src/actions');
   mkdirSync(actions, { recursive: true });
-  mkdirSync(resolve(actions, 'specs'), { recursive: true });
+  const specs = resolve(actions, 'specs');
+  mkdirSync(specs, { recursive: true });
   writeFileSync(resolve(actions, 'actionIds.ts'), "export const ACTION_ID_FAMILIES_V1 = { processes: ['processes.read', 'processes.stop'] } as const;");
   writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
   writeFileSync(resolve(actions, 'actionSpecs.ts'), `import { PROCESS_ACTION_SPECS } from './specs/processes.js';
     export const ACTION_SPECS = [...PROCESS_ACTION_SPECS];`);
-  writeFileSync(resolve(actions, 'specs/processes.ts'), `import { z } from '${dialect}';
+  writeFileSync(resolve(specs, 'processes.ts'), `import { z } from '${dialect}';
     const INPUTS = { 'processes.read': z.object({ machineId: z.string() }), 'processes.stop': z.object({ processId: z.number() }) };
     const OUTPUTS = { 'processes.read': z.object({ count: z.number() }), 'processes.stop': z.object({ stopped: z.boolean() }) };
     const rows = [['processes.read', 'Read'], ['processes.stop', 'Stop']] as const;

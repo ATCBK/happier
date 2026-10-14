@@ -1,11 +1,13 @@
+import { z } from 'zod/mini';
 import { ScmRepositoryCloneInputSchema } from '@happier-dev/protocol/scm/repositoryClone';
 import { ScmRequestBaseSchema } from '@happier-dev/protocol/scm/requestBase';
 
 // Clone's public Action input is strictly domain-only. Machine/session RPC
 // transports also carry validated SCM envelope fields; consume them only here.
-const ScmRepositoryCloneRpcRequestSchema = ScmRepositoryCloneInputSchema
-    .extend(ScmRequestBaseSchema.shape)
-    .transform(({ cwd: _cwd, backendPreference: _backendPreference, outcomeVersion: _outcomeVersion, ...request }) => request);
+const ScmRepositoryCloneRpcInputSchema = z.extend(ScmRepositoryCloneInputSchema, ScmRequestBaseSchema.shape);
+const ScmRepositoryCloneRpcRequestSchema = z.pipe(ScmRepositoryCloneRpcInputSchema,
+    z.transform(({ cwd: _cwd, backendPreference: _backendPreference, outcomeVersion: _outcomeVersion, ...request }:
+        z.infer<typeof ScmRepositoryCloneRpcInputSchema>) => request));
 
 export function parseScmRepositoryCloneRpcRequest(input: unknown) {
     return ScmRepositoryCloneRpcRequestSchema.safeParse(input);

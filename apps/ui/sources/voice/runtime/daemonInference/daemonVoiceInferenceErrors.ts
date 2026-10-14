@@ -2,6 +2,7 @@ import {
     DaemonVoiceInferenceErrorCodeSchema,
     type DaemonVoiceInferenceErrorCode,
 } from '@happier-dev/protocol/daemon/voiceInference';
+import { isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
 
 const DAEMON_VOICE_INFERENCE_CLIENT_TRANSPORT_ERROR_CODES = [
     'feature_disabled',
@@ -24,6 +25,7 @@ export const DAEMON_VOICE_INFERENCE_CLIENT_ERROR_CODES: ReadonlySet<DaemonVoiceI
 ]);
 
 export function readDaemonVoiceInferenceClientErrorCode(error: unknown): DaemonVoiceInferenceClientErrorCode {
+    if (isRpcMethodNotAvailableError(error)) return 'runtime_unavailable';
     const code = error && typeof error === 'object' && 'code' in error
         ? String((error as { code?: unknown }).code ?? '')
         : '';

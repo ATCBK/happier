@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { z as zMini } from 'zod/mini';
 
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { PluginSourceSpecV1Schema } from '@happier-dev/protocol/plugins/source-spec';
@@ -17,11 +18,11 @@ export type PluginCompatibilityStatus = z.infer<typeof PluginCompatibilityStatus
 export const PluginInstallModeSchema = z.enum(['link', 'managed_install']);
 export type PluginInstallMode = z.infer<typeof PluginInstallModeSchema>;
 
-export const PluginStateSourceRecordSchema = PluginSourceSpecV1Schema.safeExtend({
+export const PluginStateSourceRecordSchema = zMini.catchall(zMini.safeExtend(PluginSourceSpecV1Schema, {
   resolvedPath: z.string().min(1),
   manifestPath: z.string().min(1),
   devWatch: z.boolean().optional(),
-}).strict();
+}), zMini.never());
 export type PluginStateSourceRecord = z.infer<typeof PluginStateSourceRecordSchema>;
 
 export const PluginStateCompatibilityRecordSchema = z.object({
@@ -36,7 +37,7 @@ export const PluginStateInstallRecordSchema = z.object({
   manifestVersion: z.string().min(1),
   installedPath: z.string().min(1).nullable().optional(),
   trust: PluginTrustRecordSchema.optional(),
-  updatePolicy: PluginUpdatePolicyV1Schema.optional(),
+  updatePolicy: z.optional(PluginUpdatePolicyV1Schema),
   optionalAccess: z.array(PluginAccessSelectionSchema).optional(),
 }).strict();
 export type PluginStateInstallRecord = z.infer<typeof PluginStateInstallRecordSchema>;

@@ -29,15 +29,18 @@ installPopoverCommonModuleMocks({
     },
 });
 
+// Load the cold Popover graph before a mounted lifecycle test's deadline starts.
+const { OverlayPortalHost, OverlayPortalProvider } = await import('./OverlayPortal');
+const { Popover } = await import('./Popover');
+const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
+const { usePopoverPortalTarget } = await import('./PopoverPortalTarget');
+
 function PopoverChild() {
     return React.createElement('PopoverChild');
 }
 
 describe('PopoverPortalTargetProvider (native)', () => {
     it('does not churn context value across parent re-renders (prevents maximum update depth loops)', async () => {
-        const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
-        const { usePopoverPortalTarget } = await import('./PopoverPortalTarget');
-
         function Child(props: { bump: () => void }) {
             const target = usePopoverPortalTarget();
             React.useLayoutEffect(() => {
@@ -67,8 +70,6 @@ describe('PopoverPortalTargetProvider (native)', () => {
     });
 
     it('marks the portal root as non-collapsable (ensures measurement works in contained-sheet presentations)', async () => {
-        const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
-
         const screen = await renderScreen(
             React.createElement(
                 PopoverPortalTargetProvider,
@@ -85,10 +86,6 @@ describe('PopoverPortalTargetProvider (native)', () => {
     });
 
     it('renders popovers into a screen-local OverlayPortalHost (avoids coordinate-space mismatch in contained modals)', async () => {
-        const { OverlayPortalHost, OverlayPortalProvider } = await import('./OverlayPortal');
-        const { Popover } = await import('./Popover');
-        const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
-
         const anchorRef = {
             current: {
                 measureInWindow: (cb: any) => cb(200, 200, 20, 20),
@@ -132,8 +129,6 @@ describe('PopoverPortalTargetProvider (native)', () => {
 
     it('removes portal content when popover closes', async () => {
         vi.useFakeTimers();
-        const { Popover } = await import('./Popover');
-        const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
 
         const anchorRef = {
             current: {

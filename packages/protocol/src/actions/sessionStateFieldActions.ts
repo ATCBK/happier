@@ -26,7 +26,7 @@ const SessionReviewedContextTargetV1Schema = lazyZodSchema(() => z.object({
 export const SessionMemorySetInputV1Schema = lazyZodSchema(() => SessionReviewedContextTargetV1Schema.extend({ enabled: z.boolean() }).strict());
 export const SessionVoicePreferenceSetInputV1Schema = lazyZodSchema(() => SessionReviewedContextTargetV1Schema.extend({ preference: SessionVoicePreferenceV1Schema.nullable() }).strict());
 export const SessionContextUpdateInputV1Schema = lazyZodSchema(() => SessionReviewedContextTargetV1Schema.extend({ intent: SessionContextIntentV1Schema }).strict());
-export const SessionInstructionsSetInputV1Schema = lazyZodSchema(() => SessionReviewedContextTargetV1Schema.extend({ ref: PromptDocArtifactRefV1Schema.strict().nullable() }).strict());
+export const SessionInstructionsSetInputV1Schema = lazyZodSchema(() => SessionReviewedContextTargetV1Schema.extend({ ref: z.nullable(PromptDocArtifactRefV1Schema) }).strict());
 
 /** Each Action selects one registered field; the host metadata engine owns its application. */
 export const SESSION_STATE_FIELD_ACTIONS = {
@@ -63,7 +63,7 @@ export function buildSessionInstructionsContextIntentV1(ref: PromptDocArtifactRe
   return ref === null
     ? { kind: 'detach', entryId: 'session.instructions' }
     : SessionContextIntentV1Schema.parse({ kind: 'set', entry: { id: 'session.instructions',
-      ref: PromptDocArtifactRefV1Schema.strict().parse(ref), enabled: true, required: true, placement: 'system_append' } });
+      ref: PromptDocArtifactRefV1Schema.parse(ref), enabled: true, required: true, placement: 'system_append' } });
 }
 
 export function resolveSessionStateFieldActionWrite(

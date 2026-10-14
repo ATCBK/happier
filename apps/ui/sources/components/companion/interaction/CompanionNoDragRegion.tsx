@@ -44,10 +44,13 @@ export function CompanionNoDragRegionProvider(props: Readonly<{
             const existing = current[region.id];
             if (
                 existing
-                && existing.x === region.x
+                && existing.nativeRef === region.nativeRef
+                // Native admission measures the stable ref on the UI thread. Layout changes
+                // during frame resize must not republish stale coordinates to every companion.
+                && (region.nativeRef || (existing.x === region.x
                 && existing.y === region.y
                 && existing.width === region.width
-                && existing.height === region.height
+                && existing.height === region.height))
             ) {
                 return current;
             }

@@ -7,7 +7,7 @@ export const AttachmentMessageMetaItemV1Schema = z.object({
     mimeType: z.string().optional(),
     sizeBytes: z.number().finite(),
     sha256: z.string().optional(),
-    attachmentHandle: SessionAttachmentHandleV1Schema.optional(),
+    attachmentHandle: z.optional(SessionAttachmentHandleV1Schema),
 });
 
 export const AttachmentsMessageMetaV1Schema = z.object({

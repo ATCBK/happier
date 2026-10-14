@@ -13,6 +13,10 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 
 afterEach(() => standardCleanup());
 
+// The first import loads the page graph; keep that cold load outside every test's deadline.
+const { HomeHubSectionList } = await import('./HomeHubSectionList');
+const { PageColumnProvider, usePageColumn } = await import('@/components/ui/lists/listPresentation');
+
 const builtin = (id: string) => ({ kind: 'builtin' as const, id, hidden: false, hideable: true });
 const widget = (id: string, size: WidgetSizeV1 = 'medium') => ({
     kind: 'widget' as const, id, hidden: false as const, hideable: true as const, size,
@@ -20,7 +24,6 @@ const widget = (id: string, size: WidgetSizeV1 = 'medium') => ({
 });
 
 async function renderList(sections: ReadonlyArray<ReturnType<typeof builtin> | ReturnType<typeof widget>>) {
-    const { HomeHubSectionList } = await import('./HomeHubSectionList');
     return renderScreen(
         <HomeHubSectionList
             sections={sections}
@@ -84,8 +87,6 @@ describe('HomeHubSectionList (the column contract)', () => {
         expect(JSON.stringify(sections)).toBe(before);
     });
     it('puts every block on the dashboard column except the composer, which keeps the reading column', async () => {
-        const { HomeHubSectionList } = await import('./HomeHubSectionList');
-        const { PageColumnProvider, usePageColumn } = await import('@/components/ui/lists/listPresentation');
         function ColumnProbe(props: Readonly<{ id: string }>) {
             return <>{`${props.id}@${usePageColumn()}`}</>;
         }

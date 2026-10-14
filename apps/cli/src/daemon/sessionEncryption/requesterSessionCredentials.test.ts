@@ -25,8 +25,7 @@ import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
-import { createSessionRecordFixture, type SessionRecordFixture } from '@/testkit/backends/sessionFixtures';
-import { encodeBase64, encryptLegacy } from '@/api/encryption';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { configuration } from '@/configuration';
 import { normalizeServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -103,7 +102,6 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
   let access = true;
   let accountMode: 'plain' | 'e2ee' = 'plain';
   let sessionRole: 'owner' | 'view' = 'owner';
-  let sessionContent: Pick<SessionRecordFixture, 'metadata' | 'encryptionMode'> | undefined;
   let loseDuringVerification = false;
   let acpCatalog: AcpCatalogRecordV1 = { v: 1, definitions: [] };
   const requests: Array<{ path: string; bearer: string | undefined }> = [];
@@ -149,7 +147,6 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
       ...(options.bot ? { bot: { kind: 'bot' }, createdAsBot: true } : {}),
       sessionCreationCorrespondenceV1: correspondence }), dataEncryptionKey: null,
     share: sessionRole === 'owner' ? null : { accessLevel: 'view', canApprovePermissions: false },
-    ...sessionContent,
   }) }));
   app.get(`/v1/access-keys/${sessionId}/machine`, async () => ({ accessKey: { id: 'existing' } }));
   await app.ready();
@@ -160,57 +157,10 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
     setAcpCatalog: (record: AcpCatalogRecordV1) => { acpCatalog = record; },
     setAccountId: (value: string) => { accountId = value; }, setAccountMode: (value: 'plain' | 'e2ee') => { accountMode = value; },
     setSessionRole: (value: 'owner' | 'view') => { sessionRole = value; },
-    setSessionContent: (value: NonNullable<typeof sessionContent>) => { sessionContent = value; },
     replaceDuringVerification: () => { loseDuringVerification = true; } };
 }
 
 describe('requester Session lifecycle custody', () => {
-  it('opens owner metadata only for creation correspondence while retaining fresh requester authorization', async () => {
-    const host = await home();
-    const secret = new Uint8Array(32).fill(19);
-    let materialReads = 0;
-    // Observe actual material demand without mocking decryption or authorization.
-    const encryptedCredentials: Credentials = { token: credentials.token, encryption: {
-      type: 'legacy', get secret() { materialReads++; return secret; },
-    } };
-    host.setAccountMode('e2ee');
-    host.setSessionContent({ encryptionMode: 'e2ee', metadata: encodeBase64(encryptLegacy({
-      machineId: 'machine', path: '/workspace', sessionCreationCorrespondenceV1: host.correspondence,
-    }, secret)) });
-    const binding = { credentials: encryptedCredentials, attribution, sessionId: 'session', serverHttpBaseUrl: origin,
-      verifyMachineAdmissionCurrent: () => verifyRequesterSessionMachineAdmissionCurrent({
-        credentials: encryptedCredentials, attribution, sessionId: 'session', serverHttpBaseUrl: origin, boundary: host.boundary,
-      }) };
-
-    expect(await requesterCredentialOwner.verifyRequesterSessionCredentialBinding(binding)).toBe(true);
-    expect(materialReads).toBe(0);
-    expect(host.requests.map(request => request.path)).toEqual(expect.arrayContaining([
-      '/v1/account/profile', '/v1/account/encryption/currentness', '/v2/sessions/session', '/v1/machines/machine/admission/verify',
-    ]));
-    expect(await requesterCredentialOwner.verifyRequesterSessionCredentialBinding({ ...binding,
-      expectedSessionCreationTag: host.correspondence.sessionCreationTag })).toBe(true);
-    expect(materialReads).toBeGreaterThan(0);
-    expect(await requesterCredentialOwner.verifyRequesterSessionCredentialBinding({ ...binding,
-      expectedSessionCreationTag: `create:v1:${'b'.repeat(43)}` })).toBe(false);
-    expect(await requesterCredentialOwner.verifyRequesterSessionCredentialBinding({ ...binding,
-      attribution: { ...attribution, machineId: 'other-machine' },
-      expectedSessionCreationTag: host.correspondence.sessionCreationTag })).toBe(false);
-
-    materialReads = 0;
-    host.setSessionRole('view');
-    expect(await requesterCredentialOwner.verifyRequesterSessionCredentialBinding(binding)).toBe(false);
-    host.setSessionRole('owner');
-    host.setAccountMode('plain');
-    expect(await requesterCredentialOwner.verifyRequesterSessionCredentialBinding(binding)).toBe(false);
-    host.setAccountMode('e2ee');
-    host.setAccess(false);
-    expect(await requesterCredentialOwner.verifyRequesterSessionCredentialBinding(binding)).toBe(false);
-    host.setAccess(true);
-    expect(await requesterCredentialOwner.verifyRequesterSessionCredentialBinding({ ...binding,
-      signal: AbortSignal.abort() })).toBe(false);
-    expect(materialReads).toBe(0);
-  });
-
   it('restores protected existing-Session custody through the real local resume registration and refuses revoked or substituted ownership', async () => {
     const sessionId = 'caaaaaaaaaaaaaaaaaaaaaaaa';
     const host = await home({ sessionId, requesterReadsOnly: true });

@@ -36,8 +36,8 @@ const SessionHandoffPrepareTargetJobRecordV1Schema = z
     status: SessionHandoffStatusSchema,
     // Persist the validated prepare-target request so the daemon can resume/restart the job after a restart,
     // even when callers keep polling status/result without issuing a second PREPARE_TARGET call.
-    prepareTargetRequest: SessionHandoffPrepareTargetRequestSchema.optional(),
-    prepareTargetResult: SessionHandoffPrepareTargetResultGetSuccessResponseSchema.optional(),
+    prepareTargetRequest: z.optional(SessionHandoffPrepareTargetRequestSchema),
+    prepareTargetResult: z.optional(SessionHandoffPrepareTargetResultGetSuccessResponseSchema),
   })
   .strip()
   .superRefine((record, ctx) => {
@@ -165,8 +165,8 @@ const sessionHandoffPrepareTargetJobV2CommonShape = {
   lastErrorMessage: z.string().min(1).optional(),
   lastErrorCode: z.string().min(1).optional(),
   status: SessionHandoffStatusSchema,
-  prepareTargetRequest: SessionHandoffPrepareTargetRequestSchema.optional(),
-  prepareTargetResult: SessionHandoffPrepareTargetResultGetSuccessResponseSchema.optional(),
+  prepareTargetRequest: z.optional(SessionHandoffPrepareTargetRequestSchema),
+  prepareTargetResult: z.optional(SessionHandoffPrepareTargetResultGetSuccessResponseSchema),
   transitionRevision: z.number().int().min(0),
   prepareRecovery: SessionHandoffPrepareRecoveryStateV2Schema.default({ status: 'not_attempted' }),
   terminal: SessionHandoffTerminalStateV2Schema,

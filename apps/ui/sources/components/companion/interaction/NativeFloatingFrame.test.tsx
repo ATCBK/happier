@@ -8,16 +8,22 @@ import type { TestGestureChain } from '@/dev/testkit/mocks/gestureHandler';
 
 // Only the native measurement/animation boundary is replaced; frame, pan and portal stay real.
 const measurements = vi.hoisted(() => ({ pageX: 40, pageY: 50, width: 200, height: 165 }));
+const springTargets = vi.hoisted(() => [] as number[]);
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' });
 });
 vi.mock('react-native-reanimated', async () => {
     const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
-    return { ...createReanimatedModuleMock(), measure: () => measurements };
+    return { ...createReanimatedModuleMock(), withSpring: (target: number) => {
+        springTargets.push(target);
+        return target;
+    }, measure: (ref: { current?: { testID?: string } }) =>
+        ref.current?.testID === 'native-chrome-button'
+            ? { pageX: 60, pageY: 50, width: 40, height: 32 } : measurements };
 });
 
-import { FloatingFrame, type FrameRect } from '@happier-dev/plugin-ui/presentation';
+import { FloatingFrame, type FrameRect, type FloatingFrameMode } from '@happier-dev/plugin-ui/presentation';
 import {
     createRetainedPresentationSlotsStore,
     RetainedPresentationSlotBinder,
@@ -26,10 +32,61 @@ import {
     type RetainedPresentationNativeMotion,
 } from '@/components/ui/presentation/retainedPresentationSlots';
 import { NativeFloatingFrame } from './NativeFloatingFrame';
+import { CompanionNoDragRegion, CompanionNoDragRegionProvider } from './CompanionNoDragRegion';
 
-beforeEach(() => { measurements.pageX = 40; measurements.pageY = 50; });
+beforeEach(() => { measurements.pageX = 40; measurements.pageY = 50; springTargets.length = 0; });
 
 describe('native FloatingFrame binding', () => {
+    it('settles an obstacle-displaced resize with the same movement spring, honoring reduced motion', async () => {
+        const onRectChange = vi.fn();
+        const frame = (reducedMotion: boolean) => <FloatingFrame
+            mode="floating" rect={{ x: 100, y: 50, width: 200, height: 165 }}
+            availableRect={{ x: 10, y: 20, width: 800, height: 600 }} aspectRatio={1.6}
+            avoidRects={[{ x: 20, y: 50, width: 80, height: 215 }]}
+            moveInput="chrome" nativeBinding={NativeFloatingFrame} controls={<View />} reducedMotion={reducedMotion}
+            accessibilityLabel="Viewer" onRectChange={onRectChange} onModeChange={vi.fn()}><View /></FloatingFrame>;
+        for (const reduced of [false, true]) {
+            springTargets.length = 0;
+            const screen = await renderScreen(frame(reduced));
+            const gesture = screen.findAllByType('GestureDetector')[1].props.gesture as TestGestureChain;
+            await act(async () => {
+                gesture.__handlers.onBegin({ absoluteX: 110, absoluteY: 205 });
+                gesture.__handlers.onUpdate({ translationX: -80, translationY: 0 });
+                gesture.__handlers.onEnd({ translationX: -80, translationY: 0 }, true);
+                gesture.__handlers.onFinalize({}, true);
+            });
+            expect(onRectChange).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 280, height: 215 }, { kind: 'settle' });
+            expect(springTargets).toEqual(reduced ? [] : [100, 50]);
+            await screen.unmount();
+        }
+    });
+    it('rejects a registered native chrome control before recognition while admitting its background', async () => {
+        const screen = await renderScreen(<CompanionNoDragRegionProvider>
+            <FloatingFrame mode="floating" rect={{ x: 40, y: 50, width: 200, height: 165 }}
+                availableRect={{ x: 0, y: 0, width: 800, height: 600 }} aspectRatio={1.6}
+                moveInput="chrome" nativeBinding={NativeFloatingFrame} accessibilityLabel="Viewer"
+                controls={<CompanionNoDragRegion testID="native-chrome-button"><View /></CompanionNoDragRegion>}
+                onRectChange={vi.fn()} onModeChange={vi.fn()}><View /></FloatingFrame>
+        </CompanionNoDragRegionProvider>, {
+            // OS view identities let Reanimated measure the actual registered control separately.
+            createNodeMock: (element) => ({ testID: element.props.testID }),
+        });
+        await act(async () => {
+            screen.findHostByTestId('native-chrome-button')!.props.onLayout({
+                nativeEvent: { layout: { x: 20, y: 0, width: 40, height: 32 } },
+            });
+        });
+        const gesture = screen.findAllByType('GestureDetector')[0].props.gesture as TestGestureChain;
+        const controlFail = vi.fn();
+        const backgroundFail = vi.fn();
+        await act(async () => {
+            gesture.__handlers.onTouchesDown({ allTouches: [{ absoluteX: 80, absoluteY: 60 }] }, { fail: controlFail });
+            gesture.__handlers.onTouchesDown({ allTouches: [{ absoluteX: 150, absoluteY: 60 }] }, { fail: backgroundFail });
+        });
+        expect(controlFail).toHaveBeenCalledOnce();
+        expect(backgroundFail).not.toHaveBeenCalled();
+        await screen.unmount();
+    });
     it('abandons an active resize on control takeover and restores the controlled size', async () => {
         const onRectChange = vi.fn();
         const motion: { current: RetainedPresentationNativeMotion | null } = { current: null };
@@ -102,6 +159,14 @@ describe('native FloatingFrame binding', () => {
             gesture.__handlers.onFinalize({}, true);
         });
         expect(onRectChange).toHaveBeenLastCalledWith({ x: 10, y: 50, width: 230, height: 183.75 }, { kind: 'settle' });
+        const nextGesture = screen.findByTestId('browser-presentation-portal-slot-resize-frame')
+            .findByType('GestureDetector').props.gesture as TestGestureChain;
+        await act(async () => {
+            nextGesture.__handlers.onBegin({ absoluteX: 20, absoluteY: 215 });
+            nextGesture.__handlers.onUpdate({ translationX: 200, translationY: 0 });
+            nextGesture.__handlers.onFinalize({ velocityX: -900 }, false);
+        });
+        expect(onRectChange).toHaveBeenLastCalledWith({ x: 60, y: 50, width: 180, height: 152.5 }, { kind: 'settle' });
         expect(mounts).toBe(1);
         await screen.unmount();
     });
@@ -156,8 +221,8 @@ describe('native FloatingFrame binding', () => {
 
     it('admits chrome in control mode while leaving remote body input alone', async () => {
         const onRectChange = vi.fn();
-        const renderFrame = (moveInput: 'surface' | 'chrome', footer = false) => <FloatingFrame
-            mode="floating" rect={{ x: 40, y: 50, width: 200, height: footer ? 217 : 165 }}
+        const renderFrame = (moveInput: 'surface' | 'chrome', footer = false, mode: FloatingFrameMode = 'floating') => <FloatingFrame
+            mode={mode} rect={{ x: 40, y: 50, width: 200, height: footer ? 217 : 165 }}
             availableRect={{ x: 0, y: 0, width: 800, height: 600 }} aspectRatio={1.6}
             moveInput={moveInput} nativeBinding={NativeFloatingFrame} controls={<View />} footer={footer ? <View /> : undefined}
             accessibilityLabel="Viewer" onRectChange={onRectChange} onModeChange={vi.fn()}><View /></FloatingFrame>;
@@ -183,6 +248,17 @@ describe('native FloatingFrame binding', () => {
         });
         expect(fail).toHaveBeenCalledTimes(2);
         expect(onRectChange).not.toHaveBeenCalled();
+        await act(async () => {
+            controlPan.__handlers.onBegin({ absoluteX: 100, absoluteY: 60 });
+            controlPan.__handlers.onUpdate({ translationX: 100, translationY: 80 });
+            controlPan.__handlers.onEnd({ translationX: 100, translationY: 80 }, true);
+            controlPan.__handlers.onFinalize({}, true);
+        });
+        expect(onRectChange).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 200, height: 165 }, { kind: 'settle' });
+        for (const mode of ['expanded', 'docked'] as const) {
+            await screen.update(renderFrame('chrome', false, mode));
+            expect((screen.findAllByType('GestureDetector')[0].props.gesture as TestGestureChain).__config.enabled).toBe(false);
+        }
         await screen.unmount();
     });
 });

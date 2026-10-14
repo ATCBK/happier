@@ -1,5 +1,6 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import axios from 'axios';
+import { nullable } from 'zod/mini';
 import type { Socket } from 'socket.io-client';
 import type { SessionMessageAcceptedDeliveryContentV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
 
@@ -27,6 +28,13 @@ import { PendingMessageWithdrawOutcomeV1Schema } from '@happier-dev/protocol/ses
 import { PendingResetStartsReadInputV1Schema, PendingResetStartsReadResultV1Schema, type PendingResetStartsReadInputV1, type PendingResetStartsReadResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 
 export type PendingMaterializationDeliveryTiming = 'after_foreground_ready' | 'after_runtime_idle';
+
+function pendingMessageHttpPath(params: Readonly<{ sessionId: string; localId: string; targetExecutionRunId?: string }>): string {
+    const owner = params.targetExecutionRunId
+        ? `/v2/sessions/${encodeURIComponent(params.sessionId)}/execution-runs/${encodeURIComponent(params.targetExecutionRunId)}/pending`
+        : `/v2/sessions/${encodeURIComponent(params.sessionId)}/pending`;
+    return `${owner}/${encodeURIComponent(params.localId)}`;
+}
 
 /** Source-filtered metadata from the existing Pending owner; signed reads never borrow a daemon bearer. */
 export async function readPendingResetStartsForSource(params: Readonly<{
@@ -86,10 +94,7 @@ export async function withdrawPendingQueueV2Message(params: Readonly<{
     token: string; sessionId: string; localId: string; targetExecutionRunId?: string; signal?: AbortSignal;
     resolveAuthorizationHeaders: (request: Readonly<{ method: string; path: string; body: Readonly<Record<string, never>> }>) => Readonly<Record<string, string>> | null;
 }>) {
-    const pendingOwner = params.targetExecutionRunId
-        ? `/v2/sessions/${encodeURIComponent(params.sessionId)}/execution-runs/${encodeURIComponent(params.targetExecutionRunId)}/pending`
-        : `/v2/sessions/${encodeURIComponent(params.sessionId)}/pending`;
-    const requestPath = `${pendingOwner}/${encodeURIComponent(params.localId)}/withdraw`;
+    const requestPath = `${pendingMessageHttpPath(params)}/withdraw`;
     const body = {};
     const authorization = params.resolveAuthorizationHeaders({ method: 'POST', path: requestPath, body });
     if (!authorization) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
@@ -593,7 +598,7 @@ function parseMaterializedMessage(value: unknown): PendingQueueMaterializedMessa
     if (seq === undefined) return null;
     const id = typeof record.id === 'string' && record.id.length > 0 ? record.id : null;
     const localId = readPendingLocalId(record.localId);
-    const parsedRole = SessionMessageRoleSchema.nullable().safeParse(record.messageRole ?? null);
+    const parsedRole = nullable(SessionMessageRoleSchema).safeParse(record.messageRole ?? null);
     const parsedContent = SessionMessageContentSchema.safeParse(record.content);
     const parsedInputAdmissionReceipt = SessionInputAdmissionReceiptV1Schema.safeParse(
         record.inputAdmissionReceipt,
@@ -1304,11 +1309,15 @@ export async function blockPendingQueueV2Delivery(params: {
     }
 }
 
-export async function markPendingQueueV2DeliveryHandled(params: {
+type PendingDeliveryActionTransport = Readonly<{
     token: string;
     sessionId: string;
     localId: string;
-}): Promise<{ pendingQueueState?: KnownPendingQueueState }> {
+    signal?: AbortSignal;
+    resolveAuthorizationHeaders?: (request: Readonly<{ method: 'POST'; path: string; body: Record<string, unknown> }>) => Readonly<Record<string, string>> | null;
+}>;
+
+export async function markPendingQueueV2DeliveryHandled(params: PendingDeliveryActionTransport): Promise<{ pendingQueueState?: KnownPendingQueueState }> {
     return postPendingQueueV2DeliveryAction({
         ...params,
         action: 'handled',
@@ -1316,24 +1325,39 @@ export async function markPendingQueueV2DeliveryHandled(params: {
     });
 }
 
-async function postPendingQueueV2DeliveryAction(params: {
-    token: string;
-    sessionId: string;
-    localId: string;
-    action: 'block' | 'handled';
+export async function dismissPendingQueueV2Delivery(params: PendingDeliveryActionTransport & Readonly<{ targetExecutionRunId?: string }>): Promise<{ pendingQueueState?: KnownPendingQueueState }> {
+    return postPendingQueueV2DeliveryAction({ ...params, action: 'dismiss', body: {} });
+}
+
+export async function sendPendingQueueV2DeliveryAsNew(params: PendingDeliveryActionTransport & Readonly<{ targetExecutionRunId?: string }>): Promise<{ newLocalId: string; pendingQueueState?: KnownPendingQueueState }> {
+    const result = await postPendingQueueV2DeliveryAction({ ...params, action: 'send-as-new', body: {} });
+    const newLocalId = readPendingLocalId(result.newLocalId);
+    if (!newLocalId) throw new Error('Send-as-new response is missing the server-owned replacement identity');
+    return { ...result, newLocalId };
+}
+
+async function postPendingQueueV2DeliveryAction(params: PendingDeliveryActionTransport & {
+    targetExecutionRunId?: string;
+    action: 'block' | 'handled' | 'dismiss' | 'send-as-new';
     body: Record<string, unknown>;
-}): Promise<{ pendingQueueState?: KnownPendingQueueState }> {
+}): Promise<{ pendingQueueState?: KnownPendingQueueState; newLocalId?: unknown }> {
     const serverUrl = resolveServerHttpBaseUrl();
+    const path = `${pendingMessageHttpPath(params)}/delivery/${params.action}`;
+    const authorization = params.resolveAuthorizationHeaders
+        ? params.resolveAuthorizationHeaders({ method: 'POST', path, body: params.body })
+        : { Authorization: `Bearer ${params.token}` };
+    if (!authorization) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
     const response = await axios.post(
-        `${serverUrl}/v2/sessions/${encodeURIComponent(params.sessionId)}/pending/${encodeURIComponent(params.localId)}/delivery/${params.action}`,
+        `${serverUrl}${path}`,
         params.body,
         {
             headers: {
                 ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-                Authorization: `Bearer ${params.token}`,
+                ...authorization,
                 'Content-Type': 'application/json',
             },
             timeout: 10_000,
+            ...(params.signal ? { signal: params.signal } : {}),
         },
     );
     const data = response?.data;
@@ -1347,6 +1371,7 @@ async function postPendingQueueV2DeliveryAction(params: {
     const pendingQueueState = readKnownPendingQueueState(data);
     return {
         ...(pendingQueueState ? { pendingQueueState } : {}),
+        ...(params.action === 'send-as-new' ? { newLocalId: Reflect.get(data, 'newLocalId') } : {}),
     };
 }
 

@@ -39,9 +39,12 @@ vi.mock('@/utils/web/reactDomCjs', () => ({
     }),
 }));
 
+// Resolve the cold modal graph before the portal assertions start their deadlines.
+const { BaseModal } = await import('./BaseModal');
+const { ModalPortalTargetProvider } = await import('@/modal/portal/ModalPortalTarget');
+
 describe('BaseModal web portal target', () => {
     it('defaults to document.body on web when webPortalTarget is omitted', async () => {
-        const { BaseModal } = await import('./BaseModal');
         const previousDocument = (globalThis as any).document;
 
         createPortalMock.mockReset();
@@ -68,8 +71,6 @@ describe('BaseModal web portal target', () => {
     });
 
     it('inherits the nearest modal portal target when the prop is omitted', async () => {
-        const { BaseModal } = await import('./BaseModal');
-        const { ModalPortalTargetProvider } = await import('@/modal/portal/ModalPortalTarget');
         const inheritedPortalTarget = { nodeType: 1 } as unknown as Element;
         const previousDocument = (globalThis as any).document;
 
@@ -100,8 +101,6 @@ describe('BaseModal web portal target', () => {
     it('stacks above every screen popover layer: a body-level popover host is not its portal target', async () => {
         // A dialog opened from inside a popover (Add → Session, Add → confirm) must sit above it whatever
         // order the screens' popover hosts were appended to the body in.
-        const { BaseModal } = await import('./BaseModal');
-        const { ModalPortalTargetProvider } = await import('@/modal/portal/ModalPortalTarget');
         const previousDocument = (globalThis as any).document;
 
         createPortalMock.mockReset();
@@ -135,8 +134,6 @@ describe('BaseModal web portal target', () => {
     });
 
     it('renders into the provided web portal target when supplied', async () => {
-        const { BaseModal } = await import('./BaseModal');
-        const { ModalPortalTargetProvider } = await import('@/modal/portal/ModalPortalTarget');
         const portalTarget = { nodeType: 1 } as unknown as Element;
         const inheritedPortalTarget = { nodeType: 11 } as unknown as DocumentFragment;
         const previousDocument = (globalThis as any).document;

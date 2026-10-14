@@ -329,7 +329,7 @@ export type ExecutionRunMarker = DaemonExecutionRunMarker;
 type ExecutionRunMarkerPersistenceRead = DaemonExecutionRunMarkerPersistenceRead;
 
 const RetainedWorkerUpdateSchema = z.object({
-  requesterWorkAttributionV1: RequesterWorkAttributionV1Schema.optional(),
+  requesterWorkAttributionV1: z.optional(RequesterWorkAttributionV1Schema),
   sessionId: z.string().min(1),
   localId: z.string().min(1),
   update: WorkerUpdateV1Schema,

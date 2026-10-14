@@ -10,6 +10,8 @@ import { SESSION_FOLLOW_WAKE_EVENT_MESSAGE } from '@happier-dev/protocol/session
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { AgentTransitionDividerRow } from '@/components/sessions/transcript/agentTransition/AgentTransitionDividerRow';
 import { Text } from '@/components/ui/text/Text';
+import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
+import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import { TranscriptSeparatorRow } from '@/components/sessions/transcript/separators/TranscriptSeparatorRow';
 import { resolveConnectedServiceUxDiagnosticPresentation } from '@/components/sessions/connectedServices/diagnostics/connectedServiceUxDiagnostics';
 import {
@@ -342,6 +344,8 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     emphasis?: TranscriptEventEmphasis;
     /** A failed turn or rejected input: the same row, with its glyph in the failure colour. */
     tone?: 'failure';
+    /** Find ranges in the displayed primary text, supplied by the transcript row owner. */
+    findSourceRanges?: readonly FindTextRange[];
     navigationEnabled?: boolean;
     /** On the worker update that opens a context-only wake: how many updates woke the session. */
     hostWakeCount?: number;
@@ -555,7 +559,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
                 </View>
                 <View style={styles.textColumn} testID={testID ? `${testID}-body` : undefined}>
                     <Text selectable style={[styles.text, deemphasized ? styles.deemphasizedText : null]}>
-                        {text}
+                        {props.findSourceRanges?.length ? <FindHighlightedText text={text} ranges={props.findSourceRanges} selectable /> : text}
                     </Text>
                     {detailText ? (
                         <Text selectable style={styles.detailText} testID={testID ? `${testID}-detail` : undefined}>

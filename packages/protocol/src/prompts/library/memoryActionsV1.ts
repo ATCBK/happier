@@ -12,11 +12,11 @@ export function isMemoryWriteActionV1(id: string): id is typeof MEMORY_WRITE_ACT
 }
 const revision = lazyZodSchema(() => z.object({ headerVersion: z.number().int().nonnegative(), bodyVersion: z.number().int().nonnegative() }).strict());
 const topic = () => z.string().min(1).regex(/^[^\r\n]+$/).optional();
-export const MemoryDocReadInputV1Schema = lazyZodSchema(() => z.object({ ref: PromptDocArtifactRefV1Schema.strict(), topic: topic() }).strict());
+export const MemoryDocReadInputV1Schema = lazyZodSchema(() => z.object({ ref: PromptDocArtifactRefV1Schema, topic: topic() }).strict());
 const target = lazyZodSchema(() => MemoryDocReadInputV1Schema.extend({ expectedRevision: revision }).strict());
 const text = () => z.string().min(1);
 const until = () => z.number().int().nonnegative();
-const reviewedTarget = lazyZodSchema(() => z.object({ ref: PromptDocArtifactRefV1Schema.strict(), expectedRevision: revision }).strict().nullable().optional());
+const reviewedTarget = lazyZodSchema(() => z.object({ ref: PromptDocArtifactRefV1Schema, expectedRevision: revision }).strict().nullable().optional());
 const accountScope = lazyZodSchema(() => z.object({ scope: z.literal('account') }).strict());
 const projectScope = lazyZodSchema(() => z.object({ scope: z.literal('project'), projectRef: QualifiedProjectKeyV1Schema }).strict());
 export const MemoryScopeTargetV1Schema = lazyZodSchema(() => z.union([accountScope, projectScope]));
@@ -39,7 +39,7 @@ export const MemoryForgetInputV1Schema = lazyZodSchema(() => target.extend({ fac
 export const MemoryListInputV1Schema = lazyZodSchema(() => z.object({ serverId: z.string().min(1).optional(), cursor: z.string().min(1).optional(), limit: z.number().int().positive().optional() }).strict());
 export const MemoryMutationResultV1Schema = lazyZodSchema(() => z.object({
   ok: z.literal(true), artifactId: z.string().min(1), factId: z.string().min(1),
-  ref: PromptDocArtifactRefV1Schema.strict().optional(), attachment: z.enum(['attached', 'conflict']).optional(),
+  ref: z.optional(PromptDocArtifactRefV1Schema), attachment: z.enum(['attached', 'conflict']).optional(),
 }).strict());
 export const MemoryDocReadResultV1Schema = lazyZodSchema(() => {
   const version = { ok: z.literal(true), artifactId: z.string().min(1), revision, header: MemoryDocArtifactHeaderV1Schema };

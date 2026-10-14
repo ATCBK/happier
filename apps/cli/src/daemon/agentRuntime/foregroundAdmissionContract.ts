@@ -67,14 +67,14 @@ export const ForegroundAgentRuntimeAdmissionRequestV1Schema = z.object({
   agentId: AgentIdV1Schema,
   backendTarget: BackendTargetRefV2Schema,
   /** Launch intent only; executable authority is still the admitted contribution. */
-  agentTarget: AgentExecutionTargetV1Schema.optional(),
-  runtimeDescriptorV1: RuntimeDescriptorV1Schema.optional(),
+  agentTarget: z.optional(AgentExecutionTargetV1Schema),
+  runtimeDescriptorV1: z.optional(RuntimeDescriptorV1Schema),
   profileId: BoundedIdSchema.optional(),
-  profileRecordRevision: ProfileRowRevisionV1Schema.optional(),
+  profileRecordRevision: z.optional(ProfileRowRevisionV1Schema),
   accountSettingsScopeKey: z.string().min(1).max(1_024).optional(),
   accountSettingsVersion: z.number().int().nonnegative().optional(),
-  selection: SessionModelSelectionV1Schema.optional(),
-  previousBinding: SessionProviderBindingMetadataV1Schema.nullable().optional(),
+  selection: z.optional(SessionModelSelectionV1Schema),
+  previousBinding: z.optional(z.nullable(SessionProviderBindingMetadataV1Schema)),
   connectedServices: ConnectedServicesBindingsIngressSchema,
   vendorResumeId: BoundedIdSchema.optional(),
   /**
@@ -89,7 +89,7 @@ export const ForegroundAgentRuntimeAdmissionRequestV1Schema = z.object({
    * therefore cannot receive this request, and this schema is `.strict()` so
    * it would reject rather than silently launch with different credentials.
    */
-  secretReferenceOverlay: SecretReferenceOverlayV1Schema.optional(),
+  secretReferenceOverlay: z.optional(SecretReferenceOverlayV1Schema),
 }).strict().superRefine((value, ctx) => {
   if (
     value.profileId !== undefined

@@ -92,20 +92,23 @@ vi.mock('@expo/vector-icons', () => ({
 }));
 
 vi.mock('expo-clipboard', () => ({
-    setStringAsync: vi.fn(async () => {}),
+    setStringAsync: vi.fn(async () => true),
 }));
+
+// The platform mock is read on render; retain one module graph across both platforms.
+const Clipboard = await import('expo-clipboard');
+const { Item } = await import('./Item');
 
 describe('Item (long press)', () => {
     beforeEach(() => {
         platformState.os = 'web';
         modalAlertSpy.mockClear();
+        vi.mocked(Clipboard.setStringAsync).mockClear();
     });
 
     it('suppresses onPress immediately after onLongPress', async () => {
         const onPress = vi.fn();
         const onLongPress = vi.fn();
-        const { Item } = await import('./Item');
-
         const screen = await renderScreen(
             <Item
                 testID={ITEM_TEST_ID}
@@ -131,10 +134,6 @@ describe('Item (long press)', () => {
 
     it('copies native copy rows from Pressable long press without opening a success modal', async () => {
         platformState.os = 'android';
-        vi.resetModules();
-        const Clipboard = await import('expo-clipboard');
-        const { Item } = await import('./Item');
-
         const screen = await renderScreen(
             <Item
                 testID={ITEM_TEST_ID}
@@ -156,10 +155,6 @@ describe('Item (long press)', () => {
 
     it('copies web copy rows from Pressable press without opening a success modal', async () => {
         platformState.os = 'web';
-        vi.resetModules();
-        const Clipboard = await import('expo-clipboard');
-        const { Item } = await import('./Item');
-
         const screen = await renderScreen(
             <Item
                 testID={ITEM_TEST_ID}

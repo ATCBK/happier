@@ -24,6 +24,9 @@ installPopoverCommonModuleMocks({
     reactNative: () => reactNativeWebMock,
 });
 
+// A cold modal import is collection work, separate from the mounted loop check.
+const { BaseModal } = await import('@/modal/components/BaseModal');
+
 const { createRequire } = getVitestNodeBuiltin<{
     createRequire: (filename: string | URL) => (id: string) => unknown;
 }>('node:module');
@@ -377,7 +380,6 @@ describe('PopoverPortalTargetProvider (web dom)', () => {
 
         try {
             const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
-            const { BaseModal } = await import('@/modal/components/BaseModal');
 
             await act(async () => {
                 root.render(

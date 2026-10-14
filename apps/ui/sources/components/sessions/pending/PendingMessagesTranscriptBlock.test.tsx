@@ -71,6 +71,7 @@ installPendingMessagesCommonModuleMocks({
         const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
         return createPartialStorageModuleMock(importOriginal, {
             useSession: () => sessionValue,
+            useActiveServerAccountScope: () => ({ serverId: 'home-a', accountId: 'account-a' }),
             useSetting: (key: string) => settingValues[key],
             storage: { getState: () => ({}) },
         });
@@ -254,6 +255,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         executeDefaultAction.mockReset();
         executeDefaultAction.mockResolvedValue({ ok: true, result: { ok: true, status: 'cleared', sessionId: 's1' } });
         resolvePreferredServerIdForSessionId.mockReset();
+        resolvePreferredServerIdForSessionId.mockReturnValue('home-a');
         resolvePendingDeliveryLabelKeyForSession.mockReset();
         resolvePendingDeliveryLabelKeyForSession.mockReturnValue(null);
         resolvePendingDeliveryTransientActionForSession.mockReset();
@@ -1083,6 +1085,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         } as PendingMessage;
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
             sessionId: 's1',
+            serverId: 'home-a',
             pendingMessages: [pendingMessage],
             discardedMessages: [],
         }));
@@ -1099,8 +1102,10 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(sessionAbort).not.toHaveBeenCalled();
 
         await screen.pressByTestIdAsync('pendingMessages.markDeliveryHandled:p1');
-        expect(modalConfirm).toHaveBeenCalledTimes(1);
-        expect(markPendingDeliveryHandled).toHaveBeenCalledWith('s1', 'p1');
+        expect(executeDefaultAction).toHaveBeenCalledWith('session.pending.markHandled',
+            expect.objectContaining({ sessionId: 's1', localId: 'p1' }),
+            expect.objectContaining({ surface: 'ui', expectedAccountId: 'account-a' }));
+        expect(markPendingDeliveryHandled).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -1129,6 +1134,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         } as PendingMessage;
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
             sessionId: 's1',
+            serverId: 'home-a',
             pendingMessages: [
                 pendingMessage,
                 {
@@ -1158,38 +1164,64 @@ describe('PendingMessagesTranscriptBlock', () => {
 
         await screen.pressByTestIdAsync('pendingMessages.markDeliveryHandled:p1');
 
-        expect(markPendingDeliveryHandled).toHaveBeenCalledWith('s1', 'p1');
+        expect(executeDefaultAction).toHaveBeenCalledWith('session.pending.markHandled',
+            expect.objectContaining({ sessionId: 's1', localId: 'p1' }), expect.objectContaining({ surface: 'ui' }));
+        expect(markPendingDeliveryHandled).not.toHaveBeenCalled();
         expect(sendPendingMessageNow).not.toHaveBeenCalled();
         expect(deletePendingMessage).not.toHaveBeenCalled();
         expect(discardPendingMessage).not.toHaveBeenCalled();
         expect(sessionAbort).not.toHaveBeenCalled();
     });
 
-    it('dismisses or sends an uncertain delivery as a new identity without retrying the original', async () => {
+    it.each([undefined, { kind: 'execution_run' as const, runId: 'run-a' }])('dismisses or sends an uncertain delivery as a new identity without retrying the original (%j)', async recipient => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         dismissPendingDelivery.mockResolvedValueOnce(undefined);
         sendPendingDeliveryAsNew.mockResolvedValueOnce(undefined);
         const pendingMessage: PendingMessage = {
-            id: 'p1', localId: 'p1', text: 'uncertain delivery', displayText: undefined,
+            id: 'p1', localId: 'wire-local', recipient, text: 'uncertain delivery', displayText: undefined,
             createdAt: 0, updatedAt: 0, rawRecord: {}, source: 'server_pending',
             pendingDeliveryStatus: 'blocked', pendingDeliveryBlockedReason: 'delivery_outcome_uncertain',
         } as PendingMessage;
 
         const dismissScreen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
-            sessionId: 's1', pendingMessages: [pendingMessage], discardedMessages: [],
+            sessionId: 's1', serverId: 'home-a', recipient, pendingMessages: [pendingMessage], discardedMessages: [],
         }));
         await dismissScreen.pressByTestIdAsync('pendingMessages.message:p1');
         await dismissScreen.pressByTestIdAsync('pendingMessages.dismissDelivery:p1');
-        expect(dismissPendingDelivery).toHaveBeenCalledWith('s1', 'p1');
+        expect(executeDefaultAction).toHaveBeenCalledWith('session.pending.dismiss',
+            expect.objectContaining({ sessionId: 's1', localId: 'wire-local', ...(recipient ? { targetExecutionRunId: recipient.runId } : {}) }),
+            expect.objectContaining({ surface: 'ui', serverId: 'home-a', expectedAccountId: 'account-a' }));
+        expect(dismissPendingDelivery).not.toHaveBeenCalled();
         expect(discardPendingMessage).not.toHaveBeenCalled();
 
         const sendScreen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
-            sessionId: 's1', pendingMessages: [pendingMessage], discardedMessages: [],
+            sessionId: 's1', serverId: 'home-a', recipient, pendingMessages: [pendingMessage], discardedMessages: [],
         }));
         await sendScreen.pressByTestIdAsync('pendingMessages.message:p1');
         await sendScreen.pressByTestIdAsync('pendingMessages.sendAsNew:p1');
-        expect(sendPendingDeliveryAsNew).toHaveBeenCalledWith('s1', 'p1');
+        expect(executeDefaultAction).toHaveBeenCalledWith('session.pending.sendAsNew',
+            expect.objectContaining({ sessionId: 's1', localId: 'wire-local', ...(recipient ? { targetExecutionRunId: recipient.runId } : {}) }),
+            expect.objectContaining({ surface: 'ui', serverId: 'home-a', expectedAccountId: 'account-a' }));
+        expect(sendPendingDeliveryAsNew).not.toHaveBeenCalled();
         expect(sendPendingMessageNow).not.toHaveBeenCalled();
+    });
+
+    it('keeps canceled recovery quiet and retains the original Pending row', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        executeDefaultAction.mockResolvedValueOnce({ ok: false, errorCode: 'approval_canceled', error: 'approval_canceled' });
+        const pendingMessage: PendingMessage = {
+            id: 'p1', localId: 'p1', text: 'uncertain delivery', createdAt: 0, updatedAt: 0,
+            rawRecord: {}, source: 'server_pending', pendingDeliveryStatus: 'blocked', pendingDeliveryBlockedReason: 'delivery_outcome_uncertain',
+        };
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1', serverId: 'home-a', pendingMessages: [pendingMessage], discardedMessages: [],
+        }));
+        await screen.pressByTestIdAsync('pendingMessages.message:p1');
+        await screen.pressByTestIdAsync('pendingMessages.dismissDelivery:p1');
+        expect(executeDefaultAction).toHaveBeenCalledWith('session.pending.dismiss', expect.anything(), expect.anything());
+        expect(dismissPendingDelivery).not.toHaveBeenCalled();
+        expect(modalAlert).not.toHaveBeenCalled();
+        expect(screen.findByTestId('pendingMessages.row:p1')).toBeTruthy();
     });
 
     it('continues waiting on a delivery-outcome uncertainty without invoking a delivery operation', async () => {
@@ -1228,10 +1260,10 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(sessionAbort).not.toHaveBeenCalled();
     });
 
-    it('ignores duplicate mark-handled presses while the confirmation is unresolved', async () => {
+    it('ignores duplicate mark-handled presses while the Action is unresolved', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
-        const confirmDeferred = createDeferred<boolean>();
-        modalConfirm.mockReturnValueOnce(confirmDeferred.promise);
+        const actionDeferred = createDeferred<unknown>();
+        executeDefaultAction.mockReturnValueOnce(actionDeferred.promise);
         markPendingDeliveryHandled.mockResolvedValueOnce(undefined);
         const pendingMessage: PendingMessage = {
             id: 'p1',
@@ -1247,6 +1279,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         } as PendingMessage;
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
             sessionId: 's1',
+            serverId: 'home-a',
             pendingMessages: [pendingMessage],
             discardedMessages: [],
         }));
@@ -1261,17 +1294,18 @@ describe('PendingMessagesTranscriptBlock', () => {
             await Promise.resolve();
         });
 
-        expect(modalConfirm).toHaveBeenCalledTimes(1);
+        expect(executeDefaultAction).toHaveBeenCalledTimes(1);
+        expect(modalConfirm).not.toHaveBeenCalled();
         expect(markPendingDeliveryHandled).not.toHaveBeenCalled();
 
         await act(async () => {
-            confirmDeferred.resolve(true);
-            await confirmDeferred.promise;
+            actionDeferred.resolve({ ok: true, result: { ok: true } });
+            await actionDeferred.promise;
             await Promise.resolve();
         });
 
-        expect(markPendingDeliveryHandled).toHaveBeenCalledTimes(1);
-        expect(markPendingDeliveryHandled).toHaveBeenCalledWith('s1', 'p1');
+        expect(executeDefaultAction).toHaveBeenCalledTimes(1);
+        expect(markPendingDeliveryHandled).not.toHaveBeenCalled();
     });
 
     it('offers only duplicate-safe send-as-new recovery for a server-delivering row', async () => {
@@ -1293,6 +1327,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         } as PendingMessage;
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
             sessionId: 's1',
+            serverId: 'home-a',
             pendingMessages: [
                 pendingMessage,
                 {
@@ -1326,7 +1361,9 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(sessionAbort).not.toHaveBeenCalled();
 
         await screen.pressByTestIdAsync('pendingMessages.sendAsNew:p-delivering');
-        expect(sendPendingDeliveryAsNew).toHaveBeenCalledWith('s1', 'p-delivering');
+        expect(executeDefaultAction).toHaveBeenCalledWith('session.pending.sendAsNew',
+            expect.objectContaining({ sessionId: 's1', localId: 'p-delivering' }), expect.objectContaining({ surface: 'ui' }));
+        expect(sendPendingDeliveryAsNew).not.toHaveBeenCalled();
         expect(sendPendingMessageNow).not.toHaveBeenCalled();
     });
 

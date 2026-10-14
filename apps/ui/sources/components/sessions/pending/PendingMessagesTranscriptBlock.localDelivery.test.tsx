@@ -2,6 +2,7 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
+import { PendingRequestedActionV1Schema, PendingResetStartSetResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 
 import { createDeferred, createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -62,8 +63,11 @@ beforeEach(async () => {
         if (init?.method === 'PATCH' && path.endsWith('/action')) {
             actionRequests.push(path);
             const localId = path.split('/').at(-2)!;
+            const body: unknown = JSON.parse(String(init.body));
+            if (!body || typeof body !== 'object') throw new Error('Pending action fixture expected a request body');
+            const requestedAction = PendingRequestedActionV1Schema.parse(Reflect.get(body, 'requestedAction'));
             return durableLocalIds.has(localId)
-                ? Response.json({ didUpdate: true })
+                ? Response.json(PendingResetStartSetResultV1Schema.parse({ didUpdate: true, requestedAction }))
                 : Response.json({ error: 'not-found' }, { status: 404 });
         }
         return path === '/v1/features'
