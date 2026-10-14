@@ -26,6 +26,7 @@ import { EntityDragGripChooser } from './EntityDragGripChooser';
 import { useEntityDropOutcome } from './entityDropOutcome';
 import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 export type EntityFlatReorderBinding = Readonly<{
     scope: EntityDragScopeV1 | null;
@@ -59,16 +60,19 @@ export async function settleEntityReorderWrite(write: () => Promise<void>): Prom
     }
 }
 
-/** Present-user execution preserves the existing Action policy and the exact Account fence. */
-export async function executeEntityReorderAction(effect: EntityDropEffectV1, scope: EntityDragScopeV1): Promise<EntityDropOutcomeV1> {
+/** Every flat-list Action joins the incumbent mounted approval and Account lifetime owner. */
+export function useEntityReorderAction(scope: EntityDragScopeV1 | null) {
+    const { execute } = useMountedActionExecution(scope, { openOnRequest: true });
+    return React.useCallback((effect: EntityDropEffectV1) => executeEntityReorderAction(effect, execute), [execute]);
+}
+
+/** Only settled execution results reach the drag outcome projection. */
+async function executeEntityReorderAction(effect: EntityDropEffectV1,
+    execute: ReturnType<typeof useMountedActionExecution>['execute']): Promise<EntityDropOutcomeV1> {
     const { ActionIdSchema } = await import('@happier-dev/protocol/actions/actionIds');
     try {
-        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const actionId = ActionIdSchema.parse(effect.actionId);
-        const result = await createDefaultActionExecutor().execute(actionId, effect.input, {
-            surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
-            serverId: scope.serverId, expectedAccountId: scope.accountId,
-        });
+        const result = await execute(actionId, effect.input);
         if (!result.ok) return entityReorderActionFailure(result.errorCode);
         const outcome = result.result;
         if (outcome && typeof outcome === 'object' && 'status' in outcome && outcome.status !== 'applied') {

@@ -23,7 +23,7 @@ import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
-import { EntityFlatReorderList, EntityFlatReorderRow, executeEntityReorderAction, entityReorderPreview, entityReorderRefused, type EntityFlatReorderBinding } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
+import { EntityFlatReorderList, EntityFlatReorderRow, useEntityReorderAction, entityReorderPreview, entityReorderRefused, type EntityFlatReorderBinding } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -320,6 +320,7 @@ export const QualifiedPoolDetailView = React.memo(function QualifiedPoolDetailVi
         setLeftWide((current) => (current === next ? current : next));
     }, []);
     const scope = useActiveServerAccountScope();
+    const executeReorder = useEntityReorderAction(scope);
 
     const label = React.useMemo(() => presentQualifiedConnectedAccountTarget({
         target: { kind: 'group', service: group.ref.service, groupId: group.ref.groupId },
@@ -399,7 +400,7 @@ export const QualifiedPoolDetailView = React.memo(function QualifiedPoolDetailVi
         },
         execute: async (effect) => {
             if (!scope) return { status: 'refused', reason: { code: 'reorder_scope_unavailable', message: t('entityDragDrop.reasons.gone') } };
-            const outcome = await executeEntityReorderAction(effect, scope);
+            const outcome = await executeReorder(effect);
             return outcome.status === 'refused' ? {
                 ...outcome,
                 reason: { ...outcome.reason, message: resolveConnectedServiceSettingsErrorMessage({ code: outcome.reason.code }) },
