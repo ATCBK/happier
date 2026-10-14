@@ -1,5 +1,6 @@
 import test from 'node:test';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { allocateAvailableLocalhostPort } from '../../testkit/core/ephemeral_port.mjs';
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -250,6 +251,7 @@ test('ensureDevExpoServer restarts Expo after a Node heap OOM abort', async () =
   const children = [];
   let result;
   try {
+    const expoPort = await allocateAvailableLocalhostPort();
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
     await mkdir(join(uiDir, 'node_modules'), { recursive: true });
@@ -291,7 +293,7 @@ test('ensureDevExpoServer restarts Expo after a Node heap OOM abort', async () =
         FAKE_EXPO_RUN_COUNT_PATH: runCountPath,
         FAKE_EXPO_ARGS_PATH: argsPath,
         HAPPIER_STACK_EXPO_CLEAR_CACHE: '0',
-        HAPPIER_STACK_EXPO_DEV_PORT: '45678',
+        HAPPIER_STACK_EXPO_DEV_PORT: String(expoPort),
         HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: 'stable',
         HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10',
         HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10',
@@ -311,7 +313,7 @@ test('ensureDevExpoServer restarts Expo after a Node heap OOM abort', async () =
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.port, 45678);
+    assert.equal(result.port, expoPort);
 
     await waitForCondition(async () => (await readRunCount(runCountPath)) >= 2 && children.length >= 2);
     const spawnedArgs = (await readFile(argsPath, 'utf-8'))
@@ -352,6 +354,7 @@ test('ensureDevExpoServer restarts Expo after an unexpected SIGKILL while the st
   const children = [];
   let result;
   try {
+    const expoPort = await allocateAvailableLocalhostPort();
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
     await mkdir(join(uiDir, 'node_modules'), { recursive: true });
@@ -387,7 +390,7 @@ test('ensureDevExpoServer restarts Expo after an unexpected SIGKILL while the st
         ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: uiDir }),
         HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
         FAKE_EXPO_RUN_COUNT_PATH: runCountPath,
-        HAPPIER_STACK_EXPO_DEV_PORT: '45679',
+        HAPPIER_STACK_EXPO_DEV_PORT: String(expoPort),
         HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: 'stable',
         HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10',
         HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10',
@@ -407,7 +410,7 @@ test('ensureDevExpoServer restarts Expo after an unexpected SIGKILL while the st
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.port, 45679);
+    assert.equal(result.port, expoPort);
 
     await waitForCondition(async () => (await readRunCount(runCountPath)) >= 2 && children.length >= 2);
     assert.equal(children.length, 2);
@@ -420,7 +423,7 @@ test('ensureDevExpoServer restarts Expo after an unexpected SIGKILL while the st
     });
     const runtime = await readStackRuntimeStateFile(runtimeStatePath);
     assert.equal(runtime?.processes?.expoPid, children[1].pid);
-    assert.equal(runtime?.expo?.webPort, 45679);
+    assert.equal(runtime?.expo?.webPort, expoPort);
   } finally {
     await result?.close?.();
     for (const child of children) {
@@ -436,6 +439,7 @@ test('ensureDevExpoServer restores the restart budget after a replacement remain
   const children = [];
   let result;
   try {
+    const expoPort = await allocateAvailableLocalhostPort();
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
     await mkdir(join(uiDir, 'node_modules'), { recursive: true });
@@ -474,7 +478,7 @@ test('ensureDevExpoServer restores the restart budget after a replacement remain
         ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: uiDir }),
         HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
         FAKE_EXPO_RUN_COUNT_PATH: runCountPath,
-        HAPPIER_STACK_EXPO_DEV_PORT: '45681',
+        HAPPIER_STACK_EXPO_DEV_PORT: String(expoPort),
         HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: 'stable',
         HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10',
         HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10',
@@ -495,7 +499,7 @@ test('ensureDevExpoServer restores the restart budget after a replacement remain
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.port, 45681);
+    assert.equal(result.port, expoPort);
     await waitForCondition(
       async () => (await readRunCount(runCountPath)) >= 3 && children.length >= 3,
       { timeoutMs: 2_000 },
@@ -518,6 +522,7 @@ test('ensureDevExpoServer continues capped backoff when the stability override i
   const children = [];
   let result;
   try {
+    const expoPort = await allocateAvailableLocalhostPort();
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
     await mkdir(join(uiDir, 'node_modules'), { recursive: true });
@@ -552,7 +557,7 @@ test('ensureDevExpoServer continues capped backoff when the stability override i
         ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: uiDir }),
         HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
         FAKE_EXPO_RUN_COUNT_PATH: runCountPath,
-        HAPPIER_STACK_EXPO_DEV_PORT: '45682',
+        HAPPIER_STACK_EXPO_DEV_PORT: String(expoPort),
         HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: 'stable',
         HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10',
         HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10',
@@ -573,7 +578,7 @@ test('ensureDevExpoServer continues capped backoff when the stability override i
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.port, 45682);
+    assert.equal(result.port, expoPort);
     await waitForCondition(
       async () => (await readRunCount(runCountPath)) >= 2 && children[1]?.signalCode === 'SIGKILL',
       { timeoutMs: 2_000 },
@@ -598,6 +603,7 @@ test('ensureDevExpoServer clears published UI runtime metadata without restartin
   let result;
   let shuttingDown = false;
   try {
+    const expoPort = await allocateAvailableLocalhostPort();
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
     await mkdir(join(uiDir, 'node_modules'), { recursive: true });
@@ -630,7 +636,7 @@ test('ensureDevExpoServer clears published UI runtime metadata without restartin
         ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: uiDir }),
         HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
         FAKE_EXPO_RUN_COUNT_PATH: runCountPath,
-        HAPPIER_STACK_EXPO_DEV_PORT: '45680',
+        HAPPIER_STACK_EXPO_DEV_PORT: String(expoPort),
         HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: 'stable',
         HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10',
         HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10',
@@ -651,7 +657,7 @@ test('ensureDevExpoServer clears published UI runtime metadata without restartin
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.port, 45680);
+    assert.equal(result.port, expoPort);
     await waitForCondition(async () => (await readRunCount(runCountPath)) === 1);
 
     shuttingDown = true;
@@ -682,6 +688,7 @@ test('ensureDevExpoServer retries after a transient replacement spawn failure', 
   const children = [];
   let result;
   try {
+    const expoPort = await allocateAvailableLocalhostPort();
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
     await mkdir(join(uiDir, 'node_modules'), { recursive: true });
@@ -716,7 +723,7 @@ test('ensureDevExpoServer retries after a transient replacement spawn failure', 
         ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: uiDir }),
         HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
         FAKE_EXPO_RUN_COUNT_PATH: runCountPath,
-        HAPPIER_STACK_EXPO_DEV_PORT: '45683',
+        HAPPIER_STACK_EXPO_DEV_PORT: String(expoPort),
         HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: 'stable',
         HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '40',
         HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '40',
@@ -737,7 +744,7 @@ test('ensureDevExpoServer retries after a transient replacement spawn failure', 
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.port, 45683);
+    assert.equal(result.port, expoPort);
     await waitForCondition(async () => children[0]?.signalCode === 'SIGKILL');
     await children[0].completion;
     await rm(teeFile, { force: true });
@@ -771,6 +778,7 @@ test('ensureDevExpoServer does not retry a replacement spawn failure after shutd
   let result;
   let shuttingDown = false;
   try {
+    const expoPort = await allocateAvailableLocalhostPort();
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
     await mkdir(join(uiDir, 'node_modules'), { recursive: true });
@@ -805,7 +813,7 @@ test('ensureDevExpoServer does not retry a replacement spawn failure after shutd
         ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: uiDir }),
         HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
         FAKE_EXPO_RUN_COUNT_PATH: runCountPath,
-        HAPPIER_STACK_EXPO_DEV_PORT: '45684',
+        HAPPIER_STACK_EXPO_DEV_PORT: String(expoPort),
         HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: 'stable',
         HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '300',
         HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '300',
@@ -827,7 +835,7 @@ test('ensureDevExpoServer does not retry a replacement spawn failure after shutd
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.port, 45684);
+    assert.equal(result.port, expoPort);
     await waitForCondition(async () => children[0]?.signalCode === 'SIGKILL');
     await children[0].completion;
     await rm(teeFile, { force: true });

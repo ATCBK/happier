@@ -419,6 +419,8 @@ test('a pending build suspends recovery scans and revalidates missed edits befor
   const fixture = await createTempFixture(t, { prefix: 'hstack-pending-build-scan-' });
   const source = fixture.path('source.ts');
   await fs.writeFile(source, 'export const value = 1;');
+  await fs.utimes(source, 1, 1);
+  const admittedSourceStat = await fs.lstat(source, { bigint: true });
   const originalLstat = fs.lstat;
   let sourceStats = 0;
   t.mock.method(fs, 'lstat', async (...args) => {
@@ -472,6 +474,12 @@ test('a pending build suspends recovery scans and revalidates missed edits befor
   // Deliberately omit the native event: completion must still reject stale
   // prepared inputs before activating, then build the current generation.
   await fs.writeFile(source, 'export const value = 2;');
+  // Recovery checks known metadata. Establish an observable same-size edit
+  // without assuming two awaited writes cross the filesystem's timestamp tick.
+  await fs.utimes(source, 2, 2);
+  const editedSourceStat = await fs.lstat(source, { bigint: true });
+  assert.equal(editedSourceStat.size, admittedSourceStat.size);
+  assert.notEqual(editedSourceStat.mtimeNs, admittedSourceStat.mtimeNs);
   releaseBuild();
   await preparing;
   assert.deepEqual(builds, [1, 2]);

@@ -928,7 +928,16 @@ test('hosted CI public compiler scripts execute locally on a small host and pres
 });
 
 test('finite typecheck dispatch is granted by public script owners on remote and explicit local paths', async (t) => {
-  const { invocation } = await memoryRoutingFixture(t, { roomyAvailableKiB: 41943040, roomyTotalKiB: 50331648 });
+  const fixture = await memoryRoutingFixture(t, { roomyAvailableKiB: 41943040, roomyTotalKiB: 50331648 });
+  const { invocation } = fixture;
+  // Permission checks consume a ready fixture tree, never the mutable primary
+  // install. Real readiness and permission policy remain in place.
+  const { launcher } = await installNativeAdmissionFixture({ root: fixture.root, prepareDependencies: true });
+  const checkout = resolve(launcher, '../../../..');
+  invocation.cwd = checkout;
+  for (const target of fixture.config.targets) target.repoDir = checkout;
+  await writeFile(fixture.configPath, JSON.stringify(fixture.config));
+  await writeNativeProjectionFixture(join(fixture.stackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(fixture.config, { repoRoot: checkout }));
   const binDir = invocation.env.PATH.split(':')[0];
   await executable(join(binDir, 'corepack'), '#!/bin/sh\nprintf "dispatch=%s\\n" "${HAPPIER_TYPECHECK_DISPATCHED-}"\n');
   for (const script of ['typecheck:local', 'typecheck:compiler:local', 'check:public-sdk:finite:local']) {
