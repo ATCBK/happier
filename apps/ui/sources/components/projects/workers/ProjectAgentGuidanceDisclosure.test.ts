@@ -76,6 +76,35 @@ describe('describeProjectAgentGuidance', () => {
     expect(text).not.toMatch(/^(test|typecheck|lint): /m);
   });
 
+  it.each(['primaryFirst', 'portableFirst', 'allOverridden', 'noScripts'] as const)(
+    'describes the workspace default independently of declaration order and overrides (%s)', order => {
+      const base = guidance('refused');
+      const preference = { ...createDefaultWorkspaceWorkerPreferenceV1(), enabled: true as const,
+        destination: { kind: 'machine' as const, machineId: 'worker-b' },
+        scriptOverrides: order === 'allOverridden' ? { test: 'primary' as const, typecheck: 'primary' as const, lint: 'primary' as const } : {} };
+      const scripts = base.scripts!.map(script => ({ ...script, resolution: resolveProjectExecutionChoiceV1({
+        execution: script.execution, scriptName: script.name, preference: { status: 'ready', value: preference },
+      }) }));
+      if (order === 'primaryFirst') scripts.reverse();
+      if (order === 'noScripts') scripts.length = 0;
+      const text = describeProjectAgentGuidance({ ...base, scripts,
+        workerPreferences: { status: 'ready', preference, revision: 1, provenance: 'saved' } }, 'happier');
+      expect(text.split('\n').filter(line => line.startsWith('projectWorkers.defaultSummary')))
+        .toEqual(['projectWorkers.defaultSummary {"destination":"worker-b"}']);
+      if (order !== 'noScripts') expect(text.split('\n').find(line => line.includes('projectWorkers.guidePrimary'))).toContain('lint');
+      if (order === 'allOverridden') expect(text).toContain('test: projectWorkers.primary');
+    },
+  );
+
+  it('describes the disabled workspace default even without Scripts', () => {
+    const base = guidance('refused');
+    const preference = createDefaultWorkspaceWorkerPreferenceV1();
+    const text = describeProjectAgentGuidance({ ...base, scripts: [],
+      workerPreferences: { status: 'ready', preference, revision: 1, provenance: 'saved' } }, 'happier');
+    expect(text.split('\n').filter(line => line.startsWith('projectWorkers.defaultSummary')))
+      .toEqual(['projectWorkers.defaultSummary {"destination":"projectWorkers.primary"}']);
+  });
+
   it('distinguishes actual empty declarations from an unavailable read', () => {
     expect(describeProjectAgentGuidance({ ...guidance('refused'), scripts: [] }, 'happier'))
       .toContain('projectWorkers.guideNoScripts');

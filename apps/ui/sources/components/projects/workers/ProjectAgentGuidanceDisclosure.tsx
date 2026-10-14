@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import type { ProjectExecutionChoiceResolutionV1, WorkerDestinationV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
+import { resolveProjectExecutionChoiceV1, type ProjectExecutionChoiceResolutionV1, type WorkerDestinationV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 
 import {
   readProjectSetupAgentGuidance,
@@ -89,12 +89,14 @@ export function describeProjectAgentGuidance(
     targetLines.push('status' in preferences && preferences.status === 'locked'
       ? t('projectWorkers.settingsLocked') : t('common.retry'));
   }
-  // Where a script goes is the checkout default, said once; only a script the person overrode names its own.
+  // The workspace default is independent of declaration policy and named overrides.
   const overrides = 'status' in preferences && preferences.status === 'ready' ? preferences.preference.scriptOverrides : {};
   const isOverridden = (name: string) => Object.hasOwn(overrides, name);
-  const defaulted = scripts.find(script => !isOverridden(script.name) && script.resolution.status === 'resolved');
+  const workspaceDefault = 'status' in preferences && preferences.status === 'ready'
+    ? resolveProjectExecutionChoiceV1({ execution: 'portable', preference: { status: 'ready', value: preferences.preference } })
+    : null;
   const scriptTargetLines = [
-    ...(defaulted ? [t('projectWorkers.defaultSummary', { destination: resolutionLabel(defaulted.resolution) })] : []),
+    ...(workspaceDefault ? [t('projectWorkers.defaultSummary', { destination: resolutionLabel(workspaceDefault) })] : []),
     ...scripts.filter(script => isOverridden(script.name))
       .map(script => `${script.name}: ${resolutionLabel(script.resolution)}`),
   ];
