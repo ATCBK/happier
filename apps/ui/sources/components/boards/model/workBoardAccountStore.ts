@@ -151,8 +151,10 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
                 await Promise.all(wanted.map(readBody));
                 if (!shouldContinue()) return;
                 const wasReady = readState.status === 'ready';
-                readState = { status: 'ready', hasSnapshot: true };
-                if (!wasReady) notify();
+                if (!wasReady) {
+                    readState = { status: 'ready', hasSnapshot: true };
+                    notify();
+                }
             } catch (error) {
                 if (!shouldContinue()) return;
                 const errorCode = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'

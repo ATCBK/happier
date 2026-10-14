@@ -16,6 +16,23 @@ function boundary() {
 }
 
 describe('WorkBoard Account Artifact save queue', () => {
+    it('keeps every external-store snapshot stable when an inventory refresh changes nothing', async () => {
+        const b = boundary();
+        const releaseView = b.store.retainView(() => () => {}, 'headers');
+        try {
+            await b.store.refresh();
+            const snapshots = [b.store.getReadState(), b.store.getSummaries(), b.store.getBoards()];
+            let notifications = 0;
+            const release = b.store.subscribe(() => { notifications++; });
+            try {
+                await b.store.refresh();
+                expect(b.store.getReadState()).toBe(snapshots[0]);
+                expect(b.store.getSummaries()).toBe(snapshots[1]);
+                expect(b.store.getBoards()).toBe(snapshots[2]);
+                expect(notifications).toBe(0);
+            } finally { release(); }
+        } finally { releaseView(); }
+    });
     it('reloads the old source before acknowledgement and the edited source after acknowledgement', async () => {
         const b = boundary();
         let release!: () => void;
