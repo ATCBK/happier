@@ -590,12 +590,6 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: [],
     representation: 'client',
   },
-  'prompts.assets.external': {
-    description: 'External prompt assets import/export surfaces and daemon adapters.',
-    defaultFailMode: 'fail_closed',
-    dependencies: ['prompts.library'],
-    representation: 'client',
-  },
   'auth.recovery.providerReset': {
     description: 'Auth provider reset support during recovery flows.',
     defaultFailMode: 'fail_closed',
@@ -792,12 +786,6 @@ const FEATURE_CATALOG_DEFINITION = {
     description: 'Optional Android Termux-based native terminal renderer.',
     defaultFailMode: 'fail_closed',
     dependencies: ['terminal.renderer.native'],
-    representation: 'client',
-  },
-  'mcp.servers': {
-    description: 'MCP servers management and injection support.',
-    defaultFailMode: 'fail_closed',
-    dependencies: [],
     representation: 'client',
   },
   'memory.search': {

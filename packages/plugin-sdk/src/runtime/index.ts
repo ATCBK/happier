@@ -226,27 +226,3 @@ export type {
 export type {
     PluginConnectedAccountMaterializationKind,
 } from '../connectedAccounts.js';
-export type {
-    PromptAssetAdapter,
-    PromptAssetBundleRecord,
-    PromptAssetDefaultRoot,
-    PromptAssetDeleteRequest,
-    PromptAssetDiscoverRequest,
-    PromptAssetDiscoverResult,
-    PromptAssetDiscoveryItem,
-    PromptAssetDocRecord,
-    PromptAssetExternalRef,
-    PromptAssetInstallMode,
-    PromptAssetLibraryKind,
-    PromptAssetListTypesResult,
-    PromptAssetMutationErrorCode,
-    PromptAssetMutationPreview,
-    PromptAssetMutationResult,
-    PromptAssetReadRequest,
-    PromptAssetReadResult,
-    PromptAssetScope,
-    PromptAssetSupportsScope,
-    PromptAssetWriteBundleRequest,
-    PromptAssetWriteDocRequest,
-    PromptAssetWriteRequest,
-} from '../resources.js';

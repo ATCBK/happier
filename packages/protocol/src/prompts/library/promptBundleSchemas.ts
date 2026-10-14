@@ -4,7 +4,7 @@ import { decodeBase64 } from '../../crypto/base64.js';
 import { ArtifactRevisionV1Schema } from '../../artifacts/artifactRevisionV1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { PromptLibrarySaveOrganizationFieldsV1, isPromptLibrarySaveFolderAssignmentV1 } from './promptFolderActionSchemasV1.js';
-import { readSkillFrontmatterV1 } from './skills/skillLibraryItemV1.js';
+import { readStoredSkillFrontmatterV1 } from './skills/skillLibraryItemV1.js';
 import { computePromptBundleDigestV1 } from './promptLibraryDigests.js';
 import { FIRST_PARTY_SKILLS_V1 } from './skills/firstPartySkillsV1.js';
 
@@ -37,7 +37,7 @@ export function projectPromptBundleActionEntriesV1(entries: readonly PromptBundl
   return PromptBundleActionEntriesProjectionV1Schema.parse(entries);
 }
 export const PromptBundleCreateActionInputV1Schema = lazyZodSchema(() => z.object({
-  title: z.string().min(1), bundleSchemaId: PromptBundleSchemaIdV1Schema,
+title: z.string().min(1), bundleSchemaId: z.literal('skills.skill_md_v1'),
   entries: z.array(PromptBundleActionEntryV1Schema), ...PromptLibrarySaveOrganizationFieldsV1,
 }).strict().refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' }));
 export type PromptBundleCreateActionInputV1 = z.infer<typeof PromptBundleCreateActionInputV1Schema>;
@@ -65,7 +65,7 @@ export type PromptBundleBodyV1 = z.infer<typeof PromptBundleBodyV1Schema>;
 
 export type SkillBundleContentV1 = Readonly<{
   body: PromptBundleBodyV1; skillMd: string;
-  frontmatter: ReturnType<typeof readSkillFrontmatterV1> & Readonly<{ name: string }>;
+  frontmatter: ReturnType<typeof readStoredSkillFrontmatterV1> & Readonly<{ name: string }>;
   digest: string;
 }>;
 
@@ -76,13 +76,15 @@ export function readSkillBundleContentV1(artifact: Readonly<{ header: unknown; b
   let value: unknown;
   try { value = JSON.parse(artifact.body); } catch { return null; }
   const body = PromptBundleBodyV1Schema.safeParse(value);
-  if (!body.success || !validatePromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: header.data.bundleSchemaId, body: body.data }).ok) return null;
+  if (!body.success || !validateStoredPromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: header.data.bundleSchemaId, body: body.data }).ok) return null;
   const entry = body.data.entries.find(entry => entry.path === 'SKILL.md' && entry.contentKind === 'utf8');
   if (!entry) return null;
-  const skillMd = new TextDecoder().decode(decodeBase64(entry.contentBase64, 'base64'));
-  const frontmatter = readSkillFrontmatterV1(skillMd);
-  return frontmatter.name ? { body: body.data, skillMd, frontmatter: { ...frontmatter, name: frontmatter.name },
-    digest: computePromptBundleDigestV1(body.data) } : null;
+  try {
+    const skillMd = new TextDecoder().decode(decodeBase64(entry.contentBase64, 'base64'));
+    const frontmatter = readStoredSkillFrontmatterV1(skillMd);
+    return frontmatter.name ? { body: body.data, skillMd, frontmatter: { ...frontmatter, name: frontmatter.name },
+      digest: computePromptBundleDigestV1(body.data) } : null;
+  } catch { return null; }
 }
 
 /** Bundled content passes the same validation/digest owner as stored skill content. */
@@ -130,10 +132,22 @@ function normalizePosixRelativePath(raw: string, portable: boolean): { ok: true;
   return { ok: true, normalized: segments.join('/') };
 }
 
-export function validatePromptBundleBodyV1AgainstSchemaId(input: Readonly<{
+type PromptBundleValidationInput = Readonly<{
   bundleSchemaId: PromptBundleSchemaIdV1;
   body: PromptBundleBodyV1;
-}>): PromptBundleValidationResult {
+}>;
+
+/** New imports and writes require portable skill paths. */
+export function validatePromptBundleBodyV1AgainstSchemaId(input: PromptBundleValidationInput): PromptBundleValidationResult {
+  return validatePromptBundleBody(input, input.bundleSchemaId === 'skills.skill_md_v1');
+}
+
+/** The cd2bb4d853 predecessor admitted safe relative POSIX names, including CON.txt. */
+export function validateStoredPromptBundleBodyV1AgainstSchemaId(input: PromptBundleValidationInput): PromptBundleValidationResult {
+  return validatePromptBundleBody(input, false);
+}
+
+function validatePromptBundleBody(input: PromptBundleValidationInput, portable: boolean): PromptBundleValidationResult {
   const schemaId = input.bundleSchemaId;
   const body = input.body;
 
@@ -146,7 +160,7 @@ export function validatePromptBundleBodyV1AgainstSchemaId(input: Readonly<{
   // Registry skills already exceed the former 1 MiB ceiling; file count has no separate resource boundary.
   const seen = new Set<string>();
   for (const entry of body.entries) {
-    const normalized = normalizePosixRelativePath(entry.path, schemaId === 'skills.skill_md_v1');
+    const normalized = normalizePosixRelativePath(entry.path, portable);
     if (!normalized.ok) {
       return {
         ok: false,

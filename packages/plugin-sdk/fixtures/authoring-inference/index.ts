@@ -4,10 +4,8 @@ import {
   defineProtocolString,
 } from '../../src/protocol/index.js';
 import type { AgentRuntimeFactory } from '@happier-dev/plugin-sdk/agents/runtime';
-import type { PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
 import type { SpeechProviderRuntime } from '@happier-dev/plugin-sdk/voice/speech';
 
-import { promptAssetAdapter } from './promptAsset.js';
 
 const executionRuntime: AgentRuntimeFactory = () => Object.freeze({
   executionRuns: Object.freeze({
@@ -68,12 +66,9 @@ export const { manifest, activate } = definePlugin({
   },
   promptAssets: {
     'external-skills': {
-      declaration: {
-        kind: 'context',
-        resource: 'readme',
-        target: { kind: 'agent', agent: 'reviewer' },
-      },
-      adapter: promptAssetAdapter satisfies PromptAssetAdapter,
+      kind: 'context',
+      resource: 'readme',
+      target: { kind: 'agent', agent: 'reviewer' },
     },
   },
   voiceProviders: {

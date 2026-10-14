@@ -311,7 +311,7 @@ export const CLAUDE_PLUGIN = definePlugin({
                 darwin: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://claude.ai/install.sh | bash'] }],
                 linux: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://claude.ai/install.sh | bash'] }],
                 win32: [{
-                  cmd: 'powershell',
+                  cmd: 'powershell.exe',
                   args: [
                     '-NoProfile',
                     '-ExecutionPolicy',

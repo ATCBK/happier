@@ -368,7 +368,6 @@ describe('CORE.T1/T5 public contract', () => {
         expectTypeOf<PluginApi['voiceProviders']['register']>().returns.toEqualTypeOf<void>();
         expectTypeOf<PluginApi['composerReferences']['register']>().returns.toEqualTypeOf<void>();
         expectTypeOf<PluginApi['composerAttachments']['register']>().returns.toEqualTypeOf<void>();
-        expectTypeOf<PluginApi['resources']['registerPromptAssetAdapter']>().returns.toEqualTypeOf<void>();
         expectTypeOf<PluginApi['resources']['registerDynamicResource']>().returns.toEqualTypeOf<void>();
         expectTypeOf<PluginApi['backgroundServices']['register']>().returns.toEqualTypeOf<void>();
     });

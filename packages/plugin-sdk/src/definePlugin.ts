@@ -65,7 +65,7 @@ import type {
     McpDiscoverySourceContribution,
     McpServerContribution,
 } from './mcp/projections.js';
-import type { PromptAssetAdapter, PromptAssetContribution } from './resources.js';
+import type { PromptAssetContribution } from './resources.js';
 import type {
     ConnectedAccountRuntime,
     PluginConnectedAccountDescriptorContributionV2,
@@ -379,18 +379,7 @@ export type PluginAgentDefinition = Readonly<{
     }>
 );
 
-type PluginPromptAssetDeclaration = Omit<PromptAssetContribution, 'id' | 'adapterDescriptor'>;
-export type PluginPromptAssetDefinition =
-    | Readonly<{
-        declaration: Omit<PromptAssetContribution, 'id' | 'adapterDescriptor'>;
-        adapter: PromptAssetAdapter;
-    }>
-    | Omit<PromptAssetContribution, 'id' | 'adapterDescriptor'>;
-
-type PluginPromptAssetAdapterDefinition = Extract<
-    PluginPromptAssetDefinition,
-    Readonly<{ declaration: PluginPromptAssetDeclaration; adapter: PromptAssetAdapter }>
->;
+export type PluginPromptAssetDefinition = Omit<PromptAssetContribution, 'id'>;
 
 export type PluginHookDefinition = Readonly<{
     declaration: Omit<HookContribution, 'id'>;
@@ -1359,24 +1348,7 @@ function projectPromptAsset(
     localId: PluginContributionLocalId,
     definition: PluginPromptAssetDefinition,
 ): PromptAssetContribution {
-    if (isPluginPromptAssetAdapterDefinition(definition)) {
-        return Object.freeze({
-            ...definition.declaration,
-            adapterDescriptor: captureDefinePluginAuthorValue(
-                definition.adapter.descriptor,
-            ) as PromptAssetAdapter['descriptor'],
-            id: localId,
-        });
-    }
     return Object.freeze({ ...definition, id: localId });
-}
-
-function isPluginPromptAssetAdapterDefinition(
-    definition: PluginPromptAssetDefinition,
-): definition is PluginPromptAssetAdapterDefinition {
-    return 'declaration' in definition
-        && 'adapter' in definition
-        && definition.adapter !== undefined;
 }
 
 /**
@@ -1991,7 +1963,6 @@ const AGENTS_ADAPTER: DefinePluginFamilyAdapter = Object.freeze({
 
 const PROMPT_ASSETS_ADAPTER: DefinePluginFamilyAdapter = Object.freeze({
     authorKey: 'promptAssets',
-    runtimeReceiverPaths: [['*', 'adapter']],
     project(input) {
         const definitions = input.promptAssets as Readonly<
             Record<PluginContributionLocalId, PluginPromptAssetDefinition>
@@ -2001,16 +1972,6 @@ const PROMPT_ASSETS_ADAPTER: DefinePluginFamilyAdapter = Object.freeze({
                 projectPromptAsset(localId, definition)
             )),
         };
-    },
-    activate(input, api) {
-        const definitions = input.promptAssets as Readonly<
-            Record<PluginContributionLocalId, PluginPromptAssetDefinition>
-        > | undefined;
-        for (const [localId, definition] of Object.entries(definitions ?? {})) {
-            if ('adapter' in definition && definition.adapter !== undefined) {
-                api.resources.registerPromptAssetAdapter(localId, definition.adapter);
-            }
-        }
     },
 });
 
@@ -2614,7 +2575,7 @@ type DefinePluginFamilyPolicy = DefinePluginActiveFamilyPolicy;
 export const DEFINE_PLUGIN_FAMILY_POLICY_V2 = Object.freeze({
     actions: { classification: 'adapter', authorKey: 'actions', inputShape: 'structured', adapter: ACTIONS_ADAPTER },
     agents: { classification: 'adapter', authorKey: 'agents', inputShape: 'structured', adapter: AGENTS_ADAPTER },
-    promptAssets: { classification: 'adapter', authorKey: 'promptAssets', inputShape: 'structured', adapter: PROMPT_ASSETS_ADAPTER },
+    promptAssets: { classification: 'descriptor-only', authorKey: 'promptAssets', inputShape: 'structured', adapter: PROMPT_ASSETS_ADAPTER },
     backgroundServices: { classification: 'adapter', authorKey: 'backgroundServices', inputShape: 'structured', adapter: BACKGROUND_SERVICES_ADAPTER },
     captureSources: { classification: 'adapter', authorKey: 'captureSources', inputShape: 'structured', adapter: CAPTURE_SOURCES_ADAPTER },
     projectNativeAdapters: { classification: 'adapter', authorKey: 'projectNativeAdapters', inputShape: 'structured', adapter: PROJECT_NATIVE_ADAPTERS_ADAPTER },

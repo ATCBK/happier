@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isMap, parseDocument } from 'yaml';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../../json/storedReadSchema.js';
 import { RegistryContentRefV1Schema, RegistryProvenanceV1Schema } from '../../../registries/registryItemsV1.js';
@@ -56,28 +57,101 @@ export const SkillListItemV1Schema = lazyZodSchema(() => z.object({
   lastUsedAt: z.number().int().nonnegative().optional(), createdAt: z.number().int().nonnegative(), migratedFromContext: z.boolean(), userInvocable: z.boolean(), folderId: z.string().nullable(),
 }).strict());
 export type SkillListItemV1 = z.infer<typeof SkillListItemV1Schema>;
+/** Identity and public title remain knowable when a single stored skill cannot be opened. */
+export const SkillUnavailableItemV1Schema = lazyZodSchema(() => z.object({
+  skillId: z.string().min(1), title: z.string().min(1).nullable(),
+  reason: z.enum(['skill_content_unavailable', 'not_found', 'invalid_skill_lock']),
+}).strict());
+export type SkillUnavailableItemV1 = z.infer<typeof SkillUnavailableItemV1Schema>;
 
 export const SKILL_NAME_PATTERN_V1 = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const SkillFrontmatterV1Schema = lazyZodSchema(() => z.object({
+  name: z.string().regex(SKILL_NAME_PATTERN_V1).optional(),
+  description: z.string().optional(),
+  'disable-model-invocation': z.boolean().optional(),
+  'user-invocable': z.boolean().optional(),
+}));
+const skillFrontmatterPattern = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 
-/** One frontmatter projection for registry discovery, delivery and the picker. */
-export function readSkillFrontmatterV1(markdown: string): Readonly<{
+/** Delimiter lines consume only their own whitespace, never Markdown body indentation. */
+export function splitSkillMarkdownV1(markdown: string): Readonly<{ frontmatter: string | null; body: string }> {
+  const match = markdown.match(skillFrontmatterPattern);
+  return { frontmatter: match?.[1] ?? null, body: match ? markdown.slice(match[0].length) : markdown };
+}
+
+function openSkillFrontmatter(markdown: string) {
+  const { frontmatter, body } = splitSkillMarkdownV1(markdown);
+  try {
+    const document = parseDocument(frontmatter ?? '');
+    return { document, hasHeader: frontmatter !== null, body };
+  } catch { return null; }
+}
+
+type SkillFrontmatterV1 = Readonly<{
   name?: string; description?: string; disableModelInvocation: boolean; userInvocable: boolean;
-}> {
-  const match = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
-  const out: { name?: string; description?: string; disableModelInvocation: boolean; userInvocable: boolean } = {
-    disableModelInvocation: false, userInvocable: true,
-  };
+}>;
+
+/** Exact 82f2997875 predecessor line projection, used only after a stored YAML syntax failure. */
+function readPredecessorSkillFrontmatter(markdown: string) {
+  const match = String(markdown ?? '').match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
+  const out: { name?: string; description?: string } = {};
   if (!match) return out;
-  for (const line of match[1]!.split(/\r?\n/)) {
+  for (const line of match[1]!.split('\n')) {
     const separatorIndex = line.indexOf(':');
     if (separatorIndex <= 0) continue;
     const key = line.slice(0, separatorIndex).trim().toLowerCase();
     const value = line.slice(separatorIndex + 1).trim();
     if (!value) continue;
-    if (key === 'name' && SKILL_NAME_PATTERN_V1.test(value)) out.name = value;
+    if (key === 'name') out.name = value;
     if (key === 'description') out.description = value;
-    if (key === 'disable-model-invocation') out.disableModelInvocation = value === 'true';
-    if (key === 'user-invocable') out.userInvocable = value !== 'false';
   }
   return out;
+}
+
+function readFrontmatter(markdown: string, stored: boolean): SkillFrontmatterV1 {
+  const out: { name?: string; description?: string; disableModelInvocation: boolean; userInvocable: boolean } = {
+    disableModelInvocation: false, userInvocable: true,
+  };
+  const opened = openSkillFrontmatter(markdown);
+  let value: unknown;
+  if (!opened) {
+    if (!stored) return out;
+    value = readPredecessorSkillFrontmatter(markdown);
+  } else if (!opened.hasHeader) return out;
+  else if (opened.document.errors.length) {
+    if (!stored) return out;
+    value = readPredecessorSkillFrontmatter(markdown);
+  } else {
+    if (opened.document.contents !== null && !isMap(opened.document.contents)) return out;
+    try { value = opened.document.toJS(); } catch { return out; }
+  }
+  const decoded = SkillFrontmatterV1Schema.safeParse(value);
+  if (!decoded.success) return out;
+  if (decoded.data.name) out.name = decoded.data.name;
+  if (decoded.data.description) out.description = decoded.data.description;
+  out.disableModelInvocation = decoded.data['disable-model-invocation'] === true;
+  out.userInvocable = decoded.data['user-invocable'] !== false;
+  return out;
+}
+
+/** Current registry imports and writes require decoded, semantically valid YAML. */
+export function readSkillFrontmatterV1(markdown: string): SkillFrontmatterV1 {
+  return readFrontmatter(markdown, false);
+}
+
+/** Stored 0.2 Markdown is YAML-first; only syntax failures reach its predecessor line rule. */
+export function readStoredSkillFrontmatterV1(markdown: string): SkillFrontmatterV1 {
+  return readFrontmatter(markdown, true);
+}
+
+/** Editing uses the same YAML owner; block children, quoting and retained metadata are not line fragments. */
+export function writeSkillFrontmatterV1(markdown: string, fields: Readonly<{ name?: string; description?: string }>): string | null {
+  const opened = openSkillFrontmatter(markdown);
+  if (!opened || opened.document.errors.length || opened.document.contents !== null && !isMap(opened.document.contents)) return null;
+  try {
+    if (fields.name !== undefined) opened.document.set('name', fields.name);
+    if (fields.description !== undefined) opened.document.set('description', fields.description);
+    if (!SkillFrontmatterV1Schema.safeParse(opened.document.toJS()).success) return null;
+    return `---\n${opened.document.toString()}---\n${opened.body}`;
+  } catch { return null; }
 }

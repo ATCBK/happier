@@ -1385,10 +1385,8 @@ describe('CLI bundled plugin registry projection', () => {
       '',
     ].join('\n'));
 
-    const executableRenderer = sourceBetween(
-      'function renderCliBundledPluginEntriesTs(',
-      'function renderCliPromptAssetPluginDescriptorsTs(',
-      registryRendererSource,
+    const executableRenderer = registryRendererSource.slice(
+      registryRendererSource.indexOf('export function renderCliBundledPluginEntriesTs('),
     );
     const output = renderRetainedCliBundledPluginImplementationEntriesTs(outputPath);
 

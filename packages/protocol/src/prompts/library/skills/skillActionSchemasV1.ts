@@ -5,7 +5,7 @@ import { ReachRulesChangeV1Schema } from '../../../reach/reachRulesChangeV1.js';
 import { RegistryItemPointerV1Schema } from '../../../registries/registryItemsV1.js';
 import { SkillCostV1Schema } from './skillCostV1.js';
 import { SkillTrustV1Schema } from './skillTrustV1.js';
-import { SkillListItemV1Schema, SkillProvenanceV1Schema, SkillRevisionV1Schema } from './skillLibraryItemV1.js';
+import { SkillListItemV1Schema, SkillUnavailableItemV1Schema, SkillProvenanceV1Schema, SkillRevisionV1Schema } from './skillLibraryItemV1.js';
 
 export const SkillFileInputV1Schema = lazyZodSchema(() => z.object({ path: z.string().min(1), contentBase64: z.string(),
   contentKind: z.enum(['utf8', 'binary']), unixMode: z.number().int().min(0).max(0o7777).nullable().optional() }).strict());
@@ -32,6 +32,7 @@ export const SkillInstallSourceV1Schema = lazyZodSchema(() => z.union([
 const changeResult = lazyZodSchema(() => z.object({ revision: SkillRevisionV1Schema }).strict());
 export const SkillUpdateFileV1Schema = lazyZodSchema(() => z.object({ path: z.string(), mine: SkillFileInputV1Schema.nullable(),
   theirs: SkillFileInputV1Schema.nullable(), changed: z.boolean() }).strict());
+export type SkillUpdateFileV1 = z.infer<typeof SkillUpdateFileV1Schema>;
 export const SKILL_ACTION_INPUT_SCHEMAS_V1 = {
   'skills.list': lazyZodSchema(() => z.object({ query: z.string().optional(), state: z.enum(['in_use', 'off', 'updates', 'needs_attention']).optional() }).strict()),
   'skills.create': lazyZodSchema(() => z.object({ name: z.string().min(1), description: z.string().optional(), files: z.array(SkillFileInputV1Schema), where: ReachRulesChangeV1Schema.optional() }).strict()),
@@ -48,6 +49,7 @@ export const SKILL_ACTION_INPUT_SCHEMAS_V1 = {
 } as const;
 export const SKILL_ACTION_OUTPUT_SCHEMAS_V1 = {
   'skills.list': lazyZodSchema(() => z.object({ items: z.array(SkillListItemV1Schema), revision: z.string(),
+    unavailableItems: z.array(SkillUnavailableItemV1Schema).optional(),
     usageObservedSince: z.number().int().nonnegative().safe().nullable().optional() }).strict()),
   'skills.create': createResult, 'skills.update': changeResult, 'skills.duplicate': createResult,
   'skills.delete': lazyZodSchema(() => z.object({ deleted: z.literal(true), rulesLeft: z.literal(true).optional() }).strict()),

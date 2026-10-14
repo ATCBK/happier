@@ -98,7 +98,6 @@ import type {
     TargetedContributionPointRef,
     TargetedContributionSnapshot,
 } from './services/targetedContributions.js';
-import type { PromptAssetAdapter } from './resources.js';
 import type {
     DaemonDatabaseIncumbentQueryFixture,
     DaemonDatabaseMigration,
@@ -114,6 +113,34 @@ import type { VoiceProvidersRegistrationApi } from './voice/projections.js';
 import type { SpeechProviderRuntime, VoiceSpeechSynthesizeRequest } from './voice/speech.js';
 
 describe('declarative plugin workflows', () => {
+    it('retains static system prompts without granting retired adapter registration', async () => {
+        const plugin = definePlugin({
+            id: 'com.acme.prompts',
+            version: '1.0.0',
+            promptAssets: {
+                guidance: {
+                    kind: 'systemPrompt',
+                    resource: { pluginId: 'com.acme.prompts', localId: 'guidance-text' },
+                    target: { kind: 'agent', agent: { pluginId: 'com.acme.agent', localId: 'reviewer' } },
+                },
+            },
+        });
+        const manifest = PluginManifestV2Schema.parse(plugin.manifest);
+        expect(manifest.contributes.promptAssets).toEqual([
+            {
+                id: 'guidance', kind: 'systemPrompt',
+                resource: { pluginId: 'com.acme.prompts', localId: 'guidance-text' },
+                target: { kind: 'agent', agent: { pluginId: 'com.acme.agent', localId: 'reviewer' } },
+            },
+        ]);
+        const rights = derivePluginDaemonContributionRegistrationRights(manifest);
+        expect(rights).toEqual([]);
+        const scope = createPluginRegistrationScope({ pluginId: manifest.id, target: { realm: 'daemon' }, rights });
+        await plugin.activate(scope.api);
+        expect('registerPromptAssetAdapter' in scope.api.resources).toBe(false);
+        expect(scope.commit()).toEqual([]);
+    });
+
     it('projects the optional execution installation hint through strict manifest normalization', () => {
         const plugin = definePlugin({
             id: 'com.acme.execution-default',
@@ -2699,78 +2726,6 @@ describe('definePlugin', () => {
         expect(result).toBe(cleanup);
     });
 
-    it('projects and registers an adapter-bearing prompt asset under its row local id', async () => {
-        const supportsScope = { user: true, project: true };
-        const adapter = {
-            descriptor: {
-                id: 'acme.skill',
-                providerId: 'acme',
-                title: 'Acme skills',
-                description: 'Acme SKILL.md bundles.',
-                libraryKind: 'bundle',
-                supportsScope,
-                supportsFiles: true,
-                formatId: 'skill_md_v1',
-                defaultRoots: [],
-                capabilities: {},
-            },
-            async discover() { throw new Error('not invoked'); },
-            async read() { throw new Error('not invoked'); },
-            async writeDoc() { throw new Error('not invoked'); },
-            async writeBundle() { throw new Error('not invoked'); },
-            async delete() { throw new Error('not invoked'); },
-        } satisfies PromptAssetAdapter;
-        const plugin = definePlugin({
-            id: 'example.prompt-assets',
-            version: '0.1.0',
-            resources: {
-                'skill-context': {
-                    kind: 'skill',
-                    path: 'skills/context/SKILL.md',
-                    contentType: 'text/markdown',
-                },
-            },
-            agents: {
-                'acme-agent': {
-                    declaration: {
-                        title: 'Acme Agent',
-                        runtime: { kind: 'custom' },
-                        primary: 'executionRuns',
-                        capabilities: {
-                            executionRuns: { open: ['create'], checkpoint: false, stop: true },
-                        },
-                    },
-                    factory: executionOnlyFactory,
-                },
-            },
-            promptAssets: {
-                'external-skills': {
-                    declaration: {
-                        kind: 'context',
-                        resource: 'skill-context',
-                        target: { kind: 'agent', agent: 'acme-agent' },
-                    },
-                    adapter,
-                },
-            },
-        });
-
-        expect(plugin.manifest.contributes.promptAssets).toContainEqual({
-            id: 'external-skills',
-            kind: 'context',
-            resource: 'skill-context',
-            target: { kind: 'agent', agent: 'acme-agent' },
-            adapterDescriptor: adapter.descriptor,
-        });
-        const registerPromptAssetAdapter = vi.fn();
-        await plugin.activate({
-            agents: { register: vi.fn() },
-            resources: { registerPromptAssetAdapter },
-        } as never);
-        expect(registerPromptAssetAdapter).toHaveBeenCalledWith('external-skills', adapter);
-        adapter.descriptor.supportsScope.project = false;
-        expect(plugin.manifest.contributes.promptAssets?.[0]?.adapterDescriptor?.supportsScope.project).toBe(true);
-    });
 
     it('projects client-only Voice and descriptor-only prompt assets without inventing daemon registrations', async () => {
         const plugin = definePlugin({
@@ -2839,14 +2794,11 @@ describe('definePlugin', () => {
             },
         })]);
 
-        const registerPromptAssetAdapter = vi.fn();
         const registerVoiceProvider = vi.fn();
         await plugin.activate({
             agents: { register: vi.fn() },
-            resources: { registerPromptAssetAdapter },
             voiceProviders: { register: registerVoiceProvider },
         } as never);
-        expect(registerPromptAssetAdapter).not.toHaveBeenCalled();
         expect(registerVoiceProvider).not.toHaveBeenCalled();
     });
 

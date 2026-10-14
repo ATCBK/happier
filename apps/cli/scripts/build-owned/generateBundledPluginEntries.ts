@@ -113,12 +113,10 @@ import {
 } from '../../../../scripts/workspaces/bundledPluginPublicationFailure.mjs';
 
 import {
-  PLUGIN_PROMPT_ASSET_EXPORT_NAME,
   renderCliBundledAgentRegistrationBindingsTs,
   renderCliBundledPluginEntriesTs,
   renderCliBundledPluginManifestEntriesTs,
   renderCliBundledPluginManifestAssets,
-  renderCliPromptAssetPluginDescriptorsTs,
 } from './bundledPlugins/registry.ts';
 import {
   collectBundledAgentContributionIdentities,
@@ -190,7 +188,6 @@ import type {
   JsonValue,
   PluginManifestJson,
   PluginManifestSerializerModule,
-  PromptAssetContributionSource,
   ProtocolExternalSessionSourceProjectionDescriptor,
   ProviderRuntimeDescriptorReaderContributionDescriptor,
   ProviderSessionIdRuntimeDescriptorReaderContributionDescriptor,
@@ -501,7 +498,6 @@ type BundledPluginSourceProjectionFacts = Readonly<{
   agentUiDescriptor?: AgentUiDescriptor;
   agentPredecessorMessageMetaWriter?: AgentPredecessorMessageMetaWriterImportSource;
   releasedFlatSessionMetadataRuntimeDescriptorReader?: ReleasedFlatSessionMetadataRuntimeDescriptorReaderContributionDescriptor;
-  promptAssetContributions?: PromptAssetContributionSource;
   builtInLegacyConnectedAccountCompatibility?:
     readonly BuiltInLegacyConnectedAccountCompatibilitySource[];
 }>;
@@ -1710,62 +1706,6 @@ async function loadPluginAgentPredecessorMessageMetaWriter(
   };
 }
 
-function assertPluginPromptAssetAdapterDescriptor(value: unknown, path: string): void {
-  if (!isRecord(value)) {
-    throw new Error(`Invalid prompt asset adapter descriptor ${path}: expected object`);
-  }
-  if (value.adapterKind !== 'markdownDoc' && value.adapterKind !== 'skillMd') {
-    throw new Error(`Invalid prompt asset adapter descriptor ${path}.adapterKind`);
-  }
-  for (const key of [
-    'assetTypeId',
-    'providerId',
-    'title',
-    'description',
-    'projectRootDisplayPath',
-    'userRootDisplayPath',
-  ] as const) {
-    if (typeof value[key] !== 'string' || value[key].trim().length === 0) {
-      throw new Error(`Invalid prompt asset adapter descriptor ${path}.${key}: expected non-empty string`);
-    }
-  }
-  for (const key of ['projectRootPath', 'userRootPath'] as const) {
-    if (!Array.isArray(value[key]) || value[key].some((part) => typeof part !== 'string' || part.length === 0)) {
-      throw new Error(`Invalid prompt asset adapter descriptor ${path}.${key}: expected string array`);
-    }
-  }
-  if (value.capabilities !== undefined) {
-    assertJsonSerializable(value.capabilities, [path, 'capabilities']);
-  }
-  if (value.skillNamePattern !== undefined && !(value.skillNamePattern instanceof RegExp)) {
-    throw new Error(`Invalid prompt asset adapter descriptor ${path}.skillNamePattern: expected RegExp`);
-  }
-}
-
-async function loadPluginPromptAssetContributions(
-  repoRoot: string,
-  pluginPackageId: string,
-): Promise<PromptAssetContributionSource | undefined> {
-  const contributionPath = resolve(repoRoot, 'packages/plugins', pluginPackageId, 'src/agent/promptAssets/index.ts');
-  if (!existsSync(contributionPath)) return undefined;
-
-  const mod = await importTypescriptModule(contributionPath) as Record<string, unknown>;
-  const rawContributions = mod[PLUGIN_PROMPT_ASSET_EXPORT_NAME];
-  if (!Array.isArray(rawContributions)) {
-    throw new Error(
-      `Expected ${PLUGIN_PROMPT_ASSET_EXPORT_NAME} array export in ${contributionPath}`,
-    );
-  }
-  for (const [index, contribution] of rawContributions.entries()) {
-    assertPluginPromptAssetAdapterDescriptor(contribution, `${pluginPackageId}[${index}]`);
-    assertJsonSerializable(contribution, [pluginPackageId, 'promptAssets', String(index)]);
-  }
-
-  return {
-    pluginPackageId,
-    descriptors: rawContributions as readonly JsonObject[],
-  };
-}
 
 function normalizePluginManifest(
   rawManifest: unknown,
@@ -2628,10 +2568,6 @@ async function readSourceProjectionFacts(params: Readonly<{
       agentUiDescriptor.agentId,
     )
     : undefined;
-  const promptAssetContributions = await loadPluginPromptAssetContributions(
-    params.repoRoot,
-    params.pluginPackageId,
-  );
   const builtInLegacyConnectedAccountCompatibility =
     await loadBuiltInLegacyConnectedAccountCompatibility(
       params.repoRoot,
@@ -2656,7 +2592,6 @@ async function readSourceProjectionFacts(params: Readonly<{
     ...(releasedFlatSessionMetadataRuntimeDescriptorReader
       ? { releasedFlatSessionMetadataRuntimeDescriptorReader }
       : {}),
-    ...(promptAssetContributions ? { promptAssetContributions } : {}),
     ...(builtInLegacyConnectedAccountCompatibility
       ? { builtInLegacyConnectedAccountCompatibility }
       : {}),
@@ -2947,9 +2882,6 @@ async function collectBundledPluginSourcePackages(
             releasedFlatSessionMetadataRuntimeDescriptorReader:
               sourceProjectionFacts.releasedFlatSessionMetadataRuntimeDescriptorReader,
           }
-          : {}),
-        ...(sourceProjectionFacts.promptAssetContributions
-          ? { promptAssetContributions: sourceProjectionFacts.promptAssetContributions }
           : {}),
         ...(sourceProjectionFacts.builtInLegacyConnectedAccountCompatibility
           ? { builtInLegacyConnectedAccountCompatibility: sourceProjectionFacts.builtInLegacyConnectedAccountCompatibility }
@@ -3563,7 +3495,6 @@ function resolveGeneratorHostProjectionOutPaths(rootDir: string) {
     uiBehaviorOverridesOutPath: resolve(rootDir, 'apps/ui/sources/agents/registry/generatedBundledPluginEntries.uiBehaviorOverrides.ts'),
     sessionAgentBehaviorsOutPath: resolve(rootDir, 'apps/ui/sources/agents/registry/generatedBundledPluginEntries.sessionAgentBehaviors.ts'),
     visibleMessageResolversOutPath: resolve(rootDir, 'apps/ui/sources/agents/registry/generatedBundledPluginEntries.visibleMessageResolvers.ts'),
-    promptAssetPluginDescriptorsOutPath: resolve(rootDir, 'apps/cli/src/prompts/assets/generated/pluginDescriptors.ts'),
   };
 }
 
@@ -4353,15 +4284,6 @@ function assertDescriptorConnectedServiceLabelTranslations(
   }
 }
 
-function collectPromptAssetContributionSources(
-  pluginPackages: readonly BundledPluginPackage[],
-): readonly PromptAssetContributionSource[] {
-  return pluginPackages
-    .flatMap((pluginPackage) => (
-      pluginPackage.promptAssetContributions ? [pluginPackage.promptAssetContributions] : []
-    ))
-    .sort((a, b) => a.pluginPackageId.localeCompare(b.pluginPackageId));
-}
 
 async function generateBundledPluginEntries(
   options: GeneratorOptions,
@@ -4474,8 +4396,11 @@ async function generateBundledPluginEntries(
   const agentDefinitionsById = bundledAgentDefinitionProjection.agentDefinitionsById;
 
   const { cliOutPath, cliManifestOutPath, uiOutPath, uiTranslationsOutPath, uiVoiceEntriesOutPath, protocolVoiceSelectionOptionsOutPath,
-    uiBehaviorOverridesOutPath, sessionAgentBehaviorsOutPath, visibleMessageResolversOutPath,
-    promptAssetPluginDescriptorsOutPath } = resolveGeneratorHostProjectionOutPaths(options.rootDir);
+    uiBehaviorOverridesOutPath, sessionAgentBehaviorsOutPath, visibleMessageResolversOutPath } = resolveGeneratorHostProjectionOutPaths(options.rootDir);
+  const retiredPromptAssetPluginDescriptorsOutPath = resolve(
+    options.rootDir,
+    'apps/cli/src/prompts/assets/generated/pluginDescriptors.ts',
+  );
   const retiredAgentSettingsOutPath = resolve(
     options.rootDir,
     'apps/ui/sources/agents/registry/generatedBundledPluginEntries.agentSettings.ts',
@@ -4526,7 +4451,6 @@ async function generateBundledPluginEntries(
   const agentUiBehaviorDescriptorSources = collectAgentUiBehaviorDescriptorSources(pluginPackages);
   const sessionAgentBehaviorSources = collectAgentSessionBehaviorSources(pluginPackages);
   const visibleMessageResolverSources = collectVisibleMessageResolverSources(pluginPackages);
-  const promptAssetContributionSources = collectPromptAssetContributionSources(pluginPackages);
   const bundledPluginUiTranslations = collectBundledPluginUiTranslations(pluginPackages);
 
   const cliOut = renderCliBundledPluginEntriesTs({ pluginPackages });
@@ -4579,7 +4503,6 @@ async function generateBundledPluginEntries(
   const uiBehaviorOverridesOut = renderBundledUiBehaviorOverridesTs(agentUiBehaviorDescriptorSources);
   const sessionAgentBehaviorsOut = renderBundledSessionAgentBehaviorsTs(sessionAgentBehaviorSources);
   const visibleMessageResolversOut = renderBundledVisibleMessageResolversTs(visibleMessageResolverSources);
-  const promptAssetPluginDescriptorsOut = renderCliPromptAssetPluginDescriptorsTs(promptAssetContributionSources);
   const uiVoiceEntriesOut = renderBundledVoiceEntriesTs(bundledVoiceProjectionSources);
   const protocolVoiceSelectionOptionsOut = renderBundledVoiceSelectionOptionsTs(bundledVoiceProjectionSources);
   const voiceRuntimeOutputs = renderBundledVoiceRuntimeProjectionOutputs(
@@ -4597,6 +4520,7 @@ async function generateBundledPluginEntries(
   removeRetiredGeneratedOutput(retiredAgentSettingsOutPath, options.mode);
   removeRetiredGeneratedOutput(retiredHostAgentSettingsOutPath, options.mode);
   removeRetiredGeneratedOutput(retiredSessionControlAdaptersOutPath, options.mode);
+  removeRetiredGeneratedOutput(retiredPromptAssetPluginDescriptorsOutPath, options.mode);
   removeRetiredGeneratedOutput(retiredProtocolRuntimeDescriptorContributionsOutPath, options.mode);
   for (const retiredOutPath of retiredProtocolRuntimeDescriptorModuleOutPaths) {
     removeRetiredGeneratedOutput(retiredOutPath, options.mode);
@@ -4630,7 +4554,6 @@ async function generateBundledPluginEntries(
     assertGeneratedOutputMatches(uiBehaviorOverridesOutPath, uiBehaviorOverridesOut);
     assertGeneratedOutputMatches(sessionAgentBehaviorsOutPath, sessionAgentBehaviorsOut);
     assertGeneratedOutputMatches(visibleMessageResolversOutPath, visibleMessageResolversOut);
-    assertGeneratedOutputMatches(promptAssetPluginDescriptorsOutPath, promptAssetPluginDescriptorsOut);
     assertGeneratedOutputMatches(uiVoiceEntriesOutPath, uiVoiceEntriesOut);
     assertGeneratedOutputMatches(protocolVoiceSelectionOptionsOutPath, protocolVoiceSelectionOptionsOut);
     for (const output of voiceRuntimeOutputs) {
@@ -4666,7 +4589,6 @@ async function generateBundledPluginEntries(
     { outPath: uiBehaviorOverridesOutPath, out: uiBehaviorOverridesOut },
     { outPath: sessionAgentBehaviorsOutPath, out: sessionAgentBehaviorsOut },
     { outPath: visibleMessageResolversOutPath, out: visibleMessageResolversOut },
-    { outPath: promptAssetPluginDescriptorsOutPath, out: promptAssetPluginDescriptorsOut },
     { outPath: uiVoiceEntriesOutPath, out: uiVoiceEntriesOut },
     { outPath: protocolVoiceSelectionOptionsOutPath, out: protocolVoiceSelectionOptionsOut },
     ...voiceRuntimeOutputs,

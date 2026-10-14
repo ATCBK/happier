@@ -50,11 +50,6 @@
       "happier-source": "./src/agent/acp/definition.ts",
       "types": "./dist/agent/acp/definition.d.ts",
       "default": "./dist/agent/acp/definition.js"
-    },
-    "./agent/promptAssets": {
-      "happier-source": "./src/agent/promptAssets/index.ts",
-      "types": "./dist/agent/promptAssets/index.d.ts",
-      "default": "./dist/agent/promptAssets/index.js"
     }
   },
   "dependencies": {

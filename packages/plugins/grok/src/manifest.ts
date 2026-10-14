@@ -76,7 +76,7 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
                 darwin: [{ cmd: 'bash', args: ['-lc', installScript] }],
                 linux: [{ cmd: 'bash', args: ['-lc', installScript] }],
                 win32: [{
-                  cmd: 'powershell',
+                  cmd: 'powershell.exe',
                   args: [
                     '-NoProfile',
                     '-ExecutionPolicy',

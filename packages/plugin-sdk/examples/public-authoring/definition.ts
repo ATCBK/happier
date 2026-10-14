@@ -54,7 +54,7 @@ type PublicAuthoringActions = Readonly<Record<
 type PublicAuthoringAgents = Readonly<Record<'review-agent', PluginAgentDefinition>>;
 type PublicAuthoringPromptAssets = Readonly<Record<
     'agent-context-companion-prompt',
-    Omit<PromptAssetContribution, 'id' | 'adapterDescriptor'>
+    Omit<PromptAssetContribution, 'id'>
 >>;
 type PublicAuthoringAccountCollections = Readonly<Record<
     'review-session-statuses',

@@ -16,8 +16,6 @@ import type {
     PluginJsonSchemaValidator,
     PluginSystemToolReadinessV1,
     PluginTestkitManifest,
-    PromptAssetCapabilities,
-    PromptAssetTypeDescriptor,
 } from './manifest.js';
 import type { PluginSettingsContribution } from './settings/index.js';
 import type { ProtocolComposableSchema } from './protocol/protocolFacade.js';
@@ -258,8 +256,6 @@ describe('manifest authoring contract', () => {
             'PluginSystemToolReadinessV1',
             'PluginTestkitManifest',
             'PluginWorkflowContributionV1',
-            'PromptAssetCapabilities',
-            'PromptAssetTypeDescriptor',
             'PublicHostAccessCapability',
             'compilePluginJsonSchema',
             'createPluginContributionIdentity',
@@ -790,17 +786,6 @@ describe('manifest authoring contract', () => {
             .not.toEqualTypeOf<protocol.PluginSystemToolReadinessV1>();
         expectTypeOf<PluginJsonSchemaValidator>()
             .toEqualTypeOf<protocol.PluginJsonSchemaValidator>();
-        // Manifest authoring projects the Protocol shapes as readonly values,
-        // so mutable Protocol values remain composable without collapsing the
-        // public declaration boundary into Protocol's raw output type.
-        expectTypeOf<protocol.PromptAssetCapabilities>()
-            .toMatchTypeOf<PromptAssetCapabilities>();
-        expectTypeOf<PromptAssetCapabilities>()
-            .not.toEqualTypeOf<protocol.PromptAssetCapabilities>();
-        expectTypeOf<protocol.PromptAssetTypeDescriptor>()
-            .toMatchTypeOf<PromptAssetTypeDescriptor>();
-        expectTypeOf<PromptAssetTypeDescriptor>()
-            .not.toEqualTypeOf<protocol.PromptAssetTypeDescriptor>();
 
         const manifestInput = {
             schemaVersion: 2,

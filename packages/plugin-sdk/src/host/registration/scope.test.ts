@@ -12,7 +12,6 @@ import type {
     PluginMcpServerRuntime,
 } from '../../activation.js';
 import type { PluginInvocationContext } from '../../invocation.js';
-import type { PromptAssetAdapter } from '../../resources.js';
 import type { ManagedProviderRuntime } from '../../managed-services/contract.js';
 import type { VoiceProvidersRegistrationApi } from '../../voice/projections.js';
 import type {
@@ -1299,107 +1298,6 @@ describe('plugin registration scope targets', () => {
         expect(() => scope.commit()).toThrow(/invalid 'scmHostingProviders\/forge' runtime/i);
     });
 
-    it('captures Prompt Asset descriptor and operations without freezing author input', async () => {
-        const adapterDescriptor = {
-            id: 'acme.skill',
-            providerId: 'acme',
-            title: 'Acme skills',
-            description: 'Acme SKILL.md bundles.',
-            libraryKind: 'bundle' as const,
-            supportsScope: { user: true, project: true },
-            supportsFiles: true,
-            formatId: 'skill_md_v1',
-            defaultRoots: [],
-            capabilities: {},
-        };
-        const discover = vi.fn(async () => []);
-        const adapter = {
-            descriptor: adapterDescriptor,
-            discover,
-            async read() { throw new Error('not invoked'); },
-            async writeDoc() { throw new Error('not invoked'); },
-            async writeBundle() { throw new Error('not invoked'); },
-            async delete() { throw new Error('not invoked'); },
-        } satisfies PromptAssetAdapter;
-        const scope = createPluginRegistrationScope({
-            pluginId: 'acme.prompts',
-            target: { realm: 'daemon' },
-            rights: [{
-                family: 'promptAssets',
-                localId: 'skills',
-                target: { realm: 'daemon' },
-                promptAssetDescriptor: adapterDescriptor,
-            }],
-        });
-        scope.api.resources.registerPromptAssetAdapter('skills', adapter);
-        const replacement = vi.fn(async () => []);
-
-        const [registration] = scope.commit();
-        if (registration?.family !== 'promptAssets') {
-            throw new Error('Expected committed Prompt Asset registration');
-        }
-        adapter.discover = replacement;
-        adapterDescriptor.title = 'Mutated title';
-        adapterDescriptor.supportsScope.user = false;
-        expect(Object.isFrozen(adapter)).toBe(false);
-        expect(Object.isFrozen(adapterDescriptor)).toBe(false);
-        expect(Object.isFrozen(registration.value)).toBe(true);
-        expect(Object.isFrozen(registration.value.descriptor)).toBe(true);
-        expect(registration.value.descriptor.title).toBe('Acme skills');
-        expect(registration.value.descriptor.supportsScope.user).toBe(true);
-        await registration.value.discover({ assetTypeId: 'acme.skill', scope: 'user' });
-        expect(discover).toHaveBeenCalledOnce();
-        expect(replacement).not.toHaveBeenCalled();
-    });
-
-    it('captures a class-based Prompt Asset adapter and binds its prototype methods', async () => {
-        const adapterDescriptor = {
-            id: 'acme.class-skill',
-            providerId: 'acme',
-            title: 'Class skills',
-            description: 'Class-based adapter.',
-            libraryKind: 'bundle' as const,
-            supportsScope: { user: true, project: false },
-            supportsFiles: false,
-            formatId: 'skill_md_v1',
-            defaultRoots: [],
-            capabilities: {},
-        };
-        class Adapter {
-            readonly descriptor = adapterDescriptor;
-            readonly marker = 'captured';
-            readonly unrelated = true;
-
-            async discover() { return [{ marker: this.marker }] as never; }
-            async read() { return { marker: this.marker } as never; }
-            async writeDoc() { return { marker: this.marker } as never; }
-            async writeBundle() { return { marker: this.marker } as never; }
-            async delete() { return { marker: this.marker } as never; }
-        }
-        const scope = createPluginRegistrationScope({
-            pluginId: 'acme.class-prompts',
-            target: { realm: 'daemon' },
-            rights: [{
-                family: 'promptAssets',
-                localId: 'skills',
-                target: { realm: 'daemon' },
-                promptAssetDescriptor: adapterDescriptor,
-            }],
-        });
-        const adapter = new Adapter();
-        scope.api.resources.registerPromptAssetAdapter('skills', adapter as PromptAssetAdapter);
-
-        const [registration] = scope.commit();
-        if (registration?.family !== 'promptAssets') {
-            throw new Error('Expected committed Prompt Asset registration');
-        }
-
-        await expect(registration.value.discover({
-            assetTypeId: 'acme.class-skill',
-            scope: 'user',
-        })).resolves.toEqual([{ marker: 'captured' }]);
-        expect(registration.value).not.toHaveProperty('unrelated');
-    });
 
     it('captures a class-based Composer reference runtime through the final family while ignoring unrelated fields', async () => {
         class ComposerRuntime {

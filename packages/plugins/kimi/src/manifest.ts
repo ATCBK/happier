@@ -60,7 +60,7 @@ export const KIMI_PLUGIN = definePlugin({
                 darwin: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash'] }],
                 linux: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash'] }],
                 win32: [{
-                  cmd: 'powershell',
+                  cmd: 'powershell.exe',
                   args: [
                     '-NoProfile',
                     '-ExecutionPolicy',

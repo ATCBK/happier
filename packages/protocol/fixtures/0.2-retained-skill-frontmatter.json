@@ -1,0 +1,152 @@
+{
+  "provenance": {
+    "head": "82f2997875dd45b0af68bbee2763d095aaa87505",
+    "writer": "apps/ui/sources/sync/ops/promptLibrary/promptBundles.ts",
+    "reader": "apps/cli/src/promptRegistries/shared/readSkillBundleFrontmatter.ts",
+    "validator": "packages/protocol/src/promptLibrary/promptBundleSchemas.ts",
+    "status": "All inspected writer/reader/schema/tag paths clean at capture, 2026-10-13",
+    "capture": "Executed unchanged predecessor writer functions, real tag normalizer, bundle schemas/validator and line reader, transpiled in memory. Mocked only Artifact persistence and clock; current zod/base64 bindings supply equivalent dependencies."
+  },
+  "cases": [
+    {
+      "id": "unquoted-colon",
+      "input": {
+        "title": "unquoted-colon",
+        "skillMarkdown": "---\nname: incident-postmortem\ndescription: Turn the incident timeline into a blameless review: what happened, why, and what changes.\n---\n\nInstructions.\n"
+      },
+      "header": {
+        "v": 1,
+        "kind": "prompt_bundle.v2",
+        "title": "unquoted-colon",
+        "bundleSchemaId": "skills.skill_md_v1",
+        "folderId": null,
+        "tags": [],
+        "origin": "user",
+        "locked": false
+      },
+      "body": {
+        "v": 1,
+        "entries": [
+          {
+            "path": "SKILL.md",
+            "contentBase64": "LS0tCm5hbWU6IGluY2lkZW50LXBvc3Rtb3J0ZW0KZGVzY3JpcHRpb246IFR1cm4gdGhlIGluY2lkZW50IHRpbWVsaW5lIGludG8gYSBibGFtZWxlc3MgcmV2aWV3OiB3aGF0IGhhcHBlbmVkLCB3aHksIGFuZCB3aGF0IGNoYW5nZXMuCi0tLQoKSW5zdHJ1Y3Rpb25zLgo=",
+            "contentKind": "utf8"
+          }
+        ],
+        "createdAtMs": 1,
+        "updatedAtMs": 1
+      },
+      "predecessorFrontmatter": {
+        "name": "incident-postmortem",
+        "description": "Turn the incident timeline into a blameless review: what happened, why, and what changes."
+      },
+      "expectedName": "incident-postmortem",
+      "expectedDescription": "Turn the incident timeline into a blameless review: what happened, why, and what changes."
+    },
+    {
+      "id": "non-yaml-bracket",
+      "input": {
+        "title": "non-yaml-bracket",
+        "skillMarkdown": "---\nname: bracket-description\ndescription: [unclosed description\n---\nInstructions.\n"
+      },
+      "header": {
+        "v": 1,
+        "kind": "prompt_bundle.v2",
+        "title": "non-yaml-bracket",
+        "bundleSchemaId": "skills.skill_md_v1",
+        "folderId": null,
+        "tags": [],
+        "origin": "user",
+        "locked": false
+      },
+      "body": {
+        "v": 1,
+        "entries": [
+          {
+            "path": "SKILL.md",
+            "contentBase64": "LS0tCm5hbWU6IGJyYWNrZXQtZGVzY3JpcHRpb24KZGVzY3JpcHRpb246IFt1bmNsb3NlZCBkZXNjcmlwdGlvbgotLS0KSW5zdHJ1Y3Rpb25zLgo=",
+            "contentKind": "utf8"
+          }
+        ],
+        "createdAtMs": 1,
+        "updatedAtMs": 1
+      },
+      "predecessorFrontmatter": {
+        "name": "bracket-description",
+        "description": "[unclosed description"
+      },
+      "expectedName": "bracket-description",
+      "expectedDescription": "[unclosed description"
+    },
+    {
+      "id": "folded-block",
+      "input": {
+        "title": "folded-block",
+        "skillMarkdown": "---\nname: folded-skill\ndescription: >\n  A useful\n  skill\nmetadata:\n  name: nested\n---\nInstructions.\n"
+      },
+      "header": {
+        "v": 1,
+        "kind": "prompt_bundle.v2",
+        "title": "folded-block",
+        "bundleSchemaId": "skills.skill_md_v1",
+        "folderId": null,
+        "tags": [],
+        "origin": "user",
+        "locked": false
+      },
+      "body": {
+        "v": 1,
+        "entries": [
+          {
+            "path": "SKILL.md",
+            "contentBase64": "LS0tCm5hbWU6IGZvbGRlZC1za2lsbApkZXNjcmlwdGlvbjogPgogIEEgdXNlZnVsCiAgc2tpbGwKbWV0YWRhdGE6CiAgbmFtZTogbmVzdGVkCi0tLQpJbnN0cnVjdGlvbnMuCg==",
+            "contentKind": "utf8"
+          }
+        ],
+        "createdAtMs": 1,
+        "updatedAtMs": 1
+      },
+      "predecessorFrontmatter": {
+        "name": "nested",
+        "description": ">"
+      },
+      "expectedName": "folded-skill",
+      "expectedDescription": "A useful skill\n"
+    },
+    {
+      "id": "literal-block",
+      "input": {
+        "title": "literal-block",
+        "skillMarkdown": "---\nname: literal-skill\ndescription: |\n  First line\n  Second line\n---\nInstructions.\n"
+      },
+      "header": {
+        "v": 1,
+        "kind": "prompt_bundle.v2",
+        "title": "literal-block",
+        "bundleSchemaId": "skills.skill_md_v1",
+        "folderId": null,
+        "tags": [],
+        "origin": "user",
+        "locked": false
+      },
+      "body": {
+        "v": 1,
+        "entries": [
+          {
+            "path": "SKILL.md",
+            "contentBase64": "LS0tCm5hbWU6IGxpdGVyYWwtc2tpbGwKZGVzY3JpcHRpb246IHwKICBGaXJzdCBsaW5lCiAgU2Vjb25kIGxpbmUKLS0tCkluc3RydWN0aW9ucy4K",
+            "contentKind": "utf8"
+          }
+        ],
+        "createdAtMs": 1,
+        "updatedAtMs": 1
+      },
+      "predecessorFrontmatter": {
+        "name": "literal-skill",
+        "description": "|"
+      },
+      "expectedName": "literal-skill",
+      "expectedDescription": "First line\nSecond line\n"
+    }
+  ]
+}

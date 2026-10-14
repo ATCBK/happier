@@ -32,7 +32,7 @@ export const DROID_PLUGIN = definePlugin({
               darwin: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://app.factory.ai/cli | sh'] }],
               linux: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://app.factory.ai/cli | sh'] }],
               win32: [{
-                cmd: 'powershell',
+                cmd: 'powershell.exe',
                 args: [
                   '-NoProfile',
                   '-ExecutionPolicy',

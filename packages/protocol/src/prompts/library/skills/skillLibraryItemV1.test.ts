@@ -2,6 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { readSkillFrontmatterV1, readSkillLockV1, isSkillModifiedV1, SkillRevisionV1Schema, decodeSkillRevisionV1 } from './skillLibraryItemV1.js';
 
 describe('readSkillFrontmatterV1', () => {
+  it.each([
+    'name: sample\ndescription: A useful skill',
+    "name: 'sample'\ndescription: 'A useful skill'",
+    'name: "sample"\ndescription: "A useful skill"',
+    'name: sample\ndescription: >-\n  A useful\n  skill\nmetadata:\n  name: nested\n  user-invocable: true',
+    'name: sample\ndescription: |-\n  A useful skill\nmetadata: { name: nested }',
+  ])('decodes equivalent YAML scalars without treating nested metadata as frontmatter fields: %s', yaml => {
+    expect(readSkillFrontmatterV1(`---\n${yaml}\ndisable-model-invocation: true\nuser-invocable: false\n---\nBody`))
+      .toEqual({ name: 'sample', description: 'A useful skill', disableModelInvocation: true, userInvocable: false });
+  });
+  it.each([
+    'description: >\n  A useful\n  skill',
+    'description: |\n  A useful skill',
+    'description: "A useful skill\\n"',
+  ])('preserves default block-scalar chomping like the equivalent quoted value: %s', description => {
+    expect(readSkillFrontmatterV1(`---\nname: sample\n${description}\n---\nBody`))
+      .toEqual({ name: 'sample', description: 'A useful skill\n', disableModelInvocation: false, userInvocable: true });
+  });
+  it('refuses malformed YAML and non-scalar names instead of reading nested or duplicate keys', () => {
+    for (const yaml of ['metadata:\n  name: sample', 'name: { name: sample }', 'name: sample\nname: other', 'name: [sample',
+      'name: sample\nuser-invocable: "false"', 'name: sample\ndisable-model-invocation: [true]', 'name: |\n  sample']) {
+      expect(readSkillFrontmatterV1(`---\n${yaml}\n---\nBody`).name).toBeUndefined();
+    }
+  });
   it('reads the delivery and picker flags with the existing simple frontmatter format', () => {
     expect(readSkillFrontmatterV1('---\nname: sample\ndescription: A useful skill\ndisable-model-invocation: true\nuser-invocable: false\n---\nBody'))
       .toEqual({ name: 'sample', description: 'A useful skill', disableModelInvocation: true, userInvocable: false });

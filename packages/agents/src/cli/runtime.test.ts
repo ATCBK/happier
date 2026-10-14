@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import * as agentCliRuntimeModule from './runtime.js';
+import { getProviderCliManualInstallSummaryLines } from './providerCliInstallGuidance.js';
 import { BUNDLED_AGENT_DEFINITIONS_BY_ID } from '../generated/bundledAgentDefinitions.js';
 import { AGENT_IDS } from '../types.js';
 import { LEGACY_CONFIGURED_BACKEND_SENTINEL_ID } from '../compat/legacyConfiguredBackend.js';
@@ -22,6 +23,32 @@ function getAgentCliRuntimeSpec(id: AgentCliRuntimeSpec['id']): AgentCliRuntimeS
 }
 
 describe('AGENT_CLI_RUNTIME_SPECS', () => {
+  it('uses directly spawnable Windows PowerShell executables for every vendor recipe', () => {
+    for (const providerId of AGENT_IDS) {
+      for (const command of readAgentCliRuntimeSpec(providerId)?.manualInstallRecipes?.win32 ?? []) {
+        if (command.args.includes('-Command')) {
+          expect(command.cmd, providerId).toBe('powershell.exe');
+        }
+      }
+    }
+  });
+
+  it('projects the official Cursor install recipes and copyable Windows guidance', () => {
+    const cursor = getAgentCliRuntimeSpec('cursor');
+    expect(cursor.manualInstallRecipes?.win32?.[0]).toEqual({
+      cmd: 'powershell.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "irm 'https://cursor.com/install?win32=true' | iex"],
+    });
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(cursor.manualInstallRecipes?.[platform]?.[0]).toEqual({
+        cmd: 'bash', args: ['-lc', 'curl -fsSL https://cursor.com/install | bash'],
+      });
+    }
+    expect(getProviderCliManualInstallSummaryLines('cursor')).toContain(
+      "  Windows (PowerShell): irm 'https://cursor.com/install?win32=true' | iex",
+    );
+  });
+
   it('does not invent native CLI facts when an Agent has no declared executable', () => {
     expect(agentCliRuntimeModule.projectAgentCliRuntimeSpec('codex', undefined)).toBeNull();
   });

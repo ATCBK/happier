@@ -98,7 +98,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
                 "-Command",
                 "irm https://antigravity.google/cli/install.ps1 | iex"
               ],
-              "cmd": "powershell"
+              "cmd": "powershell.exe"
             }
           ]
         }
@@ -377,7 +377,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
                 "-Command",
                 "irm https://claude.ai/install.ps1 | iex"
               ],
-              "cmd": "powershell"
+              "cmd": "powershell.exe"
             }
           ]
         }
@@ -1788,7 +1788,39 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "guideUrl": "https://cursor.com/docs/cli/installation",
       "managed": null,
       "manual": {
-        "kind": "vendor_recipe"
+        "kind": "vendor_recipe",
+        "recipes": {
+          "darwin": [
+            {
+              "args": [
+                "-lc",
+                "curl -fsSL https://cursor.com/install | bash"
+              ],
+              "cmd": "bash"
+            }
+          ],
+          "linux": [
+            {
+              "args": [
+                "-lc",
+                "curl -fsSL https://cursor.com/install | bash"
+              ],
+              "cmd": "bash"
+            }
+          ],
+          "win32": [
+            {
+              "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "irm 'https://cursor.com/install?win32=true' | iex"
+              ],
+              "cmd": "powershell.exe"
+            }
+          ]
+        }
       },
       "nativeUpdate": {
         "args": [
@@ -2160,7 +2192,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
                 "-Command",
                 "Invoke-RestMethod https://app.factory.ai/cli/windows | Invoke-Expression"
               ],
-              "cmd": "powershell"
+              "cmd": "powershell.exe"
             }
           ]
         }
@@ -2684,7 +2716,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
                 "-Command",
                 "irm https://x.ai/cli/install.ps1 | iex"
               ],
-              "cmd": "powershell"
+              "cmd": "powershell.exe"
             }
           ]
         }
@@ -2971,7 +3003,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
                 "-Command",
                 "Invoke-RestMethod https://code.kimi.com/kimi-code/install.ps1 | Invoke-Expression"
               ],
-              "cmd": "powershell"
+              "cmd": "powershell.exe"
             }
           ]
         }

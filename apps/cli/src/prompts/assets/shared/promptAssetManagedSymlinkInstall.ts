@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
-import { dirname, join, relative, sep } from 'node:path';
+import { existsSync, lstatSync, realpathSync, rmSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 
 import { resolveHappyHomeDirFromEnvironment } from '@happier-dev/cli-common/agents';
 
@@ -46,15 +46,6 @@ export function resolveAllowedManagedBundleSymlinkTarget(args: Readonly<{
   const resolvedTarget = realpathSync(args.linkPath);
   if (!isResolvedPathInsideRoot(resolvedManagedRoot, resolvedTarget)) return null;
   return resolvedTarget;
-}
-
-export function replaceDirectoryWithManagedSymlink(args: Readonly<{
-  linkPath: string;
-  managedDirectory: string;
-}>): void {
-  rmSync(args.linkPath, { recursive: true, force: true });
-  mkdirSync(dirname(args.linkPath), { recursive: true });
-  symlinkSync(args.managedDirectory, args.linkPath, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
 export function deleteManagedBundleSymlinkInstall(args: Readonly<{

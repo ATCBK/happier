@@ -8,7 +8,6 @@ import type { PluginRegistrationValueByFamily } from '../../src/registration/val
 import type { AgentRuntimeFactory } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { activate, manifest, voiceRuntime } from './index.js';
-import { promptAssetAdapter } from './promptAsset.js';
 
 const services = {
   logger: {
@@ -115,16 +114,6 @@ export async function exerciseTestkit(): Promise<void> {
     const action: PluginRegistrationValueByFamily['actions'] | undefined =
       testkit.registration('actions', 'echo');
     if (!action) throw new Error('action registration missing');
-    const promptAsset: PluginRegistrationValueByFamily['promptAssets'] | undefined =
-      testkit.registration('promptAssets', 'external-skills');
-    assert(
-      promptAsset !== undefined
-        && promptAsset !== promptAssetAdapter
-        && Object.isFrozen(promptAsset)
-        && Object.isFrozen(promptAsset.descriptor)
-        && promptAsset.descriptor.id === promptAssetAdapter.descriptor.id,
-      'Prompt Asset registration did not expose a frozen registration-time adapter snapshot',
-    );
     const registeredVoiceRuntime: PluginRegistrationValueByFamily['voiceProviders'] | undefined =
       testkit.registration('voiceProviders', 'speech');
     assert(
@@ -135,11 +124,6 @@ export async function exerciseTestkit(): Promise<void> {
         && typeof registeredVoiceRuntime.synthesize === 'function',
       'Voice Provider registration did not expose a frozen registration-time runtime snapshot',
     );
-    await promptAsset.discover({} as never);
-    await promptAsset.read({} as never);
-    await promptAsset.writeDoc({} as never);
-    await promptAsset.writeBundle({} as never);
-    await promptAsset.delete({} as never);
     const result = await testkit.invokeAction('echo', { text: 'hello' });
     assert(
       typeof result === 'object' && result !== null && 'echoed' in result && result.echoed === 'hello',

@@ -5,7 +5,7 @@ import type { SkillRulesActionPortV1 } from '../skillRulesActionsV1.js';
 import type { SkillRuleV1 } from '../../../reach/reachRuleV1.js';
 import { createSkillActionExecuteV1 } from './skillActionOperations.js';
 import { SKILL_ACTION_OUTPUT_SCHEMAS_V1, SkillInstallAcknowledgedEffectsV1Schema } from './skillActionSchemasV1.js';
-import { readSkillLockV1 } from './skillLibraryItemV1.js';
+import { readSkillFrontmatterV1, readSkillLockV1 } from './skillLibraryItemV1.js';
 import { readSkillZipFilesV1 } from './skillZipV1.js';
 import { createRegistryHostV1 } from '../../../registries/registryHostV1.js';
 import { computeGitBlobShaV1, computeGitTreeShaV1 } from '../../../registries/registryGitTreeV1.js';
@@ -16,6 +16,8 @@ import { FIRST_PARTY_SKILLS_V1, buildFirstPartySkillSeedRuleV1 } from './firstPa
 import { computePromptBundleDigestV1 } from '../promptLibraryDigests.js';
 import { readSkillInLibrary } from '../promptLibraryActionOperations.js';
 import { SkillReadResultV1Schema } from './skillReadV1.js';
+import retainedFrontmatter from '../../../../fixtures/0.2-retained-skill-frontmatter.json';
+import { estimateTokensV1 } from '../../../capabilities/estimateTokensV1.js';
 
 const markdown = '---\nname: sample\ndescription: A useful skill\n---\nInstructions';
 const files = [{ path: 'SKILL.md', contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64'), contentKind: 'utf8' as const }];
@@ -59,6 +61,49 @@ function harness(registry?: ReturnType<typeof createRegistryHostV1>, foundReader
     failRules: (value: boolean) => { failRules = value; }, failSession: (value: boolean) => { failSession = value; } };
 }
 describe('skill library Actions', () => {
+  it('lists predecessor-valid non-YAML content and cost, while new writes remain valid YAML only', async () => {
+    const h = harness();
+    const vector = retainedFrontmatter.cases.find(item => item.id === 'unquoted-colon')!;
+    h.artifacts.set('retained-yaml', { id: 'retained-yaml', header: vector.header, body: JSON.stringify(vector.body), owned: true,
+      revision: { headerVersion: 1, bodyVersion: 1 } });
+    const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await h.execute('skills.list', {}, { surface: 'ui' }));
+    expect(listed.items.find(item => item.skillId === 'retained-yaml')).toMatchObject({ name: 'incident-postmortem',
+      description: vector.expectedDescription, cost: { descriptionTokens: estimateTokensV1(vector.expectedDescription) } });
+    expect(listed.unavailableItems).toBeUndefined();
+    expect(await h.execute('skills.create', { name: 'incident-postmortem', files: vector.body.entries }, { surface: 'ui' }))
+      .toMatchObject({ ok: false, code: 'invalid_skill_name' });
+  });
+  it('lists healthy skills beside malformed stored content while preserving inventory failure', async () => {
+    const h = harness();
+    const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));
+    const good = h.artifacts.get(created.skillId)!;
+    h.artifacts.set('broken', { ...good, id: 'broken', body: '{malformed' });
+    const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await h.execute('skills.list', {}, { surface: 'ui' }));
+    expect(listed.items).toContainEqual(expect.objectContaining({ skillId: created.skillId }));
+    expect(listed.items.some(item => item.skillId === 'broken')).toBe(false);
+    expect(listed.unavailableItems).toEqual([{ skillId: 'broken', title: 'sample', reason: 'skill_content_unavailable' }]);
+    const execute = createSkillActionExecuteV1({ store: { ...h.store, list: async () => ({ coverage: 'unavailable', items: [] }) },
+      skillRules: h.skillRules, includeInSession: async () => ({ ok: true }), randomId: () => 'rule' });
+    expect(await execute('skills.list', {}, { surface: 'ui' })).toMatchObject({ ok: false, code: 'library_unavailable' });
+  });
+  it('creates and updates decoded YAML fields without corrupting block scalars or nested metadata', async () => {
+    const h = harness();
+    const body = '\n    Instructions\r\n';
+    const original = '---\nname: "original"\ndescription: >\n  Old folded\n  description\nmetadata:\n  name: nested\nuser-invocable: false\n---\n' + body;
+    const created = await h.execute('skills.create', { name: 'sample', description: 'Use foo: bar # safely',
+      files: [{ ...files[0]!, contentBase64: encodeBase64(new TextEncoder().encode(original), 'base64') }] }, { surface: 'ui' });
+    expect(created).toMatchObject({ ok: true });
+    const receipt = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(created);
+    const read = () => readSkillInLibrary({ store: h.store, request: { skillId: receipt.skillId } });
+    const first = SkillReadResultV1Schema.parse(await read());
+    expect(readSkillFrontmatterV1(first.skillMd)).toMatchObject({ name: 'sample', description: 'Use foo: bar # safely', userInvocable: false });
+    expect(first.skillMd).toContain('name: nested');
+    expect(first.skillMd.endsWith('\n' + body)).toBe(true);
+    const description = 'First: exact\nSecond # exact';
+    expect(await h.execute('skills.update', { skillId: receipt.skillId, expectedRevision: first.revision, description }, { surface: 'ui' }))
+      .toMatchObject({ revision: '2:2' });
+    expect(readSkillFrontmatterV1(SkillReadResultV1Schema.parse(await read()).skillMd)).toMatchObject({ name: 'sample', description, userInvocable: false });
+  });
   it.each([false, true])('keeps the acknowledged creation revision without a readback, including incomplete rules (%s)', async failRules => {
     const h = harness(); h.failRules(failRules);
     // Artifact persistence can acknowledge a current non-initial revision.

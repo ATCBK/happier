@@ -6,12 +6,11 @@ import type { ArtifactFolderActionPortV1 } from './promptFolderActionsV1.js';
 
 import {
   createPromptDocInLibrary,
+  createPromptBundleInLibrary,
   setPromptDocFavorite,
   listPromptLibrary,
   listMemoryDocsInLibrary,
   type PromptLibraryArtifactStore,
-  exportPromptLibraryArtifact,
-  installPromptRegistryItemInLibrary,
   updatePromptDocInLibrary,
   updatePromptBundleInLibrary,
   readPromptDocInLibrary,
@@ -37,6 +36,15 @@ function emptyOrganizationPort(): ArtifactFolderActionPortV1 {
 }
 
 describe('prompt library action operations', () => {
+  it('refuses direct generic-bundle authoring before persistent creation', async () => {
+    const writes: unknown[] = [];
+    await expect(createPromptBundleInLibrary({ store: { read: async () => null, update: async () => {},
+      create: async input => { writes.push(input); return 'must-not-be-created'; } },
+      // @ts-expect-error Predecessor generic bundles remain readable, not authorable.
+      request: { title: 'Predecessor generic bundle', bundleSchemaId: 'bundle.generic_v1', entries: [] } }))
+      .rejects.toMatchObject({ code: 'invalid_request' });
+    expect(writes).toEqual([]);
+  });
   it('lists memory content without requiring personal folder authority', async () => {
     const store: PromptLibraryArtifactStore = {
       read: async () => null,
@@ -472,175 +480,6 @@ describe('prompt library action operations', () => {
       body: JSON.stringify({ v: 1, markdown: 'new', createdAtMs: 1, updatedAtMs: 2 }),
       signal,
     });
-  });
-
-  it('exports a stored document through the canonical asset writer and returns the link mutation', async () => {
-    const signal = new AbortController().signal;
-    const write = vi.fn(async () => ({
-      ok: true as const,
-      externalRef: { path: '/tmp/prompt.md' },
-      digest: 'external-digest',
-    }));
-
-    const result = await exportPromptLibraryArtifact({
-      machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
-      store: {
-        read: async () => ({
-          id: 'doc-1',
-          revision: { headerVersion: 1, bodyVersion: 1 },
-          header: { v: 1, kind: 'prompt_doc.v2', title: 'Prompt' },
-          body: JSON.stringify({ v: 1, markdown: '# Prompt', createdAtMs: 1, updatedAtMs: 1 }),
-        }),
-        update: async () => undefined,
-      },
-      write,
-      request: {
-        artifactId: 'doc-1',
-        machineId: 'machine-1',
-        assetTypeId: 'markdown',
-        scope: 'user',
-        targetInput: 'prompt.md',
-        promptExternalLinks: { v: 1, links: [] },
-      },
-      randomId: () => 'link-1',
-      nowMs: () => 3,
-      signal,
-    });
-
-    expect(write).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      request: expect.objectContaining({
-        assetTypeId: 'markdown',
-        scope: 'user',
-        targetPath: 'prompt.md',
-        markdown: '# Prompt',
-        previewOnly: false,
-      }),
-      signal,
-    });
-    expect(result).toEqual(expect.objectContaining({
-      ok: true,
-      artifactId: 'doc-1',
-      exported: true,
-      nextPromptExternalLinks: {
-        v: 1,
-        links: [expect.objectContaining({ id: 'link-1', artifactId: 'doc-1' })],
-      },
-    }));
-  });
-
-  it.each([
-    { name: 'keeps same-id Machines on two Homes independent', existingHome: 'srv_machine_b', targetHome: 'srv_machine_c', reuse: false },
-    { name: 'preserves a legacy library-Home link id and external reference', existingHome: undefined, targetHome: 'srv_library_a', reuse: true },
-    { name: 'does not reuse a legacy link on an independent Machine Home', existingHome: undefined, targetHome: 'srv_machine_b', reuse: false },
-  ])('qualifies external links: $name', async ({ existingHome, targetHome, reuse }) => {
-    const existing = { id: 'retained-link', artifactId: 'doc-1', assetTypeId: 'markdown',
-      scope: 'user' as const, machineId: 'shared-machine',
-      ...(existingHome ? { serverIdentityId: existingHome } : {}),
-      externalRef: { path: '/same/prompt.md' }, lastExternalDigest: 'same-content-digest' };
-    // External filesystem/network and Artifact persistence are the boundaries;
-    // canonical link selection, export and catalog mutation remain real.
-    const write = vi.fn(async (_input: Parameters<Parameters<typeof exportPromptLibraryArtifact>[0]['write']>[0]) => ({
-      ok: true as const, externalRef: { path: '/same/prompt.md' }, digest: 'same-content-digest',
-    }));
-    const result = await exportPromptLibraryArtifact({
-      store: { read: async () => ({ id: 'doc-1', revision: { headerVersion: 1, bodyVersion: 1 },
-        header: { v: 1, kind: 'prompt_doc.v2', title: 'Prompt' },
-        body: JSON.stringify({ v: 1, markdown: '# Prompt', createdAtMs: 1, updatedAtMs: 1 }) }),
-        update: async () => undefined },
-      write,
-      ...{ machineTarget: { serverIdentityId: targetHome, machineId: 'shared-machine' }, libraryServerIdentityId: 'srv_library_a' },
-      request: { artifactId: 'doc-1', machineId: 'shared-machine', serverId: 'device-local-routing-alias',
-        assetTypeId: 'markdown', scope: 'user', targetInput: 'prompt.md', promptExternalLinks: { v: 1, links: [existing] } },
-      randomId: () => 'new-link', nowMs: () => 3,
-    });
-    expect(write.mock.calls[0]?.[0].request).toMatchObject({
-      externalRef: reuse ? existing.externalRef : null,
-      expectedDigest: reuse ? existing.lastExternalDigest : null,
-    });
-    expect(result).toMatchObject({ ok: true, exported: true });
-    if (!result.ok) throw new Error('Expected acknowledged external export');
-    expect(result.nextPromptExternalLinks?.links).toHaveLength(reuse ? 1 : 2);
-    if (!reuse) expect(result.nextPromptExternalLinks?.links[0]).toEqual(existing);
-    expect(result.nextPromptExternalLinks?.links.at(-1)).toMatchObject({
-      id: reuse ? existing.id : 'new-link', artifactId: 'doc-1', machineId: 'shared-machine',
-      serverIdentityId: targetHome, externalRef: existing.externalRef,
-    });
-    expect(result.nextPromptExternalLinks?.links.at(-1)).not.toHaveProperty('serverId');
-    if (!result.nextPromptExternalLinks) throw new Error('Expected acknowledged link catalog');
-    expect(sealPromptLibraryContentV1({ record: { key: 'external-links', value: result.nextPromptExternalLinks },
-      mode: 'plain', material: null })).toEqual({ t: 'plain', v: { key: 'external-links', value: result.nextPromptExternalLinks } });
-  });
-
-  it('installs one fetched registry bundle into the artifact store and optional asset route', async () => {
-    const create = vi.fn(async () => 'bundle-1');
-    const install = vi.fn(async () => ({
-      ok: true as const,
-      externalRef: { name: 'skill' },
-      digest: 'external-digest',
-    }));
-    const item = {
-      sourceId: 'source-1',
-      itemId: 'item-1',
-      title: 'Skill',
-      bundleSchemaId: 'skills.skill_md_v1' as const,
-      bundleBody: {
-        v: 1 as const,
-        entries: [{ path: 'SKILL.md', contentBase64: 'IyBTa2lsbA==', contentKind: 'utf8' as const }],
-        createdAtMs: 1,
-        updatedAtMs: 1,
-      },
-    };
-
-    const result = await installPromptRegistryItemInLibrary({
-      machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
-      store: { read: async () => null, update: async () => undefined, create },
-      fetchItem: async () => ({ ok: true, item }),
-      install,
-      request: {
-        machineId: 'machine-1',
-        sourceId: 'source-1',
-        itemId: 'item-1',
-        configuredSources: [],
-        installTarget: {
-          assetTypeId: 'skills',
-          scope: 'user',
-          targetName: 'skill',
-        },
-        promptExternalLinks: { v: 1, links: [] },
-      },
-      randomId: () => 'link-1',
-      nowMs: () => 4,
-    });
-
-    expect(install).toHaveBeenCalledOnce();
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      header: expect.objectContaining({ kind: 'prompt_bundle.v2', title: 'Skill' }),
-    }));
-    expect(result).toEqual(expect.objectContaining({
-      ok: true,
-      artifactId: 'bundle-1',
-      exported: true,
-    }));
-  });
-
-  it('classifies a successful registry commit without a link reference as an acknowledged typed failure', async () => {
-    const create = vi.fn(async () => 'must-not-be-created');
-    const response = { ok: true as const, digest: 'committed-digest' };
-    const result = await installPromptRegistryItemInLibrary({
-      machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
-      store: { read: async () => null, update: async () => undefined, create },
-      fetchItem: async () => ({ ok: true, item: { sourceId: 'source-1', itemId: 'item-1', title: 'Private title',
-        bundleSchemaId: 'skills.skill_md_v1', bundleBody: { v: 1, entries: [{ path: 'SKILL.md', contentBase64: 'IyBTa2lsbA==', contentKind: 'utf8' }],
-          createdAtMs: 1, updatedAtMs: 1 } } }),
-      install: async () => response,
-      request: { machineId: 'machine-1', sourceId: 'source-1', itemId: 'item-1', configuredSources: [],
-        installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'skill' }, promptExternalLinks: { v: 1, links: [] } },
-      randomId: () => 'link-1',
-    });
-    expect(result).toMatchObject({ ok: false, errorCode: expect.any(String), exported: true, response });
-    expect(create).not.toHaveBeenCalled();
-    expect(JSON.stringify(result)).not.toContain('Private title');
   });
 
   it('does not begin a store mutation when the caller is already retired', async () => {

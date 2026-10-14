@@ -54,7 +54,17 @@ export const CURSOR_PLUGIN = definePlugin({
           },
           install: {
             managed: null,
-            manual: { kind: 'vendor_recipe' },
+            manual: {
+              kind: 'vendor_recipe',
+              recipes: {
+                darwin: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://cursor.com/install | bash'] }],
+                linux: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://cursor.com/install | bash'] }],
+                win32: [{
+                  cmd: 'powershell.exe',
+                  args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "irm 'https://cursor.com/install?win32=true' | iex"],
+                }],
+              },
+            },
             guideUrl: 'https://cursor.com/docs/cli/installation',
             docsUrl: 'https://cursor.com/docs/cli',
             // https://cursor.com/docs/cli/installation ("agent update"); `agent` and `cursor-agent`

@@ -27,7 +27,6 @@ import {
 } from './composerAttachments.js';
 import type { PluginClientExecutionPlatformV1 } from './clientExecution.js';
 import type { VoiceProviderContribution } from './voiceProviders.js';
-import type { PromptAssetTypeDescriptorV1 } from '../../prompts/library/promptAssetsV1.js';
 import { isBundledProviderCatalogParserV1 } from '../../providers/catalog/descriptorV1.js';
 import { isBundledProviderCommandCatalogParserV1 } from '../../providers/detection/descriptorV1.js';
 import { normalizePluginWorkflowContributionV1 } from './workflows.js';
@@ -78,7 +77,6 @@ export type PluginContributionRegistrationRight = Readonly<{
     | 'externalSessions'
     | ComposerAttachmentRuntimeRegistrationFieldV1
   )[];
-  promptAssetDescriptor?: PromptAssetTypeDescriptorV1;
   /** Canonical parsed declaration used to validate the registered Voice runtime. */
   voiceProviderDeclaration?: VoiceProviderContribution;
   connectedAccountDescriptorDeclaration?: PluginConnectedAccountDescriptorContributionV2;
@@ -220,7 +218,7 @@ const FAMILY_POLICIES = {
   connectedAccountDescriptors: { identityField: 'id', disposition: 'reshaped', activationDemand: 'registration', projectionFamily: 'connectedAccounts', allowedRuntimeRegistration: 'connectedAccounts', consumer: 'connected-account-service', platforms: CLI_PLATFORMS },
   managedDependencies: { identityField: 'id', disposition: 'reshaped', activationDemand: 'none', projectionFamily: 'managedDependencies', allowedRuntimeRegistration: null, consumer: 'managed-dependency-service', platforms: CLI_PLATFORMS },
   systemTools: { identityField: 'id', disposition: 'reshaped', activationDemand: 'none', projectionFamily: null, allowedRuntimeRegistration: null, consumer: 'system-tool-service', platforms: CLI_PLATFORMS },
-  promptAssets: { identityField: 'id', disposition: 'reshaped', activationDemand: 'conditional', projectionFamily: null, allowedRuntimeRegistration: 'promptAssets', consumer: 'prompt-service', platforms: CLI_PLATFORMS },
+  promptAssets: { identityField: 'id', disposition: 'reshaped', activationDemand: 'none', projectionFamily: null, allowedRuntimeRegistration: null, consumer: 'prompt-service', platforms: CLI_PLATFORMS },
   hooks: { identityField: 'id', disposition: 'reshaped', activationDemand: 'registration', projectionFamily: null, allowedRuntimeRegistration: 'hooks', consumer: 'hook-dispatch', platforms: CLI_PLATFORMS },
   requestInterceptors: { identityField: 'id', disposition: 'reshaped', activationDemand: 'registration', projectionFamily: null, allowedRuntimeRegistration: 'interceptors', consumer: 'fetch-service', platforms: CLI_PLATFORMS },
   voiceModelPacks: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'voiceModelPacks', allowedRuntimeRegistration: null, consumer: 'voice-model-catalog', platforms: ALL_PLATFORMS },
@@ -802,7 +800,6 @@ function requiresFamilyRegistration(family: string, value: Readonly<Record<strin
   // runtime producer. A packaged resource is package bytes and gets no
   // registration right (§8.1).
   if (family === 'resources') return isDynamicPluginResourceContributionV2(value);
-  if (family === 'promptAssets') return value.adapterDescriptor !== undefined;
   if (family === 'composerAttachments') {
     return readComposerAttachmentRuntimeRegistrationFieldsV1(value.runtime).length > 0;
   }
@@ -1136,12 +1133,6 @@ function derivePluginContributionRegistrationRightsForHost(
           target,
           voiceProviderDeclaration: record as VoiceProviderContribution,
         }];
-      }
-      if (entry.manifestKey === 'promptAssets') {
-        const promptAssetDescriptor = record.adapterDescriptor;
-        return promptAssetDescriptor && typeof promptAssetDescriptor === 'object'
-          ? [{ family, localId, target, promptAssetDescriptor: promptAssetDescriptor as PromptAssetTypeDescriptorV1 }]
-          : [];
       }
       if (entry.manifestKey === 'composerAttachments') {
         const fields = readComposerAttachmentRuntimeRegistrationFieldsV1(record.runtime);

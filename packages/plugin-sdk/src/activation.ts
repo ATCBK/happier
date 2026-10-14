@@ -44,7 +44,6 @@ import type {
     PluginNotificationSendResult as NotificationSendResult,
     PluginDynamicResourceRuntime,
 } from './services/resources.js';
-import type { PromptAssetAdapter } from './resources.js';
 import type { AgentExternalSessionsContribution } from './externalSessions.js';
 import type { AgentExternalSessionObservationContribution } from './externalSessionObservation.js';
 import type {
@@ -339,10 +338,6 @@ export type PluginRequestInterceptor = (request: PluginInterceptedRequest, conte
 export interface PluginInterceptorRegistrationApi { register(id: string, interceptor: PluginRequestInterceptor): void }
 
 export interface ResourcesRegistrationApi {
-    registerPromptAssetAdapter(
-        localId: PluginContributionLocalId,
-        adapter: PromptAssetAdapter,
-    ): void;
     /**
      * Bind the runtime producer for one manifest-declared dynamic resource
      * (`contributes.resources[].source === 'dynamic'`). Packaged resources are

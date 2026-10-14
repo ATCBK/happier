@@ -21,7 +21,6 @@ import type {
     HostingProviderRuntime,
 } from '../../activation.js';
 import { PluginContributionLocalIdSchema } from '@happier-dev/protocol/plugins/contribution-identity';
-import type { PromptAssetTypeDescriptor } from '@happier-dev/protocol/plugins/manifest';
 import type {
     PluginConnectedAccountDescriptorContributionV2,
 } from '@happier-dev/protocol';
@@ -69,7 +68,6 @@ import type { PluginCaptureSourceRuntime } from '../../captureSources.js';
 import type { PluginProjectNativeAdapterRuntimeV1, ProjectNativeAdapterRoleV1 } from '../../projectNativeAdapters.js';
 import type { PluginDragSourceRuntime, PluginDropTargetRuntime } from '../../entityDragDrop.js';
 import type { JsonValue } from '../../identity.js';
-import type { PromptAssetAdapter } from '../../resources.js';
 import type { PluginDynamicResourceRuntime } from '../../services/resources.js';
 import type { PluginConnectedAccountRuntime } from '../../services/index.js';
 import type {
@@ -79,7 +77,6 @@ import type {
 import type { VoiceProvidersRegistrationApi } from '../../voice/projections.js';
 import {
     snapshotManagedProviderRuntime,
-    snapshotPromptAssetDescriptor,
     snapshotStaticRegistrationData,
     snapshotStaticRegistrationValue,
 } from './staticRegistrationSnapshots.js';
@@ -112,7 +109,6 @@ export type PluginRegistrationRight = Readonly<{
             platforms: readonly ('web' | 'ios' | 'android')[];
         }>;
     requiredFields?: readonly PluginRegistrationRequiredField[];
-    promptAssetDescriptor?: PromptAssetTypeDescriptor;
     voiceProviderDeclaration?: VoiceProviderContribution;
     connectedAccountDescriptorDeclaration?: PluginConnectedAccountDescriptorContributionV2;
     projectNativeAdapterRoles?: readonly ProjectNativeAdapterRoleV1[];
@@ -225,7 +221,6 @@ const REGISTRATION_FAMILY = Object.freeze({
     projectNativeAdapters: 'projectNativeAdapters',
     dragSources: 'dragSources',
     dropTargets: 'dropTargets',
-    promptAssets: 'promptAssets',
     dynamicResources: 'resources',
     composerReferences: 'composerReferences',
     composerAttachments: 'composerAttachments',
@@ -1744,9 +1739,6 @@ export function createPluginRegistrationScope(
                 ? { requiredFields: Object.freeze([...right.requiredFields]) }
                 : {}),
             ...(right.projectNativeAdapterRoles ? { projectNativeAdapterRoles: Object.freeze([...right.projectNativeAdapterRoles]) } : {}),
-            ...(right.promptAssetDescriptor
-                ? { promptAssetDescriptor: snapshotPromptAssetDescriptor(right.promptAssetDescriptor) }
-                : {}),
             ...(right.providerArms
                 ? {
                     providerArms: Object.freeze({
@@ -2180,8 +2172,6 @@ export function createPluginRegistrationScope(
                 register(REGISTRATION_FAMILY.composerAttachments, id, runtime),
         }),
         resources: Object.freeze({
-            registerPromptAssetAdapter: (id: string, adapter: PromptAssetAdapter) =>
-                register(REGISTRATION_FAMILY.promptAssets, id, adapter),
             registerDynamicResource: (id: string, runtime: PluginDynamicResourceRuntime) =>
                 register(REGISTRATION_FAMILY.dynamicResources, id, runtime),
         }),
@@ -2380,16 +2370,6 @@ export function createPluginRegistrationScope(
                     fail(
                         `Plugin '${params.pluginId}' activation is missing Agent External Sessions contribution for 'agents/${registration.localId}'`,
                     );
-                }
-            }
-            for (const right of rightsByKey.values()) {
-                if (right.family !== REGISTRATION_FAMILY.promptAssets || !right.promptAssetDescriptor) continue;
-                const registration = capturedByKey.get(registrationKey(right.family, right.localId));
-                const descriptor = registration?.family === REGISTRATION_FAMILY.promptAssets
-                    ? (registration.value as PromptAssetAdapter).descriptor
-                    : undefined;
-                if (!isStructurallyEqual(right.promptAssetDescriptor, descriptor)) {
-                    fail(`Plugin '${params.pluginId}' registered a mismatched Prompt Asset adapter descriptor for '${right.family}/${right.localId}'`);
                 }
             }
             assertCommitActive();

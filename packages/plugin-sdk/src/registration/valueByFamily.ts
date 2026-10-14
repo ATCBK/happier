@@ -33,7 +33,6 @@ import type {
 } from '../agentRuntime/index.js';
 import type { BackgroundServiceRunner } from '../backgroundServices.js';
 import type { AgentExternalSessionHooksContribution } from '../externalSessionHooks.js';
-import type { PromptAssetAdapter } from '../resources.js';
 import type { PluginDynamicResourceRuntime } from '../services/resources.js';
 import type { PluginConnectedAccountRuntime } from '../services/index.js';
 import type { AgentExternalSessionTakeoverContribution } from '../sessions/externalSessionTakeover.js';
@@ -99,7 +98,6 @@ export interface PluginRegistrationValueByFamily {
     requestInterceptors: PluginRequestInterceptor;
     voiceProviders: Parameters<VoiceProvidersRegistrationApi['register']>[1];
     backgroundServices: BackgroundServiceRunner;
-    promptAssets: PromptAssetAdapter;
     /**
      * The dynamic arm of the discriminated `resources` contribution family
      * (§3.6.1). Packaged resources are package bytes and deliberately have no

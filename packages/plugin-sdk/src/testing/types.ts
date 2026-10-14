@@ -139,7 +139,6 @@ export type PluginTestkitRegistrationByFamily = Readonly<{
     'mcp.discoverySources': Parameters<PluginApi['mcp']['registerDiscoverySource']>[1];
     voiceProviders: Parameters<PluginApi['voiceProviders']['register']>[1];
     backgroundServices: Parameters<PluginApi['backgroundServices']['register']>[1];
-    promptAssets: Parameters<PluginApi['resources']['registerPromptAssetAdapter']>[1];
     resources: Parameters<PluginApi['resources']['registerDynamicResource']>[1];
     composerReferences: Parameters<
         PluginApi['composerReferences']['register']

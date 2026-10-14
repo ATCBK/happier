@@ -1338,6 +1338,23 @@ describe('dynamic Resource HostAccess callback binding (SDK-RESOURCE-01)', () =>
 
     it.each([
         {
+            code: 'plugin_collection_contract_conflict',
+            hostAccess: ['account-storage'] as const,
+            label: 'Account Collection publication refuses an incompatible contract',
+            read: () => {
+                throw new PluginError({
+                    code: 'plugin_collection_contract_conflict',
+                    message: 'Collection contract is incompatible',
+                });
+            },
+        },
+        {
+            code: 'plugin_resource_io_failed',
+            hostAccess: undefined,
+            label: 'a producer throws an untyped exception',
+            read: () => { throw new Error('private producer failure'); },
+        },
+        {
             code: 'collection_unavailable',
             hostAccess: undefined,
             label: 'the same producer error has no Account HostAccess',
@@ -1367,7 +1384,7 @@ describe('dynamic Resource HostAccess callback binding (SDK-RESOURCE-01)', () =>
             // deliberately violates the registered runtime return contract.
             read: () => ({ invalid: true } as unknown as Uint8Array),
         },
-    ] as const)('isolates a failed global resource when $label', async ({ hostAccess, read }) => {
+    ] as const)('isolates a failed global resource when $label', async ({ code, hostAccess, read }) => {
         const hostAccessRequests = hostAccess === undefined
             ? []
             : [{
@@ -1406,9 +1423,9 @@ describe('dynamic Resource HostAccess callback binding (SDK-RESOURCE-01)', () =>
             }],
         });
         const service = owner.bind({ pluginId: 'acme.alpha', signal: new AbortController().signal, isOccurrenceCurrent: () => true });
-        await expect(service.read('live')).rejects.toMatchObject({ code: 'plugin_resource_admission_unavailable' });
-        expect(() => service.describe('live')).toThrowError(expect.objectContaining({ code: 'plugin_resource_admission_unavailable' }));
-        expect(() => service.watch('live', () => undefined)).toThrowError(expect.objectContaining({ code: 'plugin_resource_admission_unavailable' }));
+        await expect(service.read('live')).rejects.toMatchObject({ code });
+        expect(() => service.describe('live')).toThrowError(expect.objectContaining({ code }));
+        expect(() => service.watch('live', () => undefined)).toThrowError(expect.objectContaining({ code }));
         await expect(service.read('healthy')).resolves.toMatchObject({ bytes: new Uint8Array(Buffer.from('healthy')) });
     });
 

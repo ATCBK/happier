@@ -13,8 +13,8 @@ import type { RegistryItemPointerV1, RegistryItemV1, RegistryContentRefV1 } from
 import type { RegistrySourceDescriptorV1 } from '../../../registries/registrySourcesV1.js';
 import { RegistryUpstreamV1Schema, registryUpstreamEqualV1, type RegistryUpstreamV1 } from '../../../registries/registryUpstreamV1.js';
 import type { RegistryProvenanceV1 } from '../../../registries/registryItemsV1.js';
-import { encodeSkillRevisionV1, readSkillLockV1, isSkillModifiedV1, readSkillFrontmatterV1, SKILL_NAME_PATTERN_V1,
-  type SkillListItemV1, type SkillLockV1, type SkillProvenanceV1 } from './skillLibraryItemV1.js';
+import { encodeSkillRevisionV1, readSkillLockV1, isSkillModifiedV1, readSkillFrontmatterV1, writeSkillFrontmatterV1, SKILL_NAME_PATTERN_V1,
+  type SkillListItemV1, type SkillUnavailableItemV1, type SkillLockV1, type SkillProvenanceV1 } from './skillLibraryItemV1.js';
 import { deriveSkillTrustV1 } from './skillTrustV1.js';
 import { estimateSkillCostV1 } from './skillCostV1.js';
 import { deriveSkillAccountStatusesV1 } from './skillStatusV1.js';
@@ -77,12 +77,8 @@ function renameMarkdown(files: readonly SkillFileInputV1[], name?: string, descr
   if (name === undefined && description === undefined) return [...files];
   return files.map(file => {
     if (file.path !== 'SKILL.md') return file;
-    let markdown = text(file);
-    const frontmatter = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
-    const fields = (frontmatter?.[1] ?? '').split(/\r?\n/).filter(line => line && !(name !== undefined && /^name\s*:/.test(line)) && !(description !== undefined && /^description\s*:/.test(line)));
-    if (name !== undefined) fields.push(`name: ${name}`);
-    if (description !== undefined) fields.push(`description: ${description.replace(/[\r\n]/g, ' ')}`);
-    markdown = `---\n${fields.join('\n')}\n---\n${frontmatter ? markdown.slice(frontmatter[0].length) : markdown}`;
+    const markdown = writeSkillFrontmatterV1(text(file), { name, description });
+    if (markdown === null) return fail('invalid_skill_name');
     return { ...file, contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64') };
   });
 }
@@ -253,18 +249,29 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
           if (!port.store.list) return fail('library_unavailable');
           const [rules, usage, folderCatalog] = await Promise.all([rulesRead(signal), readSkillUsageCatalogV1(port.skillRules, signal),
             port.store.organization ? readArtifactFolderCatalogV1({ port: port.store.organization, signal }).catch(() => null) : null]);
-          const items: SkillListItemV1[] = []; let cursor: string | undefined;
+          const items: SkillListItemV1[] = []; const unavailableItems: SkillUnavailableItemV1[] = []; let cursor: string | undefined;
           do { const page = await port.store.list({ limit: 500, ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
             if (page.coverage === 'unavailable' || page.coverage === 'partial' && !page.nextCursor) return fail('library_unavailable');
             const opened = await Promise.all(page.items.flatMap(item => item.header?.kind === 'prompt_bundle.v2'
-              && item.header.bundleSchemaId === 'skills.skill_md_v1' ? [{ ...item, header: item.header }] : []).map(async header => {
+              && item.header.bundleSchemaId === 'skills.skill_md_v1' ? [{ ...item, header: item.header }] : []).map(async (header): Promise<SkillListItemV1 | SkillUnavailableItemV1> => {
               const folder = folderCatalog?.status === 'ready' ? resolveArtifactOrganizationHeaderV1({ header: header.header,
                 artifactHeadersById: folderCatalog.value.artifactHeadersById, artifactId: header.id, owned: header.owned === true }).folderId ?? null : null;
-              const item = await project(await read(header.id, signal), rules.rules, folder);
-              return usage && Object.hasOwn(usage.row.lastUsedAt, item.skillId)
-                ? { ...item, lastUsedAt: usage.row.lastUsedAt[item.skillId] } : item;
+              try {
+                const item = await project(await read(header.id, signal), rules.rules, folder);
+                return usage && Object.hasOwn(usage.row.lastUsedAt, item.skillId)
+                  ? { ...item, lastUsedAt: usage.row.lastUsedAt[item.skillId] } : item;
+              } catch (error) {
+                const code: unknown = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined;
+                if (code === 'skill_content_unavailable' || code === 'not_found' || code === 'invalid_skill_lock') return {
+                  skillId: header.id, title: typeof header.header.title === 'string' && header.header.title.trim() ? header.header.title : null, reason: code,
+                };
+                throw error;
+              }
             }));
-            items.push(...opened);
+            for (const item of opened) {
+              if ('reason' in item) unavailableItems.push(item);
+              else items.push(item);
+            }
             cursor = page.nextCursor;
           } while (cursor);
           for (const skill of FIRST_PARTY_SKILLS_V1) {
@@ -273,11 +280,11 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
               ? { ...item, lastUsedAt: usage.row.lastUsedAt[item.skillId] } : item);
           }
           const usageObservedSince = skillUsageObservedSinceV1(usage?.row);
-          result = { usageObservedSince, items: items.filter(item => { const statuses = deriveSkillAccountStatusesV1(item, { nowMs: nowMs(), usageObservedSince });
+          result = { usageObservedSince, ...(unavailableItems.length ? { unavailableItems } : {}), items: items.filter(item => { const statuses = deriveSkillAccountStatusesV1(item, { nowMs: nowMs(), usageObservedSince });
             return (!input.query || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(input.query.toLowerCase()))
               && (!input.state || input.state === 'in_use' && !statuses.includes('off') || input.state === 'off' && statuses.includes('off')
                 || (input.state === 'updates' || input.state === 'needs_attention') && statuses.includes('update')); }),
-            revision: `${rules.revision}:${usage?.revision ?? 'unavailable'}:${items.map(item => item.revision).join(',')}` }; break;
+            revision: `${rules.revision}:${usage?.revision ?? 'unavailable'}:${items.map(item => item.revision).join(',')}:${JSON.stringify(unavailableItems)}` }; break;
         }
         case 'skills.create': { const input = inputs[actionId].parse(raw); result = await create(renameMarkdown(input.files, input.name, input.description), { kind: 'written' }, caller, input.where, signal); break; }
         case 'skills.found.read': { const input = inputs[actionId].parse(raw), bundle = await readFound(input.machineId, input.path, signal);

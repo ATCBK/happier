@@ -56,10 +56,14 @@ describe('stack skill conversion', () => {
     expect(convertStackSkillEntriesV1(entries, { kind: 'profile' }, { skillIds }).ruleIdFor('append')).toBeNull();
     expect(convertStackSkillEntriesV1(account.remainingEntries, { kind: 'account' }, { skillIds }).skillIds).toEqual([]);
   });
-  it('preserves session-disabled inherited skill identity as a session exclusion', () => {
-    const result = convertStackSkillEntriesV1(entries, { kind: 'session' }, { skillIds,
-      disabledInheritedEntryIds: ['inherited'], disabledInheritedEntries: [{ ...entries[0]!, id: 'inherited' }] });
-    expect(result.excludedSkillIds).toEqual(['lint']);
+  it('preserves disabled inherited references through classification as a session exclusion', async () => {
+    const inherited = [{ ...entries[2]!, id: 'inherited' }];
+    const classified = await readStackSkillIdsV1(inherited, { readArtifact: async () => ({ header: {
+      v: 1, kind: 'prompt_bundle.v2', title: 'Disabled skill', bundleSchemaId: 'skills.skill_md_v1' } }) });
+    if (classified.status !== 'ready') throw new Error('Disabled exclusion authority unavailable');
+    const result = convertStackSkillEntriesV1([], { kind: 'session' }, { ...classified,
+      disabledInheritedEntryIds: ['inherited'], disabledInheritedEntries: inherited });
+    expect(result.excludedSkillIds).toEqual(['off']);
   });
   it('preserves a retained inherited exclusion after its migrated rule is removed and recreated', () => {
     const initial = appendMigratedStackSkillRulesV1([], entries.slice(0, 1), { kind: 'account' }, { skillIds, nowMs: 1 });

@@ -26,7 +26,6 @@ import { FeaturesResponseSchema, HomeConnectionDescriptorV1Schema } from '@happi
 import { configuration } from '@/configuration';
 import { ApiClient } from '@/api/api';
 import { createDaemonMachineBootstrapRuntime } from '@/daemon/startup/createDaemonMachineBootstrapRuntime';
-import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { createDaemonServerWorkBudget, createDaemonServerWorkScheduler } from '@/daemon/serverWork';
 import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
@@ -41,7 +40,7 @@ vi.mock('node:os', async importOriginal => {
 async function fixture(run: (fixture: Readonly<{
   service: ReturnType<typeof createMachineSkillActions>; home: string;
   credentials: persistence.StoredCredentials; base: string;
-  state: { text: string; homeIdentity: string; conflict: boolean; retireOnRead: boolean; retireOnWrite: boolean; unavailable: boolean; missingArtifact: boolean; malformedSkillHeader: boolean; writes: number };
+  state: { text: string; homeIdentity: string; conflict: boolean; retireOnRead: boolean; retireOnWrite: boolean; unavailable: boolean; missingArtifact: boolean; malformedSkillHeader: boolean; unreadableNeighbour: boolean; writes: number };
   readLinks(): Extract<ReturnType<typeof PromptLibraryRecordV1Schema.parse>, { key: 'external-links' }>;
 }>) => Promise<void>) {
   const home = mkdtempSync(join(tmpdir(), 'happier-machine-actions-'));
@@ -51,7 +50,7 @@ async function fixture(run: (fixture: Readonly<{
     machineId: 'machine', serverIdentityId: 'srv_elsewhere', externalRef: { skillName: 'foreign' }, lastExternalDigest: 'untouched' };
   for (const key of PromptLibraryCatalogKeyV1Schema.options) database.prepare('INSERT INTO rows VALUES (?, 1, ?)')
     .run(key, JSON.stringify(key === 'external-links' ? { key, value: { v: 1, links: [foreign] } } : emptyPromptLibraryRecordV1(key)));
-  const state = { text: 'initial', homeIdentity: 'srv_home', conflict: false, retireOnRead: false, retireOnWrite: false, unavailable: false, missingArtifact: false, malformedSkillHeader: false, writes: 0 };
+  const state = { text: 'initial', homeIdentity: 'srv_home', conflict: false, retireOnRead: false, retireOnWrite: false, unavailable: false, missingArtifact: false, malformedSkillHeader: false, unreadableNeighbour: false, writes: 0 };
   const artifact = () => ({ id: 'skill', ownerAccountId: 'fixture-account', access: 'owner', encryptionMode: 'plain',
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
     header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', ...(state.malformedSkillHeader ? {} : { title: 'example' }), bundleSchemaId: 'skills.skill_md_v1' }),
@@ -79,7 +78,8 @@ async function fixture(run: (fixture: Readonly<{
         result = write.changes === 1 ? { status: 'updated', revision: current.revision, cursor: state.writes } : { status: 'conflict', revision: current.revision };
         if (state.retireOnWrite) setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'retired-account' });
       } else if (path === '/v1/features') result = FeaturesResponseSchema.parse({ features: {}, capabilities: { serverIdentity: { serverIdentityId: state.homeIdentity } } });
-      else if (path === '/v1/artifacts') result = [artifact()];
+      else if (path === '/v1/artifacts') result = [artifact(), ...(state.unreadableNeighbour ? [{ ...artifact(), id: 'broken' }] : [])];
+      else if (path === '/v1/artifacts/broken') result = { ...artifact(), id: 'broken', body: encodePlainArtifactStoredContent({ body: '{malformed' }) };
       else if (path === '/v1/artifacts/skill') {
         if (state.retireOnRead) setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'retired-account' });
         if (state.missingArtifact) { response.statusCode = 404; result = { error: 'not_found' }; }
@@ -173,7 +173,6 @@ describe('machine skill service through real Account HTTP and SQLite CAS', () =>
       spawnSession: unused, stopSession: unused, awaitAgentSessionOpen: unused,
       isSessionAlreadyRunning: unused, loadLocalSessionMetadataForHandoff: unused,
       beforeShutdown: async () => {}, requestShutdown: () => {},
-      directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
       directTransferRegistryHost: createCliRegistryHostV1({ credentials }),
       daemonServerWorkScheduler: createDaemonServerWorkScheduler({ budget: createDaemonServerWorkBudget({ maxConcurrentWrites: 1 }) }),
       setDaemonServerWorkOnline: () => {}, onMachineConnectionOnline: () => {},
@@ -242,9 +241,18 @@ describe('machine skill service through real Account HTTP and SQLite CAS', () =>
       expect(readLinks().value.links).toHaveLength(1);
     } finally { await machine.shutdown(); }
   }));
-  it('reports malformed skill inventory as typed library unavailability before joining Found', async () => fixture(async ({ service, state }) => {
-    state.malformedSkillHeader = true; await expect(service.found()).rejects.toMatchObject({ code: 'library_unavailable' });
-    expect(state.writes).toBe(0);
+  it('keeps Found available beside a malformed stored skill without fabricating library membership', async () => fixture(async ({ service, state }) => {
+    await service.install({ skillId: 'skill' });
+    const writes = state.writes;
+    state.unreadableNeighbour = true;
+    expect(SkillFoundListResultV1Schema.parse(await service.found()).items.find(item => item.name === 'example'))
+      .toMatchObject({ inLibrary: 'skill', masksLibrary: true, happierInstalled: true });
+    state.malformedSkillHeader = true;
+    expect(SkillFoundListResultV1Schema.parse(await service.found()).items.find(item => item.name === 'example'))
+      .toMatchObject({ inLibrary: null, masksLibrary: false });
+    expect(state.writes).toBe(writes);
+    state.unavailable = true;
+    await expect(service.found()).rejects.toMatchObject({ code: 'library_unavailable' });
   }));
   it('joins Found to verified library content and exact own receipts, without giving plugin skills install ownership', async () => fixture(async ({ service, state, home }) => {
     expect((await service.install({ skillId: 'skill' })).results[0]?.status).toBe('installed');
@@ -256,7 +264,9 @@ describe('machine skill service through real Account HTTP and SQLite CAS', () =>
     expect(result.items.find(item => item.scope === 'plugin')).toMatchObject({ inLibrary: 'skill', masksLibrary: false, happierInstalled: false, pluginOwned: { pluginName: 'fixture' } });
     writeFileSync(join(home, '.agents/skills/example/SKILL.md'), 'local edit');
     expect((await service.found()).items.find(item => item.scope === 'user')).toMatchObject({ inLibrary: null, masksLibrary: true, happierInstalled: false });
-    state.missingArtifact = true; await expect(service.found()).rejects.toMatchObject({ code: 'library_unavailable' });
+    state.missingArtifact = true;
+    expect(SkillFoundListResultV1Schema.parse(await service.found()).items.find(item => item.scope === 'user'))
+      .toMatchObject({ inLibrary: null, masksLibrary: false });
   }));
   it('installs for actual installed Agents, refreshes and uninstalls while preserving foreign receipts', async () => fixture(async ({ service, state, home, readLinks }) => {
     const installed = await service.install({ skillId: 'skill' }); expect(installed.results[0]?.status).toBe('installed'); expect(installed.row.status).toBe('updated');

@@ -1,4 +1,4 @@
-import { PromptBundleArtifactHeaderV1Schema, readSkillBundleContentV1 } from '../promptBundleSchemas.js';
+import { readSkillBundleContentV1 } from '../promptBundleSchemas.js';
 import { FIRST_PARTY_SKILLS_V1 } from './firstPartySkillsV1.js';
 
 export type SkillLibraryInventoryArtifactV1 = Readonly<{
@@ -24,9 +24,9 @@ export async function readCompleteSkillLibraryInventoryV1<T extends SkillLibrary
     if (page.coverage !== 'complete') throw Object.assign(new Error('Skill library unavailable'), { code: 'catalog_unavailable' });
     for (const artifact of page.items) {
       if (artifact.header.bundleSchemaId !== 'skills.skill_md_v1') continue;
-      if (!PromptBundleArtifactHeaderV1Schema.safeParse(artifact.header).success) {
-        throw Object.assign(new Error('Skill header unavailable'), { code: 'catalog_unavailable' });
-      }
+      // Preserve the item's identity even when its stored header is malformed.
+      // The content owner refuses it; selected Sessions can report the item,
+      // and GC still withholds its sweep when any content cannot be read.
       items.push(artifact);
     }
     cursor = page.nextCursor;
@@ -57,7 +57,9 @@ export async function readSkillLibraryCatalog(store: SkillLibraryInventoryPortV1
   const items: Array<{ id: string; name: string }> = [];
   for (const artifact of inventory) {
     const content = readSkillBundleContentV1(artifact);
-    if (!content) throw Object.assign(new Error('Skill content unavailable'), { code: 'catalog_unavailable' });
+    // One malformed stored skill is unavailable, not the whole name catalog.
+    // Session delivery independently reads selected content and exposes its refusal.
+    if (!content) continue;
     items.push({ id: artifact.artifactId, name: content.frontmatter.name });
   }
   return [...items, ...bundled.map(skill => ({ id: skill.skillId, name: skill.name }))];

@@ -118,10 +118,20 @@ export function createMachineSkillActions(input: MachineSkillActionsInput) {
     } }, { includeBody: false, signal }).catch(error => {
       current(signal); return fail('library_unavailable', errorCode(error));
     });
-    return Promise.all([
-      ...inventory.map(artifact => readContent(artifact.artifactId, signal)),
+    const opened = await Promise.all([
+      ...inventory.map(async artifact => {
+        try { return await readContent(artifact.artifactId, signal); }
+        catch (error) {
+          current(signal);
+          // Found annotates native items from readable library content only.
+          // An unreadable neighbour cannot withdraw the native inventory.
+          if (['not_found', 'skill_content_unavailable'].includes(errorCode(error))) return null;
+          throw error;
+        }
+      }),
       ...FIRST_PARTY_SKILLS_V1.map(stub => readContent(stub.skillId, signal)),
     ]).catch(error => { current(signal); return fail('library_unavailable', errorCode(error)); });
+    return opened.filter((content): content is MachineSkillInstallContent => content !== null);
   }
   return {
     found: async (request: Readonly<{ directory?: string; signal?: AbortSignal }> = {}): Promise<SkillFoundListResultV1> => {
