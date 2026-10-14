@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { ExternalActionActionIdV1Schema, bindExternalActionExecutionAuthorizationVerifyHttpPathV1, bindExternalActionExecutionAuthorizationHttpPathV1, EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationVerifyRequestV1Schema, isExternalActionResolvedTargetAllowedV1, type ExternalActionExecutionAuthorizationBindingV1, type ExternalActionExecutionAuthorizationV1, type ExternalActionMachineRpcExecutionV1, type ExternalActionTargetV1, type ExternalActionServerPrincipalV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { decodeExternalActionResolvedTargetV1, encodeExternalActionResolvedTargetV1, verifyExternalActionMachineRpcRequestV1, verifyExternalActionMachineRequestV1, isExternalActionAuthorizationBoundToEnvelope, type ExternalActionMachineRpcEventV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { getActionSpec, isPluginProvenanceOnlyActionId, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
@@ -59,6 +60,8 @@ import { KvMutationRequestSchema } from '@/app/kv/kvMutate';
 import { isHomeDomainActionIdV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { bindHomeDomainHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { SessionOrganizationPinSetInputSchema } from '@happier-dev/protocol/actions/sessionOrganizationMoveAction';
+import { isSessionStateFieldActionId } from '@happier-dev/protocol/actions/sessionStateFieldActions';
+import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
@@ -391,6 +394,7 @@ async function readCurrentExternalActionPrincipal(
         ...(qualifiedAction ? { contributedQualifiedId: binding.actionId } : {}),
         target: binding.target,
         targetMachineId: binding.machineId,
+        automationId: binding.automationId,
     }).ok) return null;
     return principal;
 }
@@ -726,7 +730,7 @@ function isScmReviewedMarksHttpPurpose(proof: ExternalActionExecutionRequestProo
     };
     const method = proof.method.toUpperCase();
     if (method === 'POST' && url.pathname === '/v1/kv') {
-        const request = KvMutationRequestSchema.strict().safeParse(proof.body);
+        const request = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(KvMutationRequestSchema).safeParse(proof.body);
         return request.success && request.data.mutations.every(mutation => isReviewedKey(mutation.key));
     }
     if (method !== 'GET' || proof.body !== undefined) return false;
@@ -851,6 +855,20 @@ function isHomeDomainActionHttpPurpose(verified: VerifiedExternalActionExecution
     return isHomeDomainActionHttpOperation(verified.binding.actionId, proof);
 }
 
+/** Account metadata writes resolve one Session before signing its codec reads and tuple patch. */
+function isSessionStateFieldActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
+    proof: ExternalActionExecutionRequestProof): boolean {
+    if (!isSessionStateFieldActionId(verified.binding.actionId)
+        || verified.effectActionId !== verified.binding.actionId || verified.target.kind !== 'session') return false;
+    const sessionPath = `/v2/sessions/${encodeURIComponent(verified.target.sessionId)}`;
+    if (proof.method.toUpperCase() === 'GET' && proof.body === undefined) {
+        return isAccountEncryptionCurrentnessHttpRead(proof)
+            || proof.path === sessionPath || proof.path === `${sessionPath}?accessProjectionVersion=1`;
+    }
+    return proof.method.toUpperCase() === 'PATCH' && proof.path === sessionPath
+        && SessionMetadataTuplePatchV1Schema.safeParse(proof.body).success;
+}
+
 export async function verifyExternalActionDomainExecutionRequest(
     proof: ExternalActionExecutionRequestProof,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
@@ -880,6 +898,8 @@ export async function verifyExternalActionDomainExecutionRequest(
     if (readsExecutionMachine) {
         // Native Machine and Session RPC read the exact execution Machine's content codec
         // before delivery. This is not Account read authority or a family grant.
+    } else if (isSessionStateFieldActionHttpPurpose(verified, proof)) {
+        // The existing Session routes retain actor access, tuple CAS and publisher policy.
     } else if (rootSpec?.executionPlacement === 'session'
         && verified.effectActionId === verified.binding.actionId && verified.target.kind === 'session'
         && isAccountEncryptionCurrentnessHttpRead(proof)) {

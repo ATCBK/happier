@@ -162,6 +162,11 @@ import { registerMachinePromptAssetTransferRpcHandlers } from '../../../../../..
 import { createFoundSkillBundleReader } from '../../../../../../cli/src/cli/actions/foundSkillBundleReader';
 import { scanNativeSkillRoots } from '../../../../../../cli/src/prompts/skills/native/scanNativeSkillRoots';
 import { createCliActionDeps } from '../../../../../../cli/src/session/actions/createCliActionDeps';
+import { createTestMetadata } from '../../../../../../cli/src/testkit/backends/sessionMetadata';
+import { buildSessionMetadataEnvelopeCreateFields } from '../../../../../../cli/src/session/metadata/buildSessionMetadataEnvelopeCreateFields';
+import { fetchSessionById } from '../../../../../../cli/src/session/transport/http/sessionsHttp';
+import { tryDecryptSessionOwnerMetadataView } from '../../../../../../cli/src/session/transport/encryption/sessionEncryptionContext';
+import { registerSessionPatchRoute } from '@/app/api/routes/session/registerSessionPatchRoute';
 import { FoundSkillBundleV1Schema } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
 import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { createTransferRecipientKeyPair } from '@happier-dev/transfers/node';
@@ -1244,6 +1249,85 @@ describe("external Action execution authorization", () => {
                 witnessPath.replace(encodeURIComponent(accepted.id), 'different-witness'), '/v2/account/settings', '/v1/account/encryption']) {
                 expect((await read(path)).statusCode, path).toBe(401);
             }
+        } finally { await app.close(); }
+    });
+
+    it('executes a signed Account metadata title through the real writer and exact Session HTTP purpose', async () => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const credentials = { token, encryption: null };
+        const metadataFields = buildSessionMetadataEnvelopeCreateFields({ credentials, accountEncryptionMode: 'plain',
+            storedContentMode: 'plain', metadata: createTestMetadata({ machineId: fixture.machine.id }), agentState: null });
+        const session = await db.session.create({ data: { accountId: fixture.account.id,
+            tag: crypto.randomUUID(), encryptionMode: 'plain',
+            metadataLayoutVersion: metadataFields.metadataLayoutVersion, metadata: metadataFields.sharedMetadata.ciphertext,
+            ownerMetadata: JSON.stringify(metadataFields.ownerMetadata), agentState: metadataFields.agentState } });
+        await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id,
+            sessionId: session.id, data: 'opaque-source-key' } });
+        const { app } = await createApp(fixture.team.id, false, async () => fixture.machine.id, undefined, false,
+            routes => registerSessionPatchRoute(routes));
+        const actionId = 'session.title.set';
+        const input = getActionSpec(actionId).inputSchema.parse({ sessionId: session.id, title: 'Signed metadata title' });
+        const envelope: ExternalActionRequestEnvelopeV1 = { v: 1, requestId: crypto.randomUUID(),
+            target: { kind: 'machine', machineId: fixture.machine.id }, input };
+        try {
+            const serverHttpBaseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
+            const homeId = await getOrCreateServerIdentityId();
+            let preparedToken: string | undefined;
+            await runWithServerHttpBaseUrl(serverHttpBaseUrl, async () => {
+                await bootstrapAccountSettingsContext({ credentials, mode: 'blocking' });
+                const execute = createDaemonSessionAccountActionExecutor({ credentials, token, serverId: 'metadata-home',
+                    serverHttpBaseUrl, machineId: fixture.machine.id,
+                    prepareExternalActionAuthorization: async ({ operation, sessionActionOrigin, isCallerCurrent }) => {
+                        const target = { kind: 'machine' as const, machineId: fixture.machine.id };
+                        const authorization = await prepareExternalActionRequesterAccountAuthorization({ actionId: operation.actionId,
+                            input: operation.input, requestId: operation.requestId, target, machineId: fixture.machine.id,
+                            sourceMachineId: fixture.machine.id, accountId: fixture.account.id, accountEncryptionMode: 'plain',
+                            tokenEpochHint: fixture.account.tokenEpoch, token, serverId: 'metadata-home', serverIdentityId: homeId,
+                            serverHttpBaseUrl, installationId: fixture.machine.installationId!, privateKey: fixture.keyPair.secretKey,
+                            sessionActionOrigin, isCurrent: isCallerCurrent });
+                        if (!authorization) return null;
+                        preparedToken = authorization.token;
+                        authorizationRequests.set(authorization.token, { target,
+                            installationId: fixture.machine.installationId!, requestId: operation.requestId });
+                        return { authorization, target };
+                    },
+                    createExecutor: () => createCliActionExecutorFromCredentials({ credentials, serverId: 'metadata-home',
+                        serverApiUrl: serverHttpBaseUrl, serverIdentityId: homeId, machineId: fixture.machine.id,
+                        externalActionMachineRequestPrivateKey: fixture.keyPair.secretKey,
+                        externalActionMachineInstallationId: fixture.machine.installationId!, pluginActionExecutionOwner: 'current_process' }),
+                });
+                const result = await execute({ kind: 'action.execute', actionId, input, requestId: envelope.requestId!,
+                    witness: { turnId: 'metadata-turn', inputId: crypto.randomUUID(), userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0,
+                        agentStartCaller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 } } },
+                    { sessionId: session.id, isCurrent: async () => true });
+                expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+                const raw = await fetchSessionById({ token, serverUrl: serverHttpBaseUrl, sessionId: session.id });
+                expect(raw).not.toBeNull();
+                expect(tryDecryptSessionOwnerMetadataView({ credentials, accountEncryptionMode: 'plain', rawSession: raw! }))
+                    .toMatchObject({ summary: { text: 'Signed metadata title' } });
+                const target = { kind: 'session' as const, sessionId: session.id };
+                for (const path of [`/v2/sessions/${session.id}x`, '/v2/account/settings', '/v1/account/encryption/currentness?accountId=other']) {
+                    const refused = await app.inject({ method: 'GET', url: path, headers: machineHeaders({
+                        authorizationToken: preparedToken!, effectActionId: actionId, target,
+                        method: 'GET', path, body: undefined, privateKey: fixture.keyPair.secretKey }) });
+                    expect(refused.statusCode, path).toBe(401);
+                }
+                for (const [method, path, body, effectActionId] of [
+                    ['PATCH', `/v2/sessions/${session.id}`, { metadata: 'legacy-write', expectedVersion: 0 }, actionId],
+                    ['GET', `/v1/account/encryption/currentness`, undefined, 'session.bot.set'],
+                ] as const) {
+                    const refused = await app.inject({ method, url: path, payload: body, headers: machineHeaders({
+                        authorizationToken: preparedToken!, effectActionId, target,
+                        method, path, body, privateKey: fixture.keyPair.secretKey }) });
+                    expect(refused.statusCode).toBe(401);
+                }
+                await db.machine.update({ where: { id: fixture.machine.id }, data: { revokedAt: new Date() } });
+                const path = '/v1/account/encryption/currentness';
+                expect((await app.inject({ method: 'GET', url: path, headers: machineHeaders({
+                    authorizationToken: preparedToken!, effectActionId: actionId, target,
+                    method: 'GET', path, body: undefined, privateKey: fixture.keyPair.secretKey }) })).statusCode).toBe(401);
+            });
         } finally { await app.close(); }
     });
 
