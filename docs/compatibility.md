@@ -1090,8 +1090,8 @@ ceiling. Optional subscription monetary facts distinguish provider-observed
 paid amounts from versioned, dated list prices; absence is not a zero cost or an
 inferred payment.
 
-In development UI source, the Usage Resource can drain the requested history
-through one captured quota Action read. The client starts at the existing page
+An exact-history client can drain its requested range through one captured quota
+Action read. The client starts at the existing page
 size, grows later pages by the accepted volume, and publishes current capacity
 and accepted prefixes independently of entered-price and Pending metadata. It coalesces unchanged
 material runs to their witnessed endpoints without dropping reset or entitlement
@@ -1099,6 +1099,20 @@ changes. A remaining cursor still marks partial history; failures retain that
 prefix, while authority refusal retires it. This is an in-process read option,
 not a new wire or persisted format: ordinary quota Actions retain one-page
 semantics and exact witness reads remain unchanged.
+
+The development V4 history operation also admits
+`{ recordId, projection: { range, resolution: 'accepted_observations' } }`.
+Its closed read result is `{ projection, complete }`; a missing materialization
+is explicitly incomplete. A qualified PUT to that same route accepts a closed
+Account-mode protected projection with its record, range, accepted count and
+frontier. The server admits only a complete accepted range and preserves other
+record metadata. Clients open the protected content and validate its identity;
+plain coverage metadata must also agree with its packed observations. The
+dictionary format is lossless and introduces no retention horizon or polling
+policy. The exact paged and immutable-witness operations retain their shapes.
+Existing records without this metadata remain readable and backfill on demand.
+This is an undeployed 0.3 read materialization, not a predecessor writer, a second
+allowance authority or a promise of reverse 0.2 process compatibility.
 
 The development `connectedServices.subscription.price.set` Action sets or clears
 an amount and currency for an exact qualified connected account. It uses normal

@@ -215,6 +215,8 @@ normalization but delegates skill/content decisions to the current owner. It
 drops `configuredSources`; there is no alternate registry list or daemon install
 path behind that compatibility input. Prompt-asset native export is a separate
 filesystem operation, not another registry decision-maker.
+In 0.3 development the same adapter is available to Agent and MCP callers,
+with approval by default and user-changeable surface waivers.
 Its outer Action result also owns external-links settlement: a conflicting or
 unavailable row write returns a failure with the already-acknowledged Artifact
 and native export effects. A host's successful export receipt plus a failed row

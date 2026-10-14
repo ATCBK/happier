@@ -221,12 +221,20 @@ an intentionally omitted observation operand does not waive its replay requireme
 Declared review hints retain their intentional omissions, including private retry keys.
 A domain can declare `approvalPresentation.projectInput`
 for private review operands (such as a saved Profile definition) that its shared
-`projectObservationInput` must omit. Missing review context produces a typed
+`projectObservationInput` must omit. In development, `approvalPresentation.inputSchema`
+validates a safe review shape when it differs from executable input, and optional
+private `inputHints` describe that shape without changing Action authoring or CLI
+fields. Approval preparation writes only this validated private projection to its
+preview. Missing review context produces a typed
 refusal consumed by both the Approve control and the executor. Settled private history retains the declared
 `approvalPresentation.projectInput` when the spec declares `retainInputOnSettlement`,
 falling back to the observation projection otherwise. Rules and registry source
-specs retain their review; other input-redaction contracts stay unchanged. Live-only input custody remains
-redacted. Settled Details reads that history without re-running Approve admission
+specs retain their review, as do capability mutations that narrow shared observations.
+MCP review names its server, configuration, tool-policy changes and Where; literal
+environment/header values and import text are omitted. Live-only import, adoption
+and credential input custody remains redacted in `actionArgs`; only their safe
+review preview persists, and execution still needs the originating continuation.
+Settled Details reads the validated review schema without re-running Approve admission
 or offering another decision; operands already removed from historical records
 remain unavailable. Capability rule fields name the skill or MCP server, place,
 and change through the existing spec hints and typed reference reader; exact
@@ -562,9 +570,19 @@ editing, duplication, deletion, ZIP export, Found adoption and updates through
 the existing Artifact and prompt-library row owners. `skills.create` replaces
 the unreleased `prompt_bundle.create` id. Current bundle authoring admits
 `skills.skill_md_v1`; stored `bundle.generic_v1` remains readable.
-`prompt_bundle.update` and `prompt_registry.install` remain hidden 0.2 reference
-adapters at the same operation owners while those stored references are
-supported. Legacy registry install targets are parsed but do not export.
+`prompt_bundle.update` remains a hidden 0.2 reference adapter at the same
+operation owner while those stored references are supported. In 0.3 development,
+`prompt_registry.install` also exposes its existing library installer to Agent
+and MCP callers. Installation asks for approval by default; the user can waive
+approval per surface. Legacy registry install targets are parsed but do not export.
+
+Plugin permission administration exposes grant listing and revocation to Agent
+and MCP callers in 0.3 development. Listing and session-hook status inventory
+are reads without default approval. Revocation asks by default and honours the
+user's per-surface waiver. Grant and dismiss operations still require
+`present_user` authority: automation can propose them for human approval, but a
+waiver cannot execute them as a human. Permission requests remain plugin-originated
+operations using host-stamped plugin provenance; they are not user UI capabilities.
 
 `prompt_asset.export` retires without an alias: its prompt-document-to-Claude
 command operation has no equivalent replacement. Unknown Action overrides,
@@ -881,6 +899,17 @@ Development v2 accounting and published-message counts use half-open ranges:
 start is included and end is excluded, so adjacent comparisons do not count a
 boundary twice. The retained v1 adapter preserves its inclusive end instant.
 
+Development accounting reconciles reported counter totals before filtering.
+A reported amount that covers earlier estimated or API-priced contributions
+is a separate money-only fact, with query-only references to the contributions
+it covers. The cost owner selects it once when that complete population is
+present. A day, model, source or Work subset that cannot apportion the charge
+keeps selected money unavailable; it does not attach the whole charge to residual
+tokens. Raw reported, estimated and API-equivalent facts stay separate. A
+zero-token money observation adds no tariff population and cannot make otherwise
+fully priced tokens incomplete. These overlap references are derived query
+evidence, not persisted accounting or producer-supplied admission authority.
+
 In 0.3 development source, `includeSessionEvidence` controls opened Session
 input/metadata demand, and `includeWorkEvidence` controls native SCM outcomes.
 Both default to true for direct Usage Actions, and the accounting HTTP adapter
@@ -1033,6 +1062,9 @@ null unpriced amounts, as-of and completeness. Recap strips private source
 identities and never blends those kinds, reprices tokens or interprets absent
 canonical money facts as a paid zero. Selected Coach facts expose only witnessed
 detector ids and evidence counts, with currentness and coverage kept explicit.
+Cache selection retains its read and write token counts even without selecting
+total tokens. Agent and model mixes remain separate populations, and selected
+highlights retain their witnessed peak or linked-outcome facts in the card model.
 
 Coach is a development-only projection of this same query, not another query,
 registry or rules engine. Its finite built-in vocabulary each returns `finding`,
@@ -1121,7 +1153,10 @@ not Git rollback. Its finding carries the canonical execution target, directory,
 Agent target and explicit nonempty text prompt, not an arbitrary Session birth
 envelope, browser content or trigger configuration. Apply delegates that recipe
 to the unchanged full `session.spawn_new` owner. Dismissal and snooze are scoped
-Account preferences keyed to the exact evidence. Coach's digest is an opt-in
+Account preferences keyed to the exact evidence.
+Mounted findings use the refreshed canonical dismissal/snooze state, including
+expiry and external restoration; an acknowledged Action does not keep a second
+local suppression mask. Coach's digest is an opt-in
 suggestion in the same query, not a cadence preference or another scheduler.
 The user supplies a destination and schedule before the existing
 `workflow.trigger.add` Action creates a recurring Automation under its normal
@@ -2674,6 +2709,22 @@ endpoint label is not a newly writable preference.
 
 These are development-source contracts, not a released availability claim.
 
+The safe Channels management reads share the UI's Account projection owners:
+`connection/list-v1`, `binding/list-v1`, `ingress/attention-v1`,
+`delivery/attention-v1` and `delivery/read-v1` (qualified under
+`happier.channels/actions/`). They are available through CLI, UI, Agent and MCP.
+Lists accept the existing Collection `limit` and opaque `cursor`, and return
+`nextCursor` when more rows remain, including after a filtered empty page.
+Binding lists may filter by exact `connectionId`, `parentBindingId`, `sessionId`
+or `automationId`; router children remain ordinary bindings. Recovery rows carry
+their exact custody/obligation id and current revision. The delivery read derives
+`lastOutcome` from custody: accepted work can still be pending or unknown; only
+confirmed delivery reports `delivered`. A start requiring owner confirmation also
+projects `createdThreadEndpointRequired.parentId` for `delivery/resolve-v1`.
+These reads disclose no message body, recipient list, credential, raw provider
+configuration or native delivery evidence. Provider reconciliation reads retain
+their separate host-stamped provider-caller fence.
+
 ### Email, router and recipe Actions (0.3 development)
 
 `happier.channels/actions/conversation/start-v1` takes `routerBindingId`,
@@ -2712,9 +2763,12 @@ do not confer plugin identity.
 
 `workflow.trigger.run_now` takes an existing `automationId` and optional
 `idempotencyKey`. API grants can restrict this Action and its machine/Session
-targets, but `ApiTokenGrantV1Schema` has no automation-ID selector. A trusted
-integrator must choose the Automation; documentation must not claim a token
-grant isolates exactly one saved Automation. Notification alerts use
+targets, plus exact saved Automation IDs with optional `automationIds`.
+For run-now admission, a non-null selector requires a matching `automationId`;
+omission or `null` preserves unrestricted Automation selection. The same grant
+owner enforces this selector at signed HTTP admission, current-token revalidation
+and Action execution, and prevents a delegated grant from widening it. Other
+workflow Actions retain their ordinary Action grants. Notification alerts use
 `workflow_run_update` with `workflowRun.updateKind` and optional reason code;
 they do not prove that Channels delivery completed.
 

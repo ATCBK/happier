@@ -55,6 +55,16 @@ native configuration for adoption without claiming that a Happier Session loads
 it. The declaration schema owns the fact; the host does not infer it from an Agent
 id.
 
+Native MCP discovery in 0.3 development source returns `detectedServers` through
+the registered discovery contribution. Agent leaves read their native config
+files; the host keeps the declared Agent and `loadedInHappierSessions` authority
+and normalizes the rows for Found/adoption. Stdio commands/arguments, remote URLs,
+enabled state, source paths and env/header names survive; env/header values and
+unknown config fields do not. Credential-bearing remote URLs are refused through
+the canonical MCP URL schema. The existing remote `endpoints` projection remains
+available to discovery sources that publish remote endpoints rather than native
+configuration rows.
+
 Plugin-declared MCP servers in 0.3 development source project from the lazy
 contribution catalog, not a runner-owned manifest loader. Their metadata carries
 `source: { kind: 'plugin', pluginId, pluginName }` for the MCP page's
@@ -76,6 +86,18 @@ policy changes use `AgentSessionConfigurationUpdate`, not a plugin-owned policy
 reader or a second permission engine. A declaration still requires proof through
 the actual Agent's launch and permission path.
 
+In 0.3 development source, OpenCode's session-scoped MCP namespace retains its
+isolation prefix and uses a compact digest. The remaining 64-character model
+tool-name budget is supplied to the host-owned Happier stdio transport. Its
+optional naming projection reads the actual admitted inventory on discovery
+and dispatch, including plugin-tool changes; the canonical HTTP inventory keeps
+original names. The native Agent MCP service's `resolveToolNaming` supplies that
+same current projection for original transcript and approval identities. It
+does not change `enabledTools` visibility or create another tool registry.
+Unresolved or removed aliases retain their raw evidence instead of acquiring a
+new canonical identity. The OpenCode V2 unsupported-registration path remains
+unchanged. These are development-source contracts, not release availability.
+
 Persistent MCP tool grants use the Account catalog Actions. The unpublished
 permission decision's unused `persistAllowRule` field and scope aliases have
 been removed in place; native Session permission updates retain their existing
@@ -92,6 +114,16 @@ host approval requires a real leaf call reaching the host before the server.
 The public testing barrel is published by the SDK's canonical API producer,
 and source declarations do not substitute for successful publication or vendor
 validation.
+
+For development-source MCP tool control, Claude, Codex and Gemini keep human
+display titles separate from permission identity. Gemini's plugin decodes its function-name correlation id
+and translates it to the host's canonical MCP name. Codex's plugin selects
+the native `requestUserInput` approval mode, whose item id joins the existing
+tool lifecycle projection. Codex 0.162.1's default tool-approval elicitation
+omits that identity and supplies a human title, so it cannot replace this
+correlated path. Actual server elicitation retains its existing handler.
+Injected Codex servers share the existing app-server startup budget for
+discovery before the first turn; they remain optional.
 
 In 0.3 development source, Happier-tool auto-approval is derived from safe
 Action specs by `tools/happierToolAutoApprovalV1.ts`. Native projections request
@@ -1484,6 +1516,11 @@ use the file path; all six bundled Agents declare positive content search.
 Decoders still own branch/rollback selection and native item identity. The
 control inherits caller cancellation and the cooperative scan deadline and yields;
 plugins publish partial coverage with a continuation for unfinished work.
+The decoder can report source-bound EOF through `isScanComplete`; the shared
+helper then assembles verified matches under cancellation without reopening the
+cooperative scan budget. A previously yielded decoder still yields. Forward and
+backward JSONL diagnostic callbacks preserve incomplete-source evidence before
+a consumed row yields.
 The canonical forward JSONL scanner can hand each parsed line to a decoder
 without retaining source bodies. Codex consumes that path and shares root-family
 discovery across its requested candidate page; complete native rollback selection
@@ -2623,6 +2660,16 @@ supply the source label and optional destination; Account reads, transcript
 isolation and scoped routes stay with their existing host owners. These are
 presentation exports, not new trigger or sharing contribution families. Exact
 names and props come from the generated Plugin UI API reports.
+
+Memory fact rows also share one controlled Plugin UI content presenter in 0.3
+development source. The public `/components` export accepts fact text,
+caller-formatted metadata, optional source navigation, retired-state facts and
+trailing actions. Core's `MemoryDocumentBody` binds its existing Item and text
+leaves to that presenter. Qualified document reads, expiry decisions, arrival
+animation, topic navigation and memory Actions stay with their existing callers;
+the renderer introduces no memory service, parser or contribution family. The
+[typed author example](../packages/plugin-ui/fixtures/external-authoring/src/memoryFactsSurface.tsx)
+composes a fact and a topic row using public package imports.
 
 Share sheets, expanded grants, level controls and their help legend also use
 neutral Plugin UI presentation in 0.3 development source. Callers supply the

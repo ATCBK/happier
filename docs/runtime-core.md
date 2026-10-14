@@ -7,9 +7,12 @@ This page describes **0.3 development source**, not a shipped release or a compl
 Session capability edits converge through the host's
 [`capabilitySelectionSynchronizer`](../apps/cli/src/agent/runtime/capabilitySelectionSynchronizer.ts).
 It observes the canonical desired selection and applied metadata baselines plus
-skill rules published through the host's captured Account subscription. The
+skill and MCP rules published through the host's captured Account subscription. MCP
+observation retains the launch resolver's realpath, Project, Agent and plugin-item
+context and its resolved server-selection baseline; it does not substitute a later
+catalog for the launch decision. The
 Session client's content-free `account-change` ingress and change-feed recovery
-refresh the prompt-library catalog for the admitted Home and captured
+refresh the MCP and prompt-library catalogs for the admitted Home and captured
 Account lifetime. They join the existing in-flight hydration and re-observe rows
 after an invalidation. Refreshed rules reach the same synchronizer as Session
 selection edits. The Protocol resolver compares effective selections after
@@ -26,7 +29,7 @@ restart-with-resume owner with reason `capability_selection_change` and
 `force_current_cli`; they never create a fresh conversation as a fallback.
 Turn/approval busy refusals wait for the next settled turn. Missing resume evidence
 or a launch mode requiring a person's restart leaves the selection pending, with
-an apply-status projection rather than a queue or timer. Effective skill-rule
+an apply-status projection rather than a queue or timer. Effective skill- and MCP-rule
 changes publish that same projection with `source: 'rules'` before waiting for
 settlement or native acknowledgement, so unchanged Session overrides cannot hide
 the pending change. The one composer notice reads this status as well as explicit
@@ -50,6 +53,13 @@ still require the program's composed live journey before certification.
 The engine registry's [`runtimeCore.ts`](../apps/cli/src/agent/runtime/registry/engineRegistry/runtimeCore.ts) resolves the admitted Agent runtime and composes host services. Agent code receives the scoped public context, not raw host lifecycle controls. Agent-native configuration in `RuntimeDescriptorV1.agent` is interpreted by its Agent; generic host code must not infer its meaning from an Agent id.
 
 Session-owned child Runs retain their own transcript sidechain and interaction scope. They cannot publish the parent Session's work-state or active-input readiness; those projections belong to the main Session context. Finite and retained child contexts use the same Run-scoped work-state service, which reports Session projection as unavailable.
+
+In 0.3 development source, both Session-derived Run adapters bind hook-server
+and hook-plugin-directory creation to the child invocation lifetime. The child
+retains its genuine parent Session identity but cannot reclaim that Session's
+persisted hook port or overwrite its retained hook files. The existing hook
+resource owner allocates and disposes the invocation resources. This correction
+requires a fresh runner after the CLI reload for loaded-runtime validation.
 
 In 0.3 development source, Session-owned Runs execute in the Session runner.
 The runner-local registrar retains Session controls, sidechain/transcript delivery,
@@ -146,6 +156,12 @@ implementation projects the applied runner set and never repeats a catalog or
 rules resolution. Session-owned Runs receive their own applied projection;
 detached Runs retain execution-run scope and cannot attach a declaration that
 requires a Session. These source paths are not a claim of completed live QA.
+
+The shared ACP cancellation owner releases the cancelled prompt's raw request
+custody before publishing terminal turn state. This includes host-denied MCP
+calls: the next admitted input must not race that cancellation and be refused
+as a still-settling predecessor. Permission denial continues to cancel the
+current prompt through the same owner; plugins do not own host turn state.
 
 In 0.3 development source, known third-party MCP wire names resolve through the
 runner's canonical item-identity map and Protocol's tool decision owner. Off

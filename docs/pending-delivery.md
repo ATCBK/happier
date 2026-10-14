@@ -106,9 +106,17 @@ unresolved tasks and projects unknown, whether physical cleanup succeeds or fail
 already proven native closure remains idle. Retained or external hosts without this
 subscription remain conservative; see the Claude
 terminal host ownership contract in [CLI architecture](./cli-architecture.md).
+The SDK execution adapter preserves the same launch builder's
+`providerExitOwnership: 'direct'` qualification through the existing system-tool
+resolution. It emits `providerStopped: true` only with an actual exit or signal
+from that exact resolved invocation. Shell-wrapper exit and missing qualification
+retain unknown Activity; a numeric root exit code is not provider-stop proof.
 Completing a pending source-history baseline releases only its own observation
 gap. Lost query observation, unresolved unattributed tasks, and a genuine
-source-history observation loss still keep Activity unknown.
+source-history observation loss still keep Activity unknown. Historical terminal
+pages are admitted through the same bounded source owner as fresh pages; the
+provider readers already support that replay projection. Delayed task-cancellation
+responses clear only the captured task and turn, preserving a newer resumed owner.
 
 The host owns delivery of this projection to the server. Binding or retiring a
 runtime keeps Activity unknown until a provider snapshot supplies its state. The

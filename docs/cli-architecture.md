@@ -73,8 +73,12 @@ same custody result after reload.
 
 Declared Service Start retains process exit evidence under the existing
 `plugin_managed_service_establishment_failed` refusal. Its strict optional
-`establishmentFailure` includes the observed exit code or signal and the last
-retained stderr line, sanitized against launch environment values. A recognized
+`establishmentFailure` includes the observed exit code or signal and a meaningful
+retained stderr line, sanitized against launch environment values within the
+existing diagnostic bound. Selection prefers the latest retained error summary,
+then the latest substantive line, skipping known runtime footers, stack frames
+and traceback source excerpts. If only those structural lines remain, the
+optional stderr line is omitted. A recognized
 address-in-use failure also names its declared or observed port. The existing
 platform listener census and workspace containment owner supply a same-project
 association when available; an occupied port alone does not explain an unrelated
@@ -857,6 +861,12 @@ calls retain automation authority through the existing Session/Machine socket
 intents keep their existing admission policy.
 
 Speech capture and inference retain their existing application/attempt authority.
+The daemon's `voice.daemonInference` local policy defaults on, with
+`HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED=false` as the operator opt-out.
+Bootstrap and Machine RPC registration use the same feature decision and catalog
+dependencies. Startup creates a lazy inference handle; model downloads require an
+explicit install, and native runtime loading/worker spawning waits for a model
+operation. The UI's experimental Machine speech preference remains separate.
 Binary speech grants authorize the speech application, not a TCP destination port;
 see [peer mediation](peer-mediation.md).
 Semantic output segmentation and character/UTF-8 budgets are owned by the shared
@@ -3211,7 +3221,14 @@ for hook secrets, endpoint and plugin directory through the existing Session hoo
 service. Its prepared plan remains inert until the host reports the actual child
 launch to the captured native Session runtime. That binding owns local task facts
 in the same ledger as SDK queries; stale remote hooks cannot borrow its authority.
-The generic process owner retains all physical control. The Agent CLI launch
+The generic process owner retains all physical control. The SDK query execution
+adapter also receives the builder's optional direct-provider qualification through
+the existing system-tool grant and public Exec projection. It combines that exact
+invocation fact with observed process exit or signal before publishing
+`providerStopped: true`; generic process exit codes retain their root-process
+meaning. Runner and daemon resolution forwarders already preserve this optional
+fact. Missing qualification, including Windows shell shims, remains unknown.
+The Agent CLI launch
 builder explicitly qualifies direct native execution, and the host combines that
 qualification with actual child termination before reporting provider closure.
 Shell shims without positive provider proof remain observation loss. Preparation,
@@ -3520,8 +3537,16 @@ reachability does not consume that budget before plugin startup begins.
 
 In current development, `createOnChildExited` releases session-marker evidence only
 through the tracked exit lifecycle. An exit notification for an untracked PID does
-not authorize marker deletion. Failed terminal-exit staging retains tracking and
-marker evidence; visible-console startup awaits that cleanup and reports an
+not authorize marker deletion. A positively dead plain runner may release local
+tracking while its Home is unreachable only when its exact persisted Session marker
+remains as recovery evidence. Explicit Stop keeps that marker until the existing
+startup/reconnect orphan-settlement owner confirms Home finality and retires the
+matching runner's terminal-control projection. A replacement runner is not retired.
+Caller-local CLI cleanup removes only terminal-owned markers under captured marker
+identity; it cannot erase the daemon's retained Home-retirement evidence.
+No terminal attachment means final-exit handling needs no Account/plugin catalog.
+Failed local cleanup or durable terminal-turn staging retains tracking and marker
+evidence; visible-console startup awaits that cleanup and reports an
 incomplete retirement rather than allowing its rejection to escape.
 
 Development startup recovery uses `daemonProcessScopeIdentity.ts` to keep runners
@@ -4018,13 +4043,21 @@ Session runners, to
 That sender rechecks current custody, revocation/replacement, settings-version
 bound consent and existing Account/device notification policy. It reads no
 Session activity and sends generic, content-free offline copy. The next admitted
-Machine-alive read submits data-only quiet recovery. Existing batched presence
-writes can repeat that idempotent dismissal before flushing; there is no new
-presence flag, timer, ordering or exactly-once guarantee. These development
+Machine-alive read normally submits data-only quiet recovery. Enabling the
+keyed alert while that Machine is already offline also requests one visible
+"back online" notice. The Account settings CAS records that request at the
+existing remote-alert owner in `SimpleCache`; the sender consumes it when
+submitting recovery, so repeated alive reads and later outages stay quiet.
+UI and agent settings Actions use the same enrollment producer and server
+writer. Disabling consent clears the request. Existing Account/device delivery
+policy still applies to the visible notice. There is no new presence flag,
+timer or notification lifecycle. These development
 paths do not claim released availability or physical push certification.
 Native optional name enrichment uses the authenticated current
 Account and admitted Machine-mode codec, without including the name in the
-server payload. Android recovery dismisses the stable Machine notification tag;
+server payload. A requested return uses the same Expo/native presenter and
+Machine notification identity as the offline alert, with the generic body
+"A machine you follow is back online." Android data-only recovery dismisses the stable Machine notification tag;
 the existing JavaScript background owner enumerates presented notices and
 dismisses the actual OS request ids after matching and re-admitting their exact
 Home, Account and Machine. An iOS thread identifier is only grouping, not that

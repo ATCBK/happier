@@ -115,13 +115,30 @@ plain/sealed Account-mode representation; an authorized client opens sealed
 content, and mode/content disagreement fails closed. Retention metadata does
 not make the quota or capacity numbers SQL-queryable for E2EE Accounts.
 
-The development Usage Resource drains this encrypted history on the authorized
-client. Current capacity is published before history, entered-price and Pending work settle;
+The authorized client can drain exact encrypted history. Current capacity is published before history, entered-price and Pending work settle;
 each accepted page then updates the same Resource. Client projection keeps the
 first and last actual observations of an unchanged material run, preserving reset,
 denominator and entitlement changes. Its sample counts describe the retained
 observations used for the projection. Ordinary paged reads and exact immutable
 reset-witness reads still return their requested accepted records.
+
+The development B page-projection format shares snapshot, meter and subscription
+material through dictionaries while retaining every accepted observation id and
+its observation/fetch clocks. It uses the Account-mode envelope: plain content
+for a plain Account, or the domain-separated
+`provider_account_usage_page_projection` ciphertext for E2EE. Only a client with
+the Account material produces or opens encrypted projection facts; the server
+does not decrypt quota history to build them.
+
+The existing qualified history route admits projection reads and writes at the
+same record/source authority. A missing projection reports `complete: false`;
+the key-holding producer backfills exact pages on demand. The server checks the
+accepted count and frontier before storing the derived document in current-record
+metadata. A new tail makes the read incomplete; a changed prefix requires a fresh
+backfill. The document is preserved across latest updates, never copied into
+accepted observations, and is deleted with its parent record. Exact history and
+immutable Pending witnesses remain authoritative. This is development source,
+not a claim of completed loaded-runtime or performance acceptance.
 
 History also follows B's existing lifecycle. The explicit Account-mode
 conversion owner, `migrateConnectedServicesAccountEncryptionInTx`, clears B's
@@ -2007,8 +2024,13 @@ methods retain their existing plain transport and inner-envelope contracts.
   shared recipients cannot enroll the custodian through their own preference.
   The existing presence-timeout transition supplies the server sender, which
   rechecks current custody and settings-version-bound Account consent before
-  applying existing Account/device policy. Admitted Machine alive submits quiet,
-  content-free recovery through the same push owner. No Session history or
+  applying existing Account/device policy. Admitted Machine alive normally
+  submits quiet, content-free recovery through the same push owner. An opt-in
+  written while the Machine is offline records a one-shot return request in
+  the remote-alert owner's existing server storage. Recovery consumes that
+  request and may carry generic visible "back online" copy under the same
+  delivery policy, without changing the strict payload or disclosing a name.
+  Opt-out clears the request; ordinary enrollment keeps quiet recovery. No Session history or
   private metadata enters eligibility. These development-source contracts do
   not claim released offline-alert availability or physical push certification.
 - Machine Sync publication carries only engine/carrier readiness. Its existing

@@ -560,7 +560,17 @@ The Summary model and Prepare after each turn declarations use domain admission
 before the Account settings CAS write. UI and `settings.set` use that same owner:
 unsupported or unavailable model choices and preparation without a supported
 selection are refused. Turning preparation off remains possible when the
-previous model is unavailable. The existing scalar preference codec is unchanged.
+previous model is unavailable.
+In 0.3 development, background model choices share `useAgentModelChoices` and
+`projectAgentModelChoices`: walkthroughs require admitted structured output;
+Replay summaries can use text-only models and custom native model ids. Both use
+Protocol's `ProviderBoundModelRef` payload (`agentTargetKey`,
+`providerConnectionId: null`, `modelId`). The Summary scalar preference encodes
+that payload with its existing `model:` carrier; Replay's runner wrapper stores
+it as `modelSelection`, keeping task permission separate. The runner reader
+normalizes 0.2's backend/model fields and drops unknown stored fields; current
+writes use the canonical reference. Session models, Provider routes and
+review-engine fanout retain their own admission and lifecycle owners.
 Seven-day cost uses reported execution records and exposes partial/unavailable
 coverage rather than inventing prices. The current reader counts retained
 `scm_diff_summary` records in the interval and may see only a Run's latest turn;
