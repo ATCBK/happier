@@ -106,7 +106,12 @@ describe('New Session selected credential launch gate', () => {
         const bridge = await loadSyncSingletonForTests();
         mountedBridge = bridge;
         const accountId = 'credential-suggestions';
-        const http = createHomeHubArtifactHttpBoundary(accountId);
+        const profile = AccountProfileSchema.parse({ id: accountId, connectedAccountsV4: [{
+            ref: { service, accountId: 'work' }, revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`,
+            status: 'connected', kind: 'oauth', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
+            displayName: 'Work', providerIdentity: {}, expiresAt: null,
+        }] });
+        const http = createHomeHubArtifactHttpBoundary(accountId, profile);
         const features = buildServerFeaturesResponse();
         features.capabilities.connectedServices.qualifiedAccounts = { protocolVersion: 4 };
         const consumer = { pluginId: 'happier.agent.claude', localId: 'claude' };
@@ -128,11 +133,7 @@ describe('New Session selected credential launch gate', () => {
         mountedConnection = connection;
         storage.setState({ profileScope: scope, settingsScope: scope,
             settings: { ...settingsDefaults, lastUsedAgent: 'claude', useEnhancedSessionWizard: false },
-            profile: AccountProfileSchema.parse({ id: accountId, connectedAccountsV4: [{
-                ref: { service, accountId: 'work' }, revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`,
-                status: 'connected', kind: 'oauth', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
-                displayName: 'Work', providerIdentity: {}, expiresAt: null,
-            }] }) });
+            profile });
         const machine = createMachineFixture({ id: 'credential-devbox', activeAt: Date.now() });
         storage.getState().applyMachines([machine], false, { sourceServerId: connection.home.id });
         applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 1,
@@ -199,7 +200,12 @@ describe('New Session selected credential launch gate', () => {
         await prepareSessionDraftPersistenceStorage();
         const bridge = await loadSyncSingletonForTests();
         const accountId = `credential-launcher-${scenario.native}-${scenario.connected}-${scenario.selected}-${scenario.acpReady}`;
-        const http = createHomeHubArtifactHttpBoundary(accountId);
+        const profile = AccountProfileSchema.parse({ id: accountId, connectedAccountsV4: scenario.connected ? [{
+            ref: { service, accountId: 'work' }, revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`,
+            status: 'connected', kind: 'oauth', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
+            displayName: 'Work', providerIdentity: {}, expiresAt: null,
+        }] : [] });
+        const http = createHomeHubArtifactHttpBoundary(accountId, profile);
         const features = buildServerFeaturesResponse();
         features.features.providers.enabled = true;
         features.capabilities.connectedServices.qualifiedAccounts = { protocolVersion: 4 };
@@ -243,11 +249,7 @@ describe('New Session selected credential launch gate', () => {
         const scope = { serverId: connection.home.id, accountId };
         mountedConnection = connection;
         storage.setState({ profileScope: scope, settingsScope: scope, settings: { ...settingsDefaults, lastUsedAgent: 'claude', useEnhancedSessionWizard: false, useProfiles: lateDraft },
-            profile: AccountProfileSchema.parse({ id: accountId, connectedAccountsV4: scenario.connected ? [{
-                ref: { service, accountId: 'work' }, revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`,
-                status: 'connected', kind: 'oauth', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
-                displayName: 'Work', providerIdentity: {}, expiresAt: null,
-            }] : [] }) });
+            profile });
         const machine = createMachineFixture({ id: 'credential-devbox', activeAt: Date.now() });
         storage.getState().applyMachines([machine], false, { sourceServerId: connection.home.id });
         applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 1, record: { key: 'purposes', value: purposeValue } }, true);

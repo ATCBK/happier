@@ -4,13 +4,20 @@ import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 /** HTTP persistence boundary: the real Account mode, Artifact codec, Action and Home owners run above it. */
-export function createHomeHubArtifactHttpBoundary(accountId: string) {
+export function createHomeHubArtifactHttpBoundary(
+    accountId: string,
+    profile: ReturnType<typeof AccountProfileSchema.parse> | (() => ReturnType<typeof AccountProfileSchema.parse>) = AccountProfileSchema.parse({ id: accountId }),
+) {
     const boundary = createLayoutArtifactHttpBoundary(accountId, { artifactId: buildHomeHubArtifactIdV1(accountId), kind: HOME_HUB_ARTIFACT_KIND_V1,
         defaultLayout: HOME_HUB_DEFAULT_LAYOUT, parseLayout: value => HomeHubLayoutV1Schema.parse(value) });
     return { ...boundary, request: async (input: RequestInfo | URL, init?: RequestInit) => {
         // The signed-in Account establishes the Home lifetime. A shared layout's
         // owner is a different principal and must never supply this Profile.
-        if (new URL(String(input)).pathname === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: accountId }));
+        if (new URL(String(input)).pathname === '/v1/account/profile') {
+            const currentProfile = AccountProfileSchema.parse(typeof profile === 'function' ? profile() : profile);
+            if (currentProfile.id !== accountId) throw new Error('Home HTTP profile must belong to the signed-in Account');
+            return Response.json(currentProfile);
+        }
         return boundary.request(input, init);
     } };
 }

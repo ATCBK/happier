@@ -146,7 +146,8 @@ async function renderSection() {
     await upsertServerProfile({ serverUrl: state.homeUrl });
     const declaredHome = await setServerProfileIdentityForUrl(state.homeUrl, `srv_attention_${caseNumber}`);
     if (!declaredHome) throw new Error('The attention fixture Home must exist');
-    const artifact = createHomeHubArtifactHttpBoundary('attention-account');
+    const profile = profileParse({ ...initialStorageState.profile, ...state.profile, id: 'attention-account' });
+    const artifact = createHomeHubArtifactHttpBoundary('attention-account', profile);
     const baseFeatures = createRootLayoutFeaturesResponse();
     const features = FeaturesResponseSchema.parse({ ...baseFeatures,
         capabilities: { ...baseFeatures.capabilities, connectedServices: { qualifiedAccounts: { protocolVersion: 4 } } } });
@@ -160,7 +161,7 @@ async function renderSection() {
     const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now(), daemonStateVersion: 3,
         metadata: { ...createMachineFixture().metadata!, displayName: 'MacBook Pro' } });
     const target = { serverIdentityId: home.serverIdentityId!, machineId: machine.id };
-    const seedAttentionState = () => storage.setState({ isDataReady: true, profile: profileParse({ ...initialStorageState.profile, ...state.profile, id: scope.accountId }), profileScope: scope, settingsScope: scope,
+    const seedAttentionState = () => storage.setState({ isDataReady: true, profile, profileScope: scope, settingsScope: scope,
         settings: { ...initialStorageState.settings, machineAdministrationTargetsLocalV1: {
             [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents]: target, [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.plugins]: target } },
         machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] }, machineListStatusByServerId: { [home.id]: 'idle' } });

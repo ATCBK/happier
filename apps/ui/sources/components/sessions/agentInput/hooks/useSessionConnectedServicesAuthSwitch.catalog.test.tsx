@@ -15,6 +15,8 @@ import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput
 import { t } from '@/text';
 import { useSessionConnectedServicesAuthSwitch } from './useSessionConnectedServicesAuthSwitch';
 
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
+    .createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
 // authSource is the web chip's published dataset; select that native boundary.
@@ -51,7 +53,12 @@ it('previews destination-only armed defaults without inferring Native from unrea
     const bridge = await loadSyncSingletonForTests();
     const previous = storage.getState();
     const accountId = 'armed-purpose-catalog';
-    const http = createHomeHubArtifactHttpBoundary(accountId);
+    const profile = AccountProfileSchema.parse({ id: accountId,
+        connectedAccountsV4: [{ revisionSemantics: 'legacy_unfenced', ref: { service, accountId: 'work' },
+            status: 'connected', authenticationModeId: null, configurationReady: true, configurationRevision: null,
+            credentialRevision: null, kind: 'oauth', expiresAt: null, lastUsedAt: null, providerIdentity: {} }],
+    });
+    const http = createHomeHubArtifactHttpBoundary(accountId, profile);
     const features = buildServerFeaturesResponse();
     features.capabilities.connectedServices.qualifiedAccounts = { protocolVersion: 4 };
     const value = { v: 1 as const, bindings: [{ purpose: { consumer, purpose: 'primary' },
@@ -67,11 +74,7 @@ it('previews destination-only armed defaults without inferring Native from unrea
             return http.request(input, init);
         } });
     const scope = { serverId: connection.home.id, accountId };
-    storage.setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: accountId,
-        connectedAccountsV4: [{ revisionSemantics: 'legacy_unfenced', ref: { service, accountId: 'work' },
-            status: 'connected', authenticationModeId: null, configurationReady: true, configurationRevision: null,
-            credentialRevision: null, kind: 'oauth', expiresAt: null, lastUsedAt: null, providerIdentity: {} }],
-    }) });
+    storage.setState({ profileScope: scope, profile });
     installConnectedAccountDescriptorProjection(projection);
     applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 5, record: { key: 'purposes', value } }, true);
     const armed = { agentId: 'codex', agentIdentity: consumer, connectedAccounts: declarations };

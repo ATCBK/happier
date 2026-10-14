@@ -16,9 +16,10 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { TabBadge } from '@/components/ui/navigation/tabBadge/TabBadge';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import '@/sync/syncEngine';
-import { FeaturesResponseSchema, UserProfileSchema } from '@happier-dev/protocol';
+import { AccountProfileSchema, FeaturesResponseSchema, UserProfileSchema } from '@happier-dev/protocol';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const tabBarProfile = AccountProfileSchema.parse({ id: 'tabbar-account', username: 'tabbar-viewer' });
 
 const friendRequestsState = vi.hoisted(() => ({
     items: [] as Array<{ id: string }>,
@@ -42,6 +43,8 @@ const badgeSettingsState = vi.hoisted(() => ({
     showLabels: true,
 }));
 
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
+    .createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock();
@@ -93,7 +96,7 @@ async function renderTabBar(element: React.ReactElement) {
         }] });
         storage.setState({
             isDataReady: true,
-            profile: { ...storage.getState().profile, username: 'tabbar-viewer' },
+            profile: tabBarProfile,
             settings: badgeSettings(),
             friends: Object.fromEntries(friendRequestsState.items.map(({ id }) => [id, UserProfileSchema.parse({
                 id, username: id, firstName: id, lastName: null, avatar: null, bio: null, publicKey: null, status: 'pending' as const,
@@ -131,7 +134,7 @@ describe('MainAppTabBar', () => {
         badgeSettingsState.inbox = true;
         badgeSettingsState.sessions = true;
         badgeSettingsState.showLabels = true;
-        const artifact = createHomeHubArtifactHttpBoundary('tabbar-account');
+        const artifact = createHomeHubArtifactHttpBoundary('tabbar-account', tabBarProfile);
         connection = await restoreServerAccountForTest({ serverUrl: 'https://tabbar.test', accountId: 'tabbar-account', request: (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v2/account/settings') return Promise.resolve(Response.json({ content: { t: 'plain', v: badgeSettings() }, version: 1 }));

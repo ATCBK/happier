@@ -466,18 +466,17 @@ describe('New Session purpose catalog authority', () => {
     ])('launch readiness follows the selected credential and offers a one-tap binding recovery: %j', async (scenario) => {
         const bridge = await loadSyncSingletonForTests();
         const accountId = 'selected-launch-credential';
-        const http = createHomeHubArtifactHttpBoundary(accountId);
         const features = buildServerFeaturesResponse();
         features.capabilities.connectedServices.qualifiedAccounts = { protocolVersion: 4 };
         const value = { v: 1 as const, bindings: [] };
         const profile = AccountProfileSchema.parse({ id: accountId, connectedAccountsV4: scenario.connected
             ? [{ ...v4Account({ ...CLAUDE_CONNECTED_ACCOUNTS[0]!.service, accountId: 'work', displayName: 'Work', kind: 'token' }),
                 revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`, authenticationModeId: 'api-key' }] : [] });
+        const http = createHomeHubArtifactHttpBoundary(accountId, profile);
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://selected-launch-credential.test', accountId,
             request: (input, init) => {
                 const path = new URL(String(input)).pathname;
                 if (path === '/v1/features') return Promise.resolve(Response.json(features));
-                if (path === '/v1/account/profile') return Promise.resolve(Response.json(profile));
                 if (path === '/v1/account/entity-rows/connected-accounts/purposes') return Promise.resolve(Response.json({
                     status: 'present', revision: 1, content: { t: 'plain', v: { key: 'purposes', value } },
                 }));
@@ -648,11 +647,13 @@ describe('New Session purpose catalog authority', () => {
     it('inherits destination-only purpose defaults and refuses unavailable inheritance without blocking explicit or native-only auth', async () => {
         const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
         const bridge = await loadSyncSingletonForTests();
-        const http = createHomeHubArtifactHttpBoundary('catalog-inheritance');
         const features = buildServerFeaturesResponse();
         features.capabilities.connectedServices.qualifiedAccounts = { protocolVersion: 4 };
         const consumer = { pluginId: 'happier.agent.claude', localId: 'claude' };
         const service = CLAUDE_CONNECTED_ACCOUNTS[0]!.service;
+        const profile = AccountProfileSchema.parse({ id: 'catalog-inheritance',
+            connectedAccountsV4: [v4Account({ ...service, accountId: 'work', displayName: 'Work' })] });
+        const http = createHomeHubArtifactHttpBoundary('catalog-inheritance', profile);
         const value = { v: 1 as const, bindings: [{ purpose: { consumer, purpose: 'primary' },
             target: { kind: 'account' as const, account: { service, accountId: 'work' } } }] };
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://catalog-inheritance.test', accountId: 'catalog-inheritance', request: (input, init) => {
@@ -663,8 +664,7 @@ describe('New Session purpose catalog authority', () => {
             return http.request(input, init);
         } });
         const scope = { serverId: connection.home.id, accountId: 'catalog-inheritance' };
-        storage.setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId,
-            connectedAccountsV4: [v4Account({ ...service, accountId: 'work', displayName: 'Work' })] }) });
+        storage.setState({ profileScope: scope, profile });
         applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 5, record: { key: 'purposes', value } }, true);
         let withdrawing = false;
         const withdrawnLabels: string[] = [];
