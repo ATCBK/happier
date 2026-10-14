@@ -78,6 +78,16 @@ create a Workspace reference merely to label native usage, because that row
 would also carry a root path. The collector retains its local project witness
 in sealed pending custody while Account Project admission is unavailable.
 
+Owner Session usage publication uses that same Project resolver when launch
+metadata has no Project identity. Its witness is the Session's exact execution
+root on its own Machine, including an explicit agent-to-machine path mapping;
+it does not choose a containing directory or match a branch or timestamp.
+An accepted checkout supplies its Project and workspace identifiers. Otherwise,
+the existing opaque Project key and mode-protected organization label identify
+that execution root without uploading a path in accounting. Restricted Session
+runners receive no Account lookup authority, and unavailable Project admission
+leaves the accounting unattributed. Existing rows are not rewritten.
+
 The Machine collector seals normalized unacknowledged accounting together with
 source cursors and consent using the incumbent device-local secret storage and
 protected atomic writes, including for a keyless plain Account. This device
@@ -346,6 +356,9 @@ Registry URL variables retain their ValueRef bindings in `remote.urlTemplate`;
 credential redaction atoms exist only in the private bridge configuration.
 OAuth admission compares that resolved URL with the request-auth resource
 exactly; a base endpoint match does not authorize another resolved destination.
+For SSE, the advertised message endpoint may use another path on the initial
+origin; cross-origin endpoints and redirects are refused. Request-auth still
+selects and validates the grant against the exact initial resource.
 The bridge registers these private URL redaction atoms, including JSON-escaped
 forms, in its existing credential lease before connecting. The same lease
 redacts server tool results, structured output and transport diagnostics for

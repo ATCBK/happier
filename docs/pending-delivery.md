@@ -60,6 +60,64 @@ borrow the custodian's B credentials. Only the captured Machine recovery owner c
 release after its actual B opens succeed. Ordinary shared Session input remains
 supported, but shared edit permission alone cannot author an owner-Account reset.
 
+## Claude background activity and delivery readiness (development)
+
+`after_runtime_idle` consumes the existing Runtime Activity projection. Claude's
+SDK runtime keeps task activity in one ledger keyed by native Session and task id.
+An owned SDK stream or an exact native tool call associates the task with its
+actual query object. This association is independent of transcript presentation.
+A successful resume transfers the task to its newer query; terminal facts and
+process exits from the older query cannot settle the resumed execution.
+
+Losing a query observer demotes its unresolved tasks to unknown while retaining
+their exact identities. Only that query's observed native process exit settles
+its owned tasks. Foreground completion and query disposal do not prove process
+exit. Failed physical disposal retains unknown activity, reports a default
+warning, and preserves the original provider failure delivered to the caller.
+Explicit SDK retirement attempts all registered owned queries, including queries
+whose earlier cleanup failed. Releasing source observation cannot skip those
+physical cleanup attempts. Retirement rejects failed cleanup, preserving the
+original single failure or all failures with their cause. Transient control query
+creation uses the same owner and cannot begin after retirement starts.
+Cancellation prioritizes the foreground turn while it is in flight. After local
+foreground completion, even while its query is still draining,
+a background task is targeted only through its known query owner; an uncorrelated
+shared hook does not authorize choosing an arbitrary query. TaskStop and TaskOutput
+hooks use the target owner captured by their exact tool call; an uncorrelated
+shared hook cannot settle a task owned by another query.
+
+A first-party SDK local presentation prepares invocation hook resources separately
+from the retained remote Session endpoint. Preparation grants no task authority.
+The host reports an actual launch before that local binding can own activity in
+the same ledger, including a resumed task with the same native tuple. Older SDK
+hooks cannot attribute their observations to that binding. The launch builder's
+explicit direct-child qualification and actual process closure settle only that
+local owner; an unproven wrapper outcome loses observation. Failed preparation
+releases its pending resources, and cleanup failures remain observable without
+undoing positive provider-close evidence. External or unattributed tasks remain
+conservative when the last SDK query exits, because that exit does not prove a
+separate terminal process stopped. The unified terminal's current owned host can
+publish physical provider-close proof through
+its scoped exit subscription and settle Activity without another prompt. Wrapper
+death, post-spawn errors, and SessionEnd alone remain unknown. A confirmed dead
+pane demotes unresolved activity to unknown; an inconclusive liveness probe
+preserves the last active facts. Explicit unified disposal loses observation of
+unresolved tasks and projects unknown, whether physical cleanup succeeds or fails;
+already proven native closure remains idle. Retained or external hosts without this
+subscription remain conservative; see the Claude
+terminal host ownership contract in [CLI architecture](./cli-architecture.md).
+Completing a pending source-history baseline releases only its own observation
+gap. Lost query observation, unresolved unattributed tasks, and a genuine
+source-history observation loss still keep Activity unknown.
+
+The host owns delivery of this projection to the server. Binding or retiring a
+runtime keeps Activity unknown until a provider snapshot supplies its state. The
+first runtime listener refreshes the canonical provider watch if prompt-outcome
+observation had already started it, so its current snapshot is still delivered.
+A rejected publication
+reports one default warning per failed enqueue, including when callers await it.
+The projection retains its existing retry and ordering behavior.
+
 ## Explicit non-interrupting delivery (development)
 
 **Steer now** requests immediate delivery of the exact Pending row without
@@ -89,6 +147,18 @@ Pending provider acceptance carries the exact `localId` through `SessionClient`
 to server settlement. The server transaction
 commits or updates the transcript message and removes that Pending row.
 Transcript and Pending state are then published through separate events.
+
+For ACP in 0.3 development source, provider effect correlated to the exact
+dispatched prompt witnesses consumption even before `session/prompt` responds.
+The public ACP producer emits `input-accepted` through the existing host
+settlement path before releasing that turn's buffered output. A later typed
+turn failure retains the output and failure cause but does not return the input
+to Pending; a user retry is a new input. Transport loss without witnessed
+effect remains unknown. Previously blocked rows can accept later exact
+acceptance evidence through the same Pending owner. A terminal turn or an
+admitted user transcript row alone cannot reconstruct missing historical
+acceptance evidence. Loaded-runtime and historical-row replay remain separate
+validation from this source contract.
 
 The acceptance operation optionally retains the host-witnessed acceptance time,
 actual delivery kind (`newTurn`, `followUp`, or `steer`), and turn identity in that

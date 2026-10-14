@@ -118,8 +118,9 @@ Command Node and package runners use the shared managed runtime normalizer under
 Agent CLI installer and its declared package bin, while archive definitions use
 the descriptor-taking runtime installables adapter. Session launch installs a
 missing managed definition on first use, then resolves it again before spawning.
-Probes resolve installed launches without installing a missing definition. The
-managed uv consumer is still unavailable at this development boundary.
+Probes resolve installed launches without installing a missing definition.
+Pinned uv definitions use host-managed uv with managed Python and tool directories
+inside the definition's version root; a system uv or Python is not required.
 Managed launches use Account + definition id + version roots. Pin changes acquire
 another root and leave an older Session's executable intact. Archive and npm
 acquisition share the existing promotion lock, preserving a version another
@@ -175,7 +176,9 @@ launch; current writers emit only `launch`. Package-runner commands share the
 managed runner owner with MCP servers. npm acquisition uses the existing managed
 Agent installer, and Account-defined archives use the descriptor-taking
 installables adapter and first-use ensure path without registering another Agent.
-uv execution remains unavailable until the managed uv unit lands.
+uv acquisition uses the same job and first-use launch owner. It installs the
+exact package pin through managed uv and resolves its named or sole installed
+executable; other ambiguous package bins require an explicit launch command.
 
 Registry archives verify a published SHA-256 digest on download. An absent digest
 is reported as `not_published`; manifest-declared pinned archives still require a
@@ -300,6 +303,10 @@ Session resume and runtime-preference lookups use
 Connected Account catalog lookups. It acquires the current runtime lease and
 its demanded Agent entry before reading executable hooks; the initial declaration
 snapshot alone cannot establish whether a lazy hook is available.
+Session capability-apply facts use the Session's captured registry, matching
+its skill delivery declaration. Experimental resume predicates are demanded
+from that same leased Agent entry through the catalog hook owner; the global
+current catalog cannot override an incumbent Session's captured support facts.
 Connected Account launch projections qualify declaration-local state-sharing service IDs
 with their owning plugin ID before host continuity decisions compare account selections.
 In 0.3 development, the account-settings parser also normalizes persisted Agent flavor aliases
@@ -354,6 +361,13 @@ snapshot plus subsequent turn deltas; total contribution IDs name only counted
 rows. The CLI usage publisher returns a sent, skipped, or failed result and logs
 sanitized warnings for transport failures, including a disconnected legacy transport.
 It does not retain a retry outbox.
+
+Claude's foreground assistant usage carries the explicit request turn from
+its SDK or unified terminal operation through the native runtime event and
+Session usage publisher. Historical replay, unbound sidechains and whole-Session
+summary residuals do not acquire the current foreground turn. Previously stored
+rows without a turn remain visibly unallocated; observing a later commit does
+not backfill their attribution.
 
 Plugin authors bind executable Agent behavior through one
 `definePlugin({ agents: { <localId>: ... } })` entry. Current public fields on
@@ -594,6 +608,14 @@ declared; the open-request carrier alone does not provide it. The MCP contract
 kit distinguishes launch-time hiding from live call-time blocking and observes
 real server receipts as well as approval ordering. Source fixture evidence does
 not by itself admit a first-party declaration or certify a vendor launch path.
+
+Kilo's development ACP path refuses ambiguous server aliases and tool aliases
+that lose the raw MCP name. For example, `file.read` and `file_read` both become
+`file_read` in its native spelling, so neither alias can establish the tool's
+identity. The existing ACP permission path cancels these requests before policy
+or execution; a launch-time tool policy is not a complete name inventory.
+Uniquely recoverable names still reach the live host policy owner, and built-in
+Happier binding names remain governed by the Action owner.
 
 In 0.3 development source, Pi receives user MCP servers through its existing
 native tools extension for Sessions and detached Runs, including MCP-only launches
@@ -1078,6 +1100,13 @@ observations, not launch readiness or skill support. Passive reach readers use
 the published facts on a fresh device and offline. Older retained metadata without the optional projection
 can still use its device cache; malformed optional stored facts read as absent.
 
+The same daemon metadata owner publishes native `platform` and `arch` at startup
+and reconnect. Architecture changes invalidate the Machine display projection.
+ACP Registry targets and these observations share the mapping in
+`acpPlatformTargetsV1.ts`; a retained Machine without architecture remains unknown
+for platform fit until its daemon publishes it. The existing device display cache
+retains both observations for offline rows and warm starts.
+
 Agent software acquisition has one owner:
 `packages/cli-common/src/agents/install.ts#installAgentCliForRuntime`. The daemon's
 `apps/cli/src/capabilities/installJobs/agentInstallJobOwner.ts` adds a job lifecycle around
@@ -1107,6 +1136,13 @@ declaration and standalone pet discovery consume the same policy. The SDK's
 for connected-service profile/group enumeration. Custody stops at the home:
 intentional shared-state symlinks inside it remain supported. This does not add a
 second native-home catalog or require a daemon merely to discover local pets.
+
+Claude External Sessions in 0.3 development source resolve the admitted config
+home's `projects` entry to its physical storage root, including connected-account
+shared-state links. Candidate discovery, exact identity, transcript paging and
+observation use that same root. Project-directory escapes and transcript-file
+symlinks remain refused; a completed turn cannot settle Activity when ordered
+source admission fails.
 
 The process singleton admits one active built-in job per Agent target; configured
 jobs additionally distinguish the admitted Account and pinned version. Another
@@ -1142,7 +1178,12 @@ job owner to its actual tracked runner set, including adopted Sessions.
 `agent/acp/catalog/registry/managedAgentInstalls.ts` supplies the shared definition
 removal used by explicit jobs, hydration cleanup and Storage. Managed archive
 metadata stays in the existing version file, and npm identity stays in the
-Happier-authored workspace manifest; vendor package manifests are untouched.
+Happier-authored workspace manifest; uv identity lives in its managed version's
+`uv.json`. Vendor package manifests are untouched. uv removal runs managed
+`uv tool uninstall` with that version's tool directories before the same remover
+deletes its managed root. Ordinary failed acquisitions clear incomplete bytes
+so first-use can retry; a failed process containment retains them and the job's
+existing exclusion.
 
 Configured definition jobs require current Account admission at the machine RPC.
 Foreign requests read the caller's ACP catalog through the existing admitted

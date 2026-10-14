@@ -72,9 +72,48 @@ package binaries with a `#!/usr/bin/env node` entrypoint run without Node on the
 user's PATH. Selecting an absolute launcher executable alone does not prepare
 the package's child processes.
 
+In 0.3 development, the same normalizer maps `uvx` and `uv tool run` to
+Happier-managed uv. Its pinned release assets and publisher SHA-256 digests are
+owned by `packages/cli-common/src/agents/managedUv.ts`; acquisition uses the
+existing verified downloader, archive extractor, install lock and promotion
+owner, without a GitHub latest-release API request or system uv fallback.
+uv's cache, tool and managed Python directories live under the Happier home.
+Registry uv Agents install through the existing definition job/first-use path
+into their Account/definition/version root, including their managed Python,
+tool environments and launchers. Removing shared uv bootstrap/cache state does
+not remove a retained Agent's interpreter. Their virtual environments stay at
+that final location because they embed absolute interpreter paths. Install and
+uninstall commands use the existing process-tree cancellation owner. Runtime
+overrides contain only the owned directories and managed Python preference;
+authored index and authentication settings retain their normal child-environment
+priority.
+
 One request-scoped exception exists: `AgentCliSourcePolicy` (`packages/cli-common/src/agents/resolution.ts`). Passing `sourcePolicy: 'managed_only'` to the canonical resolver, install preflight, or `prepareAgentCliForRuntime(...)` restricts that single request to the managed install under its own `HAPPIER_HOME_DIR`: environment overrides, system/global installs and vendor recipes are ignored, and a retry may reuse a valid current managed install. It is a per-request argument, never a persisted or environment-configurable preference, because a composition that may run only what it installed itself (the temporary-computer Runner) must not be widened by the endpoint's environment. Such a composition passes the returned resolution unchanged into the launch through `buildAgentCliLaunchSpecFromResolution(...)`; resolving again at launch would let an override or system binary substitute itself between readiness and launch.
 
 Model Provider endpoints are not Agent executables. Provider discovery may use only the bounded detector and local-command declarations owned by the Provider contribution and the canonical local-services/runtime abstractions. An adopted local service is observed but never stopped or restarted by Happier. A Provider process started through the managed-local-service path is owned by that path; Provider code must not spawn `node`, package managers, or vendor commands directly. See [Providers](./providers.md#local-discovery-and-process-ownership).
+
+In current development source, vendor installers preserve the Windows process
+environment's `Path` spelling; cloning that environment and replacing it with an
+empty `PATH` prevents executable resolution. Only POSIX recipes prepend user
+install directories. Windows recipes declare `powershell.exe` in their owning
+Agent plugins, which also supply the copyable installation guidance.
+
+## Installer state home
+
+Both shell installers resolve the data home from an explicit `HAPPIER_HOME_DIR`,
+otherwise following `HAPPIER_INSTALL_DIR` or the default `.happier` directory.
+In current development source, the POSIX installer uses that same resolved home
+for daemon commands and shell startup-file exports, preserving an explicit data
+home when the binary install directory differs.
+
+In current development source, `install.ps1` persists its resolved state home as
+the user-scoped `HAPPIER_HOME_DIR` and applies it to the installer process before
+post-install CLI commands. The background service and new terminals therefore
+read the same credentials. An explicit `HAPPIER_HOME_DIR` selects the data home;
+otherwise it follows `HAPPIER_INSTALL_DIR`, falling back to `%USERPROFILE%\.happier`.
+The binary install directory can remain separate from an explicit data home.
+On Windows, `HAPPIER_NO_PATH_UPDATE` skips PATH changes only, not state-home persistence.
+This does not copy or migrate credentials from a previous data home.
 
 ## Native computer driver (0.3 development source)
 
@@ -285,6 +324,24 @@ bundled-dependency publication contract; that validation stays in the background
 build. A cold component's startup failure is reported without exiting the runner
 or stopping available siblings. Infrastructure, authentication, ownership and
 output integrity remain prerequisites for the component that needs them.
+Development server startup and reload use the existing retained source-runtime
+builder when a compatible native snapshot is unavailable. Server code and its
+first-party dependencies are captured and emitted together; startup does not
+combine moving server TypeScript with older workspace dist. Atomic selection
+pins the completed graph, so startup reads it without waiting on publication
+custody. The existing server reload coordinator builds replacements in the
+background and owns readiness and process activation. These development builds
+reuse protected local jobs placement and dependency custody, without entering
+validation's capacity queue or the shared CLI dist publication lease. A first
+startup without retained output still needs a cold build. Retained startup and
+availability recovery do not replay an older migration ledger; current source
+replacement remains the migration owner.
+Source QA uses the same startup admission policy, including nested compiler
+leaves. A warm start reads the retained role without producer custody and prepares
+current source through the existing pending-start owner in the background. That
+preparation preserves the QA selection; explicit reload checks and activates the
+replacement. Retiring the Stack cancels its background preparation. Cold roles
+still need their first build, while ordinary validation keeps capacity admission.
 The automatic refresh reapplies and verifies installed patches. Metro can serve
 installed bytes and its retained source inventory while those inputs move or
 another Stack prevents refresh. Missing packages
@@ -747,9 +804,13 @@ Binary CLI packaging separates local semantic-memory inference, native voice
 inference, and difftastic into the signed `happier-memory-runtime`,
 `happier-voice-runtime`, and `happier-difftastic` components. The managed-installable
 catalog exposes them for explicit installation and the real memory, voice, and diff
-consumers acquire the CLI's exact version on first use. A validated
-installed version can be reused offline; first acquisition still needs the release
-service. Local memory startup does not hold daemon readiness while downloading,
+consumers acquire the packaged CLI's exact version on first use. Source CLI
+and retained source-bundle Voice inference instead use the CLI's installed,
+pinned Sherpa dependency through the same optional-runtime resolver, including
+capability detection and explicit installation. The source package version does
+not require a matching published CLI release. A validated
+installed version can be reused offline; first packaged-component acquisition
+still needs the release service. Local memory startup does not hold daemon readiness while downloading,
 and disabling memory prevents late activation. When `deleteOnDisable` is enabled,
 it removes late-written model cache after pending initialization settles. The shared optional-runtime download is not
 aborted on behalf of other callers.

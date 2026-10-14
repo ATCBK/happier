@@ -40,6 +40,45 @@ graph TB
     Agents --> API
 ```
 
+## Explicit session creation targets (0.3 development)
+
+Session creation and spawn-nonce recovery use the exact-machine RPC transport.
+An unavailable explicit target cannot redirect a new launch or its recovery to a
+replacement machine. Existing Session operations that follow a recorded Machine
+replacement retain their separate replacement-aware transport policy.
+
+The shared RPC acknowledgement owner distinguishes typed pre-execution refusals
+from uncertain submissions. A launch with an unknown outcome retains its submitted
+nonce and returns `pending`; callers retry with the same creation key to recover
+that launch. A proven refusal remains a definite error, and cancellation of a
+proven unsent request remains cancelled.
+
+## Compose service prerequisites (0.3 development)
+
+Declared Compose Services use the native Compose lifecycle under the daemon's
+managed-services supervisor. Start checks Docker engine access during review and
+again with the final authorized launch environment before spawning Compose.
+An unavailable engine returns `native_tool_unavailable` with a strict,
+content-free prerequisite naming the machine and whether Docker is missing,
+unreachable, or inaccessible to the daemon user. Native stderr stays private.
+
+Stop first tries to recover the exact container identities. If observation is
+unavailable and this occurrence never started a process or captured containers,
+the managed binding can be cleared. An occurrence with a started process or
+captured container identity retains incomplete cleanup until termination can be
+confirmed. The launcher feed and existing Services row presentation consume that
+same custody result after reload.
+
+## Session permission flags (0.3 development)
+
+`--auto` is an alias for `--permission-mode auto`, resolved by the common session
+argument parser through the existing permission-intent owner. It is consumed by
+Happier instead of forwarded to the native Agent. Permission flags preserve their
+command-line ordering, with the last flag taking effect. For OpenCode, automatic
+mode approves reads and edits; other tools may still require approval. `--yolo`
+requests full access. The managed Session's permission policy takes precedence over
+the native Agent's defaults.
+
 ## High-level layout
 - **Entry point:** `src/index.ts` parses subcommands and routes execution.
 - **API client:** `src/api` handles HTTP + Socket.IO, encryption, and RPC.
@@ -781,6 +820,22 @@ Model Provider configuration remains in the ordinary Agent/Provider selection
 seam, including migrated predecessor direct-chat settings. There is no second
 Voice-owned HTTP chat runtime.
 
+For a session-sourced Local Voice Agent, the bound coding root owns the Agent,
+currently applied model, connected-account selection and Launch Profile. Its
+hidden Voice conversation owns transcript and RPC custody. Carrier creation
+uses the root's declared Agent and rematerializes its connected selection;
+reuse requires the same Agent target and connected selection. The current model
+catalog is validated against the daemon's actual runner process identity; pending
+intent and historical accepted-turn models are not current-model evidence.
+Missing execution facts fail closed rather
+than selecting another Agent or an Account default. Configured global Voice
+Agents retain their explicit settings selection.
+
+Daemon Voice run retention follows its effective native-session transcript
+configuration, not the raw Voice-memory preference. The current daemon transcript
+is persistent and therefore uses resumable run retention; the raw memory setting
+continues to govern cross-attempt replay and provider-resume eligibility.
+
 An Agent may ask to open or recover Voice through the existing danger/Ask-first
 Actions; approval does not give it control of the conversation. The execution-run
 dispatcher admits caller turns and run Actions for `voice_agent` only with
@@ -1419,13 +1474,18 @@ Node code locations. Absolute user paths and function labels are not logged.
 Assignment-refresh failures leave the worker's last successful assignment
 cache intact; the existing reconciliation loop owns retries.
 
-Workflow Action failures keep their typed public result. The shared failure
+In 0.3 development, Workflow Action failures keep their typed public result. The shared failure
 normalizer emits `workflow_action_failure` through the CLI file logger when
-that result is `storage_unavailable`, retaining only the original error code,
+that result is `storage_unavailable` or Account role-override preparation fails,
+retaining only the projected and original error codes,
 HTTP status, operation and measured duration. The storage client attaches the
 operation and duration to the original exception, and storage translation keeps
 its cause; request bodies, headers, messages and stack traces are excluded from
-this diagnostic.
+this diagnostic. Unreadable Account role overrides project before admission as
+`content_unavailable` with the closed detail reason `account_role_overrides_unavailable`.
+The shared presenter explains that Account role settings could not be read and
+offers Retry; this is separate from an unusable selected role. The diagnostic
+retains `account_role_overrides_unavailable` as the original code.
 
 In 0.3 development, a Session startup failure becomes a failed Workflow leaf
 only after the daemon's existing startup-cancellation owner proves the launch
@@ -1931,12 +1991,27 @@ values and an explicit folder, never enablement. Resolved env values stay in
 private launcher files, not Agent configuration. Remote bridge env is applied
 at process startup, while headers stay in its private configuration file.
 
+The `mcp servers` command tree and help are compiled from Action specs. Add
+stamps an entry and uses the observed catalog revision before invoking the same
+create Action as the UI. The 0.2 `add --name --transport --command --arg`,
+`detect --provider --dir`, and `list --dir` spellings remain terminal adapters:
+flag-looking argument values stay literal, Detect invokes `mcp.found.list`, and
+List still reads the Account catalog independently of the accepted directory.
+The adapters do not write Settings or probe servers themselves; `mcp serve`
+remains the handwritten runtime entry point. The retired `mcp.servers.probe`
+Action and `mcp.servers` feature gate are absent from current development source.
+
 `mcp.servers.test` has one daemon pipeline; the retained CLI spelling dispatches
 the compiled Action instead of running a second probe. A saved-server Test
 captures the row revision, initializes and lists all tool pages through the MCP
 SDK, then writes metadata and per-tool token estimates through the catalog CAS.
+The remote stdio bridge follows upstream `nextCursor` pages and forwards the
+upstream server identity, version and instructions to this same probe.
 A conflict is reported, not retried against newer configuration. Draft Tests do
-not persist snapshots. Diagnostics use the existing bounded stderr and Saved
+not persist snapshots. OAuth Tests borrow the daemon's existing request-auth
+issuer with the captured Account and RPC lifetime, without fabricating a parent
+Session. The Test awaits capability retirement and private configuration cleanup
+before returning, including on materialization or probe failure. Diagnostics use the existing bounded stderr and Saved
 Secret redaction owners; a wrapped stdio spawn failure retains its typed runtime
 diagnostic. `mcp.servers.tools.list` reads the checked snapshot without launching
 a server; unchecked cost is unknown (`null`), not zero. Per-Agent control/loading
@@ -1965,6 +2040,13 @@ invent a scalar Settings version change or a second catalog cache.
 First-party Agent leaves are a later integration unit. Native detached-Run leaves must
 prove actual revocation before declaring native approval; these additions alone
 do not certify that later leaf contract.
+
+Kilo's ACP leaf resolves a native MCP alias only when its injected server key
+is unambiguous and its tool suffix preserves the raw identity. A sanitized
+underscore may stand for a raw underscore or a replaced character, so such
+aliases (including `file.read` and `file_read`) are cancelled before policy
+lookup or tool execution. A birth tool-policy projection is not a complete
+identity catalog. Built-in Happier spellings remain with the Action owner.
 
 The stored `bindings` array holds rules; configuration overrides live on each
 server's `configOverrides`. Configuration saves preserve reach rules. The shared
@@ -2529,6 +2611,15 @@ and explicit Run/service custody retain their normal settlement requirements.
 consumes that ownership runtime, the same Left-behind pass, the machine-vitals sampler
 and the local-services inventory. An actively parked Processes watch holds the existing
 `demand('live')` cadence (2 seconds), not Overview extras or a second sampling timer.
+That cadence refreshes metrics for known PIDs. Full ownership discovery runs on
+open and uses the shared 25-second watch window as its backstop. Host launch owners
+also notify the view through the private authenticated control endpoint in
+[`launchNotification`](../apps/cli/src/processes/launchNotification.ts); root owners
+invalidate after their canonical registration becomes visible. A demanded view
+reads fresh ownership and drains notifications received during that read. With no
+viewer, a notification only marks discovery dirty for the next watch. Native
+census/vitals helpers use their separate sampling execution boundary and do not
+generate workload-launch notifications.
 Ports use the existing local-services watch; no census-triggered socket scan is added.
 `daemon.processes.watch` parks through the shared `parkWatch` boundary. Hiding or closing
 the surface releases demand; return reads current evidence. At the last unsubscribe,
@@ -2580,8 +2671,10 @@ Action; they do not introduce another policy store or approval floor.
 
 In unreleased 0.3 source, agent browser sidecars are admitted at the existing
 [`productSource`](../apps/cli/src/daemon/browser/sidecar/productSource.ts) Session
-launch owner. Auto allows one engine per 4 GiB of total RAM, at least one and at
-most four: two at 8 GiB, three at 12 GiB, four at 16 GiB. The budget rounds up the
+launch owner. Auto reads the vitals sampler's reported effective memory total,
+including Linux cgroup limits, and allows one engine per 4 GiB, at least one and
+at most four: two at 8 GiB, three at 12 GiB, four at 16 GiB. An unavailable memory
+sample keeps one usable engine. The budget rounds up the
 2026-10-12 Linux observation of a 2340.7 MiB Chromium tree (main process,
 renderers and helpers) to the next binary GiB budget, 4 GiB. Aggregate RSS can
 double-count shared pages; this is a concurrency sizing proxy, not a process
@@ -3086,6 +3179,39 @@ disposes the user's pane, and exact metadata retirement and hook-artifact cleanu
 remain in the existing disposition owner.
 If required descriptor removal fails, Stop reports incomplete retirement and retains
 the exact local evidence for retry without disposing a borrowed pane.
+
+For Claude Runtime Activity, the development unified terminal subscribes to the
+current owned host's existing completion path. The foreground launch runner sends
+private native-close proof only after its provider child closes. The host drains
+that channel before publishing exit evidence, and the unified runtime settles its
+task ledger only for that positive proof. Wrapper death or a post-spawn error alone
+reports observation loss even if the wrapper has a numeric exit status. The
+subscription is fenced by the captured host handle and released by the existing
+runtime disposal owner. Retained and external hosts without owned completion
+expose no subscription and cannot prove their provider stopped from pane liveness.
+The readiness owner's confirmed dead-pane observation demotes unresolved Activity
+to unknown through the same reconciler used for unproven process exit. An
+inconclusive liveness observation preserves active facts, and readiness does not
+fabricate a process-exit failure for that pane observation.
+
+Claude's development SDK local-mode launch uses a separate invocation lifetime
+for hook secrets, endpoint and plugin directory through the existing Session hook
+service. Its prepared plan remains inert until the host reports the actual child
+launch to the captured native Session runtime. That binding owns local task facts
+in the same ledger as SDK queries; stale remote hooks cannot borrow its authority.
+The generic process owner retains all physical control. The Agent CLI launch
+builder explicitly qualifies direct native execution, and the host combines that
+qualification with actual child termination before reporting provider closure.
+Shell shims without positive provider proof remain observation loss. Preparation,
+launch and runtime retirement release hook resources at their existing owners;
+cleanup failure reports a default warning and preserves the original failure.
+Direct and borrowed physical stop handles share one attempt owner: concurrent callers
+await the same attempt, a failed attempt permits retry, and successful cleanup remains
+settled. Control return records the stop receipt without adding a second retry policy.
+Failed shutdown or an inconclusive process error retains the containing operation's
+cancellation listener; successful shutdown or observed child exit releases it.
+Cancellation cleanup failures use the default file diagnostic; launch cleanup preserves
+both the original failure and a failed physical stop.
 
 The development Session-scoped terminal service can adopt an existing owned host
 without launching another Agent. Admission requires the current runner's Session

@@ -135,11 +135,21 @@ retains the pinned directories for resumable conversations and removes them on
 saved-result deletion under its existing lock. The Settings Action anchor is
 `sourceControl.investigateSurroundingFiles`.
 
-An unset summary-model preference resolves a catalog model in the `low` cost tier
+For an attached automatic summary Run, the runner first inherits the parent's
+applied model and route. An unavailable parent selection falls back to the
+configured summary model and that Agent's canonical Account default route;
+explicit model choices retain precedence. A different default Agent passes
+through canonical Action admission only after the parent attempt proves no Run
+was created. An unknown admission outcome is never retried. The bridge resolves
+selection before summary-profile preparation so the saved generator and Run agree.
+This is development-source behavior pending daemon and runner reload validation.
+
+The summary fallback (and detached generation) resolves an unset preference to a catalog model in the `low` cost tier
 with admitted structured-output support. The picker, prefetch and direct generation
 Action consume the same selection owner; explicit selections retain precedence.
 Resolving the default does not persist a model preference. Without an admitted
-candidate, generation reports model unavailable and retains the captured inventory.
+fallback candidate, a known attached parent remains usable; detached generation
+reports model unavailable and retains the captured inventory.
 The relative cost tier is not a token price: current catalogs supply no unit pricing,
 so clients must keep that cost unavailable rather than invent an amount.
 
@@ -320,7 +330,9 @@ several branches remains ambiguous rather than being charged to each branch.
 
 `scm/checkpoints/sessionEvidence.ts` verifies retained start/final checkpoint
 receipts against their scoped Git refs, exact selected turn and capture phases,
-and actual object trees. A single-parent commit
+and actual object trees. Native turn-start alias receipts pin the commit OID;
+their tree is resolved from that exact retained object. Any supplied tree must
+agree, and a moved ref or contradictory receipt is rejected. A single-parent commit
 links only when its parent tree and tree exactly match those endpoints. The
 hosting reader supplies PR identity and immutable base/head OIDs; membership in
 that Git graph completes the link. Repository identity uses the existing

@@ -340,6 +340,14 @@ the canonical `workspaceFileSearch` owner. That owner distinguishes incomplete
 source `corpusTruncated` from displayed-page `hasMore`, and carries glob-query
 cancellation. Daemon filename globs include directory descendants, retain the
 shared exclusions, and preserve usable paths from a partial ripgrep failure.
+Filename requests carry the remaining scoped RPC budget as `budgetMs`; the
+handler counts daemon admission time and the ripgrep boundary returns bounded
+captured output with `truncated: true` at expiry. The Home relay waits for that
+domain result without a competing acknowledgement deadline. Caller cancellation
+still aborts the process tree. A caller timeout alone does not establish Machine
+unavailability. Filename enumeration uses newline-framed, line-buffered output
+to retain complete paths found before expiry; filenames containing newline
+characters are unsupported.
 `WorkspaceFileSearchUnavailableError` carries typed failures to the UI instead
 of turning a failed search into an empty result. Source integration and focused
 owner checks do not substitute for the lane's remaining package and

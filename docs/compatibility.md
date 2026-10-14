@@ -61,6 +61,20 @@ An existing same-concept split-brain in the touched corridor must be consolidate
 
 Before adding dual writers, parallel persisted formats, rollout modes, operator flags, socket-drain protocols, or a mandatory client floor, compare their lifetime cost with the actual user behavior required. If preserving old-client/new-server behavior for a major change would require substantial machinery, stop and obtain an explicit developer/product decision among: operation-scoped degradation, a documented client update requirement, or the heavier compatibility transition. An agent must not silently choose either forced upgrades or heavy compatibility machinery. This exception is for genuinely incompatible, high-cost transitions; routine server changes must remain compatible and must not manufacture client-update requirements.
 
+### Retained skill bundles (0.3 development)
+
+The inspected 0.2 predecessor at `82f2997875dd45b0af68bbee2763d095aaa87505`
+writes skill Markdown verbatim and projects registry names/descriptions with a
+first-colon line reader. Its stored inputs therefore include unquoted description
+colons and other non-YAML scalars, as well as safe relative POSIX paths such as
+`refs/CON.txt`. Current stored reads retain these inputs at the canonical bundle
+owner: YAML decoding takes precedence, with the exact predecessor line projection
+used only on YAML syntax failure. New imports and writes stay canonical and
+portable; Windows materialization refuses only a Windows-invalid item. This is
+forward stored-data admission, not a legacy writer or a parallel catalog. The
+[skill content contract](plugin-platform.md) owns the detailed behavior; real
+predecessor writer captures live in `packages/protocol/fixtures/`.
+
 ### Account trigger deletion receipts (0.3 development)
 
 The current Automation deletion transaction returns the removed definition's
@@ -343,6 +357,9 @@ existing row's `skillMigrationV1: true` field is written with its seed or includ
 in the same CAS. Removing that positive selection without Off does not restore
 it on reload. The kept marked entries still resolve inherited exclusions;
 predecessor readers ignore the additional field.
+Profile positive migration classifies only enabled, unconsumed entries; a disabled
+unavailable Artifact does not withdraw the catalog. Voice dropping and retained
+Session inherited exclusions still classify their disabled references.
 Account and Project migration record the scoped deterministic legacy entry ids
 in `skill-rules.value.consumedLegacyEntryIds` on the viewer's existing destination
 row, in the same CAS as the projected rules. Rule edits and deletion preserve
@@ -2146,6 +2163,15 @@ backfill requirement. Undeployed target/plugin approval schemas may be refined
 in place through the same Artifact owner. Released V1 bytes and readers remain
 the historical compatibility boundary.
 
+Storage proposals in 0.3 development optionally retain `storageRetryResults`
+inside the same strict V2 Artifact. This is an append-only list of strict settled
+Pile results, limited to the original execution's unsuccessful items with distinct
+batch and Trash entry ids. The transition owner preserves the terminal status,
+original subject, decision and execution; the field supplies no replay inputs or
+authority. Existing V2 records without the field and released V1 history remain
+readable. The predecessor has no Storage proposal or V2 execution contract;
+current development V2 writers do not promise rollback to those V1 readers.
+
 ## Ephemeral Runner release compatibility (development)
 
 `happier-runner` is a 0.3-only release product. Its strict V1 release manifest is
@@ -2551,8 +2577,8 @@ discarded without changing Home profiles or focus.
 
 ### Current finite-transfer admission (0.3 development)
 
-The approved one-way 0.3 transition removes the old-daemon missing-declaration
-probe and `legacy_machine_rpc` carrier. An absent, malformed or disabled daemon
+The 0.3 transition removes the old-daemon missing-declaration probe and
+`legacy_machine_rpc` carrier. An absent, malformed or disabled daemon
 transfer declaration is not support. Presentation and execution share the
 current declaration reader; ordinary daemons must declare finite import and
 export. A restricted Runner has no daemon transfer state and instead declares
@@ -2563,11 +2589,31 @@ support: the same endpoint also carries workspace and broker traffic.
 Iroh selection requires current application support, both
 `machines.transfer.directPeer` and `machines.peerMediation`, the canonical current
 endpoint descriptor, and a usable host carrier. Browser clients additionally
-require the published relay hints. A failure after selecting Iroh does not switch
-to an obsolete RPC carrier. Standard-only makes this mandatory prepared
-`machine/1` path unavailable; it does not invent another execution carrier.
-Current Session-scoped attachment RPC transfers and the general Machine-RPC
-route policy remain separate, unchanged paths. Composer media remains independently negotiated.
+require the published relay hints. Under IR-105 (2026-10-13), browsers select
+Iroh when usable and otherwise select the Home's server-mediated encrypted
+transfer RPC phases. This applies at the canonical transfer owner to Found,
+registry JSON, workspace files and the other finite Machine families; callers
+do not make their own fallback decision.
+
+The Home phases consume the same prepared-transfer capability and dispatch to
+the incumbent daemon transfer handler in-process. They retain its encrypted
+chunks, import lifecycle, destination completion and current authority checks;
+they create no second byte store or filesystem admission path. Signed callers
+spend their admitted operation root through
+`resolveMachineRpcExternalActionEffectV1`, with the exact installed target and
+phase body still verified by the Home. A browser in Standard-only mode uses
+this Home route. Native prepared transfers retain their Iroh requirement.
+The daemon keeps the prepared-transfer owner available for Home RPC when its
+optional direct listener is disabled; that does not enable the finite Iroh
+application on an endpoint published for other Machine applications.
+Initial selection precedes preparation. A failed browser Iroh acquisition may
+use Home only after successful custody cleanup, before any transfer HTTP phase
+was sent; cancellation and Account retirement still refuse the operation.
+Once the HTTP requester is acquired, failures never replay through Home,
+matching Machine RPC's unknown-delivery rule. Undeclared daemons remain
+unavailable without a declaration probe.
+Session-scoped attachment admission remains separate; Composer media remains
+independently negotiated.
 This contraction changes live component admission, not readers for data created
 by 0.2; no persisted transfer format or data migration is introduced.
 
