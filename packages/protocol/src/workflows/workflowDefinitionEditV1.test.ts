@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 import Ajv from 'ajv';
 
@@ -131,7 +132,7 @@ describe('typed workflow definition edits', () => {
   });
 
   it('projects optional identities and evaluator restrictions through the canonical Action schema bridge', () => {
-    const validate = new Ajv({ strict: false }).compile(WorkflowInsertBlockV1Schema.toJSONSchema({ io: 'input', target: 'draft-7' }));
+    const validate = new Ajv({ strict: false }).compile(z.toJSONSchema(WorkflowInsertBlockV1Schema, { io: 'input', target: 'draft-7' }));
     const evaluator = { kind: 'action', actionId: 'notifications.notify_me', input: {} };
     const loop = { kind: 'loop', body: [evaluator], repetition: { kind: 'evaluate', maxIterations: 1, history: 'none', evaluator } };
     expect(validate(loop)).toBe(true);
