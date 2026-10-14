@@ -26,7 +26,7 @@ import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/act
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
 import { createCliAutomationSettingsDeclarationAction } from './automationSettingsAction';
-import { readPortableAccountSettingBindingV1 } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
+import { readPortableAccountSettingBindingV1, machineDirectConnectionStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import { MachineTerminalHostSettingKeySchema, MachineTerminalHostSettingChangeSchema,
   readMachineTerminalHostSetting, buildMachineTerminalHostSettingMutation } from '@happier-dev/protocol/actions/settings/machineTerminalHostSetting';
 import { MachineOfflineAlertSettingKeySchema, MachineOfflineAlertSettingChangeSchema,
@@ -92,13 +92,13 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       read: readMachineTerminalHostSetting,
       mutate: (settings: AccountSettings, key: string, value: unknown) => buildMachineTerminalHostSettingMutation(
         settings, key, MachineTerminalHostSettingChangeSchema.parse(value)),
-    } : parsed.anchor === 'notifications.machineOffline' ? {
+    } : parsed.anchor === 'machines.connection.direct' ? machineDirectConnectionStorage : parsed.anchor === 'notifications.machineOffline' ? {
       key: MachineOfflineAlertSettingKeySchema, value: MachineOfflineAlertSettingChangeSchema,
       read: readMachineOfflineAlertSetting, mutate: buildMachineOfflineAlertSettingMutation,
     } : null;
     if (keyedOwner) {
       if (actionId !== 'settings.get' && actionId !== 'settings.set') return refuse('setting_reset_unsupported');
-      if (parsed.anchor === 'notifications.machineOffline' && 'target' in parsed && parsed.target) return refuse('setting_target_mismatch');
+      if ((parsed.anchor === 'notifications.machineOffline' || parsed.anchor === 'machines.connection.direct') && 'target' in parsed && parsed.target) return refuse('setting_target_mismatch');
       const key = keyedOwner.key.safeParse('key' in parsed ? parsed.key : undefined);
       if (!key.success) return refuse('setting_key_required');
       if (lacksCurrentAccountMaterial(context, params.credentials)) return refuse('requester_account_material_unavailable');
