@@ -7,6 +7,11 @@ import {
 } from "@happier-dev/protocol";
 
 import { db } from "@/storage/db";
+import { inTx } from "@/storage/inTx";
+import { eventRouter } from "@/app/events/eventRouter";
+import { UpdateContainerSchema } from "@happier-dev/protocol/updates";
+import { AccountEncryptionCurrentnessResponseSchema } from "@happier-dev/protocol/account/encryptionMode";
+import { admitAccountContentKey } from "@/app/encryption/accountContentKeyAdmission";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { registerConnectedServiceCredentialRoutesV2 } from "../connect/connectedServicesV2/registerConnectedServiceCredentialRoutesV2";
@@ -197,6 +202,7 @@ describe("accountRoutes (encryption mode integration)", () => {
     });
 
     afterEach(async () => {
+        eventRouter.clearIo();
         harness.resetEnv();
         await harness.resetDbTables([
             () => db.pluginWebhookDelivery.deleteMany(),
@@ -559,6 +565,86 @@ describe("accountRoutes (encryption mode integration)", () => {
             },
             select: { cursor: true },
         })).resolves.toEqual({ cursor: account.seq + 1 });
+    });
+
+    it("pushes committed encryption currentness to the exact Account user and machine channels", async () => {
+        harness.resetEnv({
+            HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional",
+            HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: "1",
+        });
+        const account = await db.account.create({
+            data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" },
+            select: { id: true },
+        });
+        const delivered: Array<{ room: string | string[]; payload: unknown }> = [];
+        // Socket.IO is the transport boundary; production routing and database writes remain real.
+        eventRouter.setIo({ to: (room) => ({
+            emit: (_event, payload) => { delivered.push({ room, payload }); },
+            disconnectSockets: () => {},
+        }) });
+        await withAuthenticatedTestApp((app) => accountRoutes(app), async (app) => {
+            const mutation = await app.inject({
+                method: "PATCH", url: "/v1/account/encryption",
+                headers: { "content-type": "application/json", "x-test-user-id": account.id },
+                payload: { mode: "plain" },
+            });
+            expect(mutation.statusCode, mutation.body).toBe(200);
+            const current = await app.inject({
+                method: "GET", url: "/v1/account/encryption/currentness",
+                headers: { "x-test-user-id": account.id },
+            });
+            const updates = delivered.flatMap(({ room, payload }) => {
+                const update = UpdateContainerSchema.parse(payload);
+                return update.body.t === "update-account" && "encryptionCurrentness" in update.body
+                    ? [{ room, body: update.body }]
+                    : [];
+            });
+            expect(updates.map(({ room }) => room)).toEqual([
+                `user-scoped:${account.id}`, `user-machines:${account.id}`,
+            ]);
+            for (const update of updates) {
+                expect(update.body.id).toBe(account.id);
+                expect(AccountEncryptionCurrentnessResponseSchema.parse(update.body.encryptionCurrentness))
+                    .toEqual(current.json());
+                expect(update.body).not.toHaveProperty("publicKey");
+                expect(update.body).not.toHaveProperty("contentPublicKey");
+                expect(update.body).not.toHaveProperty("contentPublicKeySig");
+            }
+        });
+    });
+
+    it("publishes repaired signing-bound content currentness only after successful commit", async () => {
+        const binding = createSignedAccountContentBinding();
+        const account = await db.account.create({
+            data: { publicKey: binding.publicKey, encryptionMode: "e2ee" },
+            select: { id: true },
+        });
+        const delivered: unknown[] = [];
+        eventRouter.setIo({ to: () => ({
+            emit: (_event, payload) => { delivered.push(payload); },
+            disconnectSockets: () => {},
+        }) });
+        const repair = async (rollback: boolean) => inTx(async (tx) => {
+            const result = await admitAccountContentKey(tx, {
+                accountId: account.id,
+                contentPublicKey: binding.contentPublicKey,
+                contentPublicKeySignature: binding.contentPublicKeySig,
+            });
+            expect(result.status).toBe("initialized");
+            expect(delivered).toEqual([]);
+            if (rollback) throw new Error("intentional test rollback");
+        });
+        await expect(repair(true)).rejects.toThrow("intentional test rollback");
+        expect(delivered).toEqual([]);
+        await repair(false);
+        const updates = delivered.map((payload) => UpdateContainerSchema.parse(payload));
+        expect(updates).toHaveLength(2);
+        for (const update of updates) {
+            expect(update.body.t).toBe("update-account");
+            if (update.body.t !== "update-account") throw new Error("unexpected update");
+            expect(AccountEncryptionCurrentnessResponseSchema.parse(update.body.encryptionCurrentness))
+                .toMatchObject({ mode: "e2ee", recipientEnvelopeReadiness: { status: "available" } });
+        }
     });
 
     it("PATCH /v1/account/encryption clears orphaned source-mode usage through the Connected Services owner", async () => {

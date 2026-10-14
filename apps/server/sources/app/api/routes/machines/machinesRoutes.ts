@@ -416,11 +416,11 @@ export function machinesRoutes(app: Fastify) {
                         );
                         return reply.code(400).send({ error: "invalid-params", reason: "content_public_key_invalid" });
                     }
-                    const admission = await admitAccountContentKey(db, {
+                    const admission = await inTx(tx => admitAccountContentKey(tx, {
                         accountId: userId,
                         contentPublicKey: decoded,
                         contentPublicKeySignature: decodedSignature,
-                    });
+                    }));
                     if (admission.status === "key_mismatch") {
                         log(
                             { module: "machines", machineId: id, userId, reason: "content_public_key_mismatch" },

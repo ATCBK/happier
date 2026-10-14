@@ -9,10 +9,8 @@ import {
     deriveAccountEncryptionCurrentnessFromRow,
     isAccountContentKeyBindingRecoveryRequired,
 } from "@/app/encryption/accountContentKeyAdmission";
-import {
-    deriveAccountEncryptionMigrationKeyFingerprints,
-} from "@/app/encryption/accountEncryptionTransition";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
+import { projectAccountEncryptionCurrentnessFromRow } from '@/app/encryption/accountEncryptionCurrentness';
 import {
     PresentUserRequiredResponseSchema,
     requirePresentUser,
@@ -116,17 +114,7 @@ export function registerAccountEncryptionRoutes(app: Fastify): void {
                         recipientEnvelopeReadiness,
                     }));
                 }
-                return reply.send({
-                    mode: currentness.currentness.encryptionMode,
-                    version: user.seq,
-                    settingsVersion: user.settingsVersion,
-                    recipientEnvelopeReadiness,
-                    ...deriveAccountEncryptionMigrationKeyFingerprints(
-                        user,
-                    ),
-                    updatedAt:
-                        user.encryptionModeUpdatedAt.getTime(),
-                });
+                return reply.send(projectAccountEncryptionCurrentnessFromRow(user));
             } catch (error) {
                 if (error instanceof InactiveAccountError) throw error;
                 return reply.code(500).send({ error: "internal" });

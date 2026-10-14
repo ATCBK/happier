@@ -22,6 +22,7 @@ import { projectSessionInputAdmissionReceipt } from "@/app/session/messages/sess
 import { serializeMachineKeyBasis } from "@/app/machines/machineSerialization";
 import type { MachineKeyBasisV1 } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
 import type { DevcontainerChildProjectionV1 } from "@happier-dev/protocol/machines/managed/devcontainerV1";
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 
 type UpdateMessagePayloadInput = Readonly<{
     id: string;
@@ -519,7 +520,7 @@ export function buildDeleteSessionUpdate(sessionId: string, updateSeq: number, u
     };
 }
 
-export function buildUpdateAccountUpdate(userId: string, profile: Partial<AccountProfile>, updateSeq: number, updateId: string): UpdatePayload {
+export function buildUpdateAccountUpdate(userId: string, profile: Partial<AccountProfile>, updateSeq: number, updateId: string, encryptionCurrentness?: AccountEncryptionCurrentnessResponse | null): UpdatePayload {
     return {
         id: updateId,
         seq: updateSeq,
@@ -527,6 +528,7 @@ export function buildUpdateAccountUpdate(userId: string, profile: Partial<Accoun
             t: 'update-account',
             id: userId,
             ...profile,
+            ...(encryptionCurrentness !== undefined ? { encryptionCurrentness } : {}),
             ...(profile.name !== undefined ? projectAccountNameToLegacyFieldsV1(profile.name) : {}),
             avatar: profile.avatar ? { ...profile.avatar, url: getPublicUrl(profile.avatar.path) } : undefined
         },

@@ -631,13 +631,13 @@ function registerKeyChallengeAuthRoutesForPurpose(
         }
         const user = existingAccount ?? freshAccount!;
         if (contentKeyBinding && existingAccount) {
-            const admission = await admitAccountContentKey(db, {
+            const admission = await inTx(tx => admitAccountContentKey(tx, {
                 accountId: user.id,
                 contentPublicKey:
                     contentKeyBinding.contentPublicKey,
                 contentPublicKeySignature:
                     contentKeyBinding.contentPublicKeySignature,
-            });
+            }));
             if (admission.status === "key_mismatch") {
                 return reply.code(409).send({
                     error: "content_public_key_mismatch",

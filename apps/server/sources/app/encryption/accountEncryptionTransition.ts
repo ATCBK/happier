@@ -15,6 +15,7 @@ import {
     AccountSessionOwnerMetadataFenceAccountNotFoundError,
 } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import type { Tx } from "@/storage/inTx";
+import { publishAccountEncryptionCurrentnessAfterTx } from './accountEncryptionCurrentness';
 
 export type AccountEncryptionTransitionFenceResult =
     | Readonly<{ status: "account_not_found" }>
@@ -221,6 +222,7 @@ export async function applyAccountEncryptionTransitionInTx(
             "Account encryption transition wrote an invalid persisted mode",
         );
     }
+    await publishAccountEncryptionCurrentnessAfterTx(tx, params.accountId);
     return {
         mode: mode.mode,
         version: updated.seq,
