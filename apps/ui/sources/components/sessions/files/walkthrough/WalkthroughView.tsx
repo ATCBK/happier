@@ -120,6 +120,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
     const phone = props.layout === 'phone';
     const reducedMotion = useReducedMotionPreference();
     const safeArea = useSafeAreaInsets();
+    const rootRef = React.useRef<View>(null);
     const scrollRef = React.useRef<ScrollView>(null);
     const stopOffsets = React.useRef(new Map<string, number>());
     const othersOffset = React.useRef<number | null>(null);
@@ -404,7 +405,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
         />
     ) : null;
     return (
-        <View testID="walkthrough-view" style={styles.root}>
+        <View ref={rootRef} testID="walkthrough-view" tabIndex={-1} style={styles.root}>
             {notices}
             <View style={styles.row}>
                 {rail}
@@ -419,6 +420,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
             </View>
             <WalkthroughKeyboardShortcuts
                 enabled={props.active !== false && reading.stops.length > 0}
+                scopeRef={rootRef}
                 onMove={move}
                 onToggleReviewed={toggleCurrent}
                 onAsk={askCurrent}
