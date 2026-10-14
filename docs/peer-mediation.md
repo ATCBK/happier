@@ -604,6 +604,10 @@ that origin; native direct access does not weaken this server-origin boundary.
 `hostOriginAvailable` is derived from the actual HTTPS/domain resolver; `pathModeAvailable` is false.
 One-use URL admissions have a short expiry. An exchanged viewer cookie has no elapsed-time
 expiry: the server authorizes it against the live registration until that resource is unregistered.
+Every server HTTP admission and WebSocket upgrade also checks the current Home preview feature
+decision before exchange or forwarding. Disabling it refuses fresh admissions and subsequent
+cookie-authenticated requests without retiring registrations. A failed Home configuration read
+during an upgrade closes that request's socket; its rejection never escapes the preview ingress.
 Private and public viewer cookies share `app/local/services/viewerCookie.ts`: host-only,
 HttpOnly, Secure, `SameSite=None; Partitioned`, with each route's existing path scope.
 The cross-site Browser frame can retain its exchanged admission, while browsers supporting
