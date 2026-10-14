@@ -134,8 +134,11 @@ describe("pendingMessageService", () => {
         storagePolicyEnv.restore();
 
         currentTx = {
-            // Database adapter for the canonical Session row lock.
-            $queryRawUnsafe: vi.fn(async () => [{ id: 's1' }]),
+            // Database boundary: Account and Session locks return their bound row ids.
+            $queryRawUnsafe: vi.fn(async (_query: string, ...parameters: unknown[]) => {
+                const ids: unknown[] = Array.isArray(parameters[0]) ? parameters[0] : parameters;
+                return ids.filter((id): id is string => typeof id === 'string').map(id => ({ id }));
+            }),
             session: {
                 findUnique: vi.fn(async () => createPendingSessionFixture()),
                 findMany: vi.fn(async () => [{ ...createPendingSessionFixture(), account: { status: 'active' } }]),
@@ -1027,6 +1030,10 @@ describe("pendingMessageService", () => {
             sessionId: "s1",
             localId: "original",
         });
+        if (!result.ok) {
+            // Surface database-boundary callback failures that the operation maps to "internal".
+            await transactionHarness.inTx.mock.results.at(-1)?.value;
+        }
         expect(result).toMatchObject({ ok: true, didWrite: true });
 
         expect(currentTx.sessionPendingMessage.create).toHaveBeenCalledWith(expect.objectContaining({

@@ -15,16 +15,12 @@ import {
     type Tx,
 } from "@/storage/inTx";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
-import {
-    decideRuntimeIdleAdmission,
-    readSessionRuntimeActivityProjectionForPendingDrain,
-    isStoredContentKindAllowedForSessionByStoragePolicy,
-    normalizePendingRequestedActionV1,
-    pendingDeliveryStatusV1ToPersistedFields,
-    type SessionMessageRole,
-    type SessionInputAdmissionReceiptV1,
-    type SessionStoredContentKind,
-} from "@happier-dev/protocol";
+import { decideRuntimeIdleAdmission, readSessionRuntimeActivityProjectionForPendingDrain } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { isStoredContentKindAllowedForSessionByStoragePolicy, type SessionStoredContentKind } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
+import { normalizePendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { pendingDeliveryStatusV1ToPersistedFields } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
+import { type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
+import { type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { didSessionActivityBadgeSignalChange } from "@/app/activity/accountActivityBadge";
 import { SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { resolveSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
@@ -330,7 +326,7 @@ async function resolvePendingProviderRejoinInTx(params: {
             localId: row.localId,
             messageRole,
             content,
-            requestedAction: normalizePendingRequestedActionV1(row.requestedAction),
+            requestedAction: normalizePendingRequestedActionV1(row.requestedAction, 'stored'),
             providerAction: row.providerAction,
             inputAdmissionReceipt: readPendingInputAdmissionReceipt(row.inputAdmissionReceipt),
             createdAt: row.createdAt,
@@ -610,7 +606,7 @@ async function materializePendingTargetInTx(
             const providerAction = "localId" in invocationSelection
                 ? invocationSelection.providerAction
                 : "send";
-            const requestedAction = normalizePendingRequestedActionV1(nextPending.requestedAction);
+            const requestedAction = normalizePendingRequestedActionV1(nextPending.requestedAction, 'stored');
             const isActivityBlindAction = requestedAction.kind === "send_now"
                 || requestedAction.kind === "steer_now"
                 || (

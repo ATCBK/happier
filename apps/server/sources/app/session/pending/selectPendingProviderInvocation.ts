@@ -39,7 +39,7 @@ function selectExactAction(
     if (row.deliveryState !== null && row.deliveryState !== undefined) return null;
     let action: PendingRequestedActionV1;
     try {
-        action = normalizePendingRequestedActionV1(row.requestedAction);
+        action = normalizePendingRequestedActionV1(row.requestedAction, 'stored');
     } catch {
         return null;
     }
@@ -85,7 +85,7 @@ export function selectPendingProviderInvocation(params: Readonly<{
     if (candidate.deliveryState !== null && candidate.deliveryState !== undefined) {
         return { deferredReason: 'waiting_for_predecessor' };
     }
-    const action = normalizePendingRequestedActionV1(candidate.requestedAction);
+    const action = normalizePendingRequestedActionV1(candidate.requestedAction, 'stored');
     if (action.kind === 'reset_start') return { deferredReason: 'waiting_for_quota_reset' };
 
     if (params.foregroundState !== 'ready') {

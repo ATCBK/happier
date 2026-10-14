@@ -1,12 +1,9 @@
 import { isDeepStrictEqual } from 'node:util';
-import {
-    PendingRequestedActionV1Schema,
-    SessionInputAdmissionReceiptV1Schema,
-    ManagedWakeTargetV1Schema, createStoredReadSchema,
-    type PendingActivationAuthorizationV1,
-    type PendingActivationFailureCodeV1,
-    type SessionInputAdmissionReceiptV1,
-} from '@happier-dev/protocol';
+import { PendingRequestedActionV1StoredSchema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { SessionInputAdmissionReceiptV1Schema, type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { type PendingActivationAuthorizationV1, type PendingActivationFailureCodeV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import type { SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
@@ -166,7 +163,7 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
         where: { sessionId_localId: { sessionId: params.sessionId, localId: params.requestId }, targetExecutionRunId: null },
         select: ACTIVATION_ELIGIBILITY_SELECT,
     });
-    const requestedAction = PendingRequestedActionV1Schema.safeParse(eligible?.requestedAction);
+    const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(eligible?.requestedAction);
     const inputAdmissionReceipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(
         eligible?.inputAdmissionReceipt,
     );
