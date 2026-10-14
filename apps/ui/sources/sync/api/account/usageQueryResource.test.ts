@@ -812,7 +812,6 @@ describe('usage query captured Resource adapter', () => {
         const content = entry.getSnapshot().value;
         return content && decodeUsageQueryResource(content).results[0]?.quota?.[0]?.current;
       }).toEqual(snapshot);
-      pending.resolve(Response.json({ entries: [] }));
       await expect.poll(() => {
         const content = entry.getSnapshot().value;
         return content && decodeUsageQueryResource(content).results[0]?.quota?.[0]?.history?.entries.length;
@@ -821,8 +820,19 @@ describe('usage query captured Resource adapter', () => {
       expect(entry.getSnapshot().pending).toBe('initial');
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]).toMatchObject({ accounting: value,
         quota: [{ source, current: snapshot, history: { nextCursor: { id: 'first-use-page' } }, unusedCapacity: { historyStatus: 'partial' } }] });
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
+        .toContainEqual(expect.objectContaining({ source: expect.stringMatching(/^quota:/), status: 'pending' }));
       later.resolve(Response.json({ entries: [], nextCursor: null }));
+      // Capacity history has answered even while the independent Pending-work
+      // facet is still outstanding. It cannot keep every account "Still reading".
+      await expect.poll(() => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources
+        .find(source => source.source.startsWith('quota:'))?.status).toBe('available');
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
+        .toContainEqual(expect.objectContaining({ source: 'quota', status: 'available' }));
+      pending.resolve(Response.json({ entries: [] }));
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
+        .toContainEqual(expect.objectContaining({ source: expect.stringMatching(/^quota:/), status: 'available' }));
       sourceRefusal = 500;
       await entry.refresh();
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0]?.current).toEqual(snapshot);

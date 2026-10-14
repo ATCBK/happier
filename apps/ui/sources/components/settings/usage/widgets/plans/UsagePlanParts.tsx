@@ -44,7 +44,7 @@ type PlanAccountReadKind = 'failed' | 'pending' | 'partial';
 function planAccountReadKind(account: UsagePlanAccount): PlanAccountReadKind | null {
   const status = account.state.status;
   if (status === 'error') return 'failed';
-  if (status === 'pending' || status === 'not_loaded') return 'pending';
+  if (status === 'pending') return 'pending';
   if (account.read?.current && status !== 'stale') return null;
   return 'partial';
 }
@@ -65,7 +65,8 @@ export function readPlanAccountsStatement(
   if (affected.length === 0) return null;
   const kind: PlanAccountReadKind = affected.some((entry) => entry.kind === 'failed') ? 'failed'
     : affected.every((entry) => entry.kind === 'pending') ? 'pending' : 'partial';
-  const sources = affected.length === accounts.length && accounts.length > 1
+  const sources = kind === 'pending' ? t('connectedServices.purposeTargets.poolAccounts', { count: affected.length })
+    : affected.length === accounts.length && accounts.length > 1
     ? usageSourceTitle('quota')
     : affected.map((entry) => nameOf(entry.account).title).join(', ');
   const times = affected
@@ -81,6 +82,20 @@ export function readPlanAccountsStatement(
 }
 
 /**
+ * The Usage page names partial and pending reads once in its header and Sources, so a body keeps only
+ * failures. A pending read of a body with nothing else to draw holds the body's room with the first-load
+ * skeleton instead: the header never sits over a blank card.
+ */
+export function planAccountStatesMode(
+  kind: PlanAccountReadKind,
+  pageHasDetail: boolean,
+  replacesContent: boolean,
+): 'line' | 'reading' | 'hidden' {
+  if (usageCoverageLineMode([{ status: kind === 'failed' ? 'error' : kind }], pageHasDetail) !== 'hidden') return 'line';
+  return kind === 'pending' && replacesContent ? 'reading' : 'hidden';
+}
+
+/**
  * A plan body's read state, said once: one quiet line under the content with one Retry, for every
  * account whose read is not current, else the body's source coverage. Columns keep their data or a calm
  * placeholder; none repeats the state.
@@ -91,14 +106,17 @@ export function UsagePlanAccountStates(props: Readonly<{
   slice: UsageQueryResultSlice;
   testID: string;
   onRetry(): void | Promise<unknown>;
+  /** True when nothing else is drawn in the body: a pending read then holds the body's room. */
+  replacesContent?: boolean;
 }>) {
   const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
   const statement = readPlanAccountsStatement(props.accounts, props.nameOf);
   if (!statement) {
     return <UsageCoverageLine slice={props.slice} sources={['quota']} onRetry={props.onRetry} testID={`${props.testID}.coverage`} />;
   }
-  // The Usage page names partial and pending reads once in its header and Sources; a body keeps failures.
-  if (usageCoverageLineMode([{ status: statement.kind === 'failed' ? 'error' : statement.kind }], pageHasDetail) === 'hidden') return null;
+  const mode = planAccountStatesMode(statement.kind, pageHasDetail, props.replacesContent === true);
+  if (mode === 'reading') return <UsageBodyReading testID={`${props.testID}.loading`} />;
+  if (mode === 'hidden') return null;
   const pending = statement.kind === 'pending';
   return <SurfaceFreshnessLine testID={props.testID} asOf={statement.asOf} reason={statement.reason} busy={pending}
     tone={statement.kind === 'failed' ? 'warning' : 'neutral'}

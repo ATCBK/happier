@@ -292,6 +292,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
         {/* The legend explains pace marks; without any pace it explains nothing. */}
         {rows.some(row => row.window.pace) ? <UsagePlanLegend testID={`${props.testID}.legend`} parts={[t('usage.board.plans.legendEvenPace'), t('usage.board.plans.legendHatched')]} /> : null}
         <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} slice={props.slice} onRetry={props.model.refresh}
+          replacesContent={!rows.length && !unreported.length && !depletingNote}
           testID={`${props.testID}.state`} />
       </View>
     );

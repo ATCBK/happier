@@ -15,7 +15,7 @@ vi.mock('react-native-unistyles', async () =>
   (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock(),
 );
 
-import { formatPlanMoment, readPlanAccountsStatement } from './UsagePlanParts';
+import { formatPlanMoment, planAccountStatesMode, readPlanAccountsStatement } from './UsagePlanParts';
 import type { UsagePlanAccount } from './usagePlansModel';
 
 const previousLanguage = getPreferredLanguage();
@@ -90,5 +90,25 @@ describe('readPlanAccountsStatement', () => {
 
   it('says nothing when every account read is current', () => {
     expect(readPlanAccountsStatement([account('a', 'available', true), account('b', 'partial', true)], nameOf)).toBeNull();
+  });
+
+  it('counts outstanding accounts, clears settled reads and never calls an unissued read pending', () => {
+    const accounts = [account('a', 'pending', true), account('b', 'pending', true), account('c', 'available', true)];
+    expect(readPlanAccountsStatement(accounts, nameOf)).toMatchObject({ kind: 'pending', accounts: 2 });
+    expect(readPlanAccountsStatement(accounts, nameOf)?.reason).toContain('2 accounts');
+    expect(readPlanAccountsStatement(accounts.map(entry => ({ ...entry, state: { ...entry.state, status: 'available' } })), nameOf)).toBeNull();
+    expect(readPlanAccountsStatement([account('unissued', 'not_loaded', false)], nameOf)?.kind).toBe('partial');
+  });
+});
+
+describe('planAccountStatesMode', () => {
+  it('holds a body with nothing to draw on the first-load skeleton while the page header names the pending read', () => {
+    expect(planAccountStatesMode('pending', true, true)).toBe('reading');
+    // Beside other content the header's mention is enough, and a host without the header keeps the line.
+    expect(planAccountStatesMode('pending', true, false)).toBe('hidden');
+    expect(planAccountStatesMode('pending', false, true)).toBe('line');
+  });
+  it('keeps a failed read as its line with Retry, never a skeleton', () => {
+    expect(planAccountStatesMode('failed', true, true)).toBe('line');
   });
 });

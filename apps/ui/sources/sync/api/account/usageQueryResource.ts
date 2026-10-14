@@ -259,17 +259,22 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
         const clocks = value.flatMap(row => row.current ? [row.current.fetchedAtMs] : []);
         // A failure answering first cannot turn the still-unanswered accounts
         // into an empty/insufficient allowance result.
-        const aggregateStatus = value.length ? status : sources.some(source => source.status === 'pending') ? 'pending'
+        const aggregateStatus = value.length ? sources.every(source => source.status === 'available') ? 'available' : status
+            : sources.some(source => source.status === 'pending') ? 'pending'
             : failures.size ? 'error' : status;
         return { status: aggregateStatus, sources: [...sources], ...(value.length ? { value } : {}), ...(clocks.length ? { asOfMs: Math.min(...clocks) } : {}),
             ...(failures.size && !value.length ? { errorCode: [...failures.values()][0] } : {}) };
     };
-    const publishProgress = (index: number, value: ConnectedServiceQuotaGetResultV1 | null): void => {
+    const publishProgress = (index: number, value: ConnectedServiceQuotaGetResultV1 | null, settled = false): void => {
         requireCurrent(context, signal);
         progressValues[index] = value;
         const failure = failures.get(index);
         sources[index] = { source: sources[index]!.source,
-            status: failure ? value ? 'stale' : 'error' : value?.history?.nextCursor === null ? 'available' : 'partial',
+            // Admitted current/history facts remain usable during the read.
+            // Incompleteness alone cannot say whether its producer is still running.
+            // Allowance/history has answered at its last page, independently of
+            // the Pending-work and price facets that may still be reading.
+            status: failure ? value ? 'stale' : 'error' : settled || value?.history?.nextCursor === null ? 'available' : 'pending',
             ...(value?.current ? { asOfMs: value.current.fetchedAtMs } : {}),
             ...(failure ? { errorCode: failure } : {}),
         };
@@ -302,7 +307,7 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
             try {
                 const accepted = await read({ source, history: { range, pageSize: 100 } });
                 acceptedBySource.set(index, accepted);
-                publishProgress(index, accepted);
+                publishProgress(index, accepted, true);
             } catch (error) { failSource(index, error); }
         })), { readAllHistory: { onProgress: value => {
             const index = sourceIndices.get(createCanonicalJsonSigningInput(value.source));
