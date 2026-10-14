@@ -1,6 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { join } from 'node:path';
 import { PluginError, isPluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { createSecureTempDirectorySync, writeAtomicFile } from '@happier-dev/plugin-sdk/fs';
 import type { ComposerAttachmentRuntime, ComposerAttachmentResolveRequestV1, ComposerAttachmentResolveResultV1 } from '@happier-dev/plugin-sdk';
 import type { SessionHandle, SessionSendAttachment } from '@happier-dev/plugin-sdk/sessions';
 import {
@@ -61,7 +61,8 @@ function attachmentContext(value: ChannelFileValueV1, input: Readonly<{ text?: s
   return `<happier_channel_attachment trust="untrusted" provenance="${value.contentProvenance}">\nName: ${quoted(value.descriptor.name)}\nMedia type: ${quoted(value.descriptor.mediaType)}${input.filePath === undefined ? '' : `\nFile: ${quoted(input.filePath)}`}${input.fileUnavailable ? '\nFile availability: Attachment not available on this machine' : ''}${input.text === undefined ? '' : `\nText: ${quoted(input.text)}`}\n</happier_channel_attachment>`;
 }
 
-async function fetchChannelFile(value: ChannelFileValueV1, connection: Awaited<ReturnType<typeof readAttachmentConnection>>, context: PluginInvocationContext): Promise<string> {
+async function fetchChannelFiles(values: readonly ChannelFileValueV1[], connection: Awaited<ReturnType<typeof readAttachmentConnection>>, context: PluginInvocationContext): Promise<ReadonlyMap<string, Uint8Array>> {
+  const value = values[0]!;
   const provider = await readCurrentProviderContributionForPersistedSelection({
     context: { targetedContributions: context.services.targetedContributions, signal: context.signal },
     providerPluginId: connection.providerPluginId,
@@ -75,7 +76,7 @@ async function fetchChannelFile(value: ChannelFileValueV1, connection: Awaited<R
     providerConfigVersion: connection.payload.providerConfigVersion,
     providerConfig: connection.payload.providerConfig,
     credentialRef: connection.payload.credentialRef,
-    messageId: value.messageId, attachmentId: value.descriptor.attachmentId,
+    messageId: value.messageId, attachmentIds: [...new Set(values.map(file => file.descriptor.attachmentId))],
   });
   const fetched = ConversationAttachmentFetchResultV1Schema.parse((await context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
     operation, fetchInput, { signal: context.signal, expectedExecutionOrigin: connection.transportOrigin },
@@ -85,26 +86,47 @@ async function fetchChannelFile(value: ChannelFileValueV1, connection: Awaited<R
     retryable: fetched.reason === 'network' || fetched.reason === 'rateLimited',
   });
   await readAttachmentConnection(value, context);
-  if (!isAbsolute(fetched.path)) throw new PluginError({
-    code: 'plugin_session_attachment_source_invalid', message: 'Attachment resolution requires a provider-local absolute file path',
+  const files = new Map(fetched.attachments.map(file => [file.attachmentId, Buffer.from(file.base64, 'base64')]));
+  if (values.some(file => !files.has(file.descriptor.attachmentId))) throw new PluginError({
+    code: 'channels_attachment_fetch_unavailable', message: 'The provider did not return the requested attachment batch',
   });
-  return fetched.path;
+  return files;
 }
 
-/** Inline text is ordinary Session input, prepared once where the provider file lives. */
+/** Sharing lasts only for this consuming operation, never across queued/replayed inputs. */
+function operationFiles(values: readonly ChannelFileValueV1[], context: PluginInvocationContext) {
+  const key = (value: ChannelFileValueV1) => JSON.stringify([value.connectionId, value.connectionAuthorityEpoch, value.messageId]);
+  const pending = new Map<string, ReturnType<typeof fetchChannelFiles>>();
+  return async (value: ChannelFileValueV1, connection: Awaited<ReturnType<typeof readAttachmentConnection>>) => {
+    const identity = key(value);
+    let fetched = pending.get(identity);
+    if (!fetched) {
+      fetched = fetchChannelFiles(values.filter(file => key(file) === identity), connection, context);
+      pending.set(identity, fetched);
+    }
+    return (await fetched).get(value.descriptor.attachmentId)!;
+  };
+}
+
+/** Remote Sessions keep inline text at admission; local dispatch consumes bytes and text together. */
 export async function prepareChannelFileSessionInput(input: Readonly<{
   text: string;
   attachments: readonly SessionSendAttachment[];
+  sessionId: string;
 }>, context: PluginInvocationContext): Promise<Readonly<{ text: string }>> {
   const sections = [input.text];
-  for (const attachment of input.attachments) {
+  const values = input.attachments.map(attachment => ChannelFileValueV1Schema.parse(attachment.value.value))
+    .filter(value => attachmentMime(value.descriptor.mediaType).startsWith('text/') || attachmentMime(value.descriptor.mediaType) === 'application/pdf');
+  const fetch = operationFiles(values, context);
+  const session = await context.services.sessions.get(input.sessionId, { signal: context.signal });
+  const summary = await session?.summary({ signal: context.signal });
+  for (const value of values) {
     context.signal.throwIfAborted();
-    const value = ChannelFileValueV1Schema.parse(attachment.value.value);
     const mime = attachmentMime(value.descriptor.mediaType);
     if (!mime.startsWith('text/') && mime !== 'application/pdf') continue;
     const connection = await readAttachmentConnection(value, context);
-    const path = await fetchChannelFile(value, connection, context);
-    const text = await inlineText(await readFile(path, { signal: context.signal }), value.descriptor.mediaType);
+    if (summary?.machineId === connection.transportOrigin.materializationRef.machineId) continue;
+    const text = await inlineText(await fetch(value, connection), value.descriptor.mediaType);
     await readAttachmentConnection(value, context);
     context.signal.throwIfAborted();
     if (text !== undefined) sections.push(attachmentContext(value, { text }));
@@ -120,6 +142,7 @@ async function resolveChannelFiles(
     code: 'channels_attachment_session_required', message: 'Attachment dispatch requires its host-stamped Session',
   });
   const results: ComposerAttachmentResolveResultV1['attachments'][number][] = [];
+  const fetch = operationFiles(request.attachments.map(attachment => ChannelFileValueV1Schema.parse(attachment.value)), context);
   for (const attachment of request.attachments) {
     try {
       context.signal.throwIfAborted();
@@ -130,17 +153,29 @@ async function resolveChannelFiles(
       const summary = await session.summary({ signal: context.signal });
       const sameMachine = summary.machineId === connection.transportOrigin.materializationRef.machineId;
       let file: Awaited<ReturnType<SessionHandle['materializeAttachment']>> | undefined;
+      let text: string | undefined;
       if (sameMachine) {
-        const path = await fetchChannelFile(value, connection, context);
-        file = await session.materializeAttachment({
-          sourcePath: path, name: value.descriptor.name, messageLocalId: request.localId,
-        }, { signal: context.signal });
+        const bytes = await fetch(value, connection);
+        text = await inlineText(bytes, value.descriptor.mediaType);
+        await readAttachmentConnection(value, context);
+        context.signal.throwIfAborted();
+        const directory = createSecureTempDirectorySync({ prefix: 'channel-attachments' });
+        try {
+          const path = join(directory.path, 'attachment');
+          await writeAtomicFile({ path, contents: bytes, mode: 0o600 });
+          context.signal.throwIfAborted();
+          file = await session.materializeAttachment({
+            sourcePath: path, name: value.descriptor.name, messageLocalId: request.localId,
+          }, { signal: context.signal });
+        } finally {
+          directory.cleanup();
+        }
       }
       context.signal.throwIfAborted();
       results.push({
         instanceId: attachment.instanceId, status: 'ready',
         ...(!file ? { data: { file: { kind: 'unavailable', reason: 'attachmentNotAvailableOnThisMachine' } } } : {}),
-        context: attachmentContext(value, { filePath: file?.path, fileUnavailable: !file }),
+        context: attachmentContext(value, { text, filePath: file?.path, fileUnavailable: !file }),
       });
     } catch (error) {
       rethrowConversationProviderLifecycleFailureV1(error, context.signal);

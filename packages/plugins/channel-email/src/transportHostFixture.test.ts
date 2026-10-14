@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { readFile, stat } from 'node:fs/promises';
 import { simpleParser } from 'mailparser';
 import { assertEmailTransportContributionV1 } from '@happier-dev/email-transports-protocol/testing/v1';
 import { definePlugin, type JsonValue, type PluginInvocationContext, type PluginServices, type TargetedContributionPointRef, type TargetedContributionSnapshot } from '@happier-dev/plugin-sdk';
@@ -289,7 +288,6 @@ describe('email core with an external contributed raw transport', () => {
 
   it('fetches stable nested attachment ids after signature image filtering without trusting embedded authentication headers', async () => {
     const f = await fixture();
-    let stagedPath: string | undefined;
     const auth = 'Authentication-Results: mx.example.com; dmarc=pass header.from=example.com';
     const inner = ['From: client@outside.com', 'Message-ID: <inner@outside.com>', auth, 'Subject: Lead',
       'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary=inner', '', '--inner', 'Content-Type: text/html', '',
@@ -325,19 +323,16 @@ describe('email core with an external contributed raw transport', () => {
       const attachment = attachments.find(file => file.name.endsWith('lead.txt'))!;
       expect(attachment.attachmentId).toContain('/');
       const fetched = ConversationAttachmentFetchResultV1Schema.parse(await f.invoke(ids.attachmentFetch, {
-        ...connection, messageId: '<forward@example.com>', attachmentId: attachment.attachmentId,
+        ...connection, messageId: '<forward@example.com>', attachmentIds: [attachment.attachmentId],
       }));
       expect(fetched.kind).toBe('fetched');
-      if (fetched.kind !== 'fetched') throw new Error('Expected a protected attachment file');
-      stagedPath = fetched.path;
-      expect(await readFile(stagedPath, 'utf8')).toBe('nested lead file');
-      expect(stagedPath).not.toContain('lead.txt');
-      if (process.platform !== 'win32') expect((await stat(stagedPath)).mode & 0o777).toBe(0o600);
+      if (fetched.kind !== 'fetched') throw new Error('Expected an attachment batch');
+      expect(Buffer.from(fetched.attachments[0]!.base64, 'base64').toString()).toBe('nested lead file');
       f.replaceFetched(outer);
-      await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<different@example.com>', attachmentId: attachment.attachmentId }))
+      await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<different@example.com>', attachmentIds: [attachment.attachmentId] }))
         .resolves.toMatchObject({ kind: 'notReady', reason: 'permissionMissing' });
       f.replaceFetched(Buffer.from(outer.toString().replace('dmarc=pass', 'dmarc=fail')));
-      await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<forward@example.com>', attachmentId: attachment.attachmentId }))
+      await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<forward@example.com>', attachmentIds: [attachment.attachmentId] }))
         .resolves.toMatchObject({ kind: 'notReady', reason: 'permissionMissing' });
       const untrusted = Buffer.from(outer.toString().replace(`${auth}\r\n`, '').replace('<forward@example.com>', '<untrusted-forward@example.com>'));
       f.setMessages([['untrusted-ref', untrusted]]);
@@ -346,10 +341,9 @@ describe('email core with an external contributed raw transport', () => {
       await expect(f.invoke(ids.observationsPoll, pollInput)).resolves.toMatchObject({ observations: [{ observation: {
         observation: { actor: { kind: 'unknown', principalId: null } },
       } }] });
-      await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<untrusted-forward@example.com>', attachmentId: attachment.attachmentId }))
+      await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<untrusted-forward@example.com>', attachmentIds: [attachment.attachmentId] }))
         .resolves.toMatchObject({ kind: 'notReady', reason: 'permissionMissing' });
     } finally { await f.dispose(); }
-    if (stagedPath) await expect(stat(stagedPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('keeps reconciliation unknown without findSent and rejects original handles from a retired contributor', async () => {

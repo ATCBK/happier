@@ -59,6 +59,6 @@ describe('Email UI browser import boundary', () => {
 
   it('detects Node runtime dependencies through the actual daemon manifest graph', async () => {
     const { forbiddenImports } = await browserGraph([resolve(pluginRoot, 'manifest.ts')], true);
-    expect(forbiddenImports).toEqual(expect.arrayContaining(['node:crypto', 'node:path', 'imapflow', 'nodemailer', 'mailparser']));
+    expect(forbiddenImports).toEqual(expect.arrayContaining(['node:crypto', 'imapflow', 'nodemailer', 'mailparser']));
   });
 });

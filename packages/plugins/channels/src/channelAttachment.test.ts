@@ -2,7 +2,7 @@ import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk
 import { definePlugin, PluginError, type PluginServices } from '@happier-dev/plugin-sdk';
 import { ConversationObservationV1Schema, ConversationProvidersContributionProtocolV1, assertConversationChannelsCoreCallerV1 } from '@happier-dev/channels-protocol/v1';
 import { createConversationProviderSetupResultV1Fixture, assertConversationProviderContributionV1 } from '@happier-dev/channels-protocol/testing/v1';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -12,30 +12,19 @@ import { ChannelFileValueV1Schema, channelFileSessionAttachments } from './chann
 import { prepareChannelFileSessionInput } from './channelAttachmentRuntime.js';
 import { createCurrentConversationConnectionFixture } from './testkit/currentConnectionFixture.js';
 import { channelsTargetedContributionServices } from './testkit/operationOnlyTargetedContributionsFixture.js';
+import { textPdf } from './testkit/textPdf.js';
 
-function textPdf(text: string): Uint8Array {
-  const stream = `BT /F1 12 Tf 20 50 Td (${text}) Tj ET`;
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
-  ];
-  let pdf = '%PDF-1.4\n';
-  const offsets = [0];
-  objects.forEach((object, index) => { offsets.push(pdf.length); pdf += `${index + 1} 0 obj\n${object}\nendobj\n`; });
-  const xref = pdf.length;
-  pdf += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return new TextEncoder().encode(pdf);
-}
-
-async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType: string; machineId?: string; authorityEpoch?: number; fetchErrorCode?: string; omitAttachmentRegistration?: boolean }>) {
+async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType: string; machineId?: string; authorityEpoch?: number; fetchErrorCode?: string; omitAttachmentRegistration?: boolean;
+  files?: readonly Readonly<{ bytes: Uint8Array; mediaType: string }>[]; operation?: 'repeat' | 'concurrent' | 'cancel' | 'fail';
+}>) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-channel-file-'));
-  const sourcePath = join(directory, 'provider-file');
   const materializedPath = join(directory, 'session-file');
-  await writeFile(sourcePath, input.bytes);
+  const files = input.files ?? [input];
+  const stagedPaths: string[] = [];
+  const deliveredBytes: Buffer[] = [];
+  const controller = new AbortController();
   let dispatchStarted = false;
+  let fetchCount = 0;
   const roles = ConversationProvidersContributionProtocolV1.operations;
   const providerDefinition = definePlugin({
     id: 'test.channel.files', version: '0.0.0',
@@ -51,11 +40,14 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
         dangerLevel: roles.messageDeliver.declaration.dangerLevel, run: async () => ({ kind: 'notDelivered', reason: 'unsupported' }) },
       file: { title: 'Fetch file', scopes: ['global'], inputSchema: roles.attachmentFetch.declaration.input.schema.jsonSchema,
         resultSchema: roles.attachmentFetch.declaration.resultSchema.jsonSchema, surfaces: roles.attachmentFetch.declaration.surfaces,
-        dangerLevel: roles.attachmentFetch.declaration.dangerLevel, run: async (_request, context) => {
+        dangerLevel: roles.attachmentFetch.declaration.dangerLevel, run: async (request, context) => {
+          fetchCount += 1;
           assertConversationChannelsCoreCallerV1(context);
           if (dispatchStarted && input.machineId === 'machine-2') throw new PluginError({ code: 'plugin_action_execution_origin_mismatch', message: 'The provider-local file is on the other machine.' });
           if (input.fetchErrorCode) throw new PluginError({ code: input.fetchErrorCode, message: 'The provider generation retired.' });
-          return { kind: 'fetched', path: sourcePath };
+          const { attachmentIds } = roles.attachmentFetch.declaration.input.schema.parse(request);
+          return { kind: 'fetched', attachments: attachmentIds.map(attachmentId => ({ attachmentId,
+            base64: Buffer.from(files[Number(attachmentId.slice(5)) - 1]!.bytes).toString('base64') })) };
         } },
     },
     contributesTo: { 'happier.channels': { providers: { files: ConversationProvidersContributionProtocolV1.contribute({ operations: {
@@ -87,22 +79,25 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
           endpoint: { kind: 'direct', audience: 'direct', id: 'mailbox' },
           actor: { principalId: 'sender', kind: 'human', isIntegrationSelf: false },
           message: { id: 'message-1', providerTimestamp: 1, text: 'Original inline mail', addressingEvidence: 'none',
-            attachments: [{ attachmentId: 'part-1', name: 'lead', mediaType: input.mediaType, byteLength: input.bytes.byteLength }],
+            attachments: files.map((file, index) => ({ attachmentId: `part-${index + 1}`, name: `lead-${index}`, mediaType: file.mediaType, byteLength: file.bytes.byteLength })),
             contentProvenance: 'forwarded' },
         });
         const attachments = channelFileSessionAttachments({
           connectionId: connection.id, connectionAuthorityEpoch: input.authorityEpoch ?? connection.payload.authorityEpoch, observation,
         });
         const request = {
-          sessionId: 'session-1', localId: 'input-1', attachments: attachments.map(attachment => ({
-            instanceId: 'file-1', key: attachment.value.key, value: ChannelFileValueV1Schema.parse(attachment.value.value),
+          sessionId: 'session-1', localId: 'input-1', attachments: attachments.map((attachment, index) => ({
+            instanceId: `file-${index + 1}`, key: attachment.value.key, value: ChannelFileValueV1Schema.parse(attachment.value.value),
           })),
         };
         const prepared = await prepareChannelFileSessionInput({
-          text: observation.message.text, attachments,
+          text: observation.message.text, attachments, sessionId: 'session-1',
         }, context);
         dispatchStarted = true;
-        const result = await resolve(request, context);
+        const result = input.operation === 'concurrent'
+          ? (await Promise.all([resolve(request, context), resolve(request, context)]))[0]!
+          : await resolve(request, context);
+        if (input.operation === 'repeat') await resolve(request, context);
         return { ...result, inputText: prepared.text };
       } } },
   });
@@ -113,7 +108,12 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
     sessions: { get: async () => ({
       summary: async () => ({ id: 'session-1', machineId: input.machineId ?? 'machine-1' }),
       materializeAttachment: async (request: { sourcePath: string }) => {
+        stagedPaths.push(request.sourcePath);
+        if (process.platform !== 'win32') expect((await stat(request.sourcePath)).mode & 0o777).toBe(0o600);
         const bytes = await readFile(request.sourcePath);
+        if (input.operation === 'cancel') { controller.abort(); controller.signal.throwIfAborted(); }
+        if (input.operation === 'fail') throw new PluginError({ code: 'fixture_transfer_failed', message: 'Transfer failed', retryable: true });
+        deliveredBytes.push(bytes);
         await writeFile(materializedPath, bytes);
         return { path: materializedPath, bytes };
       },
@@ -137,12 +137,13 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
     };
   } }, services,
     targetedContributionContributors: [provider] });
-    const result = await target.invokeAction('resolve', {}, { surface: 'plugin', sessionId: 'session-1', services: channelsTargetedContributionServices(target) });
-    return { result, fileBytes: await readFile(materializedPath).catch(() => null), activationError: null };
+    const result = await target.invokeAction('resolve', {}, { surface: 'plugin', sessionId: 'session-1', signal: controller.signal, services: channelsTargetedContributionServices(target) });
+    return { result, fileBytes: await readFile(materializedPath).catch(() => null), activationError: null, fetchCount, deliveredBytes };
   } catch (error) {
     if (!input.omitAttachmentRegistration) throw error;
     return { result: null, fileBytes: await readFile(materializedPath).catch(() => null), activationError: error };
   } finally {
+    for (const path of stagedPaths) await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
     await target?.dispose();
     await provider.dispose();
     await rm(directory, { recursive: true, force: true });
@@ -163,18 +164,17 @@ describe('Channels file attachment', () => {
     const { result, fileBytes } = await resolveFixtureFile({ bytes, mediaType: 'text/plain' });
     expect(fileBytes).toEqual(Buffer.from(bytes));
     expect(result).toMatchObject({ attachments: [{ status: 'ready', context: expect.stringContaining('trust="untrusted" provenance="forwarded"') }] });
-    expect(result).toMatchObject({ inputText: expect.stringContaining('\\u003c/happier_channel_attachment\\u003e') });
-    expect(result).toMatchObject({ inputText: expect.stringContaining('Furniture lead') });
-    expect(result).not.toMatchObject({ attachments: [{ context: expect.stringContaining('Text:') }] });
+    expect(result).toMatchObject({ attachments: [{ context: expect.stringContaining('\\u003c/happier_channel_attachment\\u003e') }] });
+    expect(result).toMatchObject({ attachments: [{ context: expect.stringContaining('Furniture lead') }] });
     expect(JSON.stringify(result).length).toBeGreaterThan(16 * 1024);
   });
 
   it('extracts the real PDF text layer and still delivers the original file', async () => {
     const bytes = textPdf('Furniture lead for Batiplus');
-    const { result, fileBytes } = await resolveFixtureFile({ bytes, mediaType: 'application/pdf' });
+    const { result, fileBytes, fetchCount } = await resolveFixtureFile({ bytes, mediaType: 'application/pdf' });
     expect(fileBytes).toEqual(Buffer.from(bytes));
-    expect(result).toMatchObject({ attachments: [{ status: 'ready' }], inputText: expect.stringContaining('Furniture lead for Batiplus') });
-    expect(result).not.toMatchObject({ attachments: [{ context: expect.stringContaining('Text:') }] });
+    expect(result).toMatchObject({ attachments: [{ status: 'ready', context: expect.stringContaining('Furniture lead for Batiplus') }] });
+    expect(fetchCount).toBe(1);
   });
 
   it('preserves binary files without pretending they have a text layer', async () => {
@@ -183,6 +183,26 @@ describe('Channels file attachment', () => {
     expect(fileBytes).toEqual(Buffer.from(bytes));
     expect(result).toMatchObject({ attachments: [{ status: 'ready' }] });
     expect(JSON.stringify(result)).not.toContain('Text:');
+  });
+
+  it.each([undefined, 'repeat', 'concurrent'] as const)('shares one fetch for multiple PDFs per operation and releases staging (%s)', async operation => {
+    const files = ['First lead', 'Second lead', 'Third lead'].map(text => ({ bytes: textPdf(text), mediaType: 'application/pdf' }));
+    const { result, fetchCount, deliveredBytes } = await resolveFixtureFile({ ...files[0]!, files, operation });
+    expect(result).toMatchObject({ attachments: files.map(() => ({ status: 'ready' })) });
+    for (const text of ['First lead', 'Second lead', 'Third lead']) expect(JSON.stringify(result)).toContain(text);
+    expect(fetchCount).toBe(operation ? 2 : 1);
+    expect(deliveredBytes).toHaveLength(files.length * (operation ? 2 : 1));
+    for (const file of files) expect(deliveredBytes).toContainEqual(Buffer.from(file.bytes));
+  });
+
+  it('reclaims staging after a cancelled transfer', async () => {
+    await expect(resolveFixtureFile({ bytes: new Uint8Array([1]), mediaType: 'image/png', operation: 'cancel' })).rejects.toBeDefined();
+  });
+
+  it('reclaims staging after a failed transfer', async () => {
+    const { result, fileBytes } = await resolveFixtureFile({ bytes: new Uint8Array([1]), mediaType: 'image/png', operation: 'fail' });
+    expect(result).toMatchObject({ attachments: [{ status: 'unavailable', retryable: true }] });
+    expect(fileBytes).toBeNull();
   });
 
   it.each(['plugin_generation_retired', 'plugin_final_generation_retired'])('propagates retired execution instead of making retry work (%s)', async fetchErrorCode => {

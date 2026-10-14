@@ -4,7 +4,7 @@ import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 import { ConversationProvidersContributionProtocolV1 as providers, CONVERSATION_CORE_PLUGIN_ID_V1 } from '@happier-dev/channels-protocol/v1';
 import { EmailTransportsContributionPointV1 } from './transports.js';
 import { EMAIL_CHANNEL_PLUGIN_ID, EMAIL_CHANNEL_ACTION_IDS as ids } from './constants.js';
-import { setupEmailChannels, testEmailConnection, resolveEmailEndpoint, resolveEmailPrincipal, pollEmailObservations, deliverEmailMessage, reconcileEmailDelivery, fetchEmailAttachment, cleanupEmailAttachments, EMAIL_SETUP_INPUT_SCHEMA } from './channelActions.js';
+import { setupEmailChannels, testEmailConnection, resolveEmailEndpoint, resolveEmailPrincipal, pollEmailObservations, deliverEmailMessage, reconcileEmailDelivery, fetchEmailAttachment, EMAIL_SETUP_INPUT_SCHEMA } from './channelActions.js';
 import { EMAIL_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 import { EMAIL_SETUP_INPUT_HINTS } from './ui/setupHints.js';
 import { IMAP_SMTP_CONNECTED_ACCOUNT_ID, IMAP_SMTP_CREDENTIAL_PURPOSE,
@@ -35,7 +35,6 @@ export const emailPlugin = definePlugin({
   resources: { 'email-brand': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' } },
   ui: { translations: EMAIL_UI_TRANSLATION_BUNDLES },
   contributionPoints: { transports: EmailTransportsContributionPointV1 },
-  setup: () => cleanupEmailAttachments,
   connectedAccountDescriptors: { [IMAP_SMTP_CONNECTED_ACCOUNT_ID]: imapSmtpConnectedAccountDescriptor },
   actions: {
     ...imapSmtpActions,

@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
 import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
-import { createSecureTempDirectorySync, writeAtomicFile, type SecureTempDirectory } from '@happier-dev/plugin-sdk/fs';
 import {
   assertConversationChannelsCoreCallerV1, rethrowConversationProviderLifecycleFailureV1,
   hasCurrentConversationProviderConnectionV1,
@@ -28,14 +26,6 @@ import { composeEmail, emailDeliveryMessageId } from './email/compose.js';
 import { readEmailTransport, type EmailTransportContribution } from './transportInvocation.js';
 
 export { EMAIL_SETUP_INPUT_SCHEMA } from './config.js';
-
-let attachmentDirectory: SecureTempDirectory | undefined;
-
-/** The host disposes staging with this loaded plugin occurrence, after its operations retire. */
-export function cleanupEmailAttachments(): void {
-  attachmentDirectory?.cleanup();
-  attachmentDirectory = undefined;
-}
 
 function invalidConfiguration(diagnostic: string): ConversationProviderFailureV1 {
   return { kind: 'notReady', reason: 'invalidConfiguration', diagnostic };
@@ -269,7 +259,7 @@ export async function reconcileEmailDelivery(input: unknown, context: PluginInvo
     ...(request.endpoint.kind === 'direct' ? { endpoint: { kind: 'thread', audience: 'direct', id: messageId, parentId: config.mailbox } } : {}) };
 }
 
-/** Bytes are fetched lazily from the mailbox; only an occurrence-owned local file is staged. */
+/** Fetch and parse once for this consuming batch; no provider staging survives the call. */
 export async function fetchEmailAttachment(input: unknown, context: PluginInvocationContext): Promise<ConversationAttachmentFetchResultV1> {
   assertConversationChannelsCoreCallerV1(context);
   const request = ConversationAttachmentFetchInputV1Schema.parse(input);
@@ -284,15 +274,11 @@ export async function fetchEmailAttachment(input: unknown, context: PluginInvoca
   if (mail.messageId !== request.messageId || !trust.trusted || actor.kind !== 'human' || actor.isIntegrationSelf) {
     return { kind: 'notReady', reason: 'permissionMissing', diagnostic: 'The referenced email does not authenticate a human sender.' };
   }
-  const attachment = mail.attachments.find(file => file.attachmentId === request.attachmentId);
-  if (attachment === undefined) return { kind: 'notReady', reason: 'unsupported', diagnostic: 'The referenced attachment is unavailable.' };
+  const attachments = request.attachmentIds.map(id => mail.attachments.find(file => file.attachmentId === id));
+  if (attachments.some(file => file === undefined)) return { kind: 'notReady', reason: 'unsupported', diagnostic: 'The referenced attachment is unavailable.' };
   context.signal.throwIfAborted();
-  attachmentDirectory ??= createSecureTempDirectorySync({ prefix: 'channel-email-attachments' });
-  const filename = createHash('sha256').update(JSON.stringify([request.connectionId, request.messageId, request.attachmentId])).digest('hex');
-  const path = join(attachmentDirectory.path, filename);
-  // Existing atomic write ownership keeps concurrent fetches from exposing partial bytes;
-  // it also removes its narrowly owned partial file when publication fails.
-  await writeAtomicFile({ path, contents: attachment.bytes, mode: 0o600 });
-  context.signal.throwIfAborted();
-  return { kind: 'fetched', path };
+  return { kind: 'fetched', attachments: attachments.map(file => {
+    if (!file) throw new Error('Validated attachment is missing');
+    return { attachmentId: file.attachmentId, base64: Buffer.from(file.bytes).toString('base64') };
+  }) };
 }
