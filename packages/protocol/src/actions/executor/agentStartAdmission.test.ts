@@ -178,7 +178,8 @@ describe('canonical Action agent-start adapter', () => {
 
   it('preserves a typed ORC refusal for shared materializer admission', () => {
     expect(admitActionAgentStartV1({}, { kind: 'session_target', targetSessionId: 'target' }, null))
-      .toMatchObject({ ok: false, refusal: { code: 'target_unavailable' }, error: { errorCode: 'target_unavailable' } });
+      .toMatchObject({ ok: false, refusal: { code: 'target_unavailable', reason: 'agent_start_context_unavailable' },
+        error: { errorCode: 'target_unavailable', details: { reason: 'agent_start_context_unavailable' } } });
   });
 
   it.each([false, true])('projects frozen selection while respecting explicit native Action targets: role=%s', (overrideEngine) => {
