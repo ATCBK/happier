@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import * as React from 'react';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { renderHook, standardCleanup, flushHookEffects } from '@/dev/testkit';
+import { createDeferred, renderHook, standardCleanup, flushHookEffects } from '@/dev/testkit';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { storage } from '@/sync/domains/state/storage';
@@ -18,6 +18,8 @@ import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, rec
 import { act } from 'react-test-renderer';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { applyConnectedMetadataCatalogSnapshot } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
+import { ConnectedPresentationRecordV1Schema } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => { standardCleanup(); clearMachineRequestReachabilityForTest(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
@@ -38,10 +40,12 @@ it('changes the Usage selector when request reachability changes without a machi
 });
 
 it('refreshes the displayed Usage Resource and creates no independent quota polling demand', async () => {
+  const features = createDeferred<Response>();
   home = await serveAccountHomes({ homes: [{ key: 'plans', serverUrl: 'https://usage-plans.test', accountId: 'plans-account' }],
-    route: request => request.path === '/v1/features' ? Response.json(createRootLayoutFeaturesResponse({ features: {
+    route: request => request.path === '/v1/features' ? features.promise.then(response => response.clone()) : undefined });
+  const featureResponse = () => Response.json(createRootLayoutFeaturesResponse({ features: {
       connectedServices: { enabled: true, quotas: { enabled: true } },
-    }, capabilities: { connectedServices: { credentialDelete: { revisionGuard: true }, qualifiedAccounts: { protocolVersion: 4 } } } })) : undefined });
+    }, capabilities: { connectedServices: { credentialDelete: { revisionGuard: true }, qualifiedAccounts: { protocolVersion: 4 } } } }));
   const serverId = home.homes.plans!.id;
   publishAppliedActiveServerSnapshot({ serverId, serverUrl: home.homes.plans!.serverUrl, generation: 0 });
   const scope = { serverId, accountId: 'plans-account' };
@@ -49,9 +53,8 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
   storage.setState({ profileScope: scope, settingsScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId, connectedAccountsV4: [
     { ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
       credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [],
-      providerIdentity: { email: 'ai3@happier.dev' } },
+      displayName: 'Studio account', providerIdentity: { email: 'ai3@happier.dev' } },
   ] }) });
-  await getServerFeaturesSnapshot({ serverId, force: true });
   const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.plans!.serverUrl))!;
   const source = QualifiedConnectedServiceUsageSourceV4Schema.parse({ bindingKind: 'account', ref });
   const slice = resolveUsagePageAggregation({ queries: [normalizeUsageQuery({})], sources: [
@@ -62,10 +65,25 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
   const hook = await renderHook(() => useUsagePlans(slice, model), {
     wrapper: ({ children }) => React.createElement(InjectedAuthProvider, { credentials, children }),
   });
-  await flushHookEffects({ cycles: 20 });
-  const projected = hook.getCurrent();
-  expect(projected.nameOf(projected.projection.accounts[0]!).title).toBe('ai3@happier.dev');
-  expect(home.requests.filter(request => request.path.includes('/quotas') || request.path.includes('/provider-account-usage'))).toEqual([]);
-  await hook.getCurrent().refresh();
-  expect(refreshed).toBe(true);
+  try {
+    const cold = hook.getCurrent();
+    expect.soft(cold.nameOf(cold.projection.accounts[0]!).title).toBe('Studio account');
+    await act(async () => {
+      const presentation = ConnectedPresentationRecordV1Schema.parse({ v: 1, entries: [
+        { v: 1, subject: { kind: 'account', account: ref }, label: 'Work subscription' },
+      ] });
+      applyConnectedMetadataCatalogSnapshot(scope, {
+        presentation: { status: 'ready', revision: 1, entries: presentation.entries, diagnostics: [] },
+        acknowledgements: { status: 'ready', revision: 1, entries: [], diagnostics: [] }, disclosure: [],
+      }, true);
+    });
+    expect.soft(hook.getCurrent().nameOf(hook.getCurrent().projection.accounts[0]!).title).toBe('Work subscription');
+    await act(async () => { features.resolve(featureResponse()); await getServerFeaturesSnapshot({ serverId }); });
+    await flushHookEffects({ cycles: 20 });
+    const projected = hook.getCurrent();
+    expect(projected.nameOf(projected.projection.accounts[0]!).title).toBe('Work subscription');
+    expect(home.requests.filter(request => request.path.includes('/quotas') || request.path.includes('/provider-account-usage'))).toEqual([]);
+    await hook.getCurrent().refresh();
+    expect(refreshed).toBe(true);
+  } finally { features.resolve(featureResponse()); }
 });

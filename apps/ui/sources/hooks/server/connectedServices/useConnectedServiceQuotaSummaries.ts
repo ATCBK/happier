@@ -40,6 +40,7 @@ import {
 import type {
     ConnectedServiceQuotaProfileRefInput,
 } from '@/sync/domains/connectedServices/connectedServiceQuotaProfileRefs';
+import { normalizeConnectedServiceQuotaProfileRefs } from '@/sync/domains/connectedServices/connectedServiceQuotaProfileRefs';
 import {
     resolveConnectedServiceRegistryEntryDisplayName,
     resolveQualifiedConnectedServiceRegistryEntry,
@@ -216,7 +217,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
         connectedServicesQuotaPinnedMeterIdsByKey: settings.connectedServicesQuotaPinnedMeterIdsByKey,
         connectedServicesQuotaSummaryStrategyByKey: settings.connectedServicesQuotaSummaryStrategyByKey,
     }));
-    const labelsByKey = useConnectedMetadataCatalog(quotasEnabled ? undefined : null, selectConnectedMetadataLabels);
+    const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
     const connectedServicesRegistrySnapshot = useProjectedConnectedServicesRegistry();
     const localizePluginText = useProjectedPluginLocalizedTextResolver();
     const serverFeatures = useServerFeaturesRuntimeSnapshot({
@@ -280,22 +281,19 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
         refresh,
     } = useConnectedServiceQuotaSnapshots(quotaProfileInputs, { fetchPolicy: options?.fetchPolicy });
     const readsAccounts = (options?.fetchPolicy ?? 'poll') !== 'cache_only';
+    // Identity is already Account data; feature/transport discovery only admits
+    // quota reads. It cannot make a known account nameless before the first read.
+    const identityProfiles = React.useMemo(() => normalizeConnectedServiceQuotaProfileRefs([
+        ...profile.connectedAccountsV4.map(account => ({ ref: account.ref })),
+        ...connectedProfiles.filter(entry => entry.kind === 'legacy'),
+    ]), [profile.connectedAccountsV4, connectedProfiles]);
 
     const { summaries, accountIdentities, accountsWithoutUsage, keysWithoutLimits } = React.useMemo(() => {
-        if (!quotasEnabled) {
-            return {
-                summaries: [] as ConnectedServiceQuotaSummary[],
-                accountIdentities: [] as ConnectedServiceQuotaAccountPresentation[],
-                accountsWithoutUsage: [] as ConnectedServiceAccountWithoutUsage[],
-                keysWithoutLimits: 0,
-            };
-        }
-
         const next: ConnectedServiceQuotaSummary[] = [];
         const accountIdentities: ConnectedServiceQuotaAccountPresentation[] = [];
         const withoutUsage: ConnectedServiceAccountWithoutUsage[] = [];
         let keysWithoutLimits = 0;
-        for (const entry of connectedProfiles) {
+        for (const entry of identityProfiles) {
             const summaryService = entry.kind === 'qualified'
                 ? resolveQualifiedSummaryService({
                     ref: entry.ref,
@@ -330,6 +328,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
                 accountId: summaryService.profileId,
             });
             accountIdentities.push({ key: entry.key, ...summaryService, ...identity });
+            if (!quotasEnabled || !connectedProfiles.some(profile => profile.key === entry.key)) continue;
             const snapshot = snapshotsByKey[entry.key];
             if (!snapshot || snapshot.meters.length === 0) {
                 // In flight (or not started yet) reads as loading; a finished read without usage is
@@ -394,6 +393,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
     }, [
         connectedServicesRegistrySnapshot,
         connectedProfiles,
+        identityProfiles,
         quotasEnabled,
         localizePluginText,
         loadingByKey,
