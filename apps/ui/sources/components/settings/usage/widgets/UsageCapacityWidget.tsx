@@ -384,15 +384,20 @@ function CapacityCell(
           <UsagePlanRank rank={cell.rank} selected={cell.selected} />
         ) : null}
       </View>
-      {detail ? (
-        <Text
-          style={[styles.cellDetail, text.detail, usedUp ? styles.danger : null]}
-          // A narrow segment wraps its note ("last read 07:31") rather than cutting the time off.
-          numberOfLines={2}
-        >
-          {detail}
-        </Text>
-      ) : null}
+      {/* The caption's line is held for every account from the first frame, the one that never answers
+          included: "last read" or "used up" arrives into it, and settling never resizes the bar. */}
+      <Text
+        style={[
+          styles.cellDetail,
+          text.detail,
+          { minHeight: text.detail.lineHeight },
+          usedUp ? styles.danger : null,
+        ]}
+        // A narrow segment wraps its note ("last read 07:31") rather than cutting the time off.
+        numberOfLines={2}
+      >
+        {detail}
+      </Text>
     </View>
   );
 }

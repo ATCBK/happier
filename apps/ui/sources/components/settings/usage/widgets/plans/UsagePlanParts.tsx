@@ -132,7 +132,9 @@ export function UsagePlanAccountStates(props: Readonly<{
   const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
   const statement = readPlanAccountsStatement(props.accounts, props.nameOf);
   if (statement?.kind === 'pending' && props.pendingInHeadline) {
-    return <View style={{ minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx }} />;
+    // Holds the room the settled coverage line takes. The Usage page names coverage once in its header and
+    // draws no such line when settled, so it holds none (else the body would shrink by the line at settle).
+    return pageHasDetail ? null : <View style={{ minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx }} />;
   }
   if (!statement) {
     return <UsageCoverageLine slice={props.slice} sources={['quota']} onRetry={props.onRetry} testID={`${props.testID}.coverage`} />;
