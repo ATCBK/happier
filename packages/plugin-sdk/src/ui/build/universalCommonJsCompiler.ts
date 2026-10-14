@@ -5,6 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { build, version as esbuildVersion, type Metafile, type Plugin } from 'esbuild';
 
 import { PLUGIN_UI_HOST_RUNTIME_EXTERNAL_SPECIFIERS } from '@happier-dev/protocol/plugins/ui';
+import { createZodMiniEnglishLocaleCompilerPlugin } from './zodMiniLocaleCompilerPolicy.js';
 
 export class PluginUiUniversalCompilerError extends Error {
     readonly code: string;
@@ -263,7 +264,10 @@ export async function compileUniversalPluginUiCommonJs(input: Readonly<{
             metafile: true,
             write: false,
             nodePaths: [packageNodeModulesPath()],
-            plugins: [compilerPolicyPlugin(input.artifactId, input.resolveSourceImport)],
+            plugins: [
+                createZodMiniEnglishLocaleCompilerPlugin(),
+                compilerPolicyPlugin(input.artifactId, input.resolveSourceImport),
+            ],
             logLevel: 'silent',
         });
     } catch (cause) {

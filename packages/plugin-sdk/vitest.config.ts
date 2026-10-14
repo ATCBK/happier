@@ -17,6 +17,7 @@ export default defineConfig({
         { packageName: '@happier-dev/plugin-sdk', packageSourceRoot: sourceRoot('plugin-sdk') },
     ])],
     test: {
+        setupFiles: ['./src/ui/configureZodLocale.ts'],
         // Package-local publishers can hold complete `.tmp.*` copies beside
         // `src` while a prepared reader runs. Only the authored source tree
         // owns this Vitest lane; copied package trees and example builds have

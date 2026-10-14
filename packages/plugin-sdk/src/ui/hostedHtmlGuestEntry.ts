@@ -1,4 +1,5 @@
 /** @moduleRealm browser */
+import './configureZodLocale.js';
 import { installHostedWebPluginUiHostApiClientBootstrap, type HostedWebPluginUiClientRealm } from './hostedWebClientBootstrap.js';
 
 // Browser MessagePort callbacks expose richer events than the portable realm

@@ -10,6 +10,7 @@ describe('public plugin UI build contract', () => {
             'PublicToolchainCompatibilityV1Schema',
             'createPublicToolchainCompatibilityV1',
             'createPublicToolchainScaffoldBindingsV1',
+            'createZodMiniEnglishLocaleCompilerPlugin',
         ].sort());
         expect(publicBuildApi).not.toHaveProperty('buildUniversalPluginUiArtifacts');
     });

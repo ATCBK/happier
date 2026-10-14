@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runInNewContext } from 'node:vm';
+import { createRequire } from 'node:module';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -45,6 +46,22 @@ async function compileFixture(root: string, entry: string, artifactId: string) {
 }
 
 describe('compileUniversalPluginUiCommonJs', () => {
+    it('configures bundled Mini before an authored entry parses during module evaluation', async () => {
+        const { root, entry } = await fixture([
+            "import { z } from 'zod/mini';",
+            "const parsed = z.string().check(z.minLength(3)).safeParse('ab');",
+            "export const renderSurface = () => parsed.success ? '' : parsed.error.issues[0].message;",
+        ].join('\n'));
+        await mkdir(join(root, 'node_modules'), { recursive: true });
+        const zodPackageRoot = join(createRequire(import.meta.url).resolve('zod/package.json'), '..');
+        await symlink(zodPackageRoot, join(root, 'node_modules', 'zod'), process.platform === 'win32' ? 'junction' : 'dir');
+        const result = await compileFixture(root, entry, 'mini-import-time-error');
+        const module = { exports: {} as Record<string, unknown> };
+        runInNewContext(new TextDecoder().decode(result.bytes), { module, exports: module.exports });
+        if (typeof module.exports.renderSurface !== 'function') throw new Error('Missing renderSurface');
+        expect(module.exports.renderSurface()).toBe('Too small: expected string to have >=3 characters');
+    });
+
     it.each([
         ['sessions', 'AgentPermissionIntentV1Schema', '"default"', '"default"'],
         ['manifest', 'PluginContributionIdentityV1Schema', '{ pluginId: "happier.triage", localId: "entries" }', '{ pluginId: "happier.triage", localId: "entries" }'],
