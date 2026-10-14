@@ -27,7 +27,6 @@ import { listAutomationDefinitions } from '@/api/automations';
 import { createCliProfileStore, createCliProfileStoreForOperation } from '@/settings/profiles/profileStore';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { AcpCatalogUnavailableError } from '@/agent/acp/catalog/configured/resolveBackend';
-import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
 import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { withdrawPendingQueueV2Message, updatePendingQueueV2RequestedAction } from '@/api/session/pendingQueueV2Transport';
@@ -457,8 +456,7 @@ import { fetchAccountProfile } from '@/api/accountProfile';
 import { PushNotificationClient } from '@/api/pushNotifications';
 import { dispatchActivityNotificationAsync, listActivityNotificationChannels,
   NotificationChannelCatalogUnavailableError } from '@/notifications/activity/dispatchActivityNotification';
-import { createCliNotificationChannelStore } from '@/settings/notifications/notificationChannelStore';
-import { hydrateNotificationChannelCatalogForActiveAccount } from '@/settings/notifications/hydrateNotificationChannelCatalog';
+import { hydrateNotificationChannelCatalogForActiveAccount, hydrateNotificationChannelCatalogForOperation } from '@/settings/notifications/hydrateNotificationChannelCatalog';
 import { createSavedSecretMaterializerFromSnapshotV1, SavedSecretResolutionError } from '@/settings/secrets/savedSecretCatalog';
 import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
 import { createActionSettingsProvider, type RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -884,16 +882,8 @@ export function createCliActionDeps(params: Readonly<{
     if (!snapshot) throw new NotificationChannelCatalogUnavailableError('scope-retired');
     if (!snapshot.notificationChannelCatalog || snapshot.notificationChannelCatalog.status === 'loading') {
       if (operation) {
-        const commit = async (catalog: NotificationChannelCatalogSnapshotV1) => {
-          await assertCurrent();
-          const captured = operation.readSnapshot();
-          if (!captured || !await operation.commitNotificationChannelCatalog({ expectedSettingsVersion: captured.settingsVersion, catalog })) {
-            throw new NotificationChannelCatalogUnavailableError('scope-retired');
-          }
-        };
-        const catalog = await createCliNotificationChannelStore({ credentials, operationContext: operation, signal })
-          .readNotificationChannelCatalog(commit);
-        await commit(catalog);
+        const catalog = await hydrateNotificationChannelCatalogForOperation({ operationContext: operation, signal, assertCurrent });
+        if (catalog.status === 'unavailable' && catalog.reason === 'scope-retired') throw new NotificationChannelCatalogUnavailableError('scope-retired');
       } else {
         await runWithServerHttpBaseUrl(home, () => hydrateNotificationChannelCatalogForActiveAccount({ credentials, scopeKey, lifetimeToken, signal }));
       }
@@ -6944,9 +6934,12 @@ export function createCliActionDeps(params: Readonly<{
       }
       if (params.serverId !== undefined && serverId != null && params.serverId !== serverId)
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+      const metadataContext: ActionExecutorContext = context.externalActionExecutionAuthorization
+        ? { ...context, externalActionTarget: { kind: 'session', sessionId } }
+        : context;
       const resolveAuthorizationHeaders = (request: Readonly<{
         method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown;
-      }>) => resolveServerRequestHeaders(context, actionId, request);
+      }>) => resolveServerRequestHeaders(metadataContext, actionId, request);
       if (!resolveAuthorizationHeaders({
         method: 'GET', path: '/v1/account/encryption/currentness',
       })) {

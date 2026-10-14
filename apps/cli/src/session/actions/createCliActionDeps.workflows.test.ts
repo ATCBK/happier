@@ -34,14 +34,20 @@ import { prepareExternalActionRequesterAccountAuthorization } from '@/api/extern
 import { ExternalActionExecutionAuthorizationRequestV1Schema, computeExternalActionRequestEnvelopeDigestV1, type ExternalActionTargetV1 } from '@happier-dev/protocol/actions';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import { WorkflowAcceptedSnapshotV1Schema } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
+import { AutomationDefinitionCreateRequestSchema, AutomationDefinitionDetailSchema } from '@happier-dev/protocol/automations/automationApiV3';
 
 const processIdentity = vi.hoisted(() => vi.fn());
 // The runner's OS process identity and daemon HTTP are external boundaries.
 vi.mock('@/daemon/processIdentity', () => ({ readProcessIdentityByPid: processIdentity }));
 
-const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }));
+const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), request: vi.fn() }));
 const signedRootAction = vi.hoisted(() => vi.fn());
 const machineRpc = vi.hoisted(() => vi.fn());
+const sessionRpc = vi.hoisted(() => vi.fn());
+// Session RPC is the network boundary; keep execution-run service decoding real.
+vi.mock('@/session/transport/rpc/sessionRpc', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/session/transport/rpc/sessionRpc')>(), callSessionRpc: sessionRpc,
+}));
 
 // Native machine RPC is an authenticated transport boundary; Workflow policy stays real.
 vi.mock('@/session/transport/rpc/machineRpc', async (importOriginal) => ({
@@ -50,7 +56,7 @@ vi.mock('@/session/transport/rpc/machineRpc', async (importOriginal) => ({
 }));
 
 vi.mock('axios', () => ({
-  default: { get: http.get, post: http.post, put: http.put, delete: http.delete, isAxiosError: (value: unknown) => Boolean(value && typeof value === 'object' && 'response' in value) },
+  default: { get: http.get, post: http.post, put: http.put, delete: http.delete, request: http.request, isAxiosError: (value: unknown) => Boolean(value && typeof value === 'object' && 'response' in value) },
 }));
 
 // The daemon control client is an authenticated HTTP boundary. Keep its
@@ -178,6 +184,8 @@ describe('createCliActionDeps workflow boundary', () => {
   };
   beforeEach(() => {
     machineRpc.mockReset();
+    sessionRpc.mockReset();
+    http.request.mockReset();
     http.put.mockReset();
     http.delete.mockReset();
     signedRootAction.mockReset().mockResolvedValue({ ok: true, result: {} });
@@ -202,6 +210,64 @@ describe('createCliActionDeps workflow boundary', () => {
     });
   });
 
+  it.each(['session', 'detached', 'wrong_run', 'invalid_response', 'transport_failure', 'wrong_machine'] as const)(
+    'arms an exact-output trigger through production Run observation (%s)', async (scenario) => {
+    const sessionId = 'c' + '2'.repeat(24);
+    const runId = 'run-observed';
+    const baseGet = http.get.getMockImplementation()!;
+    http.get.mockImplementation(async (url: string) => {
+      if (url.includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: createSessionRecordFixture({
+        id: sessionId, active: true, encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine-1', path: '/repo' }),
+      }) } };
+      if (url.includes('/v3/automations?')) return { status: 200, data: { automations: [], nextCursor: null } };
+      return baseGet(url);
+    });
+    const runResponse = ExecutionRunGetResponseSchema.parse({ run: {
+      runId: scenario === 'wrong_run' ? 'another-run' : runId, callId: 'call', sidechainId: 'sidechain', intent: 'scm_diff_summary',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'no_tools', retentionPolicy: 'resumable',
+      runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 1,
+      lifecycle: { v: 1, state: 'current' },
+    } });
+    const observe = async () => {
+      if (scenario === 'transport_failure') return { ok: false, errorCode: 'execution_run_target_unavailable' };
+      return scenario === 'invalid_response' ? { run: {} } : runResponse;
+    };
+    sessionRpc.mockImplementation(observe);
+    machineRpc.mockImplementation(observe);
+    http.request.mockImplementation(async ({ data }: { data: unknown }) => {
+      const input = AutomationDefinitionCreateRequestSchema.parse(data);
+      return { status: 200, data: AutomationDefinitionDetailSchema.parse({
+        id: input.automationId, name: input.name, description: input.description ?? null, enabled: input.enabled,
+        targetType: null, existingSessionId: null, templateVersion: 1, lastRunAt: null, createdAt: 1, updatedAt: 1,
+        workflowDefinitionId: null, scopeSessionId: null, executionRecipe: input.executionRecipe,
+        assignments: input.assignments?.map(assignment => ({ ...assignment, enabled: assignment.enabled ?? true,
+          priority: assignment.priority ?? 0, updatedAt: 1 })) ?? [],
+        triggers: input.triggers.map(item => ({ ...item.trigger, id: item.triggerId, revision: 0,
+          createdAt: 1, updatedAt: 1, remainingOccurrences: 1, status: { state: 'waiting', runId: null }, triggerDefinitionEnvelope: null })),
+      }) };
+    });
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      resolveServerFeaturesSnapshot: () => enabledFeatures as never, sessionId: 'cli-global', mode: 'plain', ctx: null });
+    const actions = createActionExecutor({ ...deps, isActionApprovalRequired: () => false });
+    const result = await actions.execute('workflow.trigger.add', {
+      project: { machineId: 'machine-1', directory: '/repo' },
+      target: { kind: 'inline', definition: { version: 1, blocks: [{ kind: 'action', id: 'notify', actionId: 'notifications.notify_me',
+        input: { message: { kind: 'literal', value: 'Walkthrough complete' } } }] } },
+      trigger: { kind: 'runLifecycle', enabled: true, condition: 'terminal', source: { kind: 'execution_run',
+        machineId: scenario === 'wrong_machine' ? 'foreign-machine' : 'machine-1', runId,
+        ...(scenario === 'detached' ? {} : { sessionId }), observation: { kind: 'scm_diff_summary', comparisonId: 'comparison',
+          resultId: 'result', output: 'walkthrough', afterRevision: 0 } } },
+    }, { surface: 'ui', authority: 'present_user' });
+    if (scenario === 'session' || scenario === 'detached') {
+      expect(result).toMatchObject({ ok: true, result: { set: { health: 'available', triggers: [{ kind: 'runLifecycle',
+        source: { runId, observation: { output: 'walkthrough', resultId: 'result' } } }] } } });
+      expect(http.request).toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ ok: false, errorCode: 'source_unavailable' });
+      expect(http.request).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([
     { hasSigner: true, viaSession: false, machineRouted: false, freshWait: false, unavailableWorkspace: false },
     { hasSigner: false, viaSession: false, machineRouted: false, freshWait: false, unavailableWorkspace: false },
@@ -210,7 +276,8 @@ describe('createCliActionDeps workflow boundary', () => {
     { hasSigner: true, viaSession: true, machineRouted: true, freshWait: true, unavailableWorkspace: false, credentialedFactory: true },
     { hasSigner: true, viaSession: true, machineRouted: true, freshWait: true, unavailableWorkspace: true, credentialedFactory: true },
     { hasSigner: true, viaSession: true, machineRouted: true, freshWait: true, unavailableWorkspace: false, credentialedFactory: true, missingBackend: true },
-  ])('starts or rejoins a Session Workflow with its exact installed signer ($hasSigner, Session channel: $viaSession, Machine routed: $machineRouted, fresh Wait: $freshWait, unavailable workspace: $unavailableWorkspace, missing backend: $missingBackend)', async ({ hasSigner, viaSession, machineRouted, freshWait, unavailableWorkspace, credentialedFactory, missingBackend }) => {
+    { hasSigner: true, viaSession: true, machineRouted: true, freshWait: true, unavailableWorkspace: false, credentialedFactory: true, nullCallerPermission: true },
+  ])('starts or rejoins a Session Workflow with its exact installed signer ($hasSigner, Session channel: $viaSession, Machine routed: $machineRouted, fresh Wait: $freshWait, unavailable workspace: $unavailableWorkspace, missing backend: $missingBackend, null caller permission: $nullCallerPermission)', async ({ hasSigner, viaSession, machineRouted, freshWait, unavailableWorkspace, credentialedFactory, missingBackend, nullCallerPermission }) => {
     const sessionId = 'c' + '1'.repeat(24);
     const runId = '11111111-1111-4111-8111-111111111111';
     const directory = unavailableWorkspace ? '/missing-workflow-start-diag-workspace' : freshWait ? tmpdir() : '/repo';
@@ -452,7 +519,7 @@ describe('createCliActionDeps workflow boundary', () => {
           client: { sessionId, getServerBinding: () => ({ serverId: 'profile', serverUrl: 'https://session-home.test' }),
             rpcHandlerManager: { invokeLocal: async () => null, registerHandler() {} }, updateMetadata() {},
             getActiveTurnAdmissionWitness: () => ({ turnId: 'turn-1', inputId: 'input-1', userMessageSeq: 1, userMessageSeqs: [1],
-              agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 }, callerPermissionMode: 'default',
+              agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 }, callerPermissionMode: nullCallerPermission ? null : 'default',
               causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } }),
           },
         });
@@ -498,6 +565,7 @@ describe('createCliActionDeps workflow boundary', () => {
       return;
     }
     expect(result).toMatchObject({ admission: freshWait ? 'created' : 'existing', run: { id: runId, state: 'queued' } });
+    if (nullCallerPermission) expect(context.externalActionExecutionAuthorization!.binding.sessionActionOrigin?.callerPermissionMode).toBeNull();
     if (machineRouted) expect(context.externalActionExecutionAuthorization!.binding.target).toEqual({
       kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory },
     });
