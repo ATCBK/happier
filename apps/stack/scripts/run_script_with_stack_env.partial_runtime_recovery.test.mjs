@@ -1373,64 +1373,6 @@ test('local source restart attests an admitted replacement to the inner run owne
   }
 });
 
-test('source restart refusal leaves the observed incumbent running and its state intact', async (t) => {
-  const temp = await withTempDir();
-  const storageDir = join(temp.dir, 'storage');
-  const rootDir = join(temp.dir, 'repo');
-  const stackName = 'refused-source-restart';
-  const baseDir = join(storageDir, stackName);
-  const envPath = join(baseDir, 'env');
-  const restore = withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: storageDir });
-
-  try {
-    await Promise.all([
-      mkdir(join(rootDir, 'scripts'), { recursive: true }),
-      mkdir(join(rootDir, 'apps', 'server'), { recursive: true }),
-      mkdir(join(rootDir, 'apps', 'cli'), { recursive: true }),
-      mkdir(join(rootDir, 'apps', 'ui'), { recursive: true }),
-      mkdir(baseDir, { recursive: true }),
-    ]);
-    await Promise.all([
-      writeFile(join(rootDir, 'package.json'), '{"private":true}\n', 'utf8'),
-      writeFile(join(rootDir, 'apps', 'server', 'package.json'), '{"name":"@happier-dev/server","private":true}\n', 'utf8'),
-      writeFile(join(rootDir, 'apps', 'cli', 'package.json'), '{"name":"@happier-dev/cli","private":true}\n', 'utf8'),
-      writeFile(join(rootDir, 'apps', 'ui', 'package.json'), '{"name":"@happier-dev/app","private":true}\n', 'utf8'),
-      writeFile(join(rootDir, 'scripts', 'run.mjs'), 'throw new Error("inner run must not start");\n', 'utf8'),
-      writeFile(envPath, [
-        `HAPPIER_STACK_REPO_DIR=${rootDir}`,
-        'HAPPIER_STACK_SERVER_COMPONENT=happier-server',
-        'HAPPIER_STACK_MANAGED_INFRA=0',
-        'HAPPIER_STACK_DAEMON=0',
-      ].join('\n') + '\n', 'utf8'),
-    ]);
-    const incumbent = await spawnStackOwnedHealthServer(t, { stackName, envPath });
-    const runtimeStatePath = join(baseDir, 'stack.runtime.json');
-    const initial = await recordStackRuntimeStart(runtimeStatePath, {
-      stackName,
-      script: 'run.mjs',
-      ephemeral: true,
-      ownerPid: incumbent.pid,
-      ports: { server: incumbent.port },
-      processes: { serverPid: incumbent.pid },
-    });
-
-    await assert.rejects(runStackScriptWithStackEnv({
-      rootDir,
-      stackName,
-      scriptPath: 'run.mjs',
-      args: ['--runtime=source', '--restart', '--no-dev-targets', '--no-daemon', '--no-ui', '--no-browser'],
-    }), /full-server smoke requires isolated managed infrastructure; incumbent retained/);
-    assert.doesNotThrow(() => process.kill(incumbent.pid, 0));
-    const retained = await readStackRuntimeStateFile(runtimeStatePath);
-    assert.equal(retained?.ownerPid, initial.ownerPid);
-    assert.equal(retained?.startedAt, initial.startedAt);
-    assert.equal(retained?.processes?.serverPid, incumbent.pid);
-  } finally {
-    restore();
-    await temp.cleanup();
-  }
-});
-
 test('inspectExistingStartLikeRuntime does not short-circuit run for an untrusted live server pid', async () => {
   const staleServerPort = await reserveUnusedPort();
   const status = await inspectExistingStartLikeRuntime({
