@@ -33,6 +33,7 @@ export async function openOpenCodeServerExecutionRun(
         env,
         permissionMode: request.configuration?.permissionIntent.value ?? null,
         mcpServers: request.mcpServers,
+        mcpService: context.executionRun.services.mcp,
         request,
         signal: context.signal,
       });

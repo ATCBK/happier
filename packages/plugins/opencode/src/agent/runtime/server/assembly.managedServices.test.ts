@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { buildOpenCodeSessionMcpProjection } from './mcpRegistration.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import type { AgentSessionModelsSnapshot, AgentSessionModelsSource } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -48,8 +49,8 @@ describe('OpenCode server managed-service assembly', () => {
     });
     try {
       expect(permissions).toEqual(expect.arrayContaining([
-        { permission: 'happier-session-happy-policy--docs_search', pattern: '*', action: 'ask' },
-        { permission: 'happier-session-happy-policy--docs_delete', pattern: '*', action: 'deny' },
+        { permission: `${buildOpenCodeSessionMcpProjection('happy-policy', mcpServers).registrations[0]!.projectedName}_search`, pattern: '*', action: 'ask' },
+        { permission: `${buildOpenCodeSessionMcpProjection('happy-policy', mcpServers).registrations[0]!.projectedName}_delete`, pattern: '*', action: 'deny' },
       ]));
     } finally { await assembly.dispose(); }
   });

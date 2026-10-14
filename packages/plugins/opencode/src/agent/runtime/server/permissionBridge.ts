@@ -119,8 +119,9 @@ export function buildOpenCodePermissionApprovalRequest(
   ask: OpenCodePermissionAsk,
   mcpProjection?: OpenCodeSessionMcpProjection,
   policy?: AgentSessionOpenRequest['mcpToolPolicy'],
+  resolvedToolName?: string,
 ): InteractionTransientApprovalAuthorRequestV1 {
-  const toolName = mcpProjection ? canonicalizeOpenCodeProjectedMcpToolName(ask.permission, mcpProjection, policy) : ask.permission;
+  const toolName = resolvedToolName ?? (mcpProjection ? canonicalizeOpenCodeProjectedMcpToolName(ask.permission, mcpProjection, policy) : ask.permission);
   return {
     kind: 'approval',
     title: `Allow OpenCode to use ${toolName}?`,

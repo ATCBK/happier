@@ -7,7 +7,7 @@ import type { OpenCodeRuntimeEvent } from './runtimeEvents.js';
 import type { OpenCodeRuntimeScope } from './runtimeEvents.js';
 import { projectOpenCodeRuntimeScope } from './openCodeRuntimeEvents.js';
 import {
-  canonicalizeOpenCodeProjectedMcpToolName,
+  resolveOpenCodeProjectedMcpToolName,
   type OpenCodeSessionMcpProjection,
 } from './mcpRegistration.js';
 
@@ -40,7 +40,7 @@ export function publishOpenCodeToolPartRuntimeEvents(params: Readonly<{
   mcpProjection: OpenCodeSessionMcpProjection;
   mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
   nowMs?: () => number;
-}>): void {
+}>): void | Promise<void> {
   const turnId = params.state.activeTurnId;
   if (!params.part.nativeChildLaunch && (!params.state.turnInFlight || !turnId)) return;
   const outputScope = params.part.nativeChildLaunch || !turnId ? {} : { turnId };
@@ -50,30 +50,40 @@ export function publishOpenCodeToolPartRuntimeEvents(params: Readonly<{
   const isTerminal = isTerminalOpenCodeToolPartStatus(params.part.state.status);
   const toolInput = params.part.state.input ?? {};
 
-  if (!params.state.currentTurnPublishedToolCallKeys.has(callKey)) {
-    params.state.currentTurnPublishedToolCallKeys.add(callKey);
+  const publish = (toolName: string): void => {
+    // Alias reads may settle after the parent turn ended or changed. Do not
+    // publish its evidence or mutate the successor turn's reused dedupe sets.
+    if (!params.part.nativeChildLaunch && (!params.state.turnInFlight || params.state.activeTurnId !== turnId)) return;
+    if (!params.state.currentTurnPublishedToolCallKeys.has(callKey)) {
+      params.state.currentTurnPublishedToolCallKeys.add(callKey);
+      params.publishRuntimeEvent({
+        kind: 'tool-call',
+        ...projectOpenCodeRuntimeScope(params.scope),
+        ...outputScope,
+        toolCallId: params.part.callID,
+        toolName,
+        toolInput,
+        emittedAtMs,
+      });
+    }
+
+    if (!isTerminal || params.state.currentTurnPublishedToolResultKeys.has(callKey)) return;
+
+    params.state.currentTurnPublishedToolResultKeys.add(callKey);
+    const status = params.part.state.status;
     params.publishRuntimeEvent({
-      kind: 'tool-call',
+      kind: 'tool-result',
       ...projectOpenCodeRuntimeScope(params.scope),
       ...outputScope,
       toolCallId: params.part.callID,
-      toolName: canonicalizeOpenCodeProjectedMcpToolName(params.part.tool, params.mcpProjection, params.mcpToolPolicy),
-      toolInput,
+      output: buildOpenCodeToolResultOutput(params.part),
       emittedAtMs,
+      ...(status === 'completed' ? {} : { isError: true }),
     });
-  }
+  };
+  // A result for an already published call needs no further identity read.
+  if (params.state.currentTurnPublishedToolCallKeys.has(callKey)) return publish(params.part.tool);
+  const name = resolveOpenCodeProjectedMcpToolName(params.part.tool, params.mcpProjection, params.mcpToolPolicy);
+  return typeof name === 'string' ? publish(name) : name.then(publish);
 
-  if (!isTerminal || params.state.currentTurnPublishedToolResultKeys.has(callKey)) return;
-
-  params.state.currentTurnPublishedToolResultKeys.add(callKey);
-  const status = params.part.state.status;
-  params.publishRuntimeEvent({
-    kind: 'tool-result',
-    ...projectOpenCodeRuntimeScope(params.scope),
-    ...outputScope,
-    toolCallId: params.part.callID,
-    output: buildOpenCodeToolResultOutput(params.part),
-    emittedAtMs,
-    ...(status === 'completed' ? {} : { isError: true }),
-  });
 }

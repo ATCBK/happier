@@ -47,7 +47,7 @@ export async function openOpenCodeServerSession(
     permissionMode: request.configuration?.permissionIntent.value ?? null,
     mcpServers: request.mcpServers,
     request,
-    ...(sessionServices ? { models: sessionServices.models, modes: sessionServices.modes } : {}),
+    ...(sessionServices ? { models: sessionServices.models, modes: sessionServices.modes, mcpService: sessionServices.mcp } : {}),
     ...(sessionServices?.inputFiles ? { inputFiles: sessionServices.inputFiles } : {}),
     ...(bindActiveSkillsReader ? { bindActiveSkillsReader } : {}),
   });
