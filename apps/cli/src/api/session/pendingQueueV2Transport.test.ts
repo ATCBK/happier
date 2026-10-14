@@ -14,6 +14,7 @@ import {
     materializeNextPendingExecutionRunMessage,
     materializeNextPendingQueueV2MessageViaHttp,
     materializeNextPendingQueueV2MessageViaReleasedServerSocket,
+    markPendingQueueV2DeliveryHandled,
     readAcceptedPendingQueueV2DeliveryRetryDirective,
     readPendingQueueV2DeliveryFailureByLocalIdFromServer,
     readPendingQueueV2MessageContentByLocalIdFromServer,
@@ -25,6 +26,8 @@ import {
     listPendingQueueV2ResetStartDemands,
     updatePendingQueueV2RequestedAction,
     readPendingResetStartsForSource,
+    dismissPendingQueueV2Delivery,
+    sendPendingQueueV2DeliveryAsNew,
 } from './pendingQueueV2Transport';
 
 const { mockGet, mockPost, mockDelete, mockPatch } = vi.hoisted(() => ({
@@ -67,6 +70,45 @@ describe('pendingQueueV2Transport', () => {
         mockPost.mockReset();
         mockDelete.mockReset();
         mockPatch.mockReset();
+    });
+
+    it('marks delivery handled with the exact signed request and cancellation, without borrowing the daemon bearer', async () => {
+        const signal = new AbortController().signal;
+        const authorize = vi.fn(() => ({ 'x-execution-proof': 'signed-recovery' }));
+        mockPost.mockResolvedValueOnce({ data: { ok: true } });
+        await markPendingQueueV2DeliveryHandled({ token: 'must-not-cross', sessionId: 'session/one', localId: 'input/one',
+            signal, resolveAuthorizationHeaders: authorize });
+        const path = '/v2/sessions/session%2Fone/pending/input%2Fone/delivery/handled';
+        expect(authorize).toHaveBeenCalledWith({ method: 'POST', path, body: {} });
+        expect(mockPost).toHaveBeenCalledWith(expect.stringContaining(path), {}, expect.objectContaining({
+            headers: expect.objectContaining({ 'x-execution-proof': 'signed-recovery' }), signal,
+        }));
+        expect(mockPost.mock.calls[0]?.[2]?.headers).not.toHaveProperty('Authorization');
+    });
+
+    it.each([undefined, 'run/one'])('resolves uncertain custody at the exact target through signed recovery (run %s)', async targetExecutionRunId => {
+        const authorize = vi.fn(() => ({ 'x-execution-proof': 'signed-recovery' }));
+        const input = { token: 'must-not-cross', sessionId: 'session/one', localId: 'input/one',
+            ...(targetExecutionRunId ? { targetExecutionRunId } : {}), resolveAuthorizationHeaders: authorize };
+        const owner = targetExecutionRunId
+            ? '/v2/sessions/session%2Fone/execution-runs/run%2Fone/pending/input%2Fone/delivery'
+            : '/v2/sessions/session%2Fone/pending/input%2Fone/delivery';
+        mockPost.mockResolvedValueOnce({ data: { ok: true } });
+        await dismissPendingQueueV2Delivery(input);
+        expect(authorize).toHaveBeenLastCalledWith({ method: 'POST', path: `${owner}/dismiss`, body: {} });
+        mockPost.mockResolvedValueOnce({ data: { ok: true, newLocalId: 'server-owned-replacement' } });
+        expect(await sendPendingQueueV2DeliveryAsNew(input)).toMatchObject({ newLocalId: 'server-owned-replacement' });
+        expect(authorize).toHaveBeenLastCalledWith({ method: 'POST', path: `${owner}/send-as-new`, body: {} });
+        expect(mockPost.mock.calls.every(([, , config]) => !('Authorization' in config.headers))).toBe(true);
+    });
+
+    it('rejects unavailable signed recovery authority and a send-as-new response without the new identity', async () => {
+        const input = { token: 'must-not-cross', sessionId: 'session', localId: 'input' };
+        await expect(markPendingQueueV2DeliveryHandled({ ...input, resolveAuthorizationHeaders: () => null })).rejects.toThrow('admission_unavailable');
+        expect(mockPost).not.toHaveBeenCalled();
+        mockPost.mockResolvedValueOnce({ data: { ok: true } });
+        await expect(sendPendingQueueV2DeliveryAsNew({ ...input,
+            resolveAuthorizationHeaders: () => ({ 'x-execution-proof': 'signed' }) })).rejects.toThrow();
     });
 
     it('reads only reset-held queued inputs, preserving exact accepted witness identity', async () => {
