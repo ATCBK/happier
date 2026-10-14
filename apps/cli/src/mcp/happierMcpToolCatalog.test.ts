@@ -6,6 +6,18 @@ import { listBuiltInHappierTools } from '@/agent/tools/happierTools/listBuiltInH
 import { HAPPIER_MCP_TOOL_CATALOG, HAPPIER_MCP_TOOL_CATALOG_NAMES } from './happierMcpToolCatalog';
 
 describe('HAPPIER_MCP_TOOL_CATALOG_NAMES', () => {
+  it('binds the mounted prompt picker to the canonical MCP Action and strict input schema', () => {
+    const tool = HAPPIER_MCP_TOOL_CATALOG.find(entry => entry.name === 'ui_prompts_picker_open');
+    expect(tool).toBeDefined();
+    const spec = getActionSpec('ui.prompts.picker.open');
+    expect(spec.surfaces.mcp).toBe(true);
+    expect(tool?.inputSchema).toBe(spec.inputSchema);
+    expect(tool?.inputSchema.parse({})).toEqual({});
+    expect(tool?.inputSchema.safeParse({ query: 'not a picker input' }).success).toBe(false);
+    expect(listBuiltInHappierTools({ surface: 'mcp', isActionEnabled: () => true,
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }),
+    }).some(entry => entry.name === 'ui_prompts_picker_open')).toBe(true);
+  });
   it('exposes the landed change-explanation operations with their canonical input contracts', () => {
     const catalog = new Map(HAPPIER_MCP_TOOL_CATALOG.map((tool) => [tool.name, tool]));
     for (const [id, name] of [
