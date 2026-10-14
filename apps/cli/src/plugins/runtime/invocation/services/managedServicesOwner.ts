@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
+import { LocalServiceEstablishmentFailureV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import type { DaemonLocalServiceLauncherStartRequestV1, LocalServiceLaunchTargetV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { Buffer } from 'node:buffer';
 import { isAbsolute, join } from 'node:path';
@@ -295,10 +296,10 @@ function translateError(error: unknown): never {
         }
     })();
     if (code === 'plugin_managed_service_establishment_failed') {
-        return fail(
-            code,
-            'Managed service establishment failed',
-        );
+        const failure = LocalServiceEstablishmentFailureV1Schema.safeParse(error.details && typeof error.details === 'object'
+            && !Array.isArray(error.details) ? error.details.establishmentFailure : undefined);
+        throw new PluginError({ code, message: 'Managed service establishment failed',
+            ...(failure.success ? { details: { establishmentFailure: failure.data } } : {}) });
     }
     throw new PluginError({
         code,
@@ -4202,6 +4203,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 : { ...commonSpec, mode: request.processSpec.mode };
             const processSupervisor = input.processSupervisorHost.bind({
                 kind: 'project',
+                projectRoot: workspace.rootPath,
                 isOccurrenceCurrent: isCurrent,
             });
             const process = await processSupervisor.supervise(processSpec, {

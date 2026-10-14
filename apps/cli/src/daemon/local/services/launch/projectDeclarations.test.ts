@@ -1,4 +1,7 @@
 import axios from 'axios';
+import { createServer } from 'node:net';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import nacl from 'tweetnacl';
 import { bindExternalActionExecutionAuthorizationHttpPathV1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
@@ -298,6 +301,43 @@ describe('accepted Project Service declaration starter', () => {
         const started = await f.routes.startTarget!(f.request, f.ingress, context);
         expect(started).toMatchObject({ status: 'succeeded' });
         expect(f.owner.readResourceTargets()).toHaveLength(1);
+    });
+
+    it('retains the real occupied-port establishment cause through declaration Start and its strict consumer', async () => {
+        const listener = createServer();
+        await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+        cleanups.push(async () => { if (listener.listening) {
+            await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+        } });
+        const address = listener.address();
+        if (!address || typeof address === 'string') throw new Error('Missing fixture port');
+        const script = `require('net').createServer().listen(${address.port}, '127.0.0.1')`;
+        const f = await fixture(false, { kind: 'command', command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}` });
+        await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+        const occupant = spawn(process.execPath, ['-e', `require('net').createServer().listen(${address.port}, '127.0.0.1', () => console.log('listening'))`],
+            { cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'] });
+        cleanups.push(async () => {
+            if (occupant.exitCode !== null || occupant.signalCode !== null) return;
+            const exited = once(occupant, 'exit'); occupant.kill(); await exited;
+        });
+        await once(occupant.stdout!, 'data');
+        await writeFile(join(f.root, '.happier/project.json'), JSON.stringify(ProjectManifestV1Schema.parse({
+            ...f.manifest, services: { worker: { ...f.manifest.services!.worker, port: address.port } },
+        })));
+        const executor = await f.createRuntimeActionExecutor();
+        const action = (input: unknown) => executor({ actionId: 'localServices.launcher.start', input,
+            context: f.context, rpcContext: f.ingress });
+        const review = DaemonLocalServiceLauncherStartResponseV1Schema.parse(await action(f.request));
+        if (!review.reviewedEffectDigest) throw new Error('Missing service review');
+        const result = DaemonLocalServiceLauncherStartResponseV1Schema.parse(await action({
+            ...f.request, expectedEffectDigest: review.reviewedEffectDigest,
+        }));
+        assertActionOutputContract('localServices.launcher.start', result);
+        expect(result).toMatchObject({ status: 'denied', reasonCode: 'plugin_managed_service_establishment_failed',
+            establishmentFailure: { cause: 'port_in_use', port: address.port, sameProject: true, exitCode: 1,
+                lastStderrLine: expect.any(String) } });
+        expect(f.owner.listProjectServices()).toEqual([]);
+        expect(occupant.exitCode).toBeNull();
     });
 
     it.each(['ordinary', 'long_unicode'] as const)('emits registered launcher/Start/Stop outputs from real declaration discovery and supervision (%s)', async kind => {

@@ -5,13 +5,13 @@ import { projectNativeJsonValueForTransport, type JsonValue } from '@happier-dev
 import type { DaemonLocalServiceLauncherStartRequestV1, RuntimeActionExecuteArgs } from '@happier-dev/protocol';
 import type { ProjectCommandSourceV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 import type { RpcHandlerContext } from '@/api/rpc/types';
-import { readProjectFiniteIngressRefusal, readProjectRuntimeRequesterRefusal, type ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/projectFiniteAction';
+import { readProjectFiniteIngressRefusal, readProjectRuntimeRequesterRefusal, readProjectRuntimeCurrentnessRefusal, type ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/projectFiniteAction';
 import { resolveProjectRequesterSecretEnvironment } from '@/workspaces/projectSetup/projectSetupRequesterInputs';
 import { projectRuntimeAccountRowsInput } from '@/workspaces/projectAccountRows';
 import { resolveProjectSetupAcceptedWorkspace } from '@/workspaces/projectSetup/projectSetupAcceptedWorkspace';
 import { prepareProjectSetup, readProjectActionApprovalSettings, type PreparedProjectSetupCommand, type PreparedProjectSetupPlan, type ProjectSetupPreparationInput } from '@/workspaces/projectSetup/projectSetupPreparation';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
-import { authorizePreparedProjectCommand, createProjectNativeInvocationCustody, executeProjectSetup, publishProjectFiniteAdmission, type ProjectSetupExecutionInput, type ProjectSetupExecutionOutcome, type ProjectSetupOperationContext } from '@/workspaces/projectSetup/projectSetupExecution';
+import { authorizePreparedProjectCommand, createProjectNativeInvocationCustody, executeProjectSetup, projectBaseEnvironment, publishProjectFiniteAdmission, type ProjectSetupExecutionInput, type ProjectSetupExecutionOutcome, type ProjectSetupOperationContext } from '@/workspaces/projectSetup/projectSetupExecution';
 import { resolveProjectNativeCommand } from '@/workspaces/projectSetup/projectNativeResolution';
 import { readProjectDefinitionFileBytes } from '@/workspaces/projectSetup/nativeDefinitionFiles';
 import { resolveProjectServiceStartChoice } from '@/workspaces/execution/projectServicePlacement';
@@ -19,7 +19,8 @@ import { validatePath } from '@/rpc/handlers/pathSecurity';
 import { buildProjectManagedServiceStartRequest, type ProjectManagedServiceSupervisionInput, type createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { discoverLocalServiceRunTargets } from './runTargets';
 import type { LocalServiceLauncherStartExecutionOutcome, LocalServiceLauncherStartResolution } from './start';
-import { DaemonLocalServiceLauncherStartResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { DaemonLocalServiceLauncherStartResponseV1Schema, LocalServiceNativePrerequisiteV1Schema, LocalServiceEstablishmentFailureV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import { stopProjectManagedService, type RestartProjectManagedService } from '../actions/executor';
 import { createProjectServiceDeclarationTargetIdV1, type ProjectServiceDeclarationRefV1 } from '@happier-dev/protocol/local/services/actions/v1';
 import type { ProjectManifestFileSnapshot } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
@@ -31,7 +32,7 @@ import { assertProjectReceivingPlacement } from '@/workspaces/execution/projectR
 import { isProjectNativeProcessUncertain, preserveUnconfirmedNativeProcess, type ProjectNativeAdapterLeaseV1, type ProjectNativeAdapterProductionV1 } from '@/plugins/runtime/lifecycle/contributions/targetProjectNativeAdapters';
 import { ProjectNativeEnvironmentUncertainError } from '@/workspaces/environment/produceProjectNativeEnvironment';
 import type { ProjectNativeEffectCaptureForHost } from '@/plugins/runtime/invocation/services/exec';
-import { createNativeComposeLifecycle } from './nativeComposeLifecycle';
+import { assertNativeComposeAvailable, createNativeComposeLifecycle, NativeComposePrerequisiteError } from './nativeComposeLifecycle';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 type ActionContext = RuntimeActionExecuteArgs['context'];
@@ -85,9 +86,17 @@ class ServiceStartRefusal extends Error {
 const digest = (value: unknown) => createHash('sha256').update(createCanonicalJsonSigningInput(projectNativeJsonValueForTransport(value))).digest('hex');
 const codeOf = (error: unknown) => error instanceof ServiceStartRefusal ? error.code
     : error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : 'project_service_start_unavailable';
-const refusal = (error: unknown): Extract<LocalServiceLauncherStartResolution<SelectedDeclaration>, { ok: false }> => ({
-    ok: false, reasonCode: codeOf(error), ...(error instanceof ServiceStartRefusal && error.review ? error.review : {}),
-});
+const refusal = (error: unknown): Extract<LocalServiceLauncherStartResolution<SelectedDeclaration>, { ok: false }> => {
+    const details = isPluginError(error) && error.details && typeof error.details === 'object'
+        && !Array.isArray(error.details) ? error.details : undefined;
+    const prerequisite = LocalServiceNativePrerequisiteV1Schema.safeParse(isPluginError(error) && error.code === 'native_tool_unavailable'
+        ? details?.prerequisite : undefined);
+    const failure = LocalServiceEstablishmentFailureV1Schema.safeParse(isPluginError(error)
+        && error.code === 'plugin_managed_service_establishment_failed' ? details?.establishmentFailure : undefined);
+    return { ok: false, reasonCode: codeOf(error), ...(error instanceof ServiceStartRefusal && error.review ? error.review : {}),
+        ...(failure.success ? { establishmentFailure: failure.data } : {}),
+        ...(prerequisite.success ? { prerequisite: prerequisite.data } : {}) };
+};
 function literalServiceCommand(source: Extract<ProjectCommandSourceV1, { kind: 'command' }>, root: string, os: string): Extract<SupportedServiceCommand, { kind: 'literal' }> {
     if (source.platforms && !source.platforms.some(platform => platform === os)) throw new ServiceStartRefusal('project_service_platform_unsupported');
     if (source.command.includes('\0')) throw new ServiceStartRefusal('project_command_invalid');
@@ -135,12 +144,14 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         const signal = context.signal ? AbortSignal.any([ingress.signal, context.signal]) : ingress.signal;
         const assertCurrent = async () => {
             if (signal.aborted) throw new ServiceStartRefusal('cancelled');
-            if (!runtime.isCurrent || !await runtime.isCurrent()) throw new ServiceStartRefusal('project_requester_credentials_unavailable');
+            if (!runtime.isCurrent) throw new ServiceStartRefusal('project_requester_credentials_unavailable');
+            const requester = await readProjectRuntimeCurrentnessRefusal(runtime, signal);
+            if (requester) throw new ServiceStartRefusal(requester.errorCode);
             if (!await ingress.verifyMachineAdmissionCurrent!()) throw new ServiceStartRefusal('machine_admission_changed');
             const eligibility = await runtime.workerAdmission.observeServiceEligibility();
             if (!eligibility.eligible) throw new ServiceStartRefusal(eligibility.reason ?? 'project_service_admission_unavailable');
-            if (!await runtime.isCurrent()) throw new ServiceStartRefusal('project_requester_credentials_unavailable');
-            if (signal.aborted) throw new ServiceStartRefusal('cancelled');
+            const fresh = await readProjectRuntimeCurrentnessRefusal(runtime, signal);
+            if (fresh) throw new ServiceStartRefusal(fresh.errorCode);
         };
         await assertCurrent();
         let association = await resolveProjectSetupAcceptedWorkspace({ address: request.workspace, ...projectRuntimeAccountRowsInput(runtime),
@@ -235,7 +246,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         let builtinNative: Review['builtinNative'];
         let releaseNativeLifecycle: Review['releaseNativeLifecycle'];
         let processMode: Review['processMode'] = service?.port
-            ? { kind: 'managedSpawn', endpointDetection: { kind: 'detectAfterLaunch', minimumConfidence: 'high' } }
+            ? { kind: 'managedSpawn', port: service.port, endpointDetection: { kind: 'detectAfterLaunch', minimumConfidence: 'high' } }
             : { kind: 'managedSpawn', endpointNone: true,
                 endpointDetection: { kind: 'detectAfterLaunch', minimumConfidence: 'high' } };
         if (source.kind === 'command') {
@@ -257,10 +268,24 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 serviceScope: digest({ serverId: runtime.serverId, accountId: admission.actorAccountId }),
                 ...(production ? { plugin: { lease: production } } : {}) });
             await assertCurrent();
-            if (resolved.kind === 'refused') throw new ServiceStartRefusal(resolved.code);
+            if (resolved.kind === 'refused') {
+                if (source.kind === 'native' && source.tool === 'compose' && resolved.code === 'native_tool_unavailable') {
+                    throw new NativeComposePrerequisiteError('not_installed');
+                }
+                throw new ServiceStartRefusal(resolved.code);
+            }
             if (source.kind === 'native' && resolved.kind === 'resolved') {
                 command = { kind: 'native', source, resolution: resolved };
                 if (source.tool === 'compose') {
+                    // A toolchain may select a different Docker endpoint. Its
+                    // engine prerequisite belongs to the final produced environment.
+                    if (plan.environment.kind === 'host'
+                        && !plan.manifest?.environmentVariables?.some(requirement => requirement.kind !== 'config')) {
+                        await assertNativeComposeAvailable({ io: runtime.environmentIo, command: resolved.command,
+                            prefix: resolved.args.slice(0, resolved.args.length - resolved.reviewInvocation.args.length), cwd: resolved.cwd,
+                            env: { ...projectBaseEnvironment({ hostEnvironment: runtime.hostEnvironment }, plan), ...resolved.environmentOverlay }, signal });
+                        await assertCurrent();
+                    }
                     builtinNative = createNativeComposeLifecycle({ args: resolved.reviewInvocation.args, io: runtime.environmentIo });
                     processMode = { kind: 'native', builtinLifecycle: builtinNative.lifecycle };
                 } else if (source.tool === 'flox') {
@@ -532,6 +557,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                         if (fresh.setupReview) throw new ServiceStartRefusal(fresh.setupReview.code, fresh.setupReview);
                         if (!isCurrent() || signal.aborted) throw new ServiceStartRefusal('cancelled');
                         builtinNative?.bindLaunch(launch);
+                        await builtinNative?.assertAvailable(signal);
                         // The Project supervisor retains this final capture until
                         // its existing cleanup proves the owned process tree settled.
                         retained = true;
@@ -562,6 +588,8 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         } catch (error) { uncertain ||= isProjectNativeProcessUncertain(error) || error instanceof ProjectNativeEnvironmentUncertainError;
             if (isProjectNativeProcessUncertain(error) || error instanceof ProjectNativeEnvironmentUncertainError) throw error;
             const denied = refusal(error); return { status: 'denied', reasonCode: denied.reasonCode,
+            ...(denied.establishmentFailure ? { establishmentFailure: denied.establishmentFailure } : {}),
+            ...(denied.prerequisite ? { prerequisite: denied.prerequisite } : {}),
             ...(denied.reviewedEffect !== undefined ? { reviewedEffect: denied.reviewedEffect } : {}),
             ...(denied.reviewedEffectDigest ? { reviewedEffectDigest: denied.reviewedEffectDigest } : {}) }; }
         finally { if (!uncertain) await Promise.all([...nativeInvocations].map(production => production.release())); await lease?.release(); }

@@ -4,7 +4,7 @@ import type { RpcHandlerContext } from '@/api/rpc/types';
 import type { RuntimeActionExecuteArgs } from '@happier-dev/protocol';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { LocalServiceManagedServiceActionTargetV1 } from '@happier-dev/protocol/local/services/actions/v1';
-import type { LocalServiceNativePrerequisiteV1 } from '@happier-dev/protocol/local/services/launcher/v1';
+import type { LocalServiceNativePrerequisiteV1, LocalServiceEstablishmentFailureV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import type { LocalServiceLauncherFeed } from './feed';
 import type { LocalServiceLauncherHistoryStore } from './leaves';
@@ -18,12 +18,12 @@ export type LocalServiceLauncherStartTarget = (
 
 export type LocalServiceLauncherStartResolution<TDeclaration = unknown> = Readonly<
     | { ok: true; declaration: TDeclaration }
-    | { ok: false; reasonCode: string; prerequisite?: LocalServiceNativePrerequisiteV1; reviewedEffect?: JsonValue; reviewedEffectDigest?: string }
+    | { ok: false; reasonCode: string; prerequisite?: LocalServiceNativePrerequisiteV1; establishmentFailure?: LocalServiceEstablishmentFailureV1; reviewedEffect?: JsonValue; reviewedEffectDigest?: string }
 >;
 
 export type LocalServiceLauncherStartExecutionOutcome = Readonly<
     | { status: 'succeeded'; currentTarget?: LocalServiceManagedServiceActionTargetV1 }
-    | { status: 'denied' | 'failed'; reasonCode: string; prerequisite?: LocalServiceNativePrerequisiteV1; reviewedEffect?: JsonValue; reviewedEffectDigest?: string }
+    | { status: 'denied' | 'failed'; reasonCode: string; prerequisite?: LocalServiceNativePrerequisiteV1; establishmentFailure?: LocalServiceEstablishmentFailureV1; reviewedEffect?: JsonValue; reviewedEffectDigest?: string }
 >;
 
 export type CreateLocalServiceLauncherStartTargetInput<TDeclaration = unknown> = Readonly<{
@@ -73,6 +73,7 @@ function response(input: Readonly<{
     status: DaemonLocalServiceLauncherStartResponseV1['status'];
     reasonCode?: string;
     prerequisite?: LocalServiceNativePrerequisiteV1;
+    establishmentFailure?: LocalServiceEstablishmentFailureV1;
     reviewedEffect?: JsonValue;
     reviewedEffectDigest?: string;
     currentTarget?: LocalServiceManagedServiceActionTargetV1;
@@ -85,6 +86,7 @@ function response(input: Readonly<{
         status: input.status,
         ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
         ...(input.prerequisite ? { prerequisite: input.prerequisite } : {}),
+        ...(input.establishmentFailure ? { establishmentFailure: input.establishmentFailure } : {}),
         ...(input.reviewedEffect !== undefined ? { reviewedEffect: input.reviewedEffect } : {}),
         ...(input.reviewedEffectDigest ? { reviewedEffectDigest: input.reviewedEffectDigest } : {}),
         ...(input.currentTarget ? { currentTarget: input.currentTarget } : {}),
@@ -234,6 +236,7 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
             status: outcome.status,
             ...(outcome.status === 'succeeded' ? {} : { reasonCode: outcome.reasonCode }),
             ...(outcome.status !== 'succeeded' && outcome.prerequisite ? { prerequisite: outcome.prerequisite } : {}),
+            ...(outcome.status !== 'succeeded' && outcome.establishmentFailure ? { establishmentFailure: outcome.establishmentFailure } : {}),
             ...(outcome.status === 'succeeded' && outcome.currentTarget ? { currentTarget: outcome.currentTarget } : {}),
             ...(outcome.status !== 'succeeded' && outcome.reviewedEffect !== undefined ? { reviewedEffect: outcome.reviewedEffect } : {}),
             ...(outcome.status !== 'succeeded' && outcome.reviewedEffectDigest ? { reviewedEffectDigest: outcome.reviewedEffectDigest } : {}),

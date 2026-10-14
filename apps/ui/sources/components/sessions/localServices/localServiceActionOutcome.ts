@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { LocalServiceNativePrerequisiteV1Schema, type LocalServiceNativePrerequisiteV1 } from '@happier-dev/protocol/local/services/launcher/v1';
+import { LocalServiceEstablishmentFailureV1Schema, type LocalServiceEstablishmentFailureV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import { Modal } from '@/modal';
 import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
@@ -32,7 +34,8 @@ export type LocalServiceActionOutcome =
      * returned `undefined` because the target could not be addressed. That is still a failure the
      * user must see; it just has no daemon code behind it.
      */
-    | Readonly<{ kind: 'failed'; reasonCode: string | null }>;
+    | Readonly<{ kind: 'failed'; reasonCode: string | null; prerequisite?: LocalServiceNativePrerequisiteV1;
+        establishmentFailure?: LocalServiceEstablishmentFailureV1 }>;
 
 function asRecord(value: unknown): UnknownRecord | null {
     return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -71,11 +74,22 @@ export function readLocalServiceActionFailureReason(result: unknown): string | n
  *
  * Anything else is a success payload the caller already knows how to parse.
  */
+function readFailureOutcome(result: unknown): Extract<LocalServiceActionOutcome, { kind: 'failed' }> {
+    const reasonCode = readLocalServiceActionFailureReason(result);
+    const record = asRecord(result);
+    const prerequisite = LocalServiceNativePrerequisiteV1Schema.safeParse(reasonCode === 'native_tool_unavailable'
+        ? record?.prerequisite ?? asRecord(record?.details)?.prerequisite : undefined);
+    const failure = LocalServiceEstablishmentFailureV1Schema.safeParse(reasonCode === 'plugin_managed_service_establishment_failed'
+        ? record?.establishmentFailure ?? asRecord(record?.details)?.establishmentFailure : undefined);
+    return { kind: 'failed', reasonCode, ...(prerequisite.success ? { prerequisite: prerequisite.data } : {}),
+        ...(failure.success ? { establishmentFailure: failure.data } : {}) };
+}
+
 export function readLocalServiceActionOutcome(result: unknown): LocalServiceActionOutcome {
     if (result === undefined || result === null || result === false) {
         return { kind: 'failed', reasonCode: null };
     }
-    if (result instanceof Error) return { kind: 'failed', reasonCode: readLocalServiceActionFailureReason(result) };
+    if (result instanceof Error) return readFailureOutcome(result);
     const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result);
     if (approval.success) return { kind: 'approval_pending', artifactId: approval.data.artifactId, actionId: approval.data.actionId };
     const record = asRecord(result);
@@ -83,14 +97,11 @@ export function readLocalServiceActionOutcome(result: unknown): LocalServiceActi
         return { kind: 'succeeded' };
     }
     if (record.ok === false) {
-        return {
-            kind: 'failed',
-            reasonCode: readLocalServiceActionFailureReason(result),
-        };
+        return readFailureOutcome(result);
     }
     const status = readNonEmptyString(record.status);
     if (status !== null && status !== 'succeeded') {
-        return { kind: 'failed', reasonCode: readLocalServiceActionFailureReason(result) };
+        return readFailureOutcome(result);
     }
     return { kind: 'succeeded' };
 }
@@ -98,16 +109,30 @@ export function readLocalServiceActionOutcome(result: unknown): LocalServiceActi
 /**
  * Show the failure. Title comes from the caller because only the caller knows which service and
  * which verb; the body comes from the canonical reason-code mapper, with the typed cause in
- * the existing diagnostic-copy format. Private transport messages are never displayed.
+ * a deliberate Details action. Private transport messages are never displayed.
  */
 export function presentLocalServiceActionFailure(input: Readonly<{
     title: string;
     reasonCode: string | null;
+    prerequisite?: LocalServiceNativePrerequisiteV1;
+    establishmentFailure?: LocalServiceEstablishmentFailureV1;
 }>): void {
-    const copy = resolveReasonCopy({ reasonCode: input.reasonCode, kind: 'localServiceAction' });
-    Modal.alert(input.title, input.reasonCode
-        ? t('errors.errorWithCode', { message: copy.body, code: input.reasonCode })
-        : copy.body);
+    const copy = resolveReasonCopy({ reasonCode: input.reasonCode, kind: 'localServiceAction', prerequisite: input.prerequisite,
+        establishmentFailure: input.establishmentFailure });
+    const reasonCode = input.reasonCode;
+    Modal.alert(input.title, copy.body, reasonCode ? [
+        { text: t('common.ok'), style: 'cancel' },
+        { text: t('common.details'), onPress: () => {
+            const failure = input.establishmentFailure;
+            const details = [copy.body,
+                ...(failure?.cause === 'port_in_use' && failure.exitCode !== undefined
+                    ? [t('localServices.actions.failure.processExit', { code: String(failure.exitCode) })] : []),
+                ...(failure?.signal ? [failure.signal] : []),
+                ...(failure?.lastStderrLine ? [failure.lastStderrLine] : []),
+            ].join('\n');
+            Modal.alert(input.title, t('errors.errorWithCode', { message: details, code: reasonCode }));
+        } },
+    ] : undefined);
 }
 
 export type LocalServiceActionRunner = Readonly<{
@@ -151,7 +176,7 @@ export function useLocalServiceActionRunner(): LocalServiceActionRunner {
         try {
             outcome = readLocalServiceActionOutcome(await input.action());
         } catch (error) {
-            outcome = { kind: 'failed', reasonCode: readLocalServiceActionFailureReason(error) };
+            outcome = readFailureOutcome(error);
         } finally {
             if (mountedRef.current) {
                 setPendingId((current) => (current === input.id ? null : current));
@@ -161,6 +186,8 @@ export function useLocalServiceActionRunner(): LocalServiceActionRunner {
             presentLocalServiceActionFailure({
                 title: input.failureTitle,
                 reasonCode: outcome.reasonCode,
+                ...(outcome.prerequisite ? { prerequisite: outcome.prerequisite } : {}),
+                ...(outcome.establishmentFailure ? { establishmentFailure: outcome.establishmentFailure } : {}),
             });
             return false;
         }

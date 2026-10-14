@@ -157,6 +157,34 @@ describe('createManagedServiceProcessSupervisorHost', () => {
         vi.restoreAllMocks();
     });
 
+    it.each([
+        ['macOS Node', 'Error: listen EADDRINUSE: address already in use :::49152\nerrno: -48\nport: 49152', 'port_in_use'],
+        ['Windows Winsock', 'bind: Only one usage of each socket address (protocol/network address/port) is normally permitted. (10048)', 'port_in_use'],
+        ['unrelated exit on an occupied port', 'Configuration failed: fixture-private-value', 'process_exited'],
+    ] as const)('retains exit evidence without inventing collision causality (%s)', async (_shape, stderr, cause) => {
+        // Only OS terminal output and the platform listener census are simulated.
+        const terminal = deferred<PluginProcessResult>();
+        terminal.resolve({ ...CLEAN_EXIT, termination: { observed: { kind: 'exit', exitCode: 23 }, requestedBy: { kind: 'none' } },
+            stderr: Buffer.from(stderr) });
+        vi.spyOn(localServiceScan, 'scanPlatformLocalServices').mockResolvedValue({
+            listeners: [{ address: '127.0.0.1', port: 49152, protocol: 'tcp', pid: 43 }],
+            processes: new Map([[43, { pid: 43, cwd: '/other-project', command: 'server' }]]), workspaces: [], diagnostics: [],
+        });
+        const { servers } = createHarness([createProcess(42, terminal)]);
+        const failure = await servers.supervise(managedSpec('diagnostic', {
+            mode: { kind: 'managedSpawn', port: 49152, endpointDetection: { kind: 'detectAfterLaunch', minimumConfidence: 'high' } },
+            launch: { executable: { kind: 'systemTool', id: 'fixture.server' }, env: { PRIVATE_TOKEN: 'fixture-private-value' } },
+        })).catch(error => error);
+        expect(failure).toMatchObject({ code: 'plugin_managed_server_process_exited', details: {
+            establishmentFailure: { cause, exitCode: 23, lastStderrLine: expect.any(String),
+                ...(cause === 'port_in_use' ? { port: 49152 } : {}) },
+        } });
+        if (cause === 'process_exited') {
+            expect(failure.details.establishmentFailure).not.toHaveProperty('port');
+            expect(failure.details.establishmentFailure.lastStderrLine).not.toContain('fixture-private-value');
+        }
+    });
+
     it('discovers an owned endpoint after the former startup cutoff without an authored deadline', async () => {
         vi.useFakeTimers();
         const firstScan = deferred<localServiceScan.LocalServicesScanResult>();

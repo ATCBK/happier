@@ -238,6 +238,21 @@ export const LocalServiceNativePrerequisiteV1Schema = lazyZodSchema(() => z.obje
 }).strict());
 export type LocalServiceNativePrerequisiteV1 = z.infer<typeof LocalServiceNativePrerequisiteV1Schema>;
 
+/** Sanitized process evidence for the existing establishment-failure family. */
+export const LocalServiceEstablishmentFailureV1Schema = lazyZodSchema(() => z.object({
+  cause: z.enum(['process_exited', 'port_in_use']),
+  exitCode: z.number().int().optional(),
+  signal: z.string().min(1).optional(),
+  lastStderrLine: z.string().min(1).max(2_048).optional(),
+  port: z.number().int().min(1).max(65_535).optional(),
+  sameProject: z.boolean().optional(),
+}).strict().superRefine((failure, ctx) => {
+  if (failure.cause === 'port_in_use' && failure.port === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['port'], message: 'Port-in-use evidence requires a port.' });
+  }
+}));
+export type LocalServiceEstablishmentFailureV1 = z.infer<typeof LocalServiceEstablishmentFailureV1Schema>;
+
 export const DaemonLocalServiceLauncherStartResponseV1Schema = lazyZodSchema(() => z
   .object({
     protocolVersion: z.literal(1),
@@ -246,6 +261,7 @@ export const DaemonLocalServiceLauncherStartResponseV1Schema = lazyZodSchema(() 
     status: z.enum(['succeeded', 'denied', 'failed']),
     reasonCode: z.string().trim().min(1).max(256).optional(),
     prerequisite: LocalServiceNativePrerequisiteV1Schema.optional(),
+    establishmentFailure: LocalServiceEstablishmentFailureV1Schema.optional(),
     reviewedEffect: StrictJsonValueSchema.optional(),
     reviewedEffectDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     currentTarget: LocalServiceManagedServiceActionTargetV1Schema.optional(),
