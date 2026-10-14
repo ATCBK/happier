@@ -37,6 +37,7 @@ import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCreden
 import { buildProviderAccountUsageScopeKey } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageLoadRoute';
 import { getProviderAccountUsageCacheState, subscribeProviderAccountUsageCache } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageCache';
 import { buildQualifiedQuotaSnapshotScopeKey, getQualifiedQuotaSnapshotEntry, subscribeQualifiedQuotaSnapshotEntry } from '@/hooks/server/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
+import { wasConnectedServiceQuotaObserved } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { shouldHideQuotaForCredentialStatus } from '@/sync/domains/connectedServices/shouldHideQuotaForCredentialStatus';
 import { getCachedServerFeaturesSnapshot, subscribeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { resolveRuntimeFeatureDecisionFromSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
@@ -65,7 +66,7 @@ function readOpenedQuotaScope(context: UsageQueryAccountContext) {
 }
 
 /** Observe already-admitted B; this path never probes, decrypts or refreshes a provider. */
-function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQueryBatchResult): NonNullable<Parameters<typeof resolveUsagePageAggregation>[0]['quota']> {
+function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQueryBatchResult): OpenedQuotaRead {
     const scope = readOpenedQuotaScope(context);
     if (!scope) return { status: 'unknown', errorCode: 'account_profile_unavailable' };
     if (scope.sources.length === 0) return scope.state.profile.connectedAccountsV4.length === 0
@@ -76,7 +77,11 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
     const rows = getProviderAccountUsageCacheState().entriesByCredentialScope[scope.providerScope] ?? {};
     const retainedBySource = new Map(previous?.results.flatMap(slice => slice.quota ?? [])
         .map(value => [createCanonicalJsonSigningInput(value.source), value]));
+    const settledBySource = new Map(previous?.results.flatMap(slice => slice.sources)
+        .filter(state => state.source.startsWith('quota:') && state.status !== 'pending' && state.status !== 'not_loaded')
+        .map(state => [state.source, state]));
     const value: ConnectedServiceQuotaGetResultV1[] = [];
+    const sources: UsageQuerySourceState[] = [];
     let pending = false;
     let unavailable = false;
     let stale = false;
@@ -84,14 +89,32 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
     for (const { source, key } of scope.sources) {
         const admitted = getQualifiedQuotaSnapshotEntry(key);
         const row = admitted.supported === true && admitted.usageRecordId ? rows[admitted.usageRecordId] : undefined;
-        pending ||= admitted.loading || row?.loading === true;
+        const sourceKey = `quota:${createCanonicalJsonSigningInput(source)}`;
+        const retained = retainedBySource.get(createCanonicalJsonSigningInput(source));
+        const settled = settledBySource.get(sourceKey);
+        // The initial cache observation is a revision of the same Resource too.
+        // A vendor reread cannot replace its settled history or qualified state
+        // with a current-only projection before the admitted history read answers.
+        if (retained?.current && settled && admitted.supported === true
+            && admitted.usageRecordId === retained.current.recordId && admitted.error === null && !row?.hadError
+            && (!row?.snapshot || row.snapshot.recordId === retained.current.recordId)) {
+            value.push(retained);
+            sources.push(settled);
+            stale ||= settled.status !== 'available';
+            continue;
+        }
+        pending ||= (admitted.loading || row?.loading === true) && (!row?.snapshot || !wasConnectedServiceQuotaObserved(row.snapshot));
         if (!row?.snapshot || row.snapshot.recordId !== admitted.usageRecordId) {
             unavailable = true;
-            const retained = retainedBySource.get(createCanonicalJsonSigningInput(source));
             if (retained) { value.push(retained); stale = true; }
             continue;
         }
-        stale ||= admitted.error !== null || row.hadError || nowMs >= row.snapshot.fetchedAtMs + row.snapshot.staleAfterMs;
+        const rowStale = admitted.error !== null || row.hadError || nowMs >= row.snapshot.fetchedAtMs + row.snapshot.staleAfterMs;
+        stale ||= rowStale;
+        // A newly batched Usage entry may have no previous result of its own,
+        // but this Account-scoped cache has already witnessed the allowance.
+        if (wasConnectedServiceQuotaObserved(row.snapshot)) sources.push({ source: sourceKey,
+            status: rowStale ? 'stale' : 'available', asOfMs: row.snapshot.fetchedAtMs });
         value.push(projectProviderAccountUsageQuotaReadV1({ input: { source }, current: row.snapshot, nowMs,
             targets: areServerAccountScopesEqual(scope.state.settingsScope, context.accountLifetime.scope)
                 ? scope.state.settings.usagePacingTargetsV1 : undefined,
@@ -99,7 +122,7 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
     }
     if (value.length) {
         const clocks = value.flatMap(row => row.current ? [row.current.fetchedAtMs] : []);
-        return { status: unavailable || pending ? 'partial' : stale ? 'stale' : 'available', value,
+        return { status: unavailable || pending ? 'partial' : stale ? 'stale' : 'available', value, sources,
             ...(clocks.length ? { asOfMs: Math.min(...clocks) } : {}) };
     }
     return { status: pending ? 'pending' : scope.sources.every(({ key }) => getQualifiedQuotaSnapshotEntry(key).supported === false)
@@ -255,8 +278,8 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
     const progressValues = scope.sources.map(({ source }) => retainedBySource.get(createCanonicalJsonSigningInput(source)) ?? null);
     // Account reads settle independently. Keep their qualified identity even
     // when a failed read has no current facts to disclose.
-    const settledBySource = new Map(previous?.results.flatMap(result => result.sources)
-        .filter(state => state.source.startsWith('quota:') && state.status !== 'pending' && state.status !== 'not_loaded')
+    const settledBySource = new Map(opened.sources
+        ?.filter(state => state.status !== 'pending' && state.status !== 'not_loaded')
         .map(state => [state.source, state]));
     const sources: UsageQuerySourceState[] = scope.sources.map(({ source }, index) => {
         const key = `quota:${createCanonicalJsonSigningInput(source)}`;

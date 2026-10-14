@@ -962,6 +962,32 @@ describe('usage query captured Resource adapter', () => {
       const settledSlice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
       const settledPlans = projectUsagePlans(settledSlice.quota ?? [], now, settledSlice.pools, settledSlice.sources);
       expect(settledPlans.tightest?.window.remainingFraction).toBe(0.6);
+      // The Usage page's vendor reread marks the admitted cache row loading
+      // before the history reader answers. Every published revision, including
+      // the initial cache observation, must retain the settled allowance.
+      updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [snapshot.recordId]: {
+        ...entries[snapshot.recordId]!, loading: true } }));
+      const revisions: Parameters<NonNullable<NonNullable<Parameters<typeof readUiUsageQueryBatch>[4]>['onProgress']>>[0][] = [];
+      const settledBatch = decodeUsageQueryResource(entry.getSnapshot().value!);
+      await readUiUsageQueryBatch(captured, { queries: [query] }, undefined, settledBatch,
+        { onProgress: batch => { revisions.push(batch); } });
+      expect(revisions.length).toBeGreaterThan(0);
+      for (const revision of revisions) {
+        const slice = revision.results[0]!;
+        expect.soft(projectUsagePlans(slice.quota ?? [], now, slice.pools, slice.sources).tightest).toEqual(settledPlans.tightest);
+        expect.soft(slice.quota?.[0]?.history).toEqual(settledSlice.quota?.[0]?.history);
+      }
+      // Usage can acquire a new batch entry while Home's single-query entry is
+      // warm. The admitted cache reading is still settled for that new entry.
+      const newlyBatchedRevisions: typeof revisions = [];
+      await readUiUsageQueryBatch(captured, { queries: [query] }, undefined, undefined,
+        { onProgress: batch => { newlyBatchedRevisions.push(batch); } });
+      for (const revision of newlyBatchedRevisions) {
+        const slice = revision.results[0]!;
+        expect.soft(projectUsagePlans(slice.quota ?? [], now, slice.pools, slice.sources).tightest?.window.remainingFraction).toBe(0.6);
+      }
+      updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [snapshot.recordId]: {
+        ...entries[snapshot.recordId]!, loading: false } }));
       holdLaterHistory = true;
       accountingResponse = { ...value, totals: { ...value.totals, eventCount: 2 } };
       const refreshingHistory = entry.refresh();
