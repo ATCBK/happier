@@ -8,8 +8,8 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
-import { createNativeCacheFileSink, shareNativeCacheFile } from '@/sync/runtime/files/nativeCacheFileSink';
-import { downloadWebFile } from '@/sync/runtime/files/downloadWebFile';
+import { createNativeCacheFileSink } from '@/sync/runtime/files/nativeCacheFileSink';
+import { saveFileBytes } from '@/sync/runtime/files/saveFileBytes';
 import { t } from '@/text';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
@@ -84,32 +84,19 @@ export function ArtifactBinaryBody(props: Readonly<{ artifactId: string; name: s
         try {
             const bytes = ready?.bytes ?? await props.readBytes(props.artifactId, reference, controller.signal);
             controller.signal.throwIfAborted();
-            if (Platform.OS === 'web') downloadWebFile(new Blob([new Uint8Array(bytes)], { type: reference.mime }), props.name, async () => {});
-            else {
-                const sink = await createNativeCacheFileSink({ directoryName: 'happier-downloads', fileName: props.name });
-                if (!sink.ok) throw new Error(sink.error);
-                let retainCacheFile = false;
-                try {
-                    await sink.writeBytes(bytes); await sink.close();
-                    const shared = await shareNativeCacheFile({ fileUri: sink.fileUri, name: props.name,
-                        mimeType: reference.mime, isCurrent: () => !controller.signal.aborted });
-                    if (shared.status === 'canceled') return;
-                    if (shared.status === 'unavailable') throw new Error(t('files.fileSharingUnavailable'));
-                    retainCacheFile = shared.retainCacheFile;
-                } finally { if (!retainCacheFile) await sink.cleanup(); }
-            }
+            await saveFileBytes({ bytes, fileName: props.name, mimeType: reference.mime, isCurrent: () => !controller.signal.aborted });
         } catch { if (!controller.signal.aborted) setDownloadFailed(true); }
         finally {
             if (downloadController.current === controller) downloadController.current = null;
             if (!controller.signal.aborted) setDownloading(false);
         }
     };
-    const card = <View style={{ gap: 8 }} testID="artifact:fileCard">
+    const card = <View style={{ gap: theme.space.s8 }} testID="artifact:fileCard">
         <Icon name={reference.mime.startsWith('image/') ? 'image' : 'file'} size={24} color={theme.colors.text.secondary} />
         <Text>{props.name}</Text>
         <Text style={{ color: theme.colors.text.secondary }}>{`${reference.mime} · ${formatHappierDataBytes(reference.sizeBytes, { kind: 'storage' })}`}</Text>
     </View>;
-    return <View style={{ gap: 16 }} testID="artifact:binaryBody">
+    return <View style={{ gap: theme.space.s16 }} testID="artifact:binaryBody">
         {ready ? <FileUriPreview uri={ready.uri} mime={reference.mime} title={props.name} fallback={card}
             onOpenImage={() => {
                 void import('@/components/sessions/attachments/preview/AttachmentImagePreviewModal').then(({ AttachmentImagePreviewModal }) => {

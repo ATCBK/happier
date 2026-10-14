@@ -103,6 +103,20 @@ describe('Artifact composed view reads', () => {
         expect(screen.tree.root.findByType('Redirect').props.href).toBe('/inbox?item=approval%3Ahome%3Aapproval');
         await screen.unmount();
     });
+    it('shows a saved widget as the widget itself, never its stored definition as a document', async () => {
+        const definition = { v: 1, id: 'saved-widget', name: 'Tokens per day', sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' } };
+        const row: DecryptedArtifact = { id: 'saved-widget', title: 'Tokens per day', isDecrypted: true,
+            header: { kind: 'widget-definition.v1', v: 1, title: 'Tokens per day' },
+            body: JSON.stringify(definition), headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+        const screen = await renderScreen(<ArtifactView artifactId={row.id} artifact={row} presentation="page" />);
+        expect(screen.findByTestId('artifact:widget')).not.toBeNull();
+        expect(screen.findByTestId('artifact:body') === null).toBe(true);
+        // It is a widget, not a text document: named so, and never offered to the text editor.
+        expect(screen.tree.root.findByProps({ testID: 'artifact:header' }).props.meta[0]).toMatchObject({ key: 'kind', text: 'artifacts.browser.kindOne.widget' });
+        expect(screen.findByTestId('artifact:edit') === null).toBe(true);
+        expect(screen.findByTestId('artifact:history') !== null).toBe(true);
+        await screen.unmount();
+    });
     it.each([{ kind: 'image', warm: false }, { kind: 'html', warm: false }, { kind: 'image', warm: true }, { kind: 'html', warm: true }] as const)(
         'opens $kind (warm=$warm) through one authenticated head and renders its private preview', async ({ kind, warm }) => {
         const { served } = await setup(kind, undefined, warm);

@@ -115,6 +115,7 @@ import { useWorkflowAgentRevision } from '../authoring/useWorkflowAgentRevision'
 import { useWorkflowTestRunPresentation } from '../editor/useWorkflowTestRunPresentation';
 import { buildWorkflowAgentAuthoringSeed } from '@/sync/domains/workflows/workflowAgentAuthoringSeed';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 const styles = StyleSheet.create((theme) => ({
     // The page's paper, as the editor body paints it (its loading and missing states included).
@@ -1040,6 +1041,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                         setHighlightedBlockIds([]);
                         pendingRetargetRef.current = null;
                         setRetargetFailed(false);
+                        setTestSourcePending(false);
                         setTestSource(null);
                         setTestRun(null);
                         pendingRunIdRef.current = null;
@@ -1237,7 +1239,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                         title: t('workflows.interchange.importIssuesTitle'),
                         testID: 'workflow-import-review-modal',
                         bodyScroll: 'auto',
-                        dimensions: { width: 620, maxHeightRatio: 0.92, size: 'md' },
+                        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
                     },
                 });
                 return;

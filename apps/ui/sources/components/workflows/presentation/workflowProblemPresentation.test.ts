@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { WORKFLOW_OPERATION_ERROR_CODES_V1 } from '@happier-dev/protocol';
+import { normalizeWorkflowActionThrownError } from '@happier-dev/protocol/actions/executor/workflowAccountActions';
+import { WorkflowActionFailureV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from './workflowRunDisplayName';
@@ -26,6 +28,21 @@ function actionError(rawCode: string | null, message = 'server-internal reason')
  * never reach a person as prose the server chose or as the identifier itself.
  */
 describe('workflowProblemPresentation', () => {
+    it('explains Account-wide role preparation and offers retry from the real strict failure projection', () => {
+        const failure = WorkflowActionFailureV1Schema.parse(normalizeWorkflowActionThrownError(
+            Object.assign(new Error('private catalog contents'), { code: 'account_role_overrides_unavailable' }),
+        ));
+        const error = new WorkflowActionError({ rawCode: failure.errorCode, message: failure.error, failure });
+        expect(resolveWorkflowProblemPresentation(error)).toMatchObject({
+            code: 'content_unavailable', title: 'workflows.problem.accountRolesUnavailableTitle',
+            message: 'workflows.problem.accountRolesUnavailable', repair: 'retry', repairLabel: 'workflows.retry',
+            accessibilitySemantics: 'alert',
+        });
+        expect(resolveWorkflowProblemPresentation(actionError('role_target_unavailable'))).toMatchObject({
+            message: 'workflows.problem.roleTargetUnavailable', repair: 'none',
+        });
+    });
+
     it('presents the precise conversation check from the typed refusal', () => {
         const error = new WorkflowActionError({ rawCode: 'workflow_conversation_unavailable', message: 'private diagnostics',
             failure: { ok: false, errorCode: 'workflow_conversation_unavailable', error: 'workflow_conversation_unavailable',

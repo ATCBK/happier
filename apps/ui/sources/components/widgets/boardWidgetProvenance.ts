@@ -46,7 +46,13 @@ export function resolveBoardWidgetProvenance(
     source: SessionSurfaceItemV1['source'],
     projection: PluginUiProjectionModel | null | undefined,
 ): BoardWidgetProvenance {
-    if (source.kind === 'declarative') return provenance(t('sessionBoard.item.provenance.note'));
+    if (source.kind === 'declarative') {
+        // An agent visual says what it is: a chart or a table, never "Note" for every document.
+        const root = (source.document as { root?: { kind?: unknown } } | undefined)?.root?.kind;
+        return provenance(root === 'chart' ? t('sessionBoard.item.provenance.chart')
+            : root === 'table' ? t('sessionBoard.item.provenance.table')
+                : t('sessionBoard.item.provenance.note'));
+    }
     if (source.kind === 'walkthrough') return provenance(resolveSessionScmReviewComparisonLabel({ kind: source.comparison }));
     if (source.kind !== 'widget' || source.instance.definition.kind !== 'installed') {
         return provenance(t('sessionBoard.item.provenance.interactiveView'));

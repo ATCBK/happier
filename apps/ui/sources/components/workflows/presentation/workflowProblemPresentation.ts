@@ -216,6 +216,11 @@ export function resolveWorkflowProblemPresentation(
                 ? { messageKey: 'machineAgents.unsupportedArch' } : {}) });
     }
     if (failure?.errorCode === 'content_unavailable' && failure.details !== undefined) {
+        if (failure.details.reason === 'account_role_overrides_unavailable') {
+            return present(code, { ...WORKFLOW_PROBLEM_SHAPES.content_unavailable,
+                titleKey: 'workflows.problem.accountRolesUnavailableTitle',
+                messageKey: 'workflows.problem.accountRolesUnavailable', repair: 'retry' });
+        }
         return present(code, { ...WORKFLOW_PROBLEM_SHAPES.content_unavailable,
             messageKey: WORKFLOW_CONTENT_REASON_KEYS[failure.details.reason] });
     }

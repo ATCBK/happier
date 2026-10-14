@@ -10,6 +10,8 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { Modal } from '@/modal';
 import { ApprovalRequestSchema } from '@happier-dev/protocol';
+import { runGuardedNavigation, runGuardedTabNavigation } from '@/utils/navigation/runGuardedNavigation';
+import type { CodeEditorHandle, CodeEditorProps } from '@/components/ui/code/editor/codeEditorTypes';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -18,10 +20,12 @@ const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 const { getStorage } = await import('@/sync/domains/state/storage');
 
-const navigation = vi.hoisted(() => ({ canGoBack: true, back: vi.fn(), replace: vi.fn(), push: vi.fn() }));
+const navigation = vi.hoisted(() => ({ canGoBack: true, back: vi.fn(), replace: vi.fn(), push: vi.fn(),
+    pathname: '/', params: {} as Record<string, string> }));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit');
-    return createExpoRouterMock({ router: { canGoBack: () => navigation.canGoBack,
+    return createExpoRouterMock({ pathname: () => navigation.pathname, params: () => navigation.params,
+        router: { canGoBack: () => navigation.canGoBack,
         back: navigation.back, replace: navigation.replace, push: navigation.push } }).module;
 });
 vi.mock('@/modal', async () => {
@@ -32,15 +36,28 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit');
     return createTextModuleMock();
 });
+vi.mock('@react-navigation/native', async () => {
+    const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+    return createReactNavigationNativeMock();
+});
 // The platform editor surface (Monaco on web, a CodeMirror WebView on native) is the boundary: a host node
 // with the same value/onChange contract, so the editor's own draft, save and refusal logic stays real.
+const editorBoundary = vi.hoisted(() => ({ pendingValue: null as string | null }));
 vi.mock('@/components/ui/code/editor/CodeEditor', async () => {
     const React = await import('react');
     return {
-        CodeEditor: React.forwardRef((props: any, ref: any) => {
+        CodeEditor: React.forwardRef<CodeEditorHandle, CodeEditorProps>((props, ref) => {
             const value = React.useRef(props.value);
             value.current = props.value;
-            React.useImperativeHandle(ref, () => ({ getValue: () => value.current, flushPendingChange: async () => undefined }));
+            React.useImperativeHandle(ref, () => ({
+                getValue: () => editorBoundary.pendingValue ?? value.current,
+                flushPendingChange: async () => {
+                    if (editorBoundary.pendingValue === null) return;
+                    value.current = editorBoundary.pendingValue;
+                    editorBoundary.pendingValue = null;
+                    props.onChange(value.current);
+                },
+            }));
             return React.createElement('CodeEditor', { testID: props.testID, value: props.value, onChangeText: props.onChange });
         }),
     };
@@ -53,7 +70,7 @@ async function loadArtifactEditor() {
 
 describe('ArtifactEditor', () => {
     const initialState = getStorage().getState();
-    let disposeHome: (() => Promise<void>) | undefined;
+    let disposeHome: Awaited<ReturnType<typeof installRealActionExecutorModuleLoader>> | undefined;
     let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
     afterEach(async () => {
         await connection?.dispose();
@@ -76,11 +93,120 @@ describe('ArtifactEditor', () => {
         return serverId;
     }
     beforeEach(() => {
+        navigation.pathname = '/';
+        navigation.params = {};
         navigation.canGoBack = true;
         navigation.back.mockClear();
         navigation.replace.mockClear();
         navigation.push.mockClear();
         vi.mocked(Modal.alert).mockClear();
+        editorBoundary.pendingValue = null;
+    });
+
+    it('publishes a settled unavailable Session title through real route hydration and workspace wiring', async () => {
+        await restoreEditorHome('https://missing-destination-title.test');
+        // The canonical hydration owner settles an unknown qualified Home as missing.
+        // It cannot be confused with an uncached Session on a known Home.
+        const serverId = 'unknown-home';
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
+        const { useDestinationInstanceTitles, resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+        const { useHydrateSessionForRoute } = await import('@/hooks/session/useHydrateSessionForRoute');
+        getStorage().setState({ isDataReady: true,
+            settings: { ...getStorage().getState().settings, mobileWorkspaceExperienceV1: 'classic' } });
+        navigation.pathname = '/session/missing';
+        navigation.params = { id: 'missing', serverId };
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
+        function Titles(props: Readonly<{ tabId: string; ref: import('@/components/appShell/destinations/compactAppDestinationCatalog').DestinationRef }>) {
+            const entries = React.useMemo(() => [{ key: props.tabId, ref: props.ref }], [props.tabId, props.ref]);
+            return React.createElement('MissingSessionTitle', { title: useDestinationInstanceTitles(catalog, entries).get(props.tabId) });
+        }
+        function HydratedRoute() {
+            const state = useHydrateSessionForRoute('missing', 'MissingSessionTitle.test', { serverId, hydrateMessages: false });
+            return React.createElement('MissingSessionRoute', { state });
+        }
+        const screen = await renderScreen(
+            <WorkspaceProvider enabled catalog={catalog}>{workspace => {
+                const tab = workspace.state.tabs[workspace.state.groups[workspace.state.focusedGroupId].activeTabId];
+                return <>
+                    <Titles tabId={tab.id} ref={tab.target} />
+                    <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname="/session/missing" focused visible
+                        navigation={workspace.navigationForTab(tab.id)}><HydratedRoute /></DestinationInstanceHost>
+                </>;
+            }}</WorkspaceProvider>
+        );
+        await vi.waitFor(() => expect(screen.root.findByType('MissingSessionRoute').props.state).toMatchObject({ kind: 'missing', sessionId: 'missing' }));
+        expect(screen.root.findByType('MissingSessionTitle').props.title).toBe('errors.sessionDeleted');
+        await screen.unmount();
+    });
+
+    it('guards the mounted artifact tab and navigation, preserving a cancelled or refused draft and saving before departure', async () => {
+        const serverId = await restoreEditorHome('https://artifact-editor-guard.test');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const ArtifactEditor = await loadArtifactEditor();
+        const tabId = 'artifact-draft';
+        const screen = await renderScreen(<DestinationInstanceHost tabId={tabId}
+            ref={{ kind: 'artifacts', params: { workspacePathname: '/artifacts/new' } }} pathname="/artifacts/new" focused visible
+            navigation={{ back: navigation.back, replace: navigation.replace, push: navigation.push,
+                canGoBack: () => navigation.canGoBack, pushRetainingCurrent: navigation.push }}>
+            <ArtifactEditor artifact={null} mode="new" />
+        </DestinationInstanceHost>);
+        const departed = vi.fn();
+        const leave = vi.fn(() => { runGuardedNavigation(departed); });
+        // A debounced platform keystroke has not reached the React draft yet.
+        editorBoundary.pendingValue = 'Unsaved document';
+        const choose = async (choice: 'common.keepEditing' | 'common.save' | 'common.discard') => {
+            await vi.waitFor(() => expect(vi.mocked(Modal.alert).mock.calls.at(-1)?.[2]).toBeDefined());
+            const buttons = vi.mocked(Modal.alert).mock.calls.at(-1)?.[2];
+            expect(buttons?.map(button => button.text)).toEqual(['common.discard', 'common.save', 'common.keepEditing']);
+            await act(async () => { await buttons?.find(button => button.text === choice)?.onPress?.(); });
+        };
+        let pending = runGuardedTabNavigation([tabId], leave);
+        await choose('common.keepEditing');
+        expect(await pending).toBe(false);
+        expect(leave).not.toHaveBeenCalled();
+        expect(screen.findByTestId('artifact-editor:body:source')?.props.value).toBe('Unsaved document');
+        vi.mocked(Modal.alert).mockClear();
+        homes.answer(serverId, 'POST /v1/artifacts', { status: 413,
+            body: { error: 'quota_exceeded', budget: 'document', limitBytes: 1, usedBytes: 10 } });
+        pending = runGuardedTabNavigation([tabId], leave);
+        await choose('common.save');
+        await act(async () => { expect(await pending).toBe(false); });
+        expect(leave).not.toHaveBeenCalled();
+        expect(screen.findByTestId('artifact-editor:quota')).not.toBeNull();
+        vi.mocked(Modal.alert).mockClear();
+        pending = runGuardedNavigation(leave);
+        await choose('common.discard');
+        await act(async () => { expect(await pending).toBe(true); });
+        expect(leave).toHaveBeenCalledOnce();
+        expect(departed).toHaveBeenCalledOnce();
+        await screen.unmount();
+    });
+
+    it('saves a guarded new artifact once and lets the save owner replace its destination', async () => {
+        const serverId = await restoreEditorHome('https://artifact-editor-guard-save.test');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const ArtifactEditor = await loadArtifactEditor();
+        const screen = await renderScreen(<DestinationInstanceHost tabId="artifact-draft"
+            ref={{ kind: 'artifacts', params: { workspacePathname: '/artifacts/new' } }} pathname="/artifacts/new" focused visible
+            navigation={{ back: navigation.back, replace: navigation.replace, push: navigation.push,
+                canGoBack: () => navigation.canGoBack, pushRetainingCurrent: navigation.push }}>
+            <ArtifactEditor artifact={null} mode="new" />
+        </DestinationInstanceHost>);
+        await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'Saved document'); });
+        const close = vi.fn();
+        const pending = runGuardedTabNavigation(['artifact-draft'], close);
+        await vi.waitFor(() => expect(vi.mocked(Modal.alert).mock.calls.at(-1)?.[2]).toBeDefined());
+        await act(async () => {
+            await vi.mocked(Modal.alert).mock.calls.at(-1)?.[2]?.find(button => button.text === 'common.save')?.onPress?.();
+            expect(await pending).toBe(true);
+        });
+        const stored = homes.artifacts(serverId).list();
+        expect(stored).toHaveLength(1);
+        expect(homes.artifacts(serverId).readPlainBody(stored[0]!.id)).toBe('Saved document');
+        expect(navigation.replace).toHaveBeenCalledWith(`/artifacts/${stored[0]!.id}`);
+        expect(close).not.toHaveBeenCalled();
+        await screen.unmount();
     });
 
     it('saves against the opening full revision after another writer advances the head, retaining the refused draft', async () => {
@@ -215,5 +341,8 @@ describe('ArtifactEditor', () => {
         const screen = await renderScreen(<ArtifactEditor artifact={artifact} mode="edit" />);
         expect(screen.findByTestId('artifact-editor:save')).toBeNull();
         expect(screen.findByTestId('artifact:download')).not.toBeNull();
+        const leave = vi.fn();
+        expect(runGuardedNavigation(leave)).toBe(true);
+        expect(leave).toHaveBeenCalledOnce();
     });
 });

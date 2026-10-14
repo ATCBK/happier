@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { Modal, type CustomModalComponentType, type CustomModalInjectedProps } from '@/modal';
 import type { FocusReturnRef } from '@/keyboard/focusReturn';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 /**
  * One lifecycle for a workflow surface presented as a canonical modal card.
@@ -68,7 +69,7 @@ export function useWorkflowCardModal<C extends CustomModalComponentType<any>>(pa
                 testID,
                 bodyScroll: 'auto',
                 ...(phonePresentation === undefined ? {} : { phonePresentation }),
-                dimensions: { width: 520, maxHeightRatio: 0.92, size: 'md' },
+                dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
             },
         });
         modalRef.current = { id, identity };
