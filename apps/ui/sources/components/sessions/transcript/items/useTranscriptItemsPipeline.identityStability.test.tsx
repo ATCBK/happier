@@ -6,15 +6,20 @@
  * unchanged.
  */
 import { describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
 
 import { createToolCallMessageFixture, renderHook } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
-import { useTranscriptItemsPipeline, useTranscriptToolAutoExpandEffect } from './useTranscriptItemsPipeline';
-
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+const { useTranscriptItemsPipeline, useTranscriptToolAutoExpandEffect } = await import('./useTranscriptItemsPipeline');
+const { AppSessionTranscriptSourceProvider } = await import('../source/appSessionTranscriptSource');
+
+function Source(props: React.PropsWithChildren) {
+    return <AppSessionTranscriptSourceProvider sessionId="s1" serverId={null}>{props.children}</AppSessionTranscriptSourceProvider>;
+}
 
 type ItemsPipelineDeps = Parameters<typeof useTranscriptItemsPipeline>[0];
 
@@ -91,8 +96,11 @@ describe('useTranscriptItemsPipeline identity stability', () => {
         const deps = { ...buildDeps(createStableMembers()), groupingMode, showToolCalls: false,
             items: [{ kind: 'tool-calls-group' as const, id: 'tools', toolMessageIds: messages.map((m) => m.id), createdAt: 1 }],
             getMessageById: (id: string) => messages.find((m) => m.id === id) ?? null };
-        const hook = await renderHook((value: typeof deps) => useTranscriptItemsPipeline(value), { initialProps: deps });
-        expect(hook.getCurrent().decomposedItems.map((item) => item.kind)).toEqual(['tool-group-header']);
+        const hook = await renderHook((value: typeof deps) => useTranscriptItemsPipeline(value), { initialProps: deps, wrapper: Source });
+        expect(hook.getCurrent().decomposedItems.map((item) => item.kind)).toEqual(['tool-group-header', 'tool-group-footer']);
+        expect(hook.getCurrent().decomposedItems[0]).toMatchObject({
+            toolMessageIds: ['tool-1', 'tool-2'], hiddenCount: 2,
+        });
         await hook.rerender({ ...deps, expandedToolCallsAnchorMessageIds: new Set(['tool-2']) });
         expect(hook.getCurrent().decomposedItems.map((item) => item.kind)).toEqual([
             'tool-group-header', 'tool-group-tool', 'tool-group-tool', 'tool-group-footer',
@@ -117,7 +125,7 @@ describe('useTranscriptItemsPipeline identity stability', () => {
         const members = createStableMembers();
         const hook = await renderHook(
             (deps: ItemsPipelineDeps) => useTranscriptItemsPipeline(deps),
-            { initialProps: buildDeps(members) },
+            { initialProps: buildDeps(members), wrapper: Source },
         );
 
         const first = hook.getCurrent();
