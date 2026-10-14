@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createDaemonMcpRequestAuthForTest } from './connectedServices/requestAuth/createDaemonMcpRequestAuthForTest';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -2119,6 +2120,7 @@ export async function startDaemon(
       },
       readSpawnFailureLimits: () => machineVitals?.latest()?.limits,
       readMachineResourcesPolicy: () => machineResourcesPolicy?.read() ?? { status: 'unavailable' },
+      readMachineMemory: () => machineVitals?.latest()?.memory ?? null,
       readDoctorResourceVitals: () => ({ sample: machineVitals?.latest() ?? null,
         attention: machineResourceSummary?.getSummary()?.attention ?? null, self: eventLoopStallMonitor.snapshot() }),
       checkRegistryUpdates,
@@ -2236,6 +2238,7 @@ export async function startDaemon(
         localServiceInventoryRoutes = routes.localServicesInventory ?? null;
         machineRpcRouteAttachments.attachLocalServicesRoutes(routes);
       },
+      onComputerRoutesReady: machineRpcRouteAttachments.attachComputerRoutes,
       onLocalServicesSummaryReady: (source) => {
         localServiceSummary = source;
         isProjectServiceExecutionLive = source.isProjectServiceExecutionLive;
@@ -2410,8 +2413,8 @@ export async function startDaemon(
     const guardFacts = createReadGuardFacts({ ...guardSources,
       trackedSessions: () => pidToTrackedSession.values(),
       readInventory: () => managedActivity.read(),
-      readSessionEligibility: async (tracked, _inventory, signal) =>
-        readCurrentSessionEligibility({ access: await readGuardAccess(tracked, signal) }),
+      readSessionEligibility: async (tracked, inventory, signal) =>
+        readCurrentSessionEligibility({ access: await readGuardAccess(tracked, signal), inventory }),
     });
     const defaultGuardPolicy = MachineGuardPolicyV1Schema.parse({});
     const readGuardPolicy = () => {
@@ -2734,7 +2737,7 @@ export async function startDaemon(
         const [{ createManagedSessionDirectories }, projectRows, { getSharedTerminalProcessRegistry }, { readStorageWorktrees },
           { readStorageComposerMediaStageFacts }, { readStorageSessionHandoffFacts }, { resolveCanonicalAbsolutePath },
           { MachineStoragePolicyV1Schema }, { readResidentVoiceModelPackPaths }, { readSessionDraftPresence },
-          { createStorageWorktreeOperations }, { createLogRetentionOwner }] = await Promise.all([
+          { createStorageWorktreeOperations }, { createLogRetentionOwner }, { createProjectWorkspaceRetirement }] = await Promise.all([
           import('@/session/creation/managedSessionDirectories'), import('@/workspaces/projectAccountRows'),
           import('./local/services/inventory/terminalRegistry'), import('./resources/readStorageWorktrees'),
           import('@/transfers/staging/composerMediaStageStore'), import('@/session/handoff/state/sessionHandoffSourceExportStore'),
@@ -2744,6 +2747,7 @@ export async function startDaemon(
           import('@/session/drafts/readSessionDraftPresence'),
           import('@/storage/worktrees/storageWorktreeOperations'),
           import('@/utils/logs/logRetention'),
+          import('@/workspaces/projectWorkspaceRetirement'),
         ]);
         const defaultStoragePolicy = MachineStoragePolicyV1Schema.parse({});
         const readTrackedSessions = () => [...pidToTrackedSession.values()].flatMap(tracked => {
@@ -2825,6 +2829,15 @@ export async function startDaemon(
             ...(hostBootedAt !== undefined ? { bootedAt: hostBootedAt } : {}),
             managedSessionDirectories: createManagedSessionDirectories({ activeServerDir }),
             worktreeOperations: createStorageWorktreeOperations({ happyHomeDir: home }),
+            checkoutReferences: createProjectWorkspaceRetirement({ authority: { credentials: capturedCredentials, serverId: target.serverId },
+              serverId: target.serverId, machineId: target.machineId,
+              assertCurrentAuthority: async () => {
+                const current = machineResourceTarget();
+                if (credentials !== capturedCredentials || !current || current.serverId !== target.serverId
+                  || current.machineId !== target.machineId || current.installationId !== target.installationId
+                  || current.custodianAccountId !== target.custodianAccountId)
+                  throw Object.assign(new Error('Storage reference authority changed'), { code: 'unauthorized' });
+              } }),
             readProjects, readTrackedSessions,
             readAcpCatalog: () => getActiveAccountSettingsSnapshot()?.scopeKey === resolveAccountSettingsScopeKey(capturedCredentials)
               ? readActiveAcpCatalog() : undefined,
@@ -3023,6 +3036,8 @@ export async function startDaemon(
           await lease.release();
         }
       },
+      activatePurposeBindings:
+        connectedAccountPurposeBindingRuntime.activatePurposeBindings,
       onQualifiedConnectedAccountCredentialUpdated: () => {
         connectedAccountPurposeBindingRuntime.invalidate();
       },
@@ -3067,7 +3082,6 @@ export async function startDaemon(
       initialDaemonState,
       directPeerServerLifecycle,
       transferLiveWorkProducer,
-      directTransferPromptAssetAdapterRegistry,
       directTransferRegistryHost,
       transferRuntimeStatePublisher,
       stopDirectPeerServer,
@@ -3853,7 +3867,6 @@ export async function startDaemon(
           if (!runtime) throw new Error('Workspace sync runtime is not ready');
           return await runtime.acquireWorkspaceSyncMachineIngress(input);
         },
-        directTransferPromptAssetAdapterRegistry,
         directTransferRegistryHost,
         daemonServerWorkScheduler,
         cancelConnectedServiceRuntimeAuthRecovery,
@@ -3905,6 +3918,19 @@ export async function startDaemon(
         },
         resolveManagedPurposeBindingIntent:
           connectedAccountPurposeBindingRuntime.resolveBindingIntent,
+        mcpServers: {
+          readCredentials: async () => credentials,
+          issueRequestAuth: createDaemonMcpRequestAuthForTest({ credentials, materializationBaseDir: connectedServicesMaterializationBaseDir,
+            establishedOwner: establishedConnectedAccountRuntimeOwner,
+            activatePurposeBindings: connectedAccountPurposeBindingRuntime.activatePurposeBindings,
+            registry: connectedAccountRequestAuthRegistry,
+            getHttpPort: () => {
+              if (connectedAccountRequestAuthHttpPort === null) throw new Error('connected_account_request_auth_http_port_unavailable');
+              return connectedAccountRequestAuthHttpPort;
+            },
+            isCurrent: () => !isDaemonQuiescing() && !homeTransportCancellation.signal.aborted,
+          }),
+        },
         createAgentCatalogObservation,
         onAutomationWorkerStarted: (worker: AutomationWorkerHandle) => {
           automationWorker = worker;
