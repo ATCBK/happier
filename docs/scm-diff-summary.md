@@ -74,6 +74,93 @@ Capture comparison evidence first, then optionally ask one analysis Run for
 `summary`, `walkthrough`, `commitPlan`, or a combination. Capture requires no
 model. Opening a Walkthrough destination does not start generation; Start does.
 
+The canonical generation brief orders explanations from contracts and data
+shapes through their implementation to callers and UI, groups files by intent,
+and places proving tests beside their behavior. Mechanical files retain coverage
+in a short final stop. Diffs, PR text, comments, file contents and saved generated
+prose are evidence, never user instructions. Review citations and settled context
+require actual supplied review findings; generation alone establishes no review.
+
+In unreleased 0.3 source, `scm.diffSummary.outputLanguage` uses the existing Account
+settings owner. Its empty default follows the requesting UI's active locale;
+explicit language tags select prose only. JSON keys, code, identifiers, enums and
+exact references retain their original meaning. The language travels on the
+existing generation request and separates analysis cache/request identities.
+The saved generator retains that effective language for refinement, additional
+outputs and a replacement Run. An explicit language on a later request takes
+precedence. Earlier saved generators without a language remain readable and use
+the normal request/Account fallback on replacement; their prose is not inspected
+to infer a language. Replacement admission carries only the user's own text in
+`instructions`; the profile rebuilds host tasks and saved evidence in their
+separate prompt sections.
+Headless Actions and direct Runs use the same Account preference resolver;
+without a prose override they use Account `preferredLanguage` when available.
+The Settings Action anchor is `sourceControl.outputLanguage`.
+
+Output notification opt-in uses the existing `RunWorkNotifications` owner and
+configured notification channels; it does not change Account preferences. An
+explicit selected comparison, saved result and output are checked against
+`execution.run.get` before the existing account-inline run-lifecycle trigger is
+registered. Pending/writing output waits beyond that saved revision; already
+settled output catches up immediately. The daemon consumes the existing
+event-backed `waitForOutput` and Action-completion matcher, not the retained
+analysis process's exit. Complete, partial, failed and cancelled output all end
+that observation, so visible notice copy must describe an update rather than
+claim success. Commit-plan output completion means proposal generation, not
+application of accepted commits: application has its separate saved-result
+state. The commit proposal keeps its existing notification control mounted while
+that selected output is pending or writing, including when usable partial groups
+are visible. Live delivery and populated presentation have not been certified here.
+
+`scm.diffSummary.investigateSurroundingFiles` is off by default in unreleased
+0.3 source. UI generation captures the Account preference as an explicit request
+option; other callers opt in with `investigateSurroundingFiles: true`. Enabled and
+disabled analysis have different cache identities without changing comparison identity.
+When enabled, the capture owner materializes raw Git blobs at both exact captured
+endpoints, bypassing checkout filters and export attributes. The Run starts in the
+after directory and receives the before directory as read-only context. Missing
+local endpoint objects, unrepresentable paths or escaping symlinks produce
+`DIFF_UNAVAILABLE` before Run creation; there is no fetch or live-checkout fallback.
+Submodule working files are not materialized from Gitlink identities.
+Immutable checkpoint reads ignore mutable Git replacement refs. For retained
+local captures, native Git applies their available patches to a private index
+and checks resulting file objects against the captured lineage; current diff
+formatting is not the witness. A mismatched retained capture is unavailable.
+
+The existing Run tool policy admits reads and denies workspace writes; it does
+not introduce another filesystem sandbox or broaden network permissions. Disabled
+generation uses the existing no-tools policy. Surrounding reads cannot invent
+captured references or establish host analysis coverage. The machine result store
+retains the pinned directories for resumable conversations and removes them on
+saved-result deletion under its existing lock. The Settings Action anchor is
+`sourceControl.investigateSurroundingFiles`.
+
+An unset summary-model preference resolves a catalog model in the `low` cost tier
+with admitted structured-output support. The picker, prefetch and direct generation
+Action consume the same selection owner; explicit selections retain precedence.
+Resolving the default does not persist a model preference. Without an admitted
+candidate, generation reports model unavailable and retains the captured inventory.
+The relative cost tier is not a token price: current catalogs supply no unit pricing,
+so clients must keep that cost unavailable rather than invent an amount.
+
+Walkthrough reading keys use the mounted reading surface. Plain-reading pointer
+engagement transfers focus from chat without scrolling; visible editors retain
+their keys. A maximized reading surface recovers J/K, reviewed-toggle and Ask keys
+from a retained hidden composer before that input receives them. Hidden or inactive
+walkthroughs do not handle keys. The composed source tests cover these transitions;
+the standalone loaded-pane focus/J/R replay passed. Authenticated chat and maximized
+panel replay remain part of the program's live validation.
+
+The unreleased PR triage default catalog includes a PR-only explanation action.
+It reuses configured-action recipients and canonical context attachments, sends an
+ordinary session message, then opens the session. A stored customized or empty
+action catalog remains authoritative; new defaults do not overwrite it.
+
+Current comparison/generation sources do not supply a repository PR template.
+The Git PR writer applies its existing template only when no body was supplied;
+it does not replace an explicit draft with generated prose. Template-aware
+`suggestedPrBody` generation therefore has no current supplied-template path.
+
 - [`comparison.ts`](../packages/protocol/src/scm/comparison.ts) owns source
   selectors, captured inventory, occurrence identities and path classification.
 - [`diffSummary.ts`](../packages/protocol/src/scm/diffSummary.ts) owns the strict
@@ -209,6 +296,12 @@ context, without giving prose or proposals Git authority.
 | `branch` | Resolved merge-base of base/head to the resolved head. Pending work is not included. |
 | `commit` | Selected parent to the immutable commit; a root uses the empty tree and a merge requires an explicit parent. |
 | `pullRequest` | Source-attested repository/PR identity and merge-base-to-head diff endpoints, with a separate base-tip freshness witness and paged evidence from the hosting source. |
+
+In unreleased 0.3 source, the canonical Git checkpoint command owner ignores
+mutable replacement refs for immutable checkpoint/comparison reads. Captured
+inventory, patches and surrounding-file materialization therefore refer to the
+same actual object identities, including when a replacement ref predates capture.
+Ordinary non-checkpoint Git commands retain their existing semantics.
 
 ### Usage Work correspondence (0.3 development)
 
