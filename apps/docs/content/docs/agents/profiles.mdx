@@ -33,6 +33,13 @@ A profile can include:
 Profiles are applied **only when starting a new session**.
 They are **fixed per session** after launch. If you want a different profile, start a new session.
 
+In **0.3 development source**, a Profile can also carry [skill seeds](/extending/skills#existing-library-and-profile-seeds).
+They add skills at the Session level when a Session starts with that Profile,
+without introducing a Profile level in Where-it's-on rules. Legacy Profile skill
+attachments migrate once. Use **Skills this Profile adds** in the development
+Profile editor to add or remove a library skill, then save the Profile. These
+controls describe unreleased development behavior.
+
 ## Built-in vs custom profiles
 
 Happier ships with built-in profiles for common setups, plus your own custom profiles.

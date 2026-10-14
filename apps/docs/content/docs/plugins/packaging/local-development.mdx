@@ -73,6 +73,12 @@ Package-root development never uses host resolution: declared dependencies
 resolve through normal package semantics, and an uninstalled dependency is an
 error, not a host substitution.
 
+When editing a first-party plugin in the Happier source repository, current 0.3
+development validates its existing workspace dependencies instead of running a
+plugin-local install or refreshing the repository's dependency tree. A missing
+or incompatible required dependency is a preparation error. External plugin
+projects keep the managed dependency preparation flow above.
+
 ## Packing requires the SDK runtime dependency
 
 `plugins pack` requires every code-defined plugin package to declare

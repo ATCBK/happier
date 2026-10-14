@@ -10,11 +10,7 @@ not a second copy of your library or permission to run its contents.
 ## Availability
 
 This guide describes **0.3 development source**, not a released stable version.
-The shared source/Action contracts and client-direct plugin browsing are being
-integrated. Personal token management is available through Actions and the CLI;
-replacement registry controls remain in progress. The current skill readers are Git, `skills.sh` and Claude
-marketplace catalogs; plugin browsing reads Happier catalogs and community npm.
-MCP/ACP registry readers and Happier picks belong to their later consumer units.
+The shared registry controls and their consumer pages are being validated. Personal token management is available through Actions and the CLI; the registry form's token controls remain in integration. Skill readers include Git, `skills.sh` and Claude marketplace catalogs. MCP and ACP registries feed their own add flows; plugin browsing reads Happier catalogs and community npm. Happier picks appear first when the curated catalog supplies entries.
 
 ## Before you begin
 
@@ -27,8 +23,7 @@ machine on native clients too.
 
 ## Browse and add content
 
-The retained **Settings → Prompts → Registries** page browses skill
-sources. **Settings → Plugins → Discover** browses plugin listings directly;
+Use **Settings → Skills** and the add dialog's registry selector to browse skill sources. Its **Manage registries** view manages the same source list. **Settings → Plugins → Discover** browses plugin listings directly;
 it does not need a Machine simply to show a public catalog. Source management
 uses the Account list rather than a selected Machine's private source file.
 
@@ -39,8 +34,7 @@ commands, Agents or MCP servers.
 
 Read an item's details before adding it. Skills are installed into the library
 at the reviewed commit with their supporting files and executable modes.
-Importing into the library and exporting to an Agent's native filesystem are
-different operations. See [Prompts and skills](/extending/prompts-and-skills).
+Adding a skill to the library and explicitly installing it outside Happier are different operations. See [Skills](/extending/skills).
 Plugin install review and installation still run on the chosen connected
 Machine and use that Machine's credential-profile owner.
 
@@ -83,11 +77,12 @@ holds requests to the host until it resets. Without a reset time it shows
 An explicit refresh retries the current request. Last-known items are not a
 substitute for current source authority: disabling/removing a source or retiring
 its supplier withdraws its old results. If a skill write succeeded but a later
-reach/export step failed, repair that step rather than install another copy.
+reach step failed, repair that step rather than install another copy.
 
 ## Related
 
-- [Prompts and skills](/extending/prompts-and-skills)
+- [Skills](/extending/skills)
+- [MCP servers](/extending/mcp-servers)
 - [Marketplace integration](/plugins/packaging/marketplace)
 - [Plugin registry declarations](/plugins/manifest/contributions#registry-sources-in-development)
 - [Host Actions](/plugins/api/host-actions)

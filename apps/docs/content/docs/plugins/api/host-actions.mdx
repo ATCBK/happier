@@ -3312,20 +3312,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `content` (text, required): Content — Base64-encoded file bytes
 - `expectedHash` (text): Expected current SHA-256
 
-## `daemon.promptAssets.delete`
-
-**Delete prompt asset** — Delete a provider-native prompt asset through the daemon prompt asset adapter registry.
-
-- Safety: `danger`; side effect: `danger`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `rpc`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
 ## `devices.simulator.input.button`
 
 **Press simulator hardware button** — Press a device button on the simulator, such as Home or volume.
@@ -7880,7 +7866,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.list`
 
-**List plugins** — List installed plugins with source and load diagnostics.
+**List plugins** — List installed plugins plus daemon-owned pending changes with the issued ids needed to rejoin them.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -8713,27 +8699,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `label` (text): Label
 - `pinned` (boolean): Pinned
 
-## `prompt_asset.export`
-
-**Export prompt asset** — Export a prompt doc or skill bundle from the Happier library to a provider-native asset.
-
-- Safety: `danger`; side effect: `write`.
-- Approval: `none` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `artifactId` (text, required): Artifact id
-- `machineId` (text, required): Machine id
-- `assetTypeId` (text, required): Asset type id
-- `scope` (select, required): Scope
-- `directory` (text): Project directory
-- `targetPath` (text): Document path
-- `targetName` (text): Skill name
-- `installMode` (select): Install mode
-
 ## `prompt_bundle.update`
 
 **Update prompt bundle** — Update a skill bundle stored in the Happier prompt library.
@@ -8828,7 +8793,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `prompt_registry.install`
 
-**Install prompt registry skill** — Import a skill bundle from a registry and optionally export it to an external skills location.
+**Install prompt registry skill** — Import a skill bundle from a registry into the Happier library.
 
 - Safety: `danger`; side effect: `external`.
 - Approval: `none` result; `deferred` flow.
@@ -8841,11 +8806,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `machineId` (text, required): Machine id
 - `sourceId` (text, required): Source id
 - `itemId` (text, required): Item id
-- `installTarget.assetTypeId` (text): Target asset type
-- `installTarget.scope` (select): Target scope
-- `installTarget.directory` (text): Project directory
-- `installTarget.targetName` (text): Target skill name
-- `installTarget.installMode` (select): Install mode
 
 ## `prompts.invocation.create`
 
@@ -11052,6 +11012,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `modelSelector.profileId` (text): Model profile id
 - `modelSelector.modelId` (text): Model id
 - `modelSelector.backendTargetKey` (text): Backend target key
+- `investigateSurroundingFiles` (boolean): Read surrounding files at captured endpoints
 
 ## `scm.diffSummary.refine`
 
@@ -12354,10 +12315,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 **Rollback code to checkpoint** — Apply a checkpoint-backed code rollback for the selected session turn.
 
 - Safety: `danger`; side effect: not classified.
-- Approval: `optional` result; `deferred` flow.
+- Approval: `required` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -13307,7 +13268,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -13638,10 +13599,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 **Rollback conversation** — Roll back conversation state in the selected session.
 
 - Safety: `danger`; side effect: not classified.
-- Approval: `optional` result; `deferred` flow.
+- Approval: `required` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -13834,7 +13795,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `mcp`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -18689,11 +18650,11 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Add machine to workspace** — Link a selected Workspace to a folder on another machine. Attaching an existing folder preserves its contents; creating from this Workspace replaces them.
 
-- Safety: `safe`; side effect: not classified.
-- Approval: `optional` result; `deferred` flow.
+- Safety: `danger`; side effect: not classified.
+- Approval: `required` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 

@@ -1,0 +1,100 @@
+---
+title: Skills
+description: Add portable instructions and supporting files once, then choose which sessions receive them.
+---
+
+Keep a skill in your Happier library to use it across connected machines. A skill combines `SKILL.md` instructions with optional scripts, templates and reference files. **Where it's on** sets the defaults; each Session can choose its own set.
+
+## Availability
+
+This guide describes **unreleased 0.3 development behavior**. Skills uses the client Prompt library capability. Replacement surfaces and Session composer integration are still being validated. These instructions do not describe the stable 0.2 Export screen.
+
+## Before you begin
+
+Sign in to the same Happier Account on your clients and session machines. A reachable machine is needed to read a skill found there or to run a Session. Browse public catalogs from your client where supported; [registry sources](/extending/registries) explains when browsing needs a connected machine.
+
+Skills are Account library items. Their storage follows your [Account encryption mode](/security/encryption), rather than becoming a public registry copy. Review unfamiliar instructions and scripts before adding them. Adding a bundle does not run its scripts; an Agent may run them later under the Session's permissions.
+
+## Add a skill to your library
+
+Open **Settings → Skills**, then use **+**. The add dialog offers **Browse**, **From a link**, **Upload** and **Write**.
+
+1. In **Browse**, choose a registry and open a skill's details. Happier picks appear first when that catalog supplies entries. **From a link** previews the skills in a repository; select the ones you want. **Upload** accepts a skill folder or ZIP on the web, or a ZIP through the native document picker. **Write** opens a draft in the skill editor.
+2. Review the instructions, files, source revision and whether the skill has scripts. Registry additions keep the reviewed revision, including supporting files and executable modes.
+3. Choose **Where it's on**, or keep **Everywhere**. Add the skill to the library, or save your written draft.
+
+The skill detail lets you edit instructions and supporting files, move the item to a library folder, duplicate it, or export an Agent Skills ZIP. A conflicting save keeps your draft for review. Removing a skill asks for confirmation.
+
+If Happier saved the item but could not save its defaults, it reports that partial result. Use **Try again** to repair where it's on; the saved skill stays in the library and stays Off until a rule or Session selection enables it.
+
+## Where it's on
+
+Expand the sentence on a skill's detail to set Everywhere, Agent exceptions, machine rules or Account Project rules. A Project rule follows that Project across its machines. New additions by you default to Everywhere; existing library skills without rules stay Off until you choose.
+
+Agent exceptions hold across places. For example, **Except Gemini** still applies inside a Project with a general On rule. A rule specifically for Gemini can override that exception. Within the same Agent scope, the more specific place wins.
+
+A Session selection wins over these defaults. You can add a skill to one Session even if its rules are Off or name another machine or Agent. The selected Agent still needs a supported delivery path, readable content and a reachable machine; the Session shows a failure when those requirements cannot be met.
+
+Happier normally delivers selected skills through a private Session folder. It does not install them into your own Agent skill folders by default. Agents with no Session-folder integration may receive an index and read a skill through Happier's `skills.read` Action. Agents without a usable Action channel cannot use that fallback. The Session's availability notice reports the selected Agent and launch path's actual skill delivery; the [Agent capability reference](/agents/capabilities) lists resume support for changes that need a restart.
+
+The built-in **happier** skill points the Agent to the installed CLI's current help. It starts Everywhere when the Account's skill-rules collection is created, follows Happier's version and has read-only content. You can turn it Off or make an editable copy. Removing its places does not seed it again.
+
+## Found on your machines
+
+Open **Found on your machines** in Skills to inspect skills already in your Agents' folders. Checking is read-only. **Add to library** copies a skill's instructions and files into your Account library; a plugin-owned skill offers **Make a copy**. The original stays on the machine. **Add all** excludes plugin-owned items and skills already in the library.
+
+A skill in a native user or project folder with the same name takes precedence on that machine. Plugin-owned skills are separate discoveries and do not participate in this masking check. The page explains a collision and offers **Compare**. An unreadable native folder is reported as a failure, rather than an empty folder; Happier withholds library delivery when it cannot determine whether names would clash.
+
+An offline machine can show dated last-known rows. Bring it online before adding a skill: the cached list does not contain its files. **Check again** retries the scan. A machine that cannot perform the scan needs an updated Happier daemon.
+
+For use outside Happier, expand **Details** on an ordinary library skill and choose **Also install** for a machine. This explicit opt-in writes copies into that machine's native skill folders. Happier refuses to overwrite an unmanaged folder. Library edits refresh an unedited installed copy; a copy edited outside Happier is left alone. Removal confirms first and separately asks before removing an edited copy. The built-in skill has no outside-install control.
+
+## Updates and local edits
+
+Registry and link additions track their source and reviewed revision. Third-party skills default to manual updates. Open **Updates** or use **Check now** on a skill's source section.
+
+- **Update available** means the source has a newer revision. Review the changes, then apply them.
+- **Modified** means your library files differ from their imported content. Review **Yours** and **Theirs**, then choose **Keep mine** or **Take theirs** for each changed file. Keeping yours advances the checked upstream baseline while retaining your edits; the skill remains Modified.
+- **Pinned** keeps the selected version. Automatic updates are an explicit choice and do not overwrite Modified content.
+
+Updates affect later delivery of the skill. The update receipt does not offer Undo: the source might no longer supply the earlier revision. A failed source check keeps your library content and reports the failure.
+
+**Not used recently** means Happier has recorded no use in more than 30 days, with enough observation to support that claim. Recorded uses include Claude's SDK skill invocations, Codex skill mentions, and successful Session reads through Happier. Other Agent or launch paths may not report use, so this is not a complete usage history.
+
+## Existing library and Profile seeds
+
+An upgraded library offers **Choose what's on** for skills that have no defaults. Nothing turns on until you choose. Suggested selections come from recorded use; without recorded use, none are selected automatically.
+
+Legacy enabled skill attachments migrate once: Account context becomes Everywhere rules, Project context becomes Project rules, Profile context becomes Profile seeds, and Session context becomes Session includes. Retained disabled inherited entries become Session excludes. Legacy records stay readable but no longer paste skill instructions; voice skill attachments stop contributing while the skill stays in the library.
+
+A Profile's skill seeds add skills to Sessions started with that Profile, at the Session level. They do not create another Where-it's-on level. In the development Profile editor, use **Skills this Profile adds** to add or remove library skills, then save the Profile. A seed whose skill has left the library stays visible so you can remove it. Changing a Profile does not retroactively change an existing Session's selection.
+
+## Choose skills for a Session
+
+The development **This session gets** sheet groups Skills and MCP servers separately. Add, remove or reset a skill there without changing its saved defaults. Library `$` groups add skills to the Session instead of pasting their instructions; those composer groups are still being integrated. Native suggestions remain dependent on the selected Agent and machine.
+
+Library-skill changes can reload live on supported Claude and Codex paths. Other changes, including native-skill On/Off, wait for the next settled turn and restart with resume when supported. A terminal-started Session or visible Windows console shows **Restart to apply**, with a restart control or terminal hint. A path without resume support shows **Applies to new sessions**. Follow the sheet's acknowledged status; a saved selection alone does not mean the Agent has received it.
+
+## Ask an Agent or use the CLI
+
+The same [Actions](/plugins/api/host-actions) back the library, rules, Found and update operations. Agent, CLI and MCP writes ask for approval by default; change that policy under **Settings → Actions**. Your own reversible taps act directly; deletion and outside-install removal confirm.
+
+An Agent-created, installed, copied or adopted skill starts On for its creating Session only. Turning it on more widely is a separate rules Action.
+
+```bash
+happier skills list
+happier skills show code-review
+happier skills install https://github.com/example/skills --dry-run
+happier skills found --machine <machine-id>
+happier skills machine-install code-review --machine <machine-id>
+```
+
+Use `happier skills --help` and each subcommand's `--help` for current arguments. The generated [host Action catalog](/plugins/api/host-actions) owns the complete command and schema reference, including editing, rules, adoption, ZIP export and update choices.
+
+## Related
+
+- [Prompts](/extending/prompts)
+- [Registry sources](/extending/registries)
+- [MCP servers](/extending/mcp-servers)
+- [Profiles](/agents/profiles)
+- [Permissions](/sessions/permissions)

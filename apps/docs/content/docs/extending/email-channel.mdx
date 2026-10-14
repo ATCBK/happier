@@ -227,13 +227,16 @@ Use `EmailTransportsContributionProtocolV1` from
 `protocol.operations.<role>.bind(localActionId)` and
 `protocol.contribute({ operations })`. Declare the resulting contribution at
 `contributesTo['happier.channel.email'].transports.<contributionId>`.
-`fetchRaw` returns `{ kind: 'raw', mimeBase64 }`; `submitRaw` receives MIME,
+`fetchRaw` returns `{ kind: 'raw', mimeBase64, receivedAtMs }`, where
+`receivedAtMs` is the transport's immutable receipt time (IMAP INTERNALDATE for
+the bundled transport), reused on replay rather than the current fetch time.
+`submitRaw` receives MIME,
 the core-selected envelope and Message-ID. `listSince` returns refs and an opaque
 checkpoint or a history gap. Without `findSent`, an uncertain submission uses
 ordinary Channels delivery resolution.
 
 Declare handlers with each operation's input/result schemas, surface and danger
-metadata. Keep operations plugin-only and require the host-stamped Email-core
+metadata. Include the required plugin surface and require the host-stamped Email-core
 caller. Never create a transport-specific parser, router or outbound sender.
 See [Plugin contributions](/plugins/manifest/contributions) for host admission and
 lifecycle, and [SDK entrypoints](/plugins/api/sdk-entrypoints) for public imports.

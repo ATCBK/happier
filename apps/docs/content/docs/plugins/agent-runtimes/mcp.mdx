@@ -45,9 +45,22 @@ agents reach the screen the same way.
 
 ## Session-scoped MCP
 
-Agent session runtimes resolve MCP servers through
-`context.session.services.mcp.resolveServers(...)`. The host owns session
+In 0.3 development, the host resolves reach defaults and Session overrides once
+and supplies the effective `mcpServers` through `AgentSessionOpenRequest` (or the
+Run open request). `context.session.services.mcp.resolveServers(...)` remains a
+projection of that applied set, rather than an independent catalog resolver.
+An explicit Session include can override Off or other-place defaults; declared
+Agent support and materialization still constrain delivery. The host owns
 integration and transport exposure.
+
+`mcpToolPolicy` travels beside those servers. Declare `mcpToolControl` and
+`mcpToolLoading` only for behavior proven by the Agent's real launch and permission
+path. The host's single decision owner feeds native controls and the live
+approval handler. Missing support stays unsupported, and the server detail says
+**Tool settings don't apply to &lt;Agent&gt;**. Off may hide a tool at launch or block
+its calls; a hidden tool returning requires the later launch named by the UI.
+Plugin-declared MCP servers use the same reach owner and appear with their
+supplying plugin, while configuration and removal remain declaration-owned.
 
 ## Agent rule
 
@@ -56,5 +69,26 @@ receive the host's stdio bridge configuration, not its OAuth tokens or client
 registration secrets. The bridge obtains a current bearer for each request
 through the existing Connected Accounts broker. Plugins do not register the
 reserved MCP sign-in service or implement a parallel token store.
+
+The host client metadata is
+`https://app.happier.dev/oauth/mcp/client-metadata.json`; the callback is
+`https://app.happier.dev/oauth/mcp/callback`. Client metadata registration precedes
+dynamic client registration. Completion validates full state and any required
+issuer before exchange. Endpoint publication and installed-app return are
+release checks. Self-hosted openers use the full-URL paste fallback.
+
+Private launch/bridge files keep resolved credentials out of Agent argv and the
+ambient tool-shell environment. Their operation or Session lifetime owns
+cleanup. This protects delivery from ambient disclosure; another process
+running as the same OS user can still read accessible credential files.
+
+For SSE in 0.3 development, the bridge accepts an advertised message endpoint
+on the initial server's origin and refuses other origins. The OAuth grant
+remains bound to the exact initial resource. Remote discovery follows every
+tool page and preserves the upstream server's identity, version and instructions.
+
+Kilo's development ACP integration cancels MCP calls whose native names lose
+their raw identity, including dotted or underscore tool names. It also refuses
+ambiguous server aliases. Built-in Happier tools retain their Action handling.
 
 Agent-specific MCP configuration belongs in the agent leaf or manifest descriptors. Shared runtime code should not branch on `agentId` to discover MCP servers.
