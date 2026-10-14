@@ -3,6 +3,7 @@ import { AccessibilityInfo, Platform, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { WidgetSizePicker, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import type { JsonValue } from '@happier-dev/protocol';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { resolveEffectiveInputFields } from '@happier-dev/protocol/inputs';
 
 import { useInputFieldOptions, type InputFieldOptionsRequest } from '@/components/sessions/actions/useInputFieldOptions';
@@ -104,6 +105,7 @@ export function WidgetSetupStep(props: Readonly<{
     const { setup } = props;
     const { theme } = useUnistyles();
     const [draft, setDraft] = React.useState<WidgetSetupDraft>(setup.initial);
+    const [pickedOptions, setPickedOptions] = React.useState<Readonly<Record<string, readonly WidgetSetupValue[]>>>({});
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
     const pendingHomeIds = React.useMemo(() => busy && props.serverId ? [props.serverId] : [], [busy, props.serverId]);
@@ -135,8 +137,15 @@ export function WidgetSetupStep(props: Readonly<{
 
     const change = React.useCallback((path: string, next: WidgetSetupFieldChange) => {
         setError(null);
+        const request = requests.find(request => request.field.path === path);
+        const offered = request ? options.state(request.field, request).options : [];
+        setPickedOptions(current => ({ ...current, [path]: next.kind === 'pin'
+            ? [...offered, ...(current[path] ?? [])].filter(option => sameStrictJsonValue(option.value, next.value)
+                || Array.isArray(next.value) && next.value.some(value => sameStrictJsonValue(option.value, value)))
+                .filter((option, index, all) => all.findIndex(candidate => sameStrictJsonValue(candidate.value, option.value)) === index)
+                .map(option => ({ value: option.value as JsonValue, label: option.label })) : [] }));
         setDraft((current) => setWidgetSetupBinding(current, path, next));
-    }, []);
+    }, [options.state, requests]);
 
     const submit = React.useCallback(async () => {
         if (busy || !finishable) return;
@@ -182,7 +191,7 @@ export function WidgetSetupStep(props: Readonly<{
     // The values the draft is bound to, as their rows name them, for the line that says what Add does.
     const boundValues = setup.describeOutcome ? setup.fields.flatMap((entry, index) => {
         const request = requests[index]!;
-        const row = describeWidgetSetupRow({ entry, draft, resolution, options: options.state(request.field, request).options.map((option): WidgetSetupValue => ({
+        const row = describeWidgetSetupRow({ entry, draft, resolution, pickedOptions: pickedOptions[entry.field.path], options: options.state(request.field, request).options.map((option): WidgetSetupValue => ({
             value: option.value as JsonValue, label: option.label })) });
         const label = row.kind === 'pinned' ? row.value?.label ?? row.label : row.kind === 'follows' ? row.valueLabel ?? row.label : null;
         return label ? [label] : [];
@@ -207,7 +216,7 @@ export function WidgetSetupStep(props: Readonly<{
                         ...(option.description ? { description: option.description } : {}),
                         ...(option.disabled ? { disabled: true } : {}),
                     }));
-                    const row = describeWidgetSetupRow({ entry, draft, resolution, options: values });
+                    const row = describeWidgetSetupRow({ entry, draft, resolution, options: values, pickedOptions: pickedOptions[entry.field.path] });
                     const binding = draft.bindings[entry.field.path];
                     const field = facts ? { ...entry.field, required: facts.required } : entry.field;
                     return (

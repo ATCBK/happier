@@ -60,6 +60,9 @@ describe('widget setup model', () => {
             draft: { bindings: { session: { kind: 'value', value } } } });
         expect(row('orchard')).toMatchObject({ kind: 'pinned', label: 'Orchard and meadow' });
         expect(row(['orchard'])).toMatchObject({ kind: 'pinned', label: 'Orchard and meadow' });
+        expect(describeWidgetSetupRow({ entry, options: [], pickedOptions: options, resolution: ready,
+            draft: { bindings: { session: { kind: 'value', value: ['orchard'] } } } }))
+            .toMatchObject({ kind: 'pinned', value: null, label: 'Orchard and meadow' });
     });
     it('starts a copy following one surface value, per viewer for connections, and the likeliest of a few', () => {
         expect(proposeWidgetSetupDraft([sessionFollows, account, checkout, { field: field('label', 'Label') }])).toEqual({

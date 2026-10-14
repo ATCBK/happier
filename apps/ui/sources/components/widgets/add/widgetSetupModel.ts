@@ -198,12 +198,15 @@ export function describeWidgetSetupRow(input: Readonly<{
     draft: WidgetSetupDraft;
     resolution: WidgetBindingResolutionV1;
     options: readonly WidgetSetupValue[];
+    /** Names captured from the person's pick; presentation only, never option admission. */
+    pickedOptions?: readonly WidgetSetupValue[];
 }>): WidgetSetupRow {
     const { entry, draft, resolution } = input;
     const path = entry.field.path;
     const binding = draft.bindings[path];
     const issue = issueFor(resolution, path);
     const offered = entry.follow?.values ?? [];
+    const summaryOptions = [...input.options, ...(input.pickedOptions ?? [])];
 
     if (binding?.kind === 'viewer') {
         if (issue && issue.status !== 'selection_required') return { kind: 'invalid', label: null, issue };
@@ -215,14 +218,14 @@ export function describeWidgetSetupRow(input: Readonly<{
     }
     if (binding?.kind === 'value') {
         if (issue && issue.status !== 'selection_required') {
-            return { kind: 'invalid', label: findValue([...offered, ...input.options], binding.value)?.label ?? plainLabel(binding.value, entry.field, input.options), issue };
+            return { kind: 'invalid', label: findValue([...offered, ...summaryOptions], binding.value)?.label ?? plainLabel(binding.value, entry.field, summaryOptions), issue };
         }
         if (offered.length > 1) {
             const selectedIndex = offered.findIndex((candidate) => sameStrictJsonValue(candidate.value, binding.value));
             if (selectedIndex >= 0 && offered.length <= AMBIGUOUS_INLINE_LIMIT) return { kind: 'choices', choices: offered, selectedIndex };
         }
         const value = findValue([...offered, ...input.options], binding.value);
-        return { kind: 'pinned', value, label: value?.label ?? plainLabel(binding.value, entry.field, input.options) ?? '' };
+        return { kind: 'pinned', value, label: value?.label ?? findValue(summaryOptions, binding.value)?.label ?? plainLabel(binding.value, entry.field, summaryOptions) ?? '' };
     }
     return { kind: 'needed' };
 }

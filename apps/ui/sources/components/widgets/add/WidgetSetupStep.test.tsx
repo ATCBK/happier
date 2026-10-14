@@ -23,15 +23,16 @@ vi.mock('socket.io-client', async importOriginal =>
 
 // Only the daemon transport is replaced: Account admission, the catalog, executor,
 // draft binding and options demand all remain real.
-const discovery = vi.hoisted(() => ({ requests: [] as PublicActionInputById['action.options.resolve'][] }));
+const discovery = vi.hoisted(() => ({ requests: [] as PublicActionInputById['action.options.resolve'][], wait: null as (() => Promise<void>) | null }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: async (args: { method: string; payload: unknown }) => {
         if (args.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)
             return { protocolVersion: 1, projection: projectionWire };
         if (args.method !== 'action.options.resolve') throw new Error(`Unexpected daemon RPC: ${args.method}`);
         const targeted = TargetedActionRpcRequestV1Schema.safeParse(args.payload);
-        const input = (await import('@happier-dev/protocol/actions')).getActionSpec('action.options.resolve').inputSchema.parse(targeted.success ? targeted.data.input : args.payload);
+        const input = (await import('@happier-dev/protocol/actions')).PUBLIC_ACTION_INPUT_SCHEMAS['action.options.resolve'].parse(targeted.success ? targeted.data.input : args.payload);
         discovery.requests.push(input);
+        await discovery.wait?.();
         const selected = input.consumer?.kind === 'widget' ? input.consumer.selectedSession?.sessionId : undefined;
         return { actionId: 'widgets.item.add', fieldPath: input.fieldPath ?? null, optionsSourceId: null,
             options: [{ value: 'choice', label: `${selected ?? 'ambient'}:${input.draftInput?.filter ?? 'none'}` }] };
@@ -91,7 +92,7 @@ beforeEach(async () => {
     releaseLoader = await installRealActionExecutorModuleLoader();
 });
 afterEach(async () => {
-    standardCleanup(); discovery.requests = []; releaseLoader?.(); releaseLoader = undefined;
+    standardCleanup(); discovery.requests = []; discovery.wait = null; releaseLoader?.(); releaseLoader = undefined;
     clearDaemonMergedProjectionCacheForTests(); await connection?.dispose(); connection = undefined;
 });
 function renderScreen(element: React.ReactElement) {
@@ -117,6 +118,10 @@ describe('WidgetSetupStep discovery', () => {
             scope, audience: 'personal', context: {}, mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }),
             renderPreview: () => <SurfaceStateCard kind="error" replacesContent title="Read failed" /> });
         const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} presentation="pane" onDone={() => {}} testID="read-failed" />);
+        // Sized widget bodies mount after their real viewport has been measured.
+        await act(async () => { screen.findByTestId('read-failed.previewCard.viewport')!.props.onLayout({
+            nativeEvent: { layout: { x: 0, y: 0, width: 320, height: 200 } },
+        }); });
         expect(screen.root.findAllByType(SurfaceStateCard).some(node => node.props.kind === 'error')).toBe(true);
         expect(screen.root.findByType(WidgetPreviewStage).props.live).not.toBe(true);
         expect(screen.findByTestId('read-failed.preview.live')).toBeNull();
@@ -188,6 +193,26 @@ describe('WidgetSetupStep discovery', () => {
         expect(screen.findAllByType(HappierInputField).find(row => row.props.field.path === 'result')!.props.options)
             .toEqual([expect.objectContaining({ value: 'choice', label: 'B:none' })]);
     });
+    it('names the picked value immediately while the new draft options read is held', async () => {
+        const setup = buildWidgetCandidateSetup({ candidate, scope, audience: 'personal', context: {},
+            mode: { kind: 'edit', instance: { v: 1, id: 'labels', definition: { kind: 'installed', surface: candidate.surface! },
+                bindings: { session: { kind: 'value', value: { serverId: scope.serverId, sessionId: 'A' } } } } },
+            submit: async () => ({ ok: true }) });
+        const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} serverId={scope.serverId}
+            onDone={() => {}} testID="picked-label" />);
+        const row = () => screen.findAllByType(WidgetSetupFieldRow).find(row => row.props.entry.field.path === 'result')!;
+        await vi.waitFor(() => expect(row().props.options).toEqual([expect.objectContaining({ value: 'choice', label: 'A:none' })]));
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        discovery.wait = () => held;
+        try {
+            await act(async () => { row().props.onChange({ kind: 'pin', value: 'choice' }); });
+            expect(row().props.optionsStatus).toBe('loading');
+            expect(row().props.row).toMatchObject({ kind: 'pinned', label: 'A:none' });
+            expect(screen.findAllByType(HappierInputField).find(field => field.props.field.path === 'result')!.props.valueLabel).toBe('A:none');
+        } finally { release(); await screen.unmount(); }
+    });
+
     it('does not write when a ready size-only setup is cancelled', async () => {
         const submit = vi.fn(async () => ({ ok: true as const }));
         const cancel = vi.fn();
