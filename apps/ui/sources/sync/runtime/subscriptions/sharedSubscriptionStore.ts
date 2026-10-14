@@ -17,7 +17,7 @@ export type SharedSubscriptionRefreshParams<TInput, TState, TSnapshotClient> = R
  *
  * `changed` carries the daemon's new snapshot; `idle` means the daemon's park window elapsed with
  * nothing to report and the store re-arms; `unavailable` retires the watch for this entry until a
- * user-initiated refresh or a foreground invalidation restarts it. There is deliberately no retry,
+ * user-initiated refresh, fresh snapshot publication or foreground invalidation restarts it. There is deliberately no retry,
  * backoff or breaker here: the daemon owns the wait, so re-arming is rate-limited by its window,
  * and an unavailable watch degrades to the explicit refresh path rather than to a client timer.
  */
@@ -223,8 +223,8 @@ export function createSharedSubscriptionStore<
 
     // The push half. Exactly one watch is outstanding per entry with subscribers; every answer
     // re-arms the next one, so the cadence is the daemon's park window and there is no timer here.
-    // An unavailable watch retires until `invalidate` restarts it, which is what the user-visible
-    // refresh control and the foreground trigger call.
+    // An unavailable watch retires until invalidation or snapshot publication restores it.
+    // Both user Refresh and the foreground trigger reuse these owners.
     const runWatchLoop = (entry: Entry): void => {
         const watch = config.watch;
         if (!watch || entry.watching || entry.watchRetired || entry.refCount <= 0 || config.shouldWatch?.(entry.state) === false) {
@@ -352,6 +352,11 @@ export function createSharedSubscriptionStore<
                     continue;
                 }
                 setState(entry, config.applySnapshot(entry.state, snapshot));
+                // An Action's successful read publishes here instead of calling
+                // invalidate. Its fresh snapshot also restores the parked watch;
+                // otherwise a recovered surface stops receiving later changes.
+                entry.watchRetired = false;
+                runWatchLoop(entry);
             }
         },
         reset() {
