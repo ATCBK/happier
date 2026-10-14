@@ -57,6 +57,10 @@ import { registerSessionListingRoutes } from "@/app/api/routes/session/registerS
 import { registerManagedMachineRoutes } from '@/app/machines/managed/managedRoutes';
 import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { mapPendingActivationAuthorization, mapPendingActivationFailureDetails } from './pendingActivationAuthorization';
+import { createSessionTurnLifecycle } from '../../../../../cli/src/agent/runtime/session/turn/lifecycle';
+import { AgentSessionRuntimeEventV1Schema } from '@happier-dev/protocol';
+import { applySessionTurnMutation } from '@/app/session/sessionWriteService';
+import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 
 type EnqueuePendingMessageParams = Parameters<typeof enqueuePendingMessageWithAction>[0];
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -5786,7 +5790,8 @@ describe("pendingMessageService (shared sessions)", () => {
     });
 
     it("withdraw reports actual removal and never mistakes an absent or accepted request for a restored draft", async () => {
-        const owner = await createAccount("withdraw-owner");
+        // Terminal lifecycle writes require the real Account encryption currentness boundary.
+        const owner = await db.account.create({ data: createSignedAccountContentBinding(), select: { id: true } });
         const session = await createSession(owner.id);
         const localId = `withdraw-${randomUUID()}`;
         const request = { actorUserId: owner.id, sessionId: session.id, localId, withdraw: true };
@@ -5800,8 +5805,43 @@ describe("pendingMessageService (shared sessions)", () => {
         await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id });
         await expect(deletePendingMessage({ ...request, localId: acceptedId })).resolves.toMatchObject({ ok: true, outcome: "delivery_unknown" });
         await resolveAcceptedPendingDelivery({ actorUserId: owner.id, sessionId: session.id, localId: acceptedId });
+        const turnMutationResults: Awaited<ReturnType<typeof applySessionTurnMutation>>[] = [];
+        const turn = createSessionTurnLifecycle({ agentId: 'custom-acp',
+            // Daemon marker publication is an OS boundary; host serialization remains real.
+            onAcceptedTurnLifecycle: async () => {}, session: {
+            sessionId: session.id, enqueueSessionTurnMutation: async mutation => {
+                turnMutationResults.push(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation }));
+            },
+        } });
+        turn.observeRuntimeEvent(AgentSessionRuntimeEventV1Schema.parse({ kind: 'turn-start', sequence: 1,
+            sessionId: session.id, turnId: 'accepted-failed-turn', startedBy: 'host', emittedAtMs: 100 }));
+        turn.observeRuntimeEvent(AgentSessionRuntimeEventV1Schema.parse({ kind: 'turn-failed', sequence: 2,
+            sessionId: session.id, turnId: 'accepted-failed-turn', emittedAtMs: 200,
+            diagnostic: { code: 'acp_turn_failed', severity: 'error', message: 'Cannot connect to API', details: { requestErrorCode: -32603 } } }));
+        await turn.drainAcceptedLifecycle();
+        expect(turnMutationResults.filter(result => !result.ok)).toEqual([]);
+        expect(turnMutationResults).toMatchObject([{ ok: true, didApply: true }, { ok: true, didApply: true }]);
+        const failedSession = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+        expect(failedSession).toMatchObject({
+            latestTurnStatus: 'failed', pendingCount: 0, pendingBlockedCount: 0,
+        });
+        expect(JSON.parse(failedSession.lastRuntimeIssue!)).toMatchObject({
+            code: 'acp_turn_failed', sanitizedPreview: 'ACP -32603: Cannot connect to API',
+        });
         await expect(deletePendingMessage({ ...request, localId: acceptedId })).resolves.toMatchObject({ ok: true, outcome: "already_delivered" });
         await expect(db.sessionMessage.count({ where: { sessionId: session.id, localId: acceptedId } })).resolves.toBe(1);
+        const rejectedId = `rejected-${randomUUID()}`;
+        await enqueuePendingMessage({ ...request, localId: rejectedId, ciphertext: 'rejected-original' });
+        await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id });
+        // Host admission persists the user row before the provider can accept it.
+        await createCommittedTranscriptMessage({ sessionId: session.id, localId: rejectedId,
+            seq: 2, messageRole: 'user', ciphertext: 'rejected-original' });
+        await blockPendingDelivery({ actorUserId: owner.id, sessionId: session.id, localId: rejectedId,
+            reason: 'provider_rejected_before_acceptance' });
+        await expect(deletePendingMessage({ ...request, localId: rejectedId })).resolves.toMatchObject({
+            ok: true, outcome: 'removed', pendingCount: 0, pendingBlockedCount: 0,
+        });
+        expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId: rejectedId } })).toBe(1);
         await withAuthenticatedTestApp(sessionPendingRoutes, async app => {
             const removedId = `route-withdraw-${randomUUID()}`;
             await enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId: removedId, ciphertext: 'route-original' });

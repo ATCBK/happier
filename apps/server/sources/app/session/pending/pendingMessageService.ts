@@ -2409,13 +2409,18 @@ export async function deletePendingMessage(params: {
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
             const alreadyDelivered = params.withdraw === true
-                ? await tx.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } }, select: { id: true } })
+                ? await tx.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } }, select: { id: true, deliveryResolution: true } })
                 : null;
-            if (alreadyDelivered) return { ok: true, ...(await readCurrentPendingMutationState(tx, sessionId)), outcome: 'already_delivered' } as const;
             const existing = await tx.sessionPendingMessage.findUnique({
                 where: { sessionId_localId: { sessionId, localId }, targetExecutionRunId },
                 select: { status: true, deliveryState: true, deliveryBlockedReason: true, discardedReason: true, providerAction: true },
             });
+            // Host admission writes the user transcript before provider acceptance.
+            // Pending custody, or its terminal delivery resolution, decides withdrawal.
+            if (alreadyDelivered && (!existing || existing.status !== 'queued'
+                || readStoredSessionMessageDeliveryResolutionV1(alreadyDelivered.deliveryResolution) !== null)) {
+                return { ok: true, ...(await readCurrentPendingMutationState(tx, sessionId)), outcome: 'already_delivered' } as const;
+            }
 
             if (!existing) {
                 const committed = params.withdraw === true
