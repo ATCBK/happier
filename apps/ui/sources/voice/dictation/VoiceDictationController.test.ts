@@ -34,7 +34,7 @@ import { createVoiceFileRecording } from '@happier-dev/audio-stream-native';
 
 const physicalRecognition = vi.hoisted(() => ({
     listeners: new Map<string, (event: unknown) => void>(),
-    text: () => '',
+    text: (): string => '',
     start: vi.fn(),
 }));
 let files = createExpoFileSystemFileMock();
@@ -79,7 +79,7 @@ function createRealCaptureBoundary(input: Readonly<{
     const sdk = { ...native.nativeModule,
         startFileRecording: async () => { await input.prepare?.(); return { recordingId: 'dictation-recording' }; },
         setFileRecordingMuted: async () => {},
-        stopFileRecording: async () => ({ uri: await finalizeRecording() }),
+        stopFileRecording: async () => ({ uri: await finalizeRecording() ?? '' }),
     };
     const real = createLocalVoiceCaptureOwner({ getSettings: () => ({}), onCaptureStarted: () => {}, onCaptureError: () => {} }, {
         createDeviceSttController: deps => createDeviceSttController({ ...deps, getAudioSessionCoordinator: () => native.coordinator }),
@@ -135,8 +135,8 @@ beforeEach(async ({ task }) => {
     const serverUrl = 'https://dictation-controller.test';
     await network.addHome(serverUrl, 'artifact-account');
     const features = createRootLayoutFeaturesResponse({ features: {
-        voice: { enabled: true }, execution: { runs: { enabled: true } },
-        machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+        voice: { enabled: true },
+        machines: { enabled: true, liveStream: { ...createRootLayoutFeaturesResponse().features.machines.liveStream, enabled: true, serverRouted: { enabled: true } } },
     } });
     features.capabilities.machines.liveStream.serverRouted = { disabledReason: null,
         caps: MachineLiveStreamRelayCapsV1Schema.parse({ maxBitrateBps: 64000, maxFramesPerSecond: 50,

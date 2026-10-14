@@ -1,3 +1,4 @@
+import { readLocalDirectVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { describe, expect, it, vi } from 'vitest';
@@ -143,9 +144,9 @@ describe('local voice engine recording lifecycle', () => {
                         local_direct: {
                             ...storage.getState().settings.voice.providers.local_direct,
                             config: {
-                                ...storage.getState().settings.voice.providers.local_direct.config,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                                 stt: {
-                                    ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                    ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                     provider: 'device',
                                 },
                             },

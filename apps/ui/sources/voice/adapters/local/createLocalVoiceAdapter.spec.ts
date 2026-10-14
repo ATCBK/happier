@@ -51,7 +51,7 @@ describe('createLocalVoiceAdapter', () => {
     disabled.sendContextUpdate({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, update: 'DISABLED_CONTEXT_SENTINEL' });
     await enabled.sendTextTurn?.({ controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
       conversationSessionId: 'voice-home-session', text: 'Inspect this', localId: 'enabled-context-turn',
-      deliveryCommand: 'interrupt_and_send' });
+      deliveryCommand: 'interrupt_and_send', onAccepted: async () => {} });
     expect(admittedProviderText()).toContain('ENABLED_CONTEXT_SENTINEL');
     expect(admittedProviderText()).not.toContain('DISABLED_CONTEXT_SENTINEL');
   });

@@ -107,8 +107,10 @@ export const VoiceOrb = React.memo(function VoiceOrb(props: Readonly<{
                         <GlassPanel radius={13} shadowLevel={2} innerShadow={false} style={styles.caption}>
                             {voice.targetSessionAddress ? (
                                 // The same admitted name remains after End, with the ended status in place of a live clock.
-                                <View style={styles.targetCaption}>
-                                    <VoiceTargetIdentity address={voice.targetSessionAddress} size="pill" testID="voice-orb-target" />
+                                <View style={voice.live ? styles.targetCaption : styles.endedTargetCaption}>
+                                    <View style={styles.targetName}>
+                                        <VoiceTargetIdentity address={voice.targetSessionAddress} size="pill" testID="voice-orb-target" />
+                                    </View>
                                     {!voice.live ? <VoiceStatusLine voice={voice} size="pill" /> : readVoiceElapsedStartedAt(voice) !== null ? (
                                         <VoiceElapsed startedAt={readVoiceElapsedStartedAt(voice)!} fontSize={12.5} lineHeight={16} />
                                     ) : null}
@@ -153,6 +155,10 @@ const stylesheet = StyleSheet.create({
     options: { minHeight: VOICE_ORB_BODY_SIZE, minWidth: 0, flexShrink: 1, justifyContent: 'center' },
     caption: { height: 26, paddingHorizontal: 10, justifyContent: 'center', flexShrink: 1, minWidth: 0 },
     targetCaption: { flexDirection: 'row', alignItems: 'center', gap: 7, minWidth: 0, flexShrink: 1 },
+    // Ended: the name leads and the status follows only when it fits whole. The one-line box wraps the
+    // status out of view rather than squeezing the name down to an initial and a dot.
+    endedTargetCaption: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 7, height: 16, overflow: 'hidden', minWidth: 0, flexShrink: 1 },
+    targetName: { maxWidth: '100%', minWidth: 0, flexShrink: 1 },
     body: {
         width: VOICE_ORB_BODY_SIZE,
         height: VOICE_ORB_BODY_SIZE,

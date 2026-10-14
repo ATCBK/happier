@@ -130,9 +130,8 @@ describe('useDaemonVoiceModelCatalogState', () => {
             machines: ['machine-a', 'machine-b'].map(id => createMachineFixture({ id, activeAt: Date.now() })),
             features: createRootLayoutFeaturesResponse({ features: {
                 voice: { enabled: true },
-                execution: { runs: { enabled: true } },
-                machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
-            }, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+                machines: { enabled: true, liveStream: { ...createRootLayoutFeaturesResponse().features.machines.liveStream, enabled: true, serverRouted: { enabled: true } } },
+            }, capabilities: { machines: { ...createRootLayoutFeaturesResponse().capabilities.machines, liveStream: { serverRouted: { disabledReason: null, caps: {
                 maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000, maxDurationMs: 60_000,
                 maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1,
                 maxConcurrentStreamsPerMachine: 1,
@@ -254,7 +253,7 @@ describe('useDaemonVoiceModelCatalogState', () => {
         await settle();
         expect(state(tree).installState).toBe('installing');
         expect(state(tree).statuses[0].progress.progress).toBe(0.5);
-        await act(async () => vi.advanceTimersByTimeAsync(100));
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
         await settle();
         expect(state(tree).installState).toBe('installed');
     });
@@ -267,18 +266,18 @@ describe('useDaemonVoiceModelCatalogState', () => {
             : ++lists === 2 ? pending.promise : modelList([status(STT_PACK, { installState: lists < 3 ? 'installing' : 'installed' })]);
         const tree = await mount();
         expect(state(tree).installState).toBe('installing');
-        await act(async () => vi.advanceTimersByTimeAsync(100));
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
         await settle();
         expect(listingRequests()).toHaveLength(2);
-        await act(async () => vi.advanceTimersByTimeAsync(500));
+        await act(async () => { await vi.advanceTimersByTimeAsync(500); });
         await settle();
         expect(listingRequests()).toHaveLength(2);
         await act(async () => pending.resolve(modelList([status(STT_PACK, { installState: 'installing' })])));
         await settle();
-        await act(async () => vi.advanceTimersByTimeAsync(99));
+        await act(async () => { await vi.advanceTimersByTimeAsync(99); });
         await settle();
         expect(listingRequests()).toHaveLength(2);
-        await act(async () => vi.advanceTimersByTimeAsync(1));
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
         await settle();
         expect(listingRequests()).toHaveLength(3);
         expect(state(tree).installState).toBe('installed');

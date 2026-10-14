@@ -28,7 +28,8 @@ async function createInstalledKokoroFs(manifestInput: Omit<ModelPackManifest, 'f
   const { fs: memoryFs } = createMemFs();
   class File extends memoryFs.File {
     async arrayBuffer() {
-      return this.uri.startsWith('file:///tmp/') ? new wavFs.File(this.uri).arrayBuffer() : super.arrayBuffer();
+      return this.uri.startsWith('file:///tmp/') ? new wavFs.File(this.uri).arrayBuffer()
+        : Uint8Array.from(await this.bytes()).buffer;
     }
     delete() {
       return this.uri.startsWith('file:///tmp/') ? new wavFs.File(this.uri).delete() : super.delete();

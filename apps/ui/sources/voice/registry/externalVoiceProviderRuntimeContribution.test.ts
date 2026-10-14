@@ -183,14 +183,18 @@ const CLIENT_ACTION_TARGET = Object.freeze({
   exportName: 'activate',
   platform: 'web' as const,
 });
-const CLIENT_ACTION_ORIGIN: PluginMachineExecutionOriginV1 = Object.freeze({
+const CLIENT_ACTION_ORIGIN = Object.freeze({
   serverIdentityId: 'srv_external_voice_client_action',
   materializationRef: Object.freeze({
     pluginId: 'acme.synthetic-voice',
     machineId: 'machine-1',
     materializationId: 'materialization-client-action',
   }),
-});
+}) satisfies PluginMachineExecutionOriginV1;
+
+const canonicalSessionMetadata = createSessionFixture().metadata;
+if (!canonicalSessionMetadata) throw new Error('Expected canonical Session fixture metadata');
+const fixtureSessionMetadata = { path: canonicalSessionMetadata.path, host: canonicalSessionMetadata.host };
 
 function createClientActionFixture(handler: PluginClientActionHandler) {
   const declaration = {
@@ -738,7 +742,7 @@ describe('external Voice provider host composition', () => {
         voice: voiceSettingsParse({ providerId, assistantLanguage: 'fr-FR', welcome: { enabled: true, mode: 'on_first_turn' } }),
       },
       sessions: { ...previous.sessions, 'bound-policy': createSessionFixture({ id: 'bound-policy', serverId: home.home.id,
-        metadata: { work: { memoryEnabled: false, promptStack: [{ id: 'voice-policy', ref: { kind: 'doc', artifactId: 'voice-policy-doc' },
+        metadata: { ...fixtureSessionMetadata, work: { memoryEnabled: false, promptStack: [{ id: 'voice-policy', ref: { kind: 'doc', artifactId: 'voice-policy-doc' },
           enabled: true, placement: 'system_append' }], sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Stay conversational.' } } } }),
       },
     });
@@ -791,7 +795,7 @@ describe('external Voice provider host composition', () => {
     expect(restarted.body.session.instructions).toContain('Use the edited terminology.');
     expect(restarted.body.session.instructions).not.toContain('Use the project terminology.');
     storage.setState({ sessions: { ...storage.getState().sessions,
-      'bound-policy': createSessionFixture({ id: 'bound-policy', serverId: home.home.id, metadata: { work: {
+      'bound-policy': createSessionFixture({ id: 'bound-policy', serverId: home.home.id, metadata: { ...fixtureSessionMetadata, work: {
         promptStack: [{ id: 'required', ref: { kind: 'doc', artifactId: 'missing' }, enabled: true, required: true, placement: 'system_append' }],
       } } }),
     } });
@@ -799,7 +803,7 @@ describe('external Voice provider host composition', () => {
       request: { requestedTargetSessionAddress: { serverId: home.home.id, sessionId: 'bound-policy' } }, signal: new AbortController().signal })).rejects.toMatchObject({ status: 'attachment_unavailable', reason: 'not_found' });
     expect(request.mock.calls).toHaveLength(2);
     storage.setState({ sessions: { ...storage.getState().sessions,
-      'bound-policy': createSessionFixture({ id: 'bound-policy', serverId: home.home.id, metadata: { work: {
+      'bound-policy': createSessionFixture({ id: 'bound-policy', serverId: home.home.id, metadata: { ...fixtureSessionMetadata, work: {
         promptStack: [{ id: 'required', ref: { kind: 'doc', artifactId: 'voice-policy-doc' }, enabled: true, placement: 'system_append' }],
       } } }),
     } });
@@ -816,8 +820,8 @@ describe('external Voice provider host composition', () => {
     const previousSessions = storage.getState().sessions;
     onTestFinished(() => storage.setState({ sessions: previousSessions }));
     storage.setState({ sessions: { ...previousSessions,
-      bound: createSessionFixture({ id: 'bound', serverId: preparationHome.home.id, metadata: { summary: { text: 'Bound Session', updatedAt: 1 }, work: { voicePreference: preference } } }),
-      visible: createSessionFixture({ id: 'visible', serverId: preparationHome.home.id, metadata: { summary: { text: 'Wrong visible Session', updatedAt: 1 }, work: { voicePreference: { ...preference, value: 'wrong-visible-voice' } } } }),
+      bound: createSessionFixture({ id: 'bound', serverId: preparationHome.home.id, metadata: { ...fixtureSessionMetadata, summary: { text: 'Bound Session', updatedAt: 1 }, work: { voicePreference: preference } } }),
+      visible: createSessionFixture({ id: 'visible', serverId: preparationHome.home.id, metadata: { ...fixtureSessionMetadata, summary: { text: 'Wrong visible Session', updatedAt: 1 }, work: { voicePreference: { ...preference, value: 'wrong-visible-voice' } } } }),
     } });
     const configs: unknown[] = [];
     let attemptPolicy: unknown;
@@ -857,7 +861,7 @@ describe('external Voice provider host composition', () => {
       publishAppliedActiveServerSnapshot({ serverId: 'home', serverUrl: 'https://home.test', generation: previousApplied.generation + 1 }, true);
     }
     storage.setState({ sessions: { ...previousSessions, revoked: createSessionFixture({ id: 'revoked', serverId: 'home',
-      metadata: { work: { voicePreference: { providerContributionId: entry.providerId, settingFieldPath: 'voice', value: 'private-owner-voice' } } },
+      metadata: { ...fixtureSessionMetadata, work: { voicePreference: { providerContributionId: entry.providerId, settingFieldPath: 'voice', value: 'private-owner-voice' } } },
     }) } });
     let resolveCatalog!: (rows: readonly VoiceRealtimeJsonValue[]) => void;
     let reachedCatalog!: () => void;
@@ -900,7 +904,7 @@ describe('external Voice provider host composition', () => {
 
   it('refuses a prepared carrier when the exact target is revoked during the provider preparation boundary', async () => {
     storage.setState({ sessions: { ...storage.getState().sessions,
-      'pending-target': createSessionFixture({ id: 'pending-target', serverId: preparationHome.home.id, metadata: { work: {} } }),
+      'pending-target': createSessionFixture({ id: 'pending-target', serverId: preparationHome.home.id, metadata: { ...fixtureSessionMetadata, work: {} } }),
     } });
     let reachedPrepare!: () => void;
     const reached = new Promise<void>(resolve => { reachedPrepare = resolve; });

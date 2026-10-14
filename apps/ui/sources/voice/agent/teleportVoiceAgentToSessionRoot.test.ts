@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
@@ -63,7 +64,7 @@ describe('teleportVoiceAgentToSessionRoot', () => {
       initializeSessionId: 'global-carrier',
       existingSession: { id: 'global-carrier', active: true,
         metadata: writeVoiceConversationScopeMetadata({ path: '/voice', host: 'voice.test', machineId: 'machine-1',
-          flavor: 'claude', systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+          flavor: 'claude', ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
           agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
         }, { kind: 'voice_home' }) },
       sessions: [
@@ -71,7 +72,7 @@ describe('teleportVoiceAgentToSessionRoot', () => {
           metadata: { path: '/repo', host: 'voice.test', machineId: 'machine-1', flavor: 'claude' } }),
         createSessionFixture({ id: 'carrier-1', active: true,
           metadata: writeVoiceConversationScopeMetadata({ path: '/repo', host: 'voice.test', machineId: 'machine-1',
-            flavor: 'claude', systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+            flavor: 'claude', ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
           }, { kind: 'session_root', sessionRootId: 's1' }) }),
       ],
     });

@@ -46,6 +46,7 @@ import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/acc
 import { createVoiceContinuationProjection, readVoiceContinuationArrival } from '@/voice/transcript/voiceContinuationProjection';
 import { appendVoiceConversationNoteText } from '@/voice/transcript/voiceConversationTranscript';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
+import { voiceConversationBindingResolver } from '@/voice/binding/VoiceConversationBindingResolver';
 import { getDeviceAnalyticsId } from '@/track/settingsAnalytics/deviceAnalyticsIdentity';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import Constants from 'expo-constants';
@@ -181,7 +182,11 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
     controllerRef.current = controller;
     const syncPublishedSnapshot = () => {
       const snapshot = controller.getSnapshot();
-      const binding = snapshot.sessionId ? voiceSessionBindingStore.getState().getByControlSessionId(snapshot.sessionId) : null;
+      // Persisted bindings describe other clients' control slots. Only a binding
+      // admitted locally may label this attempt or produce its continuation note.
+      const binding = snapshot.sessionId ? voiceConversationBindingResolver.resolveByControlSessionId({
+        controlSessionId: snapshot.sessionId, adapterId: snapshot.adapterId,
+      }) : null;
       const session = binding ? storage.getState().sessions[binding.conversationSessionId] : null;
       const lifetime = captureActiveServerAccountScopeLifetime();
       const exactHome = binding && session?.serverId === binding.conversationSessionAddress.serverId

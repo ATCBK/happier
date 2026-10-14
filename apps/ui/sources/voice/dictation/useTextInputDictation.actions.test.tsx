@@ -93,7 +93,7 @@ describe('mounted field Dictation Actions', () => {
         publishAppliedActiveServerSnapshot({ serverId, serverUrl, generation: 0 });
         const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: 'dictation-home' } }, features: {
             voice: { enabled: true, happierVoice: { enabled: false } },
-            machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+            machines: { enabled: true, liveStream: { ...createRootLayoutFeaturesResponse().features.machines.liveStream, enabled: true, serverRouted: { enabled: true } } },
         } });
         // Synthetic Home deployment input, rather than a reconstructed client policy.
         features.capabilities.machines.liveStream.serverRouted = { disabledReason: null,

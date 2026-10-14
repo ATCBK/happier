@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
-import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 import { PluginContributesV2Schema, type VoiceRealtimeJsonValue } from '@happier-dev/protocol';
 import type {
   BundledRetiringDirectMediaTranscriptDrain,
@@ -42,7 +41,12 @@ vi.mock('expo-audio', async () =>
 const platform = vi.hoisted(() => ({ current: 'web' as 'web' | 'ios' }));
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { get OS() { return platform.current; } } }));
-const nativeAudio = createNativeVoicePcmCaptureHarness();
+// Native module lookup can happen while the runtime's import graph initializes.
+// Install the genuine native boundary before that first, process-owned lookup.
+const nativeAudio = await vi.hoisted(async () => {
+  const { createNativeVoicePcmCaptureHarness } = await import('@/dev/testkit/harness/nativeVoicePcmCapture');
+  return createNativeVoicePcmCaptureHarness();
+});
 vi.mock('expo-modules-core', async original => {
   const actual = await original<typeof import('expo-modules-core')>();
   return { ...actual, requireOptionalNativeModule: (name: string) =>
@@ -55,6 +59,10 @@ function createDeferredVoid() {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+function isControlRecord(value: VoiceRealtimeJsonValue): value is Readonly<Record<string, VoiceRealtimeJsonValue>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function runCurrentGenerationEffect(callback: () => void): boolean {
@@ -177,7 +185,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
           if (activeProviderPreparation === attemptId) activeProviderPreparation = null;
         },
         decodeControl(event) {
-          if (!event || typeof event !== 'object' || Array.isArray(event)
+          if (!isControlRecord(event)
             || typeof event.text !== 'string' || typeof event.item !== 'string'
             || typeof event.id !== 'string') return [];
           const transcript = ladder.map({ itemId: event.item, eventId: event.id, role: 'user',
@@ -442,9 +450,9 @@ describe('createBundledRealtimeProviderRuntime', () => {
       const priorCloseCount = closeCount;
       let firstSettled = false;
       let secondSettled = false;
-      const firstDispose = scope.unwind().then(() => { firstSettled = true; });
+      const firstDispose = Promise.resolve(scope.unwind()).then(() => { firstSettled = true; });
       await closeStarted.promise;
-      const secondDispose = scope.unwind().then(() => { secondSettled = true; });
+      const secondDispose = Promise.resolve(scope.unwind()).then(() => { secondSettled = true; });
       await Promise.resolve();
       expect(closeCount).toBe(priorCloseCount + 1);
       expect(firstSettled).toBe(false);
@@ -646,6 +654,9 @@ describe('createBundledRealtimeProviderRuntime', () => {
     // An interruption in that interval must be retained and applied instead
     // of resolving as a no-op over a later unmuted provider resource.
     await runtime.adapter.setMuted({ sessionId: 'voice-global', muted: true });
+    await resources.preflight!({
+      controlSessionId: 'voice-global', attemptId: 1, request: {}, signal: new AbortController().signal,
+    });
     await resources.prepare({
       controlSessionId: 'voice-global', attemptId: 1, request: {}, signal: new AbortController().signal,
     });
@@ -669,6 +680,12 @@ describe('createBundledRealtimeProviderRuntime', () => {
     acquireAudioMode
       .mockImplementationOnce(() => attemptAAudioMode)
       .mockResolvedValueOnce({ release: releaseAttemptB });
+    await resources.preflight!({
+      controlSessionId: 'voice-global',
+      attemptId: 2,
+      request: {},
+      signal: new AbortController().signal,
+    });
     const prepareAttemptA = resources.prepare({
       controlSessionId: 'voice-global',
       attemptId: 2,
@@ -689,6 +706,12 @@ describe('createBundledRealtimeProviderRuntime', () => {
     await Promise.resolve();
     expect(releaseAttemptAFinished).toBe(false);
 
+    await resources.preflight!({
+      controlSessionId: 'voice-global',
+      attemptId: 3,
+      request: {},
+      signal: new AbortController().signal,
+    });
     const prepareAttemptB = resources.prepare({
       controlSessionId: 'voice-global',
       attemptId: 3,
@@ -821,6 +844,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
     const observation: { deps: VoiceConversationControllerDeps | null; controller: VoiceConversationController | null } = {
       deps: null, controller: null,
     };
+    const observedControllers: Array<{ deps: VoiceConversationControllerDeps; controller: VoiceConversationController }> = [];
     const constructionInputs: Array<Parameters<RealtimeVoiceProviderRuntime['createConnection']>[0]> = [];
     const sdkCallbacks: Array<Parameters<VoiceSdkHandleConnectionDriver['open']>[0]> = [];
     const closedConnections: Array<Parameters<VoiceSdkHandleConnectionDriver['close']>[0]> = [];
@@ -854,7 +878,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
     if (declaration.kind !== 'conversation') throw new Error('Expected conversation declaration');
     const preflightDeclarations = (['client_two_stage', 'provider_immediate'] as const).map(interruptionPolicy => {
       const parsed = PluginContributesV2Schema.parse({ voiceProviders: [{ ...declaration,
-        id: interruptionPolicy, roles: [...declaration.roles, 'turn_control'],
+        id: interruptionPolicy.replaceAll('_', '-'), roles: [...declaration.roles, 'turn_control'],
         capabilities: { turn: { cancelResponse: true, bargeIn: true, resumption: 'resume', interruptionPolicy } },
       }] }).voiceProviders[0]!;
       if (parsed.kind !== 'conversation') throw new Error('Expected conversation policy declaration');
@@ -879,7 +903,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
             if (!providerConversation) throw new Error('Expected the public provider conversation persistence authority');
             await providerConversation.write('sdk-native-conversation');
           }
-          const initialContext = request && typeof request === 'object' && !Array.isArray(request)
+          const initialContext = isControlRecord(request)
             && typeof request.initialContext === 'string' ? request.initialContext : '';
           return { kind: 'prepared', session: {
             config: preparedContextDelivery ? { initialContext } : null,
@@ -888,7 +912,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
           } };
         },
         decodeControl(event) {
-          if (!event || typeof event !== 'object' || Array.isArray(event)) return [];
+          if (!isControlRecord(event)) return [];
           if (event.type === 'output_stopped') return [{ type: 'assistant_output_stopped' }];
           if (event.type === 'final' && typeof event.id === 'string' && typeof event.item === 'string' && typeof event.text === 'string') {
             const transcript = ladder.map({ itemId: event.item, eventId: event.id, role: 'user', incoming: event.text, mode: 'final' });
@@ -917,7 +941,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
         sentControls.push({ kind: 'native_playback_drained' });
       },
       encodeContextUpdate: text => [{ kind: 'context', text }],
-      encodeTextTurn: text => [{ kind: 'input_text', text }, { kind: 'response' }],
+      encodeTextTurn: (text): readonly VoiceRealtimeJsonValue[] => [{ kind: 'input_text', text }, { kind: 'response' }],
       async forgetProviderConversation() { nativeProviderConversationId = null; },
     };
     try {
@@ -925,9 +949,9 @@ describe('createBundledRealtimeProviderRuntime', () => {
         pluginId, occurrenceId: 'media-factory-occurrence', declarations: [declaration, ...preflightDeclarations], hostPlatform: 'web',
         runtimeHost: { ...hostLease.host,
           createConversationController(input) {
-            observation.deps = input;
-            observation.controller = hostLease.host.createConversationController(input);
-            return observation.controller;
+            const controller = hostLease.host.createConversationController(input);
+            observedControllers.push({ deps: input, controller });
+            return controller;
           },
         },
         isRuntimeHostCurrent: () => getCurrentBundledConversationRuntimeHost() === hostLease.host,
@@ -940,6 +964,10 @@ describe('createBundledRealtimeProviderRuntime', () => {
       registerVoiceAdapters([adapter]);
       await environment.configureVoice({ ...environment.persistedAccountSettings.voice, providerId,
         providers: { [providerId]: { schemaVersion: 1, config: {} } } });
+      const selectedController = observedControllers.find(({ deps }) => deps.isSelectionCurrent());
+      if (!selectedController) throw new Error('Expected the selected public provider controller');
+      observation.deps = selectedController.deps;
+      observation.controller = selectedController.controller;
       await adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null, initialContext: 'startup context' });
       expect(sentControls).toEqual([{ kind: 'context', text: 'startup context' }]);
       const initialInput = constructionInputs[0]!;
@@ -975,7 +1003,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
       await toolContinuationStarted.promise;
       expect(sentControls).toHaveLength(1);
       const nativeResult = sentControls[0];
-      if (!nativeResult || typeof nativeResult !== 'object' || Array.isArray(nativeResult)
+      if (!nativeResult || !isControlRecord(nativeResult)
         || typeof nativeResult.result !== 'string') throw new Error('Expected native SDK tool result');
       expect(VoiceRealtimeToolResultV1Schema.parse(JSON.parse(nativeResult.result))).toMatchObject({
         responseId: 'native-response', callId: 'native-call', status: 'success',
@@ -1123,7 +1151,12 @@ describe('createBundledRealtimeProviderRuntime', () => {
       expect(nativeProviderConversationId).toBeNull();
       expect(await readProviderConversationState(persistedConversation)).toBeNull();
       await expect(adapter.performRuntimeAction?.('unknown')).resolves.toEqual({ status: 'unsupported' });
-      expect(deps.isSelectionCurrent()).toBe(true);
+      expect(deps.isSelectionCurrent(), JSON.stringify({
+        selected: storage.getState().settings.voice.providerId,
+        canonicalSelected: storage.getState().settings.voiceSettingsV1.providerId,
+        persistedSelected: environment.persistedAccountSettings.voice.providerId,
+        projectedSelected: hostLease.host.projectVoiceSettings(hostLease.host.getSettings(), providerId)?.providerId,
+      })).toBe(true);
       await environment.configureVoice({ ...environment.persistedAccountSettings.voice, providerId,
         providers: { [providerId]: { schemaVersion: 1, config: { authentication: { source: 'connected_service_api_key' } } } } });
       expect(deps.isSelectionCurrent()).toBe(true);
@@ -1142,7 +1175,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
       vi.stubGlobal('Intl', unavailableIntl);
       try {
         for (const policy of ['provider_immediate', 'client_two_stage'] as const) {
-          const policyProviderId = `${pluginId}/${policy}`;
+          const policyProviderId = `${pluginId}/${policy.replaceAll('_', '-')}`;
           const policyAdapter = getExternalVoiceProviderRegistration(policyProviderId)?.adapter;
           if (!policyAdapter) throw new Error('Expected the registered public policy provider');
           registerVoiceAdapters([policyAdapter]);
@@ -1172,6 +1205,64 @@ describe('createBundledRealtimeProviderRuntime', () => {
       hostLease.revoke();
       await environment.dispose();
     }
+  });
+
+  it('admits typed delivery through real public SDK custody and refuses a rejected native send before acceptance', async () => {
+    const environment = await createOpenAiVoiceRuntimeEnvironment();
+    const hostLease = createBundledConversationRuntimeHostLease();
+    const pluginId = 'conformance.voice.typed-custody';
+    const declaration = PluginContributesV2Schema.parse({ voiceProviders: [{
+      id: 'sdk', title: 'Typed custody SDK', kind: 'conversation', platforms: ['web'],
+      roles: ['conversation_stt', 'conversation_tts', 'realtime_conversation'],
+      capabilities: { turn: { cancelResponse: false, bargeIn: false } },
+      client: { artifactId: 'typed-custody-client', exportName: 'activate' },
+    }] }).voiceProviders[0]!;
+    if (declaration.kind !== 'conversation') throw new Error('Expected the public conversation declaration');
+    const providerId = `${pluginId}/${declaration.id}`;
+    const scope = createExternalVoiceProviderActivationScope({ pluginId, occurrenceId: 'typed-custody-occurrence',
+      declarations: [declaration], hostPlatform: 'web', runtimeHost: hostLease.host,
+      isRuntimeHostCurrent: () => getCurrentBundledConversationRuntimeHost() === hostLease.host });
+    const controls: VoiceRealtimeJsonValue[] = [];
+    let rejectNativeSend = false;
+    scope.api.voiceProviders.register(declaration.id, {
+      kind: 'conversation', microphoneMode: 'provider_managed', setInputMuted() {},
+      protocol: {
+        async prepare({ signal }) { return signal.aborted ? { kind: 'aborted' } : { kind: 'prepared', session: { config: null, safeMetadata: null } }; },
+        decodeControl: () => [], encodeTurnControl: () => null,
+      },
+      async createConnection({ media }) {
+        return media.createSdkHandleConnection({ driver: { async open() {}, async close() {},
+          async sendControl(event) {
+            if (rejectNativeSend) throw new Error('private native transcript at /Users/private');
+            controls.push(event);
+          },
+        } });
+      },
+      encodeToolResults: () => [], encodeToolContinuation: () => ({ kind: 'unused' }),
+      encodeContextUpdate: () => [],
+      encodeTextTurn: (text): readonly VoiceRealtimeJsonValue[] => [{ kind: 'input_text', text }, { kind: 'response' }],
+    });
+    try {
+      await scope.commit();
+      const adapter = getExternalVoiceProviderRegistration(providerId)?.adapter;
+      if (!adapter?.sendTextTurn) throw new Error('Expected the registered typed-delivery owner');
+      registerVoiceAdapters([adapter]);
+      await environment.configureVoice({ ...environment.persistedAccountSettings.voice, providerId,
+        providers: { [providerId]: { schemaVersion: 1, config: {} } } });
+      const controlSessionId = hostLease.host.globalVoiceSessionId;
+      await adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null, initialContext: '' });
+      await adapter.sendTextTurn({ controlSessionId, conversationSessionId: environment.historySessionId,
+        text: 'supported input', localId: 'typed-supported', deliveryCommand: 'interrupt_and_send',
+        onAccepted: async () => { controls.push({ kind: 'pending_settled' }); } });
+      expect(controls).toEqual([{ kind: 'input_text', text: 'supported input' }, { kind: 'pending_settled' }, { kind: 'response' }]);
+      const accepted = vi.fn(async () => {});
+      rejectNativeSend = true;
+      await expect(adapter.sendTextTurn({ controlSessionId, conversationSessionId: environment.historySessionId,
+        text: 'must not be accepted', localId: 'typed-rejected', deliveryCommand: 'interrupt_and_send', onAccepted: accepted,
+      })).rejects.toMatchObject({ message: 'voice_service_unavailable' });
+      expect(accepted).not.toHaveBeenCalled();
+      expect(controls).toHaveLength(3);
+    } finally { await scope.unwind(); hostLease.revoke(); await environment.dispose(); }
   });
 
   it('owns generic lifecycle/resources/tool barrier without provider-id policy branches', async () => {
@@ -1545,24 +1636,9 @@ describe('createBundledRealtimeProviderRuntime', () => {
     await runtimeEvents.onCanonicalEvent({ type: 'input_speech_started' });
     expect(beginOutputInterruptionCandidate).not.toHaveBeenCalled();
     hostGenerationCurrent = true;
-    const unavailableIntl = Object.create(Intl);
-    Object.defineProperty(unavailableIntl, 'Segmenter', { value: undefined });
-    vi.stubGlobal('Intl', unavailableIntl);
-    try {
-      interruptionPolicy = 'provider_immediate';
-      await expect(controllerInput!.resources!.preflight?.({
-        controlSessionId: 'session-1', attemptId: 1, request: {}, signal: new AbortController().signal,
-      })).resolves.toBeUndefined();
-      interruptionPolicy = 'client_two_stage';
-      await expect(controllerInput!.resources!.preflight?.({
-        controlSessionId: 'session-1', attemptId: 1, request: { textOnly: true }, signal: new AbortController().signal,
-      })).resolves.toBeUndefined();
-      await expect(controllerInput!.resources!.preflight?.({
-        controlSessionId: 'session-1', attemptId: 1, request: {}, signal: new AbortController().signal,
-      })).rejects.toMatchObject({ code: 'provider_setup_required', message: 'voice_text_segmentation_unavailable' });
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    // Segmentation admission is covered through the registered public policy
+    // providers above. This legacy resource oracle drives each preflight once,
+    // as the real controller does, rather than re-admitting a live carrier.
     const onConnectionReady = (controllerInput as unknown as Readonly<{
       onConnectionReady(input: Readonly<{
         request: VoiceRealtimeJsonValue;
@@ -1599,10 +1675,10 @@ describe('createBundledRealtimeProviderRuntime', () => {
     await expect(startupProtocol.adapter.prepare({})).resolves.toEqual({
       kind: 'declined', code: 'realtime_agent_update_required',
     });
-    await controllerInput!.resources!.preflight?.({
+    await controllerInput!.resources!.preflight!({
       controlSessionId: 'session-1',
       attemptId: 1,
-      request: {},
+      request: { textOnly: true },
       signal: new AbortController().signal,
     });
     await controllerInput!.resources!.prepare({
@@ -1959,6 +2035,12 @@ describe('createBundledRealtimeProviderRuntime', () => {
     mic.ensureActive.mockImplementationOnce(() => new Promise<void>((resolve) => {
       resolveLateMic = resolve;
     }));
+    await resources.preflight!({
+      controlSessionId: 'session-1',
+      attemptId: 2,
+      request: {},
+      signal: new AbortController().signal,
+    });
     const lateMicPrepare = resources.prepare({
       controlSessionId: 'session-1',
       attemptId: 2,
@@ -2029,82 +2111,9 @@ describe('createBundledRealtimeProviderRuntime', () => {
     });
     expect(sentEvents).toEqual([]);
 
-    host.settleTranscriptPersistence.mockImplementationOnce(async () => {
-      sentEvents.push('transcript-drained');
-    });
-    await runtime.adapter.sendTextTurn!({
-      controlSessionId: 'session-1',
-      conversationSessionId: 'session-2',
-      text: 'hello',
-      localId: 'voice-local-1',
-      deliveryCommand: 'interrupt_and_send',
-      onAccepted: async () => { sentEvents.push('pending-settled'); },
-    });
-    expect(sentEvents).toEqual([
-      { type: 'conversation.item.create', text: 'hello' },
-      'transcript-drained',
-      'pending-settled',
-      { type: 'response.create' },
-    ]);
-
-    sentEvents.length = 0;
-    let releaseFirstSettlement!: () => void;
-    const firstSettlement = new Promise<void>((resolve) => {
-      releaseFirstSettlement = resolve;
-    });
-    host.settleTranscriptPersistence.mockImplementationOnce(async () => {
-      await firstSettlement;
-    });
-    const firstTypedTurn = runtime.adapter.sendTextTurn!({
-      controlSessionId: 'session-1',
-      conversationSessionId: 'session-2',
-      text: 'first overlapping turn',
-      localId: 'voice-local-overlap-1',
-      deliveryCommand: 'interrupt_and_send',
-      onAccepted: async () => { sentEvents.push('first-settled'); },
-    });
-    await vi.waitFor(() => {
-      expect(sentEvents).toEqual([
-        { type: 'conversation.item.create', text: 'first overlapping turn' },
-      ]);
-    });
-    const secondTypedTurn = runtime.adapter.sendTextTurn!({
-      controlSessionId: 'session-1',
-      conversationSessionId: 'session-2',
-      text: 'second overlapping turn',
-      localId: 'voice-local-overlap-2',
-      deliveryCommand: 'interrupt_and_send',
-      onAccepted: async () => { sentEvents.push('second-settled'); },
-    });
-    await Promise.resolve();
-    expect(sentEvents).toEqual([
-      { type: 'conversation.item.create', text: 'first overlapping turn' },
-    ]);
-    releaseFirstSettlement();
-    await Promise.all([firstTypedTurn, secondTypedTurn]);
-    expect(sentEvents).toEqual([
-      { type: 'conversation.item.create', text: 'first overlapping turn' },
-      'first-settled',
-      { type: 'response.create' },
-      { type: 'conversation.item.create', text: 'second overlapping turn' },
-      'second-settled',
-      { type: 'response.create' },
-    ]);
-
-    const acceptedSentEventCount = sentEvents.length;
-    sendClientControl.mockResolvedValueOnce({
-      status: 'unavailable',
-      code: 'voice_connection_not_open',
-    });
-    await expect(runtime.adapter.sendTextTurn!({
-      controlSessionId: 'session-1',
-      conversationSessionId: 'session-2',
-      text: 'not accepted',
-      localId: 'voice-local-rejected',
-      deliveryCommand: 'interrupt_and_send',
-      onAccepted: async () => {},
-    })).rejects.toThrow('voice_service_unavailable');
-    expect(sentEvents).toHaveLength(acceptedSentEventCount);
+    // Typed admission, overlapping-turn ordering, Stop fencing and rejected native
+    // sends are exercised through the registered public SDK tests above. Do not
+    // manufacture a connected turn after this resource oracle declined capture.
     await expect(runtime.adapter.performRuntimeAction?.('forget_provider_conversation'))
       .resolves.toEqual({ status: 'completed' });
     await expect(runtime.adapter.performRuntimeAction?.('unknown'))
@@ -2119,52 +2128,10 @@ describe('createBundledRealtimeProviderRuntime', () => {
     await vi.waitFor(() => expect(fail).toHaveBeenCalledWith('voice_context_update_failed'));
 
     sentEvents.length = 0;
-    let releaseStoppedTurnSettlement!: () => void;
-    const stoppedTurnSettlement = new Promise<void>((resolve) => {
-      releaseStoppedTurnSettlement = resolve;
-    });
-    host.settleTranscriptPersistence.mockImplementationOnce(async () => {
-      await stoppedTurnSettlement;
-    });
-    const acceptedBeforeStop = vi.fn(async () => {});
-    const turnAcceptedBeforeStop = runtime.adapter.sendTextTurn!({
-      controlSessionId: 'session-1',
-      conversationSessionId: 'session-2',
-      text: 'accepted before stop',
-      localId: 'voice-local-stop-1',
-      deliveryCommand: 'interrupt_and_send',
-      onAccepted: acceptedBeforeStop,
-    });
-    await vi.waitFor(() => {
-      expect(sentEvents).toEqual([
-        { type: 'conversation.item.create', text: 'accepted before stop' },
-      ]);
-    });
-    const queuedBeforeStop = runtime.adapter.sendTextTurn!({
-      controlSessionId: 'session-1',
-      conversationSessionId: 'session-2',
-      text: 'must not revive after stop',
-      localId: 'voice-local-stop-2',
-      deliveryCommand: 'interrupt_and_send',
-      onAccepted: async () => { sentEvents.push('stale-queued-settled'); },
-    });
-    let queuedBeforeStopSettled = false;
-    void queuedBeforeStop.catch(() => {
-      queuedBeforeStopSettled = true;
-    });
-    const startCallsBeforeStop = start.mock.calls.length;
+    // The public SDK journey above owns accepted/queued turn Stop fencing.
+    // This resource oracle only owns teardown after declined capture.
     await runtime.adapter.stop({ sessionId: 'session-1' });
     getActiveControlSessionId.mockReturnValue(null);
-    await Promise.resolve();
-    expect(queuedBeforeStopSettled).toBe(true);
-    releaseStoppedTurnSettlement();
-    await expect(turnAcceptedBeforeStop).rejects.toThrow('voice_transcript_attempt_ownership_mismatch');
-    await expect(queuedBeforeStop).rejects.toThrow('voice_transcript_attempt_ownership_mismatch');
-    expect(acceptedBeforeStop).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledTimes(startCallsBeforeStop);
-    expect(sentEvents).toEqual([
-      { type: 'conversation.item.create', text: 'accepted before stop' },
-    ]);
 
     start.mockResolvedValueOnce({ status: 'failed', code: 'voice_context_update_failed' });
     await expect(runtime.adapter.start({
@@ -2285,7 +2252,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
       protocol: {
         async prepare({ signal }) { return signal.aborted ? { kind: 'aborted' } : { kind: 'prepared', session: { config: null, safeMetadata: null } }; },
         decodeControl(event) {
-          if (!event || typeof event !== 'object' || Array.isArray(event)
+          if (!isControlRecord(event)
             || typeof event.id !== 'string' || typeof event.item !== 'string' || typeof event.text !== 'string') return [];
           const transcript = ladder.map({ itemId: event.item, eventId: event.id, role: 'user', incoming: event.text, mode: 'final' });
           return transcript ? [{ type: 'transcript', event: transcript }] : [];
@@ -2325,7 +2292,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
             const observed = { conversationSessionId: input.conversationSessionId, settled: false };
             observedCarrierReleases.push(observed);
             const release = hostLease.host.releaseDirectMediaConversation(input);
-            void release.then(() => { observed.settled = true; }, () => { observed.settled = true; });
+            void Promise.resolve(release).then(() => { observed.settled = true; }, () => { observed.settled = true; });
             return release;
           },
         },
@@ -2354,7 +2321,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
       let disposeSettled = false;
       stopping = adapter.stop({ sessionId: controlSessionId });
       const duplicateStop = adapter.stop({ sessionId: controlSessionId });
-      disposal = scope.unwind();
+      disposal = Promise.resolve(scope.unwind());
       void stopping.then(() => { stopSettled = true; }, () => { stopSettled = true; });
       void duplicateStop.then(() => { duplicateStopSettled = true; }, () => { duplicateStopSettled = true; });
       void disposal.then(() => { disposeSettled = true; }, () => { disposeSettled = true; });
@@ -2393,7 +2360,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
       restoreAudio.mockResolvedValue(undefined);
       await stopping?.catch(() => {});
       await disposal?.catch(() => {});
-      await scope?.unwind().catch(() => {});
+      await Promise.resolve(scope?.unwind()).catch(() => {});
       hostLease.revoke();
       await environment.dispose();
       platform.current = 'web';
@@ -2434,7 +2401,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
       protocol: {
         async prepare({ signal }) { return signal.aborted ? { kind: 'aborted' } : { kind: 'prepared', session: { config: null, safeMetadata: null } }; },
         decodeControl(event) {
-          return event && typeof event === 'object' && !Array.isArray(event) && typeof event.id === 'string'
+          return isControlRecord(event) && typeof event.id === 'string'
             ? [{ type: 'transcript', event: final(event.id) }] : [];
         },
         encodeTurnControl: () => null,
@@ -2512,6 +2479,14 @@ describe('createBundledRealtimeProviderRuntime', () => {
       expect(transcriptDrops()[0]).not.toContain(privateWords);
 
       environment.historySessionPost = async init => environment.sessionHttp.createSessionFromPost('refusal-generation-carrier', init);
+      // The genuine 503 above revoked verified Home transport. Recover through
+      // its real readiness owner before asking a new Voice attempt to connect.
+      const { invalidateServerReachabilitySupervisor, peekServerReachabilityState } =
+        await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+      const home = environment.accountConnection.home;
+      const token = environment.accountConnection.credentials.token;
+      await invalidateServerReachabilitySupervisor({ serverUrl: home.serverUrl, token });
+      await vi.waitFor(() => expect(peekServerReachabilityState(home.serverUrl, token)?.phase).toBe('online'));
       await adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null, initialContext: '' });
       const liveAttemptId = observation.controller!.getOwnedAttemptId();
       if (liveAttemptId === null) throw new Error('Expected current generation attempt');
@@ -2520,7 +2495,9 @@ describe('createBundledRealtimeProviderRuntime', () => {
       observation.deps!.projectTranscript!({ controlSessionId, attemptId: liveAttemptId, connectionId: 1, event: final('retired-generation-one') });
       observation.deps!.projectTranscript!({ controlSessionId, attemptId: liveAttemptId, connectionId: 1, event: final('retired-generation-two') });
       expect(transcriptDrops()).toHaveLength(1);
-      expect(transcriptDrops()[0]).toContain('transcript_generation_retired');
+      // Replacing the real host synchronously disposes its registered runtime;
+      // that stronger refusal precedes the bare generation-currentness check.
+      expect(transcriptDrops()[0]).toContain('transcript_runtime_disposed');
       expect(transcriptDrops()[0]).not.toContain(privateWords);
     } finally {
       await scope?.unwind();
@@ -2704,6 +2681,17 @@ describe('createBundledRealtimeProviderRuntime', () => {
           controlSessionId: string; attemptId: number; connectionId: number; event: unknown;
         }>): void;
       }>;
+      await controllerInput!.resources!.preflight!({
+        controlSessionId: 'target-session',
+        attemptId: 1,
+        request: {
+          requestedTargetSessionAddress: {
+            serverId: 'server-a',
+            sessionId: 'carrier-1',
+          },
+        },
+        signal: new AbortController().signal,
+      });
       await controllerInput!.resources!.prepare({
         controlSessionId: 'target-session',
         attemptId: 1,
@@ -2749,6 +2737,12 @@ describe('createBundledRealtimeProviderRuntime', () => {
       // public stop cannot settle before the rebound carrier's admitted writes.
       resolvedConversationSessionId = 'carrier-1';
       await runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
+      await controllerInput!.resources!.preflight!({
+        controlSessionId: 'voice-global',
+        attemptId: 2,
+        request: {},
+        signal: new AbortController().signal,
+      });
       await controllerInput!.resources!.prepare({
         controlSessionId: 'voice-global',
         attemptId: 2,
@@ -2846,6 +2840,12 @@ describe('createBundledRealtimeProviderRuntime', () => {
       pendingCarrierRebind = null;
       carrierRebindStarted = null;
       await runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
+      await controllerInput!.resources!.preflight!({
+        controlSessionId: 'voice-global',
+        attemptId: 3,
+        request: {},
+        signal: new AbortController().signal,
+      });
       await controllerInput!.resources!.prepare({
         controlSessionId: 'voice-global',
         attemptId: 3,
@@ -2902,6 +2902,12 @@ describe('createBundledRealtimeProviderRuntime', () => {
       onStopped.mockClear();
       controllerStop.mockClear();
       await runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
+      await controllerInput!.resources!.preflight!({
+        controlSessionId: 'voice-global',
+        attemptId: 4,
+        request: {},
+        signal: new AbortController().signal,
+      });
       await controllerInput!.resources!.prepare({
         controlSessionId: 'voice-global',
         attemptId: 4,

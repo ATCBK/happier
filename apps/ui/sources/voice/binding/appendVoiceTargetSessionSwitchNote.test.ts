@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit';
+
+const fixtureMetadata = (() => {
+    const metadata = createSessionFixture().metadata;
+    if (!metadata) throw new Error('Canonical Session fixture metadata missing');
+    return metadata;
+})();
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
@@ -17,9 +23,9 @@ function publishPrivacy(shareSessionSummary: boolean, shareFilePaths = true) {
 function publishSessions(summaryA: string, summaryB: string) {
     storage.setState({ sessions: {
         s1: createSessionFixture({ id: 's1', serverId: activeServerId,
-            metadata: { ...createSessionFixture().metadata, path: '', summary: { text: summaryA, updatedAt: 1 } } }),
+            metadata: { ...fixtureMetadata, path: '', summary: { text: summaryA, updatedAt: 1 } } }),
         s2: createSessionFixture({ id: 's2', serverId: activeServerId,
-            metadata: { ...createSessionFixture().metadata, path: '', summary: { text: summaryB, updatedAt: 1 } } }),
+            metadata: { ...fixtureMetadata, path: '', summary: { text: summaryB, updatedAt: 1 } } }),
     } });
 }
 function readNote() {
@@ -56,9 +62,9 @@ describe('appendVoiceTargetSessionSwitchNote', () => {
     it('does not disclose lookup names when summary sharing is disabled', () => {
         publishPrivacy(false);
         storage.setState({ sessions: {}, sessionListRowsByServerId: { [activeServerId]: {
-            s1: createSessionFixture({ id: 's1', updatedAt: 1, metadata: { ...createSessionFixture().metadata,
+            s1: createSessionFixture({ id: 's1', updatedAt: 1, metadata: { ...fixtureMetadata,
                 name: 'Voice Target Alpha', summaryText: 'Private summary A', path: '/tmp/alpha' } }),
-            s2: createSessionFixture({ id: 's2', updatedAt: 2, metadata: { ...createSessionFixture().metadata,
+            s2: createSessionFixture({ id: 's2', updatedAt: 2, metadata: { ...fixtureMetadata,
                 name: 'Voice Tracked Beta', summaryText: 'Private summary B', path: '/tmp/beta' } }),
         } }, ordinarySessionListMembershipByServerId: { [activeServerId]: ['s1', 's2'] },
         sessionListIndexByServerId: { [activeServerId]: [
@@ -72,9 +78,9 @@ describe('appendVoiceTargetSessionSwitchNote', () => {
         publishPrivacy(false);
         storage.setState({ sessions: {
             s1: createSessionFixture({ id: 's1', serverId: activeServerId,
-                metadata: { ...createSessionFixture().metadata, path: '', name: 's1' } }),
+                metadata: { ...fixtureMetadata, path: '', name: 's1' } }),
             s2: createSessionFixture({ id: 's2', serverId: activeServerId,
-                metadata: { ...createSessionFixture().metadata, path: '', name: 's2' } }),
+                metadata: { ...fixtureMetadata, path: '', name: 's2' } }),
         } });
         appendVoiceTargetSessionSwitchNote({ conversationSessionId, previousTargetSessionAddress, targetSessionAddress });
         expect(readNote()).toBe('Target session changed from the previous session to the current session');

@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { setPreferredLanguageFromSettings, t } from '@/text';
 
 import { storage } from '@/sync/domains/state/storage';
+import type { StorageState } from '@/sync/store/types';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import {
@@ -128,7 +129,7 @@ async function prepareDaemonAudioQa() {
     if (path === '/health') return Response.json({ status: 'ok' });
     if (path === '/v1/features') {
       const features = createRootLayoutFeaturesResponse({
-        features: { voice: { enabled: true, daemonInference: { enabled: true }, agent: { enabled: true } } },
+        features: { voice: { enabled: true } },
         capabilities: { session: { ...DEFAULT_SESSION_CAPABILITIES, pendingInput: { protocolVersion: 4 } } },
       });
       features.features.machines.liveStream.serverRouted.enabled = true;
@@ -722,7 +723,7 @@ describe('VoiceQaScreen', () => {
     const serverId = 'voice-qa-label-server';
     const runtimeServerId = getActiveServerSnapshot().serverId;
 
-    storage.setState((state) => ({
+    storage.setState((state): Partial<StorageState> => ({
       settings: {
         ...state.settings,
         voice: {
@@ -780,10 +781,10 @@ describe('VoiceQaScreen', () => {
       sessionListIndexByServerId: {
         ...(state.sessionListIndexByServerId ?? {}),
         [serverId]: [
-          { type: 'session', sessionId: targetSessionId, serverId, serverName: 'Voice QA labels' },
+          { type: 'session' as const, sessionId: targetSessionId, serverId, serverName: 'Voice QA labels' },
         ],
         [runtimeServerId]: [
-          { type: 'session', sessionId: runtimeSessionId, serverId: runtimeServerId, serverName: 'Voice runtime' },
+          { type: 'session' as const, sessionId: runtimeSessionId, serverId: runtimeServerId, serverName: 'Voice runtime' },
         ],
       },
       concurrentSessionListCacheByServerId: {},
@@ -807,11 +808,11 @@ describe('VoiceQaScreen', () => {
     expect(readLabel(t('devVoiceQa.runtimeSession'))).toBe(t('devVoiceQa.runtimeSession'));
 
     await act(async () => {
-      storage.setState((state) => ({
+      storage.setState((state): Partial<StorageState> => ({
         sessionListRowsByServerId: { [serverId]: {
           ...state.sessionListRowsByServerId?.[serverId],
           [targetSessionId]: {
-            ...state.sessionListRowsByServerId?.[serverId]?.[targetSessionId],
+            ...createSessionListRenderableSessionFixture(state.sessionListRowsByServerId?.[serverId]?.[targetSessionId]),
             metadata: {
               ...emptySessionMetadata,
               name: 'Updated offline target label',
@@ -821,7 +822,7 @@ describe('VoiceQaScreen', () => {
           },
         }, [runtimeServerId]: {
           [runtimeSessionId]: {
-            ...state.sessionListRowsByServerId?.[runtimeServerId]?.[runtimeSessionId],
+            ...createSessionListRenderableSessionFixture(state.sessionListRowsByServerId?.[runtimeServerId]?.[runtimeSessionId]),
             metadata: {
               ...emptySessionMetadata,
               name: 'Updated runtime label',
@@ -1385,7 +1386,7 @@ describe('VoiceQaScreen', () => {
     let resolveTranscription!: (value: unknown) => void;
     heldTranscription = new Promise(resolve => { resolveTranscription = resolve; });
     storage.getState().applyMachines([createMachineFixture({
-      id: 'qa-configured-machine', serverId: account!.home.id, activeAt: Date.now(),
+      id: 'qa-configured-machine', activeAt: Date.now(),
     })]);
     storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceSettingsParse({
       ...storage.getState().settings.voice,

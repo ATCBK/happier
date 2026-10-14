@@ -30,6 +30,7 @@ import type {
 } from '@/voice/agent/types';
 import type { VoiceCurrentUiToolPort } from '@/voice/tools/currentUiContextToolPort';
 import { resolveSessionAddressFromLocalState } from '@/sync/domains/session/resolveSessionAddressFromLocalState';
+import { registerSessionRealtimeTranscriptConsumer } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 
 type VoicePlaybackControllerLike = Readonly<{
   registerStopper: VoicePlaybackStopperRegistrar;
@@ -500,6 +501,10 @@ export async function sendVoiceTextTurn(params: {
       .filter((messageId: any): messageId is string => typeof messageId === 'string'),
   );
 
+  const autoSpeak = config?.tts?.autoSpeakReplies !== false;
+  // The provider may reply before enqueue's HTTP acknowledgement. Demand its
+  // transcript before submission so Sync retains that real reply for playback.
+  const releaseReplyConsumer = autoSpeak ? registerSessionRealtimeTranscriptConsumer(sessionId) : null;
   voiceConversationRuntimeMachine.transitionToThinking({ controlSessionId: sessionId });
   try {
     throwIfAborted();
@@ -514,9 +519,10 @@ export async function sendVoiceTextTurn(params: {
       reason: 'send_failed',
     });
     throw error;
+  } finally {
+    releaseReplyConsumer?.();
   }
 
-  const autoSpeak = config?.tts?.autoSpeakReplies !== false;
   if (!autoSpeak) {
     transitionVoiceRuntimeToIdleIfCurrent({ controlSessionId: sessionId });
     return;

@@ -96,6 +96,11 @@ import { areSessionAddressesEqual, type SessionAddress } from '@/sync/domains/se
 import { captureActiveServerAccountScopeCurrentness, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 
 type ExternalVoiceProviderProtocolLeaf = RealtimeVoiceProviderProtocol;
+
+function isProviderConfigRecord(value: VoiceRealtimeJsonValue): value is Readonly<Record<string, VoiceRealtimeJsonValue>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 export type VoiceConversationProviderContribution = Extract<
   VoiceProviderContribution,
   Readonly<{ kind: 'conversation' }>
@@ -581,10 +586,12 @@ export function createExternalProtocol(
     const metadata = target ? readVoiceSessionOwnerMetadataFromState(storage.getState(), target) : null;
     if (target && !metadata) return { kind: 'declined' as const, code: 'session_metadata_unavailable' };
     const targetDisplayName = target ? readSessionDisplayTitle(target) : null;
-    const preference = readSessionVoicePreferenceV1(metadata?.work?.voicePreference);
+    const work = metadata?.work;
+    const preference = readSessionVoicePreferenceV1(work && typeof work === 'object' && 'voicePreference' in work
+      ? work.voicePreference : undefined);
     const field = readSessionVoiceSettingFieldV1(declaration, preference?.settingFieldPath);
     const config = deepFreeze(parsed.data);
-    const client = field && config && typeof config === 'object' && !Array.isArray(config)
+    const client = field && isProviderConfigRecord(config)
       ? createVoiceSettingsCatalogClient(providerId, () => config) : null;
     let catalog: readonly VoiceCatalogRow[] | null = null;
     if (client) {
@@ -1436,6 +1443,7 @@ export function createExternalVoiceProviderActivationScope(input: Readonly<{
           const selectionOptions = Object.freeze([Object.freeze({
             id: 'default', modeId: 'default', order: 10_000,
             titleKey: declarationTitle(declaration),
+            subtitleKey: '',
             configPatch: providerSettings.defaultConfig,
           })]);
           const declarationBase = projectVoiceProviderDeclarationRegistryBase({

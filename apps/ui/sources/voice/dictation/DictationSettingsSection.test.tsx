@@ -257,11 +257,6 @@ describe('DictationSettingsSection', () => {
   it('edits the selected Local Voice adapter STT settings when Dictation follows Local Voice', async () => {
     const { DictationSettingsSection } = await import('./DictationSettingsSection');
     const { OverlayPortalHost, OverlayPortalProvider, Popover } = await import('@/components/ui/popover');
-    // React Native supplies physical view geometry; the actual Popover decides
-    // positioning, native portal placement, opening, selection and closing.
-    const measureInWindow = vi.fn((callback: (x: number, y: number, width: number, height: number) => void) => {
-      callback(100, 120, 280, 48);
-    });
     const localDirect = readLocalDirectVoiceSettings(voiceSettingsDefaults);
     const localConversation = readLocalConversationVoiceSettings(voiceSettingsDefaults);
     const voice = writeLocalConversationVoiceSettings(writeLocalDirectVoiceSettings({
@@ -296,9 +291,7 @@ describe('DictationSettingsSection', () => {
         setVoice={setVoice}
         executionMachineId={null}
         localAvailability={localAvailability}
-      /><OverlayPortalHost /></OverlayPortalProvider>, {
-        createNodeMock: (node) => typeof node.type === 'string' ? { measureInWindow } : null,
-      });
+      /><OverlayPortalHost /></OverlayPortalProvider>);
       registerStandardCleanupTarget(tree);
     });
 
@@ -307,7 +300,7 @@ describe('DictationSettingsSection', () => {
     const recognitionLanguage = tree.root.findAllByType(DropdownMenu).filter(node =>
       Array.isArray(node.props.items) && node.props.items.some((item: { id: string }) => item.id === '__custom__'));
     expect(recognitionLanguage).toHaveLength(1);
-    const languageTriggers = recognitionLanguage[0]!.findAll((node) => node.type === 'Pressable'
+    const languageTriggers = recognitionLanguage[0]!.findAll((node) => String(node.type) === 'Pressable'
       && node.props.accessibilityState?.expanded === false);
     expect(languageTriggers).toHaveLength(1);
     await act(async () => {
@@ -315,9 +308,10 @@ describe('DictationSettingsSection', () => {
     });
     await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
     expect(tree.root.findByType(Popover).props.open).toBe(true);
-    expect(measureInWindow).toHaveBeenCalled();
+    // The native menu uses the shared phone sheet, which does not measure an
+    // anchor. Selection through its real portal is the observable contract.
     const portalHost = tree.root.findByType(OverlayPortalHost);
-    const frenchChoice = portalHost.findAll((node) => node.type === 'Pressable' && node.props.testID === 'dropdown-option-fr'
+    const frenchChoice = portalHost.findAll((node) => String(node.type) === 'Pressable' && node.props.testID === 'dropdown-option-fr'
       && typeof node.props.onPress === 'function')[0];
     if (!frenchChoice) throw new Error('Missing French choice in native portal');
     await act(async () => {
@@ -603,7 +597,8 @@ describe('DictationSettingsSection', () => {
           },
         }}
         onRecoveryAction={onRecoveryAction}
-      />, { createNodeMock: (node) => node.props.testID === 'settings.voice.dictation.engine.device'
+      />, { createNodeMock: (node) => node.props && typeof node.props === 'object' && 'testID' in node.props
+        && node.props.testID === 'settings.voice.dictation.engine.device'
         ? { focus: providerFocus } : null });
       registerStandardCleanupTarget(tree);
     });
@@ -716,6 +711,7 @@ describe('DictationSettingsSection', () => {
         contribution: { identity: subject.contribution, name: 'Gemini STT' },
         credentialSlot: { id: 'api_key', name: 'API key', purpose: declaration.credentials!.slot.purpose } },
     });
+    if (!inspection.ok) throw new Error('Expected admitted raw credential inspection fixture');
     daemonResponse.mockImplementation(async (method, payload) => {
       if (method !== RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_INSPECT) throw new Error(`Unexpected Dictation RPC: ${method}`);
       const request = DaemonVoiceClientRawCredentialAuthorizationRequestV1Schema.parse(payload);

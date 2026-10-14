@@ -276,7 +276,7 @@ describe('createVoiceSessionBindingStore', () => {
     )).toBeNull();
   });
 
-  it('removes an owned runtime binding even while a newer persisted control-slot binding masks it', async () => {
+  it('keeps local custody over newer synced control-slot bindings and reveals discovery after exact cleanup', async () => {
     const store = createVoiceSessionBindingStore();
     const owner = createVoiceRuntimeAttemptBindingOwner();
     const { syncPersistedVoiceConversationBindings } = await import('./voiceConversationBindingStore');
@@ -320,12 +320,15 @@ describe('createVoiceSessionBindingStore', () => {
     });
 
     expect(store.getState().getByControlSessionId(runtimeBinding.controlSessionId))
-      .toMatchObject({ conversationSessionId: 'persisted-carrier-b' });
+      .toMatchObject({ conversationSessionId: 'runtime-carrier-a' });
     expect(unbindVoiceRuntimeAttemptBindingIfOwned({
       store,
       owner,
       conversationSessionId: runtimeBinding.conversationSessionId,
     })).toBe(true);
+
+    expect(store.getState().getByControlSessionId(runtimeBinding.controlSessionId))
+      .toMatchObject({ conversationSessionId: 'persisted-carrier-b' });
 
     syncPersistedVoiceConversationBindings({ store, state: { sessions: {} } });
 

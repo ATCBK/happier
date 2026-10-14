@@ -191,6 +191,11 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
                     signal: context.signal, isCurrent: () => selectionCurrent() && (preview?.isCurrent() ?? true),
                     registerPlaybackStopper: preview?.registerPlaybackStopper ?? playback!.registerStopper.captureAttempt!() });
                 return await operationCurrent() && (preview?.isCurrent() ?? true) ? completed() : { status: 'cancelled' };
+            } catch (error) {
+                // Stop or replacement retires this sample even when native
+                // synthesis/playback rejects while unwinding its cancellation.
+                if (preview && !preview.isCurrent()) return { status: 'cancelled' };
+                throw error;
             } finally {
                 context.signal?.removeEventListener('abort', interrupt);
                 interrupt();

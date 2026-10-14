@@ -23,6 +23,8 @@ import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testki
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { PLUGIN_UI_HOST_API_VERSION_V1, PLUGIN_UI_HOST_API_WIRE_VERSION_V1 } from '@happier-dev/protocol/plugins/ui';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { storage } from '@/sync/domains/state/storage';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import {
@@ -132,10 +134,10 @@ async function mountCurrentUiContext(wireResult: Readonly<Record<string, boolean
     return null;
   }
   const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(InjectedAuthProvider,
-    { credentials: account.credentials }, React.createElement(MainAppTabStateProvider, null,
+    { credentials: account.credentials, children: null }, React.createElement(MainAppTabStateProvider, null,
       React.createElement(AppPaneProvider, null, React.createElement(AppShellPluginUiProjectionProvider, null,
         React.createElement(CurrentUiContextProvider, null,
-        React.createElement(PluginSurfaceFocusEligibilityProvider, { active: true, currentUiContextActive: true },
+        React.createElement(PluginSurfaceFocusEligibilityProvider, { active: true, currentUiContextActive: true, children: null },
           React.createElement(Publication), children))))));
   const mounted = await renderHook(() => ({ reader: useOptionalCurrentUiContextReader(), port: useCurrentUiContextVoiceToolPort() }), { wrapper });
   const { reader, port } = mounted.getCurrent();
@@ -161,11 +163,11 @@ function createBaseState(): any {
         presence: 'online',
         agentState: {
           requests: {
-            req_a: { id: 'req_a', tool: 'Bash', kind: 'permission' },
-            req_b: { id: 'req_b', tool: 'Read', kind: 'permission' },
+            req_a: { tool: 'Bash', kind: 'permission', arguments: {} },
+            req_b: { tool: 'Read', kind: 'permission', arguments: {} },
           },
         },
-        metadata: { path: '/Users/alice/project-alpha', homeDir: '/Users/alice', machineId: 'm1', host: 'a-host', flavor: 'claude', summary: { text: 'S1 summary' } },
+        metadata: { path: '/Users/alice/project-alpha', homeDir: '/Users/alice', machineId: 'm1', host: 'a-host', flavor: 'claude', summary: { text: 'S1 summary', updatedAt: 200 } },
       }),
       s2: createSessionFixture({
         id: 's2',
@@ -173,13 +175,13 @@ function createBaseState(): any {
         thinking: false,
         active: true,
         updatedAt: 100,
-        presence: 'offline',
+        presence: 0,
         agentState: {
           requests: {
-            req_c: { id: 'req_c', tool: 'Bash', kind: 'permission' },
+            req_c: { tool: 'Bash', kind: 'permission', arguments: {} },
           },
         },
-        metadata: { path: '/tmp/s2', machineId: 'm1', host: 'a-host', summary: { text: 'S2 summary' } },
+        metadata: { path: '/tmp/s2', machineId: 'm1', host: 'a-host', summary: { text: 'S2 summary', updatedAt: 100 } },
       }),
       sys_voice: createSessionFixture({
         id: 'sys_voice',
@@ -187,7 +189,7 @@ function createBaseState(): any {
         thinking: false,
         active: false,
         updatedAt: 300,
-        presence: 'offline',
+        presence: 0,
         agentState: { requests: {} },
         metadata: { path: '/tmp/sys', machineId: 'm1', host: 'a-host', systemSessionV1: { v: 1, key: 'voice_carrier', hidden: true } },
       }),
@@ -197,7 +199,7 @@ function createBaseState(): any {
         thinking: false,
         active: false,
         updatedAt: 60,
-        presence: 'offline',
+        presence: 0,
         agentState: { requests: {} },
         metadata: { path: '/tmp/matrix', machineId: 'm1', host: 'a-host', name: 'leeroy' },
       }),
@@ -240,7 +242,7 @@ function createBaseState(): any {
           agentStateVersion: 1,
           thinking: false,
           thinkingAt: 0,
-          presence: 'offline',
+          presence: 0,
           metadata: { summaryText: 'Session QA Voice Matrix', path: '/tmp/matrix' },
         }),
       },
@@ -249,7 +251,7 @@ function createBaseState(): any {
           id: 's_other',
           active: false,
           updatedAt: 50,
-          presence: 'offline',
+          presence: 0,
           metadata: { path: '/tmp/other', host: 'b-host', summaryText: 'Other summary' },
         }),
       },
@@ -1069,10 +1071,10 @@ describe('voice tool handlers', () => {
     const invoke = tools.invokeAction;
     if (!invoke) throw new Error('Expected the contributed Action tool while the Action is enabled');
 
-    storage.getState().applySettingsLocal({ actionsSettingsV1: {
+    storage.getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({
       v: 1,
       actions: { 'action.invoke': { enabled: false } },
-    } });
+    }) });
 
     await expect(invoke({
       action: { pluginId: 'acme.triage', localId: 'refresh-issues' },
@@ -1086,10 +1088,10 @@ describe('voice tool handlers', () => {
 
   it('does not expose the contributed Action tool when action.invoke is already disabled', async () => {
     const current = await mountCurrentUiContext();
-    storage.getState().applySettingsLocal({ actionsSettingsV1: {
+    storage.getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({
       v: 1,
       actions: { 'action.invoke': { disabledSurfaces: ['voice'] } },
-    } });
+    }) });
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({
       resolveSessionId: () => 's1',
@@ -1327,7 +1329,7 @@ describe('voice tool handlers', () => {
         active: true,
         presence: 'online',
         updatedAt: 3000,
-        metadata: { path: '/Users/leeroy/workspaces/apps/leeroy', machineId: 'm1', host: 'a-host', summary: { text: 'Apps session' } },
+        metadata: { path: '/Users/leeroy/workspaces/apps/leeroy', machineId: 'm1', host: 'a-host', summary: { text: 'Apps session', updatedAt: 3000 } },
       }),
       s4: createSessionFixture({
         id: 's4',
@@ -1335,7 +1337,7 @@ describe('voice tool handlers', () => {
         active: true,
         presence: 'online',
         updatedAt: 4000,
-        metadata: { path: '/Users/leeroy/workspaces/docs/leeroy', machineId: 'm1', host: 'a-host', summary: { text: 'Docs session' } },
+        metadata: { path: '/Users/leeroy/workspaces/docs/leeroy', machineId: 'm1', host: 'a-host', summary: { text: 'Docs session', updatedAt: 4000 } },
       }),
     } });
 
@@ -1371,7 +1373,7 @@ describe('voice tool handlers', () => {
         active: true,
         presence: 'online',
         updatedAt: 5000,
-        metadata: { path: '/Users/leeroy', machineId: 'm1_alias', host: 'a-host', summary: { text: 'Alias workspace session' } },
+        metadata: { path: '/Users/leeroy', machineId: 'm1_alias', host: 'a-host', summary: { text: 'Alias workspace session', updatedAt: 5000 } },
       }),
     } });
 
@@ -1669,7 +1671,7 @@ describe('voice tool handlers', () => {
       initializeSessionId: 'carrier-1',
       existingSession: { id: 'carrier-1', active: true, metadata: writeVoiceConversationScopeMetadata({
         path: '/repo', host: 'voice.test', machineId: 'machine-1', flavor: 'claude',
-        systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+        ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
         agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
       }, { kind: 'session_root', sessionRootId: 's1' }) },
       sessions: [createSessionFixture({ id: 's1', active: true, activeAt: Date.now(), metadata: {
@@ -2141,7 +2143,7 @@ describe('voice tool handlers', () => {
           id: 's_matrix',
           active: false,
           updatedAt: 60,
-          presence: 'offline',
+          presence: 0,
           metadata: { summaryText: 'Session QA Voice Matrix', path: '/tmp/matrix' },
         }),
       },

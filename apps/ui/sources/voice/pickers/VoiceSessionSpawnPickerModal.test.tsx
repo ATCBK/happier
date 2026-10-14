@@ -71,7 +71,8 @@ async function renderScreen(...args: Parameters<typeof renderActualScreen>) {
 }
 
 function pathProps(screen: Awaited<ReturnType<typeof renderActualScreen>>): PathSelectionListProps {
-  return screen.findByType(PathSelectionList).props;
+  // React Test Renderer does not carry the rendered component's prop type.
+  return screen.findByType(PathSelectionList).props as PathSelectionListProps;
 }
 
 describe('VoiceSessionSpawnPickerModal', () => {

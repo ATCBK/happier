@@ -276,7 +276,7 @@ describe('listSessionsForVoiceTool privacy', () => {
     seedSession({ shareSessionSummary: true, shareFilePaths: true });
     const result = await listSessionsForVoiceTool({});
     if ('view' in result || !result.ok) throw new Error('Expected summary session list');
-    expect(result.sessions[0]?.locationLabel).toBeUndefined();
+    expect(result.sessions[0]).not.toHaveProperty('locationLabel');
     expect(JSON.stringify(result)).not.toContain('payments');
   });
 

@@ -11,7 +11,6 @@ import {
 
 import { createExpoModelPackInstallerHost, reconcileExpoModelPackPromotion } from '@/voice/modelPacks/installer/host.native';
 import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
-import type { ExpoFsFile } from '@/voice/modelPacks/installer/types';
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
@@ -89,7 +88,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const prior = new Uint8Array([9, 9]);
     files.set(`${PACK_DIR}/model.bin`, prior);
-    const BaseFile: new (...args: unknown[]) => ExpoFsFile = fs.File;
+    const BaseFile = fs.File;
     let activeHandles = 0;
     class DiskFile extends BaseFile {
       open() {
@@ -124,7 +123,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
     const scratchFile = 'file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin';
     files.set(scratchFile, prefix);
     seedResumePlan(files, manifest);
-    const BaseFile: new (...args: unknown[]) => ExpoFsFile = fs.File;
+    const BaseFile = fs.File;
     let activeHandles = 0;
     const readLengths: number[] = [];
     let failRead = outcome === 'read failure';
@@ -239,7 +238,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
     // Spy on File.write to assert append-mode writes (no full-buffer rewrites).
     const writeCalls: Array<{ append: boolean; length: number }> = [];
     const OriginalFile = fs.File;
-    const BaseFile: new (...args: unknown[]) => ExpoFsFile = OriginalFile;
+    const BaseFile = OriginalFile;
     class TracingFile extends BaseFile {
       write(data: string | Uint8Array, options?: { append?: boolean }) {
         if (typeof data !== 'string' && this.uri.endsWith('/.resume.scratch/model.bin')) {

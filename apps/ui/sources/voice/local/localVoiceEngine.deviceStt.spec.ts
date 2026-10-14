@@ -1,3 +1,4 @@
+import { readLocalConversationVoiceSettings, readLocalDirectVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -45,7 +46,7 @@ async function configureDuplexDeviceSpeech(handsFree: boolean) {
         emitSpeechRecEvent('audiostart');
     });
     const storage = await getStorage();
-    const config = storage.getState().settings.voice.providers.local_direct.config;
+    const config = readLocalDirectVoiceSettings(storage.getState().settings.voice);
     storage.__setState({ settings: {
         ...storage.getState().settings,
         voice: {
@@ -227,13 +228,13 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                         } },
@@ -266,7 +267,8 @@ describe('local voice engine device STT (experimental)', () => {
         await configureDuplexDeviceSpeech(false);
         const storage = await getStorage();
         const settings = storage.getState().settings;
-        const config = settings.voice.providers[providerId].config;
+        const config = providerId === 'local_direct' ? readLocalDirectVoiceSettings(settings.voice)
+            : readLocalConversationVoiceSettings(settings.voice);
         storage.__setState({ settings: { ...settings, voice: {
             ...settings.voice,
             providerId,
@@ -320,7 +322,8 @@ describe('local voice engine device STT (experimental)', () => {
         await configureDuplexDeviceSpeech(false);
         const storage = await getStorage();
         const settings = storage.getState().settings;
-        const config = settings.voice.providers[providerId].config;
+        const config = providerId === 'local_direct' ? readLocalDirectVoiceSettings(settings.voice)
+            : readLocalConversationVoiceSettings(settings.voice);
         storage.__setState({ settings: { ...settings, voice: {
             ...settings.voice, providerId,
             providers: { ...settings.voice.providers, [providerId]: { schemaVersion: 1, config: {
@@ -419,13 +422,13 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                         } },
@@ -455,9 +458,9 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                         } },
@@ -503,13 +506,13 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                         } },
@@ -555,9 +558,9 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                         } },
@@ -593,9 +596,9 @@ describe('local voice engine device STT (experimental)', () => {
                         providers: {
                             ...storage.getState().settings.voice.providers,
                             local_direct: { schemaVersion: 1, config: {
-                                ...storage.getState().settings.voice.providers.local_direct.config,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                                 stt: {
-                                    ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                    ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                     provider: 'device',
                                 },
                             } },
@@ -625,17 +628,17 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             handsFree: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.handsFree,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).handsFree,
                                 enabled: true,
                                 endpointing: { silenceMs: 0, minSpeechMs: 0 },
                             },
@@ -678,17 +681,17 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             handsFree: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.handsFree,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).handsFree,
                                 enabled: true,
                                 endpointing: { silenceMs: 0, minSpeechMs: 0 },
                             },
@@ -725,17 +728,17 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             handsFree: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.handsFree,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).handsFree,
                                 enabled: true,
                                 endpointing: { silenceMs: 0, minSpeechMs: 0 },
                             },
@@ -771,17 +774,17 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).tts,
                                 autoSpeakReplies: false,
                             },
                             handsFree: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.handsFree,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).handsFree,
                                 enabled: true,
                                 endpointing: { silenceMs: 10, minSpeechMs: 0 },
                             },
@@ -823,13 +826,13 @@ describe('local voice engine device STT (experimental)', () => {
                     providers: {
                         ...storage.getState().settings.voice.providers,
                         local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
+                            ...readLocalDirectVoiceSettings(storage.getState().settings.voice),
                             stt: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.stt,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).stt,
                                 provider: 'device',
                             },
                             handsFree: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.handsFree,
+                                ...readLocalDirectVoiceSettings(storage.getState().settings.voice).handsFree,
                                 enabled: true,
                                 endpointing: { silenceMs: 0, minSpeechMs: 0 },
                             },

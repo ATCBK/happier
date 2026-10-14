@@ -25,6 +25,10 @@ const owner = Object.freeze({
   },
 });
 
+function isConfigRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 describe('realtime settings descriptor boundary', () => {
   it('admits a provider-owned descriptor without knowing the provider id or field paths', () => {
     const descriptor = parseRealtimeSettingsDescriptor('acme_realtime', {
@@ -78,13 +82,14 @@ describe('realtime provider config projection', () => {
       schemaVersion: 1, fields: [{ id: 'voice', title: 'Voice', schema: { type: 'string', maxLength: 32 }, default: 'default', presentation: { control: 'text' } }],
     }));
     const projectionOwner = { ...descriptor,
+      defaultConfig: { voice: 'default' },
       parseConfig: (value: unknown) => {
         const parsed = descriptor.parseConfig(value);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+        return isConfigRecord(parsed) ? parsed : null;
       },
       parseStoredConfig: (value: unknown) => {
         const parsed = descriptor.parseStoredConfig(value);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+        return isConfigRecord(parsed) ? parsed : null;
       },
     };
     expect(resolveRealtimeProviderConfig(projectionOwner, { schemaVersion: 1, config: { voice: 'kept', retired: true } }))

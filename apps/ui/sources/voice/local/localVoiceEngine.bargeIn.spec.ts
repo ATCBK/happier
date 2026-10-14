@@ -1,3 +1,4 @@
+import { readLocalDirectVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,7 +38,7 @@ async function registerControlSessionBinding(): Promise<void> {
 
 async function driveReplyToSpeaking() {
     const storage = await getStorage();
-    const config = storage.getState().settings.voice.providers.local_direct.config;
+    const config = readLocalDirectVoiceSettings(storage.getState().settings.voice);
     storage.__setState({ settings: {
         ...storage.getState().settings,
         voice: {

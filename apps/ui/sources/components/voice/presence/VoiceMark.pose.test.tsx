@@ -57,6 +57,8 @@ function canvas(): VoiceMarkCanvasProps {
         pose: props.pose,
         energy: props.energy,
         flow: props.flow,
+        gather: props.gather,
+        leave: props.leave,
     };
 }
 

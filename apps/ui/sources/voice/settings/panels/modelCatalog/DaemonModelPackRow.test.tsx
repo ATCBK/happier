@@ -34,9 +34,8 @@ async function restoreModelAccount() {
         machines: [createMachineFixture({ id: machineId, activeAt: Date.now() })],
         features: createRootLayoutFeaturesResponse({ features: {
             voice: { enabled: true },
-                execution: { runs: { enabled: true } },
-            machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
-        }, capabilities: { machines: { liveStream: { serverRouted: { disabledReason: null, caps: {
+            machines: { enabled: true, liveStream: { ...createRootLayoutFeaturesResponse().features.machines.liveStream, enabled: true, serverRouted: { enabled: true } } },
+        }, capabilities: { machines: { ...createRootLayoutFeaturesResponse().capabilities.machines, liveStream: { serverRouted: { disabledReason: null, caps: {
             maxBitrateBps: 64_000, maxFramesPerSecond: 50, maxFrameBytes: 16_000, maxDurationMs: 60_000,
             maxTotalBytes: 1_000_000, maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1,
             maxConcurrentStreamsPerMachine: 1,

@@ -6,7 +6,7 @@ import {
     storage,
 } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
-import type { BackendTargetRefV1, ExecutionRunPublicState } from '@happier-dev/protocol';
+import type { BackendTargetRefV1, ExecutionRunPublicState, ProviderBoundModelRef } from '@happier-dev/protocol';
 import { resolveDaemonVoiceAgentModelIds } from '@/voice/agent/resolveDaemonVoiceAgentModels';
 import { ensureVoiceAgentInstallablesBackground } from '@/voice/agent/ensureVoiceAgentInstallablesBackground';
 import { resolveVoiceAgentInitialContexts } from '@/voice/agent/resolveVoiceAgentInitialContexts';
@@ -60,6 +60,7 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveSelectedVoiceWelcomeText } from '@/voice/agent/voiceWelcomeText';
 import { readSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
+import { resolveVoiceSessionModelSelection } from '@/voice/agent/resolveVoiceSessionModelSelection';
 
 type InitializeVoiceAgentHandleParams = Readonly<{
     sessionId: string;
@@ -107,7 +108,7 @@ function resolveVoiceAgentBootstrapConfig(args: Readonly<{
 
 function buildVoiceAgentStartArgsBase(args: Readonly<{
     agentSource: 'session' | 'agent';
-    profileId: string | null;
+    launchProfileId: string | null;
     verbosity: 'short' | 'balanced';
     permissionIntent: PermissionIntent;
     idleTtlSeconds: number;
@@ -126,7 +127,7 @@ function buildVoiceAgentStartArgsBase(args: Readonly<{
 > {
     return {
         agentSource: args.agentSource,
-        profileId: args.profileId,
+        launchProfileId: args.launchProfileId,
         verbosity: args.verbosity,
         permissionIntent: args.permissionIntent,
         idleTtlSeconds: args.idleTtlSeconds,
@@ -425,6 +426,8 @@ export async function initializeVoiceAgentHandle({
     };
     let chatModelId: string | undefined;
     let commitModelId: string | undefined;
+    let chatModelSelection: ProviderBoundModelRef | undefined;
+    let commitModelSelection: ProviderBoundModelRef | undefined;
     let resolvedAgentId: string | null = null;
     let resolvedBackendTarget: BackendTargetRefV1 | null = null;
     let runMetadataSessionId: string | null = null;
@@ -434,7 +437,7 @@ export async function initializeVoiceAgentHandle({
     let retainedRunState: ExecutionRunPublicState | null = null;
     let startResumeHandle: VoiceAgentStartParams['resumeHandle'] = null;
     const retentionPolicy: NonNullable<VoiceAgentStartParams['retentionPolicy']> =
-        backend === 'daemon' && configuredTranscriptPersistenceMode === 'persistent' ? 'resumable' : 'ephemeral';
+        resolveTranscriptConfig(backend)?.persistenceMode === 'persistent' ? 'resumable' : 'ephemeral';
     const runtimePublicationSupportsTranscriptSource = () =>
         persistedRuntimePublication?.facets?.transcriptSource?.supported === true;
     const shouldUseProviderResume = () =>
@@ -474,14 +477,18 @@ export async function initializeVoiceAgentHandle({
         return backendTargetKeysMatch(run.backendTarget, resolvedBackendTarget);
     };
 
-    const refreshStartState = (nextBackend: 'daemon', nextRpcSessionId: string) => {
+    const refreshStartState = async (nextBackend: 'daemon', nextRpcSessionId: string) => {
         assertAccountCurrent();
         retainedRunState = null;
         rpcSessionId = nextRpcSessionId;
-        const targetAddress = boundTargetSessionAddress?.sessionId === nextRpcSessionId
+        // The carrier owns RPC/transcript custody; a bound coding root owns
+        // session-sourced execution choices even when their ids differ.
+        const targetAddress = agentSource === 'session' || boundTargetSessionAddress?.sessionId === nextRpcSessionId
             ? boundTargetSessionAddress
             : null;
         ({ chatModelId, commitModelId } = resolveModelIds(nextBackend, nextRpcSessionId, targetAddress));
+        chatModelSelection = undefined;
+        commitModelSelection = undefined;
         if (nextBackend !== 'daemon') {
             resolvedAgentId = String(agentId ?? '').trim() || null;
             runMetadataSessionId = null;
@@ -493,12 +500,33 @@ export async function initializeVoiceAgentHandle({
         }
 
         resolvedAgentId = resolveDaemonAgentId(nextRpcSessionId, targetAddress);
+        if (agentSource === 'session' && resolvedAgentId && targetAddress
+            && targetAddress.sessionId !== nextRpcSessionId
+            && (agentCfg.chatModelSource === 'session' || agentCfg.commitModelSource === 'session')) {
+            const selection = (await resolveVoiceSessionModelSelection({
+                sessionAddress: targetAddress,
+                agentId: resolvedAgentId,
+                agentTargetKey: buildAgentUniverseBackendTargetKey(resolvedAgentId),
+            }))?.ref;
+            assertAccountCurrent();
+            if (!selection) return throwVoiceAgentSelectionUnavailable();
+            if (agentCfg.chatModelSource === 'session') {
+                chatModelSelection = selection;
+                chatModelId = selection.modelId;
+            }
+            if (agentCfg.commitModelSource === 'session'
+                || (agentCfg.commitModelSource === 'chat' && chatModelSelection)) {
+                commitModelSelection = selection;
+                commitModelId = selection.modelId;
+            }
+        }
         resolvedBackendTarget = resolvedAgentId ? { kind: 'builtInAgent', agentId: resolvedAgentId } : null;
         runMetadataSessionId =
             resolveVoiceRunMetadataSessionId(sessionId, nextBackend, daemonConversationSessionId);
         refreshPersistedRunState(runMetadataSessionId);
     };
-    refreshStartState(backend, rpcSessionId);
+    await refreshStartState(backend, rpcSessionId);
+    assertAccountCurrent();
     if (backend === 'daemon' && agentSource === 'session' && !resolvedAgentId) {
         throwVoiceAgentSelectionUnavailable();
     }
@@ -552,7 +580,7 @@ export async function initializeVoiceAgentHandle({
 
     const startArgsBase = buildVoiceAgentStartArgsBase({
         agentSource,
-        profileId: personaTarget ? normalizeNonEmptyString(
+        launchProfileId: personaTarget ? normalizeNonEmptyString(
             readVoiceSessionOwnerMetadataFromState(storage.getState(), personaTarget)?.profileId,
         ) : null,
         verbosity,
@@ -656,6 +684,8 @@ export async function initializeVoiceAgentHandle({
                 ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
                 chatModelId,
                 commitModelId,
+                ...(chatModelSelection ? { chatModelSelection } : {}),
+                ...(commitModelSelection ? { commitModelSelection } : {}),
                 ...(providerChat
                     ? {
                         chatModelSelection: providerChat.chat,
@@ -729,7 +759,8 @@ export async function initializeVoiceAgentHandle({
                 if (recoveryDecision.kind === 'retry' || recoveryDecision.kind === 'switch') {
                     applyRecoveredGlobalVoiceMachineDecision(recoveryDecision);
                     daemonConversationSessionId = await ensureVoiceConversationSessionId();
-                    refreshStartState('daemon', daemonConversationSessionId ?? sessionId);
+                    await refreshStartState('daemon', daemonConversationSessionId ?? sessionId);
+                    assertAccountCurrent();
                     if (agentSource === 'session' && !resolvedAgentId) {
                         throwVoiceAgentSelectionUnavailable();
                     }

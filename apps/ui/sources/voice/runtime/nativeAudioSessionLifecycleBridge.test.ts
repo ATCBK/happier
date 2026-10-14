@@ -54,8 +54,11 @@ vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harne
 const vendor = vi.hoisted(() => ({ startSession: vi.fn(), setAudioModeAsync: vi.fn(async () => undefined), requestRecordingPermissionsAsync: vi.fn(async () => ({ granted: true, canAskAgain: true })) }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'ios' } }));
 const nativeAudio = createNativeVoicePcmCaptureHarness();
-const configureNativeAudioSession = nativeAudio.nativeModule.configureAudioSession.getMockImplementation();
-if (!configureNativeAudioSession) throw new Error('Missing initial native configure boundary');
+const configureNativeAudioSession = (() => {
+  const implementation = nativeAudio.nativeModule.configureAudioSession.getMockImplementation();
+  if (!implementation) throw new Error('Missing initial native configure boundary');
+  return implementation;
+})();
 vi.mock('expo-modules-core', async original => {
   const actual = await original<typeof import('expo-modules-core')>();
   return { ...actual, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative' ? nativeAudio.nativeModule : actual.requireOptionalNativeModule(name) };
@@ -70,7 +73,7 @@ function createVendorConversation() {
   let muted = false;
   let volume = 1;
   return {
-    endSession: vi.fn(async () => undefined),
+    endSession: vi.fn(async (): Promise<void> => {}),
     setMicMuted: vi.fn((value: boolean) => { muted = value; }),
     setVolume: vi.fn(({ volume: value }: Readonly<{ volume: number }>) => { volume = value; }),
     sendUserMessage: vi.fn(),
@@ -176,6 +179,12 @@ async function withNativeBridge(
 }
 
 const settleBridge = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+function hasOutputFocus(controller: ReturnType<typeof createVoiceSessionLifecycleController>):
+  controller is ReturnType<typeof createVoiceSessionLifecycleController> & {
+    setOutputFocusState: NonNullable<ReturnType<typeof createVoiceSessionLifecycleController>['setOutputFocusState']>;
+  } {
+  return typeof controller.setOutputFocusState === 'function';
+}
 
 // The xAI native contribution is the real host-PCM consumer. Selecting Metro's
 // native media owner here avoids substituting the browser PCM owner in Node.
@@ -606,6 +615,7 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
       conversation.setVolume.mockImplementationOnce(() => {
         throw new TypeError('Vendor output focus is unavailable');
       });
+      if (!hasOutputFocus(lifecycle)) throw new Error('Expected lifecycle output focus');
       const focusObserver = vi.spyOn(lifecycle, 'setOutputFocusState');
       emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
       await vi.waitFor(() => expect(conversation.endSession).toHaveBeenCalledTimes(1));

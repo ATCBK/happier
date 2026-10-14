@@ -1,4 +1,4 @@
-import type { InstallerFs } from './installer/types';
+import type { InstallerFs, ExpoFsFile } from './installer/types';
 
 /**
  * Test-only in-memory filesystem that models a real directory tree for the
@@ -11,7 +11,11 @@ import type { InstallerFs } from './installer/types';
  * API. Domain installer logic is exercised for real.
  */
 export type MemFs = {
-  fs: { Directory: any; File: any; Paths: { document: string } };
+  fs: { Directory: InstallerFs['Directory']; File: new (...args: unknown[]) => Omit<ExpoFsFile, 'delete' | 'open' | 'write'> & {
+    delete(): void;
+    open(...args: Parameters<ExpoFsFile['open']>): ReturnType<ExpoFsFile['open']>;
+    write(...args: Parameters<ExpoFsFile['write']>): ReturnType<ExpoFsFile['write']>;
+  }; Paths: { document: string } };
   files: Map<string, Uint8Array>;
   root: string;
 };

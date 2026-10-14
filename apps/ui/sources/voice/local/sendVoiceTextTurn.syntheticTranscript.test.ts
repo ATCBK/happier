@@ -230,11 +230,11 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
     const serverId = account.homes.voice!.id;
     const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
     const target = createSessionFixture({ id: 's1', serverId, active: true, presence: 'online', pendingVersion: 0, pendingCount: 0, metadata: {
-      machineId: machine.id, path: '/workspace/s1', flavor: 'claude',
+      machineId: machine.id, path: '/workspace/s1', host: 'voice.test', flavor: 'claude',
       agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
     } });
     const carrier = createSessionFixture({ id: 'carrier-s1', serverId, active: true, presence: 'online', pendingVersion: 0, pendingCount: 0,
-      metadata: writeVoiceConversationScopeMetadata({ ...target.metadata,
+      metadata: writeVoiceConversationScopeMetadata({ ...target.metadata!,
         ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
       }, { kind: 'session_root', sessionRootId: target.id }) });
     storage.setState({ sessions: { s1: target, 'carrier-s1': carrier }, machines: { [machine.id]: machine },

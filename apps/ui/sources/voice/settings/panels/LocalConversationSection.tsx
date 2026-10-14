@@ -197,7 +197,8 @@ export function LocalConversationSection(props: {
     settings.backendEnabledByTargetKey,
   ]);
   const selectedAgentEntry = React.useMemo(() => cfg.agent.agentTargetKey
-    ? resolvedAgentEntries.find((entry) => backendTargetKeysMatch(entry.backendTargetKey, cfg.agent.agentTargetKey!))
+    ? resolvedAgentEntries.find((entry) => entry.backendTargetKey !== null
+      && backendTargetKeysMatch(entry.backendTargetKey, cfg.agent.agentTargetKey!))
     : resolveVoiceAgentCatalogSelectionV1(resolvedAgentEntries, cfg.agent.agentId),
   [cfg.agent.agentId, cfg.agent.agentTargetKey, resolvedAgentEntries]);
   const selectedAgentIdForDropdown = selectedAgentEntry

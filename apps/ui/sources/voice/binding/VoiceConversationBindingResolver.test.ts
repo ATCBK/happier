@@ -7,6 +7,11 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 
 import { writeVoiceConversationBindingMetadata } from './voiceConversationBindingMetadata';
 
+// Cold source-graph transformation is setup, not part of a binding lookup's
+// operation budget. Warm the real owners once without substituting their logic.
+await import('./voiceConversationBindingStore');
+await import('./VoiceConversationBindingResolver');
+
 /** Every binding target is Home-qualified; the persisted record carries its own server id. */
 const activeServerId = getActiveServerSnapshot().serverId;
 
@@ -52,7 +57,7 @@ function createTestSession(id: string, metadata: Record<string, unknown> | null)
 }
 
 describe('VoiceConversationBindingResolver', () => {
-    it('prefers the newer persisted binding without mutating the runtime store', async () => {
+    it('preserves a locally admitted binding when another device publishes a newer target', async () => {
         const { createVoiceSessionBindingStore } = await import('./voiceConversationBindingStore');
         const { createVoiceConversationBindingResolver } = await import('./VoiceConversationBindingResolver');
 
@@ -97,8 +102,8 @@ describe('VoiceConversationBindingResolver', () => {
             conversationSessionId: 'carrier-s1',
             conversationSessionAddress: address(activeServerId, 'carrier-s1'),
             transcriptMode: 'synthetic',
-            targetSessionAddress: address(activeServerId, 's2'),
-            updatedAt: 25,
+            targetSessionAddress: address(activeServerId, 's1'),
+            updatedAt: 10,
         });
         expect(store.getState().getByConversationSessionId('carrier-s1')?.targetSessionAddress)
             .toEqual(address(activeServerId, 's1'));

@@ -1021,7 +1021,7 @@ describe('local voice engine agent behavior', () => {
         } }, sessions: { ...storage.getState().sessions,
             'voice-warm-cancelled': createSessionFixture({
                 id: 'voice-warm-cancelled', serverId: localVoiceHomeId, active: true,
-                metadata: { machineId: 'machine-1', path: '/workspace/voice-warm-cancelled', flavor: 'claude',
+                metadata: { machineId: 'machine-1', path: '/workspace/voice-warm-cancelled', host: 'voice.test', flavor: 'claude',
                     agentRuntimeCapabilitiesV1: { localControl: { supported: true } } },
             }),
         } });

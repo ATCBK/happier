@@ -104,8 +104,7 @@ const { recordedAudioTranscriptionController } = await import('@/voice/runtime/i
 let account: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
 const machineId = 'machine-ready-at-start';
 const features = createRootLayoutFeaturesResponse({ features: {
-  voice: { enabled: true }, machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
-  execution: { runs: { enabled: true } },
+  voice: { enabled: true }, machines: { enabled: true, liveStream: { ...createRootLayoutFeaturesResponse().features.machines.liveStream, enabled: true, serverRouted: { enabled: true } } },
 } });
 // An authored external deployment vector, validated by its wire schema.
 features.capabilities.machines.liveStream.serverRouted = { disabledReason: null,

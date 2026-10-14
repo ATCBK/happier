@@ -56,7 +56,7 @@ describe('local conversation voice adapter', () => {
     registerVoiceAdapters([adapter]);
   });
 
-  async function send(text: string, localId: string, onAccepted?: () => Promise<void>) {
+  async function send(text: string, localId: string, onAccepted: () => Promise<void> = async () => {}) {
     await adapter.sendTextTurn?.({ controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
       conversationSessionId: 'voice-home-session', text, localId, deliveryCommand: 'interrupt_and_send', onAccepted });
   }
@@ -118,12 +118,13 @@ describe('local conversation voice adapter', () => {
     }
   });
 
-  it('owns global surface semantics for configured agent mode and fails closed when unselected', async () => {
+  it('owns configured agent capabilities independently of the next provider selection', async () => {
     const storage = await getStorage();
     const selected = storage.getState().settings.voice;
     expect(adapter.resolveSurfaceCapabilities?.(selected)).toEqual({ allowsGlobalStart: true,
       controlSessionScope: 'global', requiresVoiceAgentFeature: true, bargeInEnabled: true, cancelResponse: 'immediate' });
-    expect(adapter.resolveSurfaceCapabilities?.({ ...selected, providerId: 'local_direct' })).toBeNull();
+    expect(adapter.resolveSurfaceCapabilities?.({ ...selected, providerId: 'local_direct' }))
+      .toEqual(adapter.resolveSurfaceCapabilities?.(selected));
   });
 
   it('another surface toggle finishes the active capture without retiring its global conversation', async () => {

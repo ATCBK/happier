@@ -30,7 +30,7 @@ import { ModalProvider } from '@/modal';
 import { setPreferredLanguageFromSettings } from '@/text';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));

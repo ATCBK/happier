@@ -278,7 +278,7 @@ describe('runVoiceAgentTurnWithTools permission shortcuts', () => {
       controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID, requestedTargetSessionId: 's1' });
     const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
     await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
-    const pendingRequest = structuredClone(storage.getState().sessions.s1?.agentState?.requests.permission_wire_refusal);
+    const pendingRequest = structuredClone(storage.getState().sessions.s1?.agentState?.requests?.permission_wire_refusal);
     expect(pendingRequest).toBeDefined();
     const incumbent = sessionRpcWithServerScope.getMockImplementation();
     sessionRpcWithServerScope.mockClear();
@@ -297,7 +297,7 @@ describe('runVoiceAgentTurnWithTools permission shortcuts', () => {
       userText: 'Approve it.', durableLocalId: 'permission-wire-refusal',
       currentToolSessionAddress, voiceAgentSessions,
     })).rejects.toThrow('invalid_rpc_response');
-    expect(storage.getState().sessions.s1?.agentState?.requests.permission_wire_refusal).toEqual(pendingRequest);
+    expect(storage.getState().sessions.s1?.agentState?.requests?.permission_wire_refusal).toEqual(pendingRequest);
     expect(sessionRpcWithServerScope.mock.calls.map(([request]) => request.method)).toEqual([
       SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2,
       SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ,
@@ -384,7 +384,8 @@ describe('runVoiceAgentTurnWithTools permission shortcuts', () => {
     const refusal = await tools.answerUserActionRequest({ decision: 'reject', currentSessionOnly: true });
     expect(JSON.parse(refusal), refusal).toMatchObject({ ok: false, errorCode: 'present_user_required', sessionId: 's1', requestId: 'req_question' });
 
-    const pendingRequest = structuredClone(storage.getState().sessions.s1?.agentState?.requests.req_question);
+    const pendingRequest = structuredClone(storage.getState().sessions.s1?.agentState?.requests?.req_question);
+    expect(pendingRequest).toBeDefined();
     const turn = runVoiceAgentTurnWithTools({
       sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
       userText,
@@ -404,7 +405,7 @@ describe('runVoiceAgentTurnWithTools permission shortcuts', () => {
       expect(result.assistantTurns).toEqual(['Review this request in the session.']);
       expect(result.toolResultBatches).toEqual([]);
     }
-    expect(storage.getState().sessions.s1?.agentState?.requests.req_question).toEqual(pendingRequest);
+    expect(storage.getState().sessions.s1?.agentState?.requests?.req_question).toEqual(pendingRequest);
     expectOnlyOrdinaryTurnRpc();
     expect(wireTurns).toHaveLength(1);
     expect(wireTurns[0]).toMatchObject({ displayMessage: userText,

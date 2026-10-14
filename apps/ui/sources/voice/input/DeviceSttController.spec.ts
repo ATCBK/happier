@@ -1398,7 +1398,8 @@ describe('createDeviceSttController', () => {
     const settledBeforeVad = await observeSettledPromptly(starting);
 
         // The browser SDK instance is the boundary; the host VAD lifecycle stays real.
-    vadReady.resolve({ start: vi.fn(), pause: vi.fn() } as Awaited<ReturnType<typeof MicVAD.new>>);
+    // Only start/pause of the third-party SDK instance are consumed in this boundary case.
+    vadReady.resolve({ start: vi.fn(), pause: vi.fn() } as unknown as Awaited<ReturnType<typeof MicVAD.new>>);
     await starting;
 
     expect(settledBeforeVad).toBe(true);

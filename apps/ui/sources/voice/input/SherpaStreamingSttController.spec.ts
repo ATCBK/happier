@@ -566,7 +566,7 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
 
     await controller.start({ micSession: createMicSession(), sink: firstSink });
     const firstGeneration = captureHarness.nativeModule.start.mock.calls[0]![0].generation;
-    const firstTerminalCallback = captureHarness.nativeModule.addListener.mock.calls.find(([name]) => name === 'captureTerminal')?.[1];
+    const firstTerminalCallback = vi.mocked(captureHarness.nativeModule.addListener).mock.calls.find(([name]) => name === 'captureTerminal')?.[1];
     if (!firstTerminalCallback) throw new Error('native_capture_terminal_callback_missing');
     await controller.stop();
 

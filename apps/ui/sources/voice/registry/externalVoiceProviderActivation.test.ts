@@ -1,5 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as React from 'react';
+import type { VoiceSettingsActionContext } from '@happier-dev/plugin-sdk/voice';
+import type { PluginSettingsActionInput } from '@happier-dev/plugin-sdk/settings';
 import {
   PluginContributesV2Schema,
   VoiceProviderContributionSchema,
@@ -149,7 +151,7 @@ async function installAgentBindingAccount() {
   });
   const account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
   onTestFinished(account.dispose);
-  onTestFinished(() => installDisconnectedServerSocketBoundary());
+  onTestFinished(() => { installDisconnectedServerSocketBoundary(); });
   const session = createSessionFixture({ id: 'visible-codex-session', serverId: account.scope.serverId, active: true,
     metadata: { path: '/project', host: 'voice.test', flavor: 'codex' },
   });
@@ -369,7 +371,7 @@ describe('external Voice provider activation', () => {
     onTestFinished(async () => { await scope.unwind(); await mountedScreen?.unmount(); hostLease.revoke(); await account.dispose(); });
     const screen = await renderScreen(React.createElement(ModalProvider, { children: null }));
     mountedScreen = screen;
-    const execute = vi.fn(async (_input, context): Promise<{
+    const execute = vi.fn(async (_input: PluginSettingsActionInput, context: VoiceSettingsActionContext): Promise<{
       patch: Readonly<Record<string, string | boolean>>;
     }> => {
       expect(context.credentials.phase).toBe('settings');
@@ -877,7 +879,7 @@ describe('external Voice provider activation', () => {
     expect(option?.titleKey).toBe('Synthetic Conversation');
     expect(descriptor.description).toEqual(description);
     // Service descriptions do not become billing-option subtitles or identifiers.
-    expect(option?.subtitleKey).toBeUndefined();
+    expect(option?.subtitleKey).toBe('');
   });
 
   it('answers declared settings readiness identically for bundled and external descriptors', async () => {

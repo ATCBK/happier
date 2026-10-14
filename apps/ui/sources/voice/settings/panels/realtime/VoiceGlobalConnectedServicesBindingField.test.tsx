@@ -18,6 +18,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
 import { ModalProvider } from '@/modal/ModalProvider';
 import { t, setPreferredLanguageFromSettings } from '@/text';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { createConnectedServiceOptionId } from '@/components/sessions/new/components/buildNewSessionConnectedServicesSelectionListModel';
 
 let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
@@ -30,15 +31,9 @@ function renderScreen(element: React.ReactElement) {
 
 const profileState = {
   get connectedServicesV2() { return storage.getState().profile.connectedServicesV2; },
-  set connectedServicesV2(value: Array<{
-    serviceId: string;
-    profiles: Array<{
-      profileId: string;
-      status: 'connected';
-      kind: 'oauth' | 'token';
-      providerEmail: string;
-    }>;
-  }>) { storage.setState((state) => ({ profile: { ...state.profile, connectedServicesV2: value } })); },
+  set connectedServicesV2(value: unknown) {
+    storage.setState(state => ({ profile: AccountProfileSchema.parse({ ...state.profile, connectedServicesV2: value }) }));
+  },
 };
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')

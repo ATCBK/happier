@@ -29,7 +29,7 @@ describe('voiceQaSessionResolution', () => {
       sessions: {
         s1: createSessionFixture({
           id: 's1',
-          metadata: { ...createSessionFixture().metadata,
+          metadata: { ...createSessionFixture().metadata!,
             path: '/tmp/project-a',
           },
         }),

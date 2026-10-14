@@ -30,7 +30,7 @@ export function createVoiceRunRecovery(args: Readonly<{
     getVoiceAgentHandle: (sessionId: string) => Promise<VoiceAgentHandle>;
     isActive: (sessionId: string) => boolean;
     resetCachedHandle: (sessionId: string) => void;
-    stop: (sessionId: string, beforeStop?: () => Promise<void>) => Promise<void>;
+    stop: (sessionId: string, beforeStop?: () => Promise<void>, reason?: 'continued_elsewhere') => Promise<void>;
 }> {
     const getVoiceAgentHandle = async (sessionId: string): Promise<VoiceAgentHandle> => {
         const existing = args.voiceAgentBySessionId.get(sessionId);
@@ -95,7 +95,7 @@ export function createVoiceRunRecovery(args: Readonly<{
         }
     };
 
-    const stop = async (sessionId: string, beforeStop?: () => Promise<void>): Promise<void> => {
+    const stop = async (sessionId: string, beforeStop?: () => Promise<void>, reason?: 'continued_elsewhere'): Promise<void> => {
         const admittedLifetime = captureActiveServerAccountScopeLifetime();
         const persistedRuntimeState = readPersistedVoiceConversationRuntimeState({
             managedSessionId: sessionId,
@@ -118,6 +118,11 @@ export function createVoiceRunRecovery(args: Readonly<{
             : pendingInit
                 ? await pendingInit.catch(() => null)
                 : null;
+
+        // A connected continuation retires this client's custody only. The
+        // same carrier/run now serves the arriving client; neither the old
+        // handle nor a metadata fallback authorizes stopping it or clearing it.
+        if (reason === 'continued_elsewhere') return;
 
         const accountLifetime = handle?.accountLifetime ?? admittedLifetime;
         if (!accountLifetime) return;

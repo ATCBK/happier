@@ -32,7 +32,7 @@ describe('device TTS provider controller', () => {
     beforeEach(() => { speech.speak.mockReset(); speech.stop.mockReset(); });
 
     it('stops active device speech once when playback is interrupted and releases the stopper', async () => {
-        let interrupt = () => { throw new Error('Playback stopper was not registered'); };
+        let interrupt: () => void = () => { throw new Error('Playback stopper was not registered'); };
         const clearStopper = vi.fn();
         const onSpeaking = vi.fn();
         const speaking = createDefaultLocalVoiceTtsProviderControllers().get('device')!.speak(request({

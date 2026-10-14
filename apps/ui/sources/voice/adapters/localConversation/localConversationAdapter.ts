@@ -14,11 +14,6 @@ function readConfig(voiceSettings: unknown) {
   return readLocalConversationVoiceSettings(parsedVoice);
 }
 
-function readSelectedConfig(voiceSettings: unknown) {
-  const parsedVoice = voiceSettingsParse(voiceSettings);
-  return parsedVoice.providerId === 'local_conversation' ? readConfig(parsedVoice) : null;
-}
-
 export function createLocalConversationVoiceAdapter(input: Readonly<{
   currentUiContext?: VoiceCurrentUiToolPort;
 }> = {}): VoiceAdapterController {
@@ -29,7 +24,9 @@ export function createLocalConversationVoiceAdapter(input: Readonly<{
     textTurns: true,
     resolveBindingTranscriptMode: resolveLocalConversationTranscriptMode,
     resolveSurfaceCapabilities: (voiceSettings) => {
-      const config = readSelectedConfig(voiceSettings);
+      // The registry names the adapter whose capabilities are requested. A
+      // next-provider selection cannot revoke this adapter's running controls.
+      const config = readConfig(voiceSettings);
       if (!config) return null;
       const agentMode = config.conversationMode === 'agent';
       return {

@@ -218,10 +218,9 @@ function renderAccountRetirementVoiceComposition(input: Readonly<{
   navigationBinding: ReturnType<typeof createPluginSurfaceDestinationNavigationBinding>;
   onReader: (reader: CurrentUiContextReader | null) => void;
 }>): React.ReactElement {
-  return React.createElement(
-    InjectedAuthProvider,
-    { credentials: input.credentials },
-    React.createElement(MainAppTabStateProvider, null,
+  return React.createElement(InjectedAuthProvider, {
+    credentials: input.credentials,
+    children: React.createElement(MainAppTabStateProvider, null,
       React.createElement(AppPaneProvider, null,
         React.createElement(
           CurrentUiContextProvider,
@@ -249,7 +248,7 @@ function renderAccountRetirementVoiceComposition(input: Readonly<{
         ),
       ),
     ),
-  );
+  });
 }
 
 function readOpenAiFunctionCallOutputIds(sent: readonly string[]): readonly string[] {
@@ -951,13 +950,16 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         });
       });
       const browser = installVoiceWebRtcBrowserBoundary();
-      storage.setState(current => {
-        const sessions = { ...current.sessions };
-        delete sessions[OPENAI_HISTORY_SESSION_ID];
-        return { sessions };
+      const composed = await environment.createRuntime(browser, {
+        respondToDaemonAccountOperation: request,
       });
-      sessionHttp.replaceSession(OPENAI_HISTORY_SESSION_ID);
-      environment.historySessionPost = async init => {
+      const peerConstructor = vi.mocked(globalThis.RTCPeerConnection);
+      const getUserMedia = vi.mocked(
+        globalThis.navigator.mediaDevices.getUserMedia,
+      );
+      const acquireMedia = getUserMedia.getMockImplementation();
+      if (!acquireMedia) throw new Error('Browser capture boundary is missing');
+      getUserMedia.mockImplementation(async constraints => {
         resourcePreparationCount += 1;
         if (resourcePreparationCount === 1) {
           firstResourcePreparationEntered.resolve();
@@ -966,15 +968,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
           secondResourcePreparationEntered.resolve();
           await releaseSecondResourcePreparation.promise;
         }
-        return sessionHttp.createSessionFromPost(OPENAI_HISTORY_SESSION_ID, init);
-      };
-      const composed = await environment.createRuntime(browser, {
-        respondToDaemonAccountOperation: request,
+        return acquireMedia(constraints);
       });
-      const peerConstructor = vi.mocked(globalThis.RTCPeerConnection);
-      const getUserMedia = vi.mocked(
-        globalThis.navigator.mediaDevices.getUserMedia,
-      );
 
       try {
         const firstStart = composed.runtime.adapter.start({
@@ -986,8 +981,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         expect(requestBindings).toEqual(['account-a']);
         expect(request).toHaveBeenCalledOnce();
         expect(globalThis.fetch).not.toHaveBeenCalled();
-        expect(browser.micSession.ensureActive).not.toHaveBeenCalled();
-        expect(getUserMedia).not.toHaveBeenCalled();
+        expect(browser.micSession.ensureActive).toHaveBeenCalledOnce();
+        expect(getUserMedia).toHaveBeenCalledOnce();
         expect(peerConstructor).not.toHaveBeenCalled();
 
         binding = nextBinding;
@@ -1033,7 +1028,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
           await Promise.all([secondStart, stopping]);
         }
 
-        expect(browser.micSession.ensureActive).toHaveBeenCalledTimes(1);
+        expect(browser.micSession.ensureActive).toHaveBeenCalledTimes(nextBinding === null ? 1 : 2);
         expect(peerConstructor).toHaveBeenCalledTimes(1);
       } finally {
         releaseFirstResourcePreparation.resolve();

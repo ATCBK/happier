@@ -18,6 +18,9 @@ import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/act
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 
 const entry = (id: string): PromptStackEntryV1 => ({ id, ref: { kind: 'doc', artifactId: id }, enabled: true, placement: 'system_append' });
+const canonicalSessionMetadata = createSessionFixture().metadata;
+if (!canonicalSessionMetadata) throw new Error('Expected canonical Session fixture metadata');
+const fixtureSessionMetadata = { path: canonicalSessionMetadata.path, host: canonicalSessionMetadata.host };
 const readArtifact = async (ref: { artifactId: string }): Promise<PromptLibraryStoredArtifact> => ({ id: ref.artifactId,
     revision: { headerVersion: 1, bodyVersion: 1 }, header: { v: 1, kind: 'prompt_doc.v2', title: ref.artifactId },
     body: JSON.stringify({ v: 1, markdown: ref.artifactId, createdAtMs: 1, updatedAtMs: 1 }) });
@@ -75,7 +78,7 @@ describe('qualified UI Voice prompt preparation', () => {
             return null;
         } });
         const context = await captureLazyActionAccountContext(fixture.home.id);
-        const metadata = { profileId: 'azure-openai', work: { promptStack: [entry('session')] } };
+        const metadata = { ...fixtureSessionMetadata, profileId: 'azure-openai', work: { promptStack: [entry('session')] } };
         const select = (profileId: string) => storage.setState({ sessions: { ...storage.getState().sessions,
             rowless: createSessionFixture({ id: 'rowless', serverId: context.serverId, metadata: { ...metadata, profileId } }),
         } });
@@ -187,12 +190,12 @@ describe('qualified UI Voice prompt preparation', () => {
             await account.createArtifactDocument({ artifactId: 'memory', header: { v: 1, kind: 'memory_doc.v1', title: 'Bound memory' },
                 body: JSON.stringify({ v: 1, index: [{ id: 'fact', text: 'Remembered index', createdAtMs: 1, sourceSessionRef: null }],
                     topics: [{ title: 'Detail', summary: 'Topic summary', facts: [{ id: 'deep', text: 'PRIVATE TOPIC DETAIL', createdAtMs: 1, sourceSessionRef: null }] }] }) });
-            const metadata = { profileId: profile.id, workspaceId: 'checkout', projectId: 'project', path: '/repo', machineId: 'machine',
+            const metadata = { ...fixtureSessionMetadata, profileId: profile.id, workspaceId: 'checkout', projectId: 'project', path: '/repo', machineId: 'machine',
                 work: { memoryEnabled: false, promptStack: [entry('session')], disabledInheritedEntryIds: ['suppressed'],
                     sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Bound conversational notes' } } };
             storage.setState({ sessions: { ...storage.getState().sessions,
                 bound: createSessionFixture({ id: 'bound', serverId, metadata }),
-                visible: createSessionFixture({ id: 'visible', serverId, metadata: { work: { promptStack: [entry('wrong-screen')] } } }),
+                visible: createSessionFixture({ id: 'visible', serverId, metadata: { ...fixtureSessionMetadata, work: { promptStack: [entry('wrong-screen')] } } }),
             } });
             fixture.requests.splice(0);
             const input = { targetSessionAddress: { serverId, sessionId: 'bound' }, accountContext: account };
@@ -252,8 +255,6 @@ describe('qualified UI Voice prompt preparation', () => {
                         : path === PROFILE_REFERENCE_GUARD_ROUTE_V1 ? response({ status: 'ready', revision: 2 })
                             : path === PROFILE_TRANSFER_ROUTE_V1 ? response({ status: 'absent' })
                     : null });
-        storage.setState({ settings: { ...storage.getState().settings, promptStacksV1: { v: 1,
-            surfaces: { coding: [], voice: [entry('stale-voice')], profilesById: { work: [entry('stale-profile')] } } } } });
         const context = await captureLazyActionAccountContext(fixture.home.id);
         try {
             const projection = await readPromptLibraryCatalogProjectionInContext(context);

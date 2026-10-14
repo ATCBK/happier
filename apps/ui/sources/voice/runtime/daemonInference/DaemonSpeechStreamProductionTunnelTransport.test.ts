@@ -60,7 +60,7 @@ let startFailure: 'response' | 'throw' | null = null;
 let finishFailure = false;
 let cancelFailure = false;
 let closeFailure = false;
-let confirmation = PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1;
+let confirmation: string = PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1;
 let grantFailure = false;
 let authorization: PeerTcpTunnelRelayAuthorizationV2 | null = null;
 const recipientSeed = new Uint8Array(32).fill(11);
@@ -388,7 +388,7 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
     expect(accountStorage.mode).toBe('e2ee');
     expect(accountStorage.encryption).not.toBeNull();
     const tunnel = await openProductionVoiceMediaTunnel({ machineTarget: { machineId: 'machine-1' },
-      requestId: 'request-1', signal: null, authority: { applicationKind: 'speech_transcription', applicationAttemptId: 'request-1',
+      requestId: 'request-1', signal: null, authority: { v: 1, applicationKind: 'speech_transcription', applicationAttemptId: 'request-1',
         applicationAuthorityDigest: createSpeechTranscriptionApplicationAuthorityDigestV1('request-1') } });
     expect(tunnel?.routeKind).toBe('loopback_direct');
     await tunnel?.close();
@@ -403,7 +403,7 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
   it('returns compatibility without native admission when target Home credentials are unavailable', async () => {
     expect(await TokenStorage.removeCredentialsForServerUrl(HOME, { serverId: account.home.id })).toBe(true);
     await expect(openProductionVoiceMediaTunnel({ machineTarget: { machineId: 'machine-1' }, requestId: 'request-1',
-      signal: null, authority: { applicationKind: 'speech_transcription', applicationAttemptId: 'request-1',
+      signal: null, authority: { v: 1, applicationKind: 'speech_transcription', applicationAttemptId: 'request-1',
         applicationAuthorityDigest: createSpeechTranscriptionApplicationAuthorityDigestV1('request-1') } })).resolves.toBeNull();
     expect(grants).toEqual([]); expect(NativeWebSocket.instances).toEqual([]);
   });

@@ -89,6 +89,8 @@ describe('WebMicSession', () => {
             return context as unknown as AudioContext;
         } });
         const session = browser.micSession;
+        const getAudioContext = session.getAudioContext;
+        if (!getAudioContext) throw new Error('Expected the actual Web Audio context accessor');
         const closing = createDeferred<void>();
         try {
             await session.ensureActive();
@@ -102,7 +104,7 @@ describe('WebMicSession', () => {
             expect(firstTrack.stop).toHaveBeenCalledOnce();
             expect(firstTrack.readyState).toBe('ended');
             expect(session.getStream()).toBeNull();
-            expect(session.getAudioContext()).toBeNull();
+            expect(getAudioContext()).toBeNull();
             closing.reject(new DOMException('The audio device is unavailable', 'InvalidStateError'));
             await expect(teardown).resolves.toBeUndefined();
 
@@ -110,7 +112,7 @@ describe('WebMicSession', () => {
             expect(browser.micStream).not.toBe(firstStream);
             expect(browser.micTrack).not.toBe(firstTrack);
             expect(browser.micTrack.readyState).toBe('live');
-            expect(session.getAudioContext()).toBe(contexts[1]);
+            expect(getAudioContext()).toBe(contexts[1]);
             expect(contexts[1]).not.toBe(firstContext);
             expect(contexts[1]!.close).not.toHaveBeenCalled();
             await session.teardown();

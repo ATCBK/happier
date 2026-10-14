@@ -188,14 +188,14 @@ describe('localVoiceTtsController', () => {
             sessionId: 'session-external',
             text: 'speak through both roles',
             settings: {
-                voice: {
+                voice: voiceSettingsParse({
                     providers: {
                         [providerId]: {
                             schemaVersion: 2,
                             config: providerSettings.defaultConfig,
                         },
                     },
-                },
+                }),
             },
             tts: { ...readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' })).tts,
                 provider: providerId },

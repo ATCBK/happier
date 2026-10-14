@@ -3,7 +3,7 @@ import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/native
 import { createVoiceEncodedAudioNativeBoundary } from '@/dev/testkit/harness/voiceEncodedAudioNativeBoundary';
 import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
 
-const fileDelete = vi.fn(async () => undefined);
+const fileDelete = vi.fn<() => Promise<void>>(async () => {});
 const audioSession = createNativeVoicePcmCaptureHarness();
 const native = createVoiceEncodedAudioNativeBoundary();
 const nativeSdk = native.nativeModule(audioSession.nativeModule);

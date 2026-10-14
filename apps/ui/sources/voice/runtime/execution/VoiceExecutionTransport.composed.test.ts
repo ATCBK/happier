@@ -15,6 +15,33 @@ await prepareStandaloneVoicePolicyHarness();
 await import('@/voice/adapters/localConversation/localConversationAdapter');
 
 describe('real Local Voice Agent activation', () => {
+    it('releases the old device handle on continuation without stopping the run reused by the new device', async () => {
+        const daemon = await createRetainedVoiceAgentRpcBoundary();
+        const fixture = await createStandaloneVoicePolicyHarness({
+            mode: 'off', dispatch: daemon.dispatch,
+        });
+        const { createVoiceExecutionTransport } = await import('./VoiceExecutionTransport');
+        const oldDevice = createVoiceExecutionTransport();
+        const newDevice = createVoiceExecutionTransport();
+        try {
+            await oldDevice.ensureRunning(fixture.sessionId);
+            const run = daemon.readRetainedRun();
+            expect(run?.status).toBe('running');
+            await newDevice.ensureRunning(fixture.sessionId);
+            expect(daemon.readRetainedRun()?.runId).toBe(run?.runId);
+            await oldDevice.stop(fixture.sessionId, 'continued_elsewhere');
+            expect(oldDevice.isActive(fixture.sessionId)).toBe(false);
+            expect(newDevice.isActive(fixture.sessionId)).toBe(true);
+            expect(daemon.readRetainedRun()).toEqual(run);
+            const { readVoiceAgentRunMetadataFromSession } = await import('@/voice/persistence/voiceAgentRunMetadata');
+            expect(readVoiceAgentRunMetadataFromSession({ sessionId: fixture.sessionId,
+                serverId: fixture.handle.accountLifetime.scope.serverId })?.runId).toBe(run?.runId);
+        } finally {
+            await newDevice.stop(fixture.sessionId);
+            await fixture.dispose();
+        }
+    });
+
     it('makes the hidden bound conversation active through the initializer and daemon transport, then retires its context sink', async () => {
         const daemon = await createRetainedVoiceAgentRpcBoundary();
         const fixture = await createStandaloneVoicePolicyHarness({

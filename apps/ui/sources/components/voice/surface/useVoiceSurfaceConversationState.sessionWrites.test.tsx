@@ -1,4 +1,5 @@
 import { act } from 'react-test-renderer';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
@@ -119,7 +120,7 @@ describe('useVoiceSurfaceConversationState session-store subscription', () => {
                     id: carrierId, serverId: 'server-active',
                     metadata: writeVoiceConversationBindingMetadata({
                         path: '/voice', host: 'test',
-                        systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+                        ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
                     }, binding),
                 }),
             } }));

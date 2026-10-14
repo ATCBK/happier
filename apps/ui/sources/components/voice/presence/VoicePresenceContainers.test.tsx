@@ -431,7 +431,7 @@ describe('VoiceOrb', () => {
             await screen?.unmount();
             screen = await renderScreen(<VoiceOrb voice={projection('listening')} anchorRef={React.createRef<View>()}
                 sectionOpen={false} onOpenSection={() => {}} shouldSuppressPress={() => false}
-                translateX={makeMutable(x)} hostWidth={400} />);
+                translateX={makeMutable<number>(x)} hostWidth={400} />);
             const slot = frameOf(screen, 'voice-orb-options-slot');
             expect(typeof slot[near]).toBe('number');
             expect(slot[far]).toBe('auto');

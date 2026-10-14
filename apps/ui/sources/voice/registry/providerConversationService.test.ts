@@ -122,7 +122,9 @@ describe('provider conversation service', () => {
     const attempt = fixture.factory.createAttempt('history-session');
     const writing = attempt.write('conv-admitted');
     await admitted.promise;
-    const forgetting = fixture.host.forgetProviderConversationState({ providerId });
+    const forget = fixture.host.forgetProviderConversationState;
+    if (!forget) throw new Error('Provider conversation persistence unavailable');
+    const forgetting = forget({ providerId });
     await Promise.resolve();
     expect(fixture.commits).toEqual([]);
     release.resolve();

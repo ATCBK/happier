@@ -1,6 +1,12 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit';
+
+const fixtureMetadata = (() => {
+    const metadata = createSessionFixture().metadata;
+    if (!metadata) throw new Error('Canonical Session fixture metadata missing');
+    return metadata;
+})();
 import { buildSystemSessionMetadataV1, SessionCurrentProjectionRecordV1Schema, SessionLookupByTagsResponseV2Schema } from '@happier-dev/protocol';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -24,7 +30,7 @@ function carrierSession(input: Readonly<{ id: string; active?: boolean; key?: 'v
     ? buildVoiceTranscriptHistorySessionMetadata()
     : buildSystemSessionMetadataV1({ key: input.key ?? 'voice_transcript_history', hidden: input.hidden ?? true });
   return createSessionFixture({ id: input.id, serverId: homeId, active: input.active ?? false,
-    metadata: { ...createSessionFixture().metadata, ...marker } });
+    metadata: { ...fixtureMetadata, ...marker } });
 }
 
 async function installCandidates(sessions: ReadonlyArray<ReturnType<typeof createSessionFixture>>) {

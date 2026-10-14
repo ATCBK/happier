@@ -4,6 +4,12 @@ import { buildQualifiedPluginContributionKey, createPluginContributionIdentity, 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { createMachineFixture, createPlainMachineRowFixture, createSessionFixture, standardCleanup } from '@/dev/testkit';
+
+const fixtureMetadata = (() => {
+    const metadata = createSessionFixture().metadata;
+    if (!metadata) throw new Error('Canonical Session fixture metadata missing');
+    return metadata;
+})();
 import { clearProjectedAgentUiBehaviorDescriptors } from '@/agents/registry/agentUiBehaviorProjection';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
@@ -73,6 +79,7 @@ beforeEach(async () => {
         if (match) {
             const machineId = decodeURIComponent(match[1]);
             const machine = createPlainMachineRowFixture({ id: machineId, accountId: account.scope.accountId });
+            if (!machine.access) throw new Error('Canonical Machine access missing');
             return Response.json(match[2] ? MachineAccessGrantsListResponseV1Schema.parse({
                 machineId, custodian: machine.access.custodian, access: machine.access,
                 canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
@@ -101,7 +108,7 @@ function publishTarget(withReplacement = false) {
     const serverId = account.scope.serverId;
     storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId,
         // A stale raw row has no usable execution path; the visible row supplies it.
-        metadata: { ...createSessionFixture().metadata, machineId: 'machine-raw', path: withReplacement ? '/tmp/raw' : '' } }) },
+        metadata: { ...fixtureMetadata, machineId: 'machine-raw', path: withReplacement ? '/tmp/raw' : '' } }) },
         machines: {
             'machine-raw': createMachineFixture({ id: 'machine-raw', active: !withReplacement,
                 activeAt: withReplacement ? 1 : Date.now(),
@@ -110,7 +117,7 @@ function publishTarget(withReplacement = false) {
             'machine-target': createMachineFixture({ id: 'machine-target', activeAt: Date.now() }),
         },
         sessionListRowsByServerId: { [serverId]: { s1: createSessionFixture({ id: 's1', serverId,
-            metadata: { ...createSessionFixture().metadata, machineId: 'machine-cached', path: '/tmp/cached' } }) } },
+            metadata: { ...fixtureMetadata, machineId: 'machine-cached', path: '/tmp/cached' } }) } },
         ordinarySessionListMembershipByServerId: { [serverId]: ['s1'] },
         sessionListIndexByServerId: { [serverId]: [{ type: 'session', sessionId: 's1', serverId, serverName: 'Test' }] },
     });
@@ -140,7 +147,7 @@ describe('ensureVoiceAgentInstallablesBackground', () => {
         storage.setState({ sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {},
             sessionListIndexByServerId: {} });
         storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId: account.scope.serverId,
-            metadata: { ...createSessionFixture().metadata, machineId: 'machine-raw', path: '/tmp/raw' } }) } });
+            metadata: { ...fixtureMetadata, machineId: 'machine-raw', path: '/tmp/raw' } }) } });
         const { ensureVoiceAgentInstallablesBackground } = await import('./ensureVoiceAgentInstallablesBackground');
         await ensureVoiceAgentInstallablesBackground({ agentId: externalAgentId, sessionId: 's1' });
         expect(installs).toEqual(['machine-raw']);

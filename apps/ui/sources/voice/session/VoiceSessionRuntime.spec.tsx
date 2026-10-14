@@ -8,6 +8,7 @@ import { renderScreen as renderRuntimeScreen } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { settingsParse } from '@/sync/domains/settings/settings';
+import type { z } from 'zod';
 import { SavedSecretResourceMaterialsResponseV1Schema, type SavedSecretResourceMaterialV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { resetConnectedAccountCatalogSnapshotsForTests } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
@@ -424,7 +425,7 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
   expect(lifecycle.getConfiguredProviderId()).toBe(input.codex ? CODEX_PROVIDER_ID : input.local ? localProviderId : ELEVENLABS_PROVIDER_ID);
   return { screen, lifecycle, runtime, httpRequests, agentRequests, sessionHttp,
     get profile() { return profile; },
-    async publishProfile(next: ReturnType<typeof AccountProfileSchema.parse>) {
+    async publishProfile(next: z.input<typeof AccountProfileSchema>) {
       profile = AccountProfileSchema.parse(next);
       await sync.refreshProfile();
       await screen.update(runtime);
@@ -516,7 +517,7 @@ async function prepareMountedOpenAiRuntime(input: Readonly<{ credentialSource?: 
   openAiRuntimeEnvironments.push(environment);
   const { sync } = await import('@/sync/sync');
   const { storage } = await import('@/sync/domains/state/storage');
-  await sync.resumeSync();
+  await sync.resumeSync('manual');
   await vi.waitFor(() => {
     expect(storage.getState().profileScope).toEqual({ serverId: environment.accountConnection.home.id, accountId: 'openai-composed-account' });
     expect(storage.getState().isDataReady).toBe(true);
@@ -672,12 +673,127 @@ describe('VoiceSessionRuntime', () => {
     expect(storage.getState().sessions[session.id]?.agentState?.requests?.['direct-request']).toEqual(request);
   });
 
+  it('does not adopt a synced binding for an unbound live direct-session attempt', async () => {
+    const mounted = await mountGeneratedLocalRuntime('local_conversation');
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { getVoiceSessionPresentedBinding } = await import('./voiceSessionStore');
+    const { writeVoiceConversationBindingMetadata } = await import('@/voice/binding/voiceConversationBindingMetadata');
+    const { buildSystemSessionMetadataV1 } = await import('@happier-dev/protocol/sessions/control/contract');
+    const { syncPersistedVoiceConversationBindings, voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+    const { voiceConversationBindingResolver } = await import('@/voice/binding/VoiceConversationBindingResolver');
+    const foreignBinding = { adapterId: 'local_conversation', controlSessionId: mounted.target.sessionId,
+      conversationSessionId: 'remote-carrier', conversationSessionAddress: { ...mounted.target, sessionId: 'remote-carrier' },
+      targetSessionAddress: mounted.target, transcriptMode: 'native_session' as const, updatedAt: Date.now() };
+    await act(async () => {
+      storage.getState().applySessions([createSessionFixture({ id: foreignBinding.conversationSessionId,
+        serverId: mounted.target.serverId, metadata: writeVoiceConversationBindingMetadata({
+          ...createSessionFixture().metadata!, ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+        }, foreignBinding) })]);
+      // Apply the decoded Sync projection through its real binding owner. The
+      // warm Vitest graph may load the bridge before its subscription is registered.
+      syncPersistedVoiceConversationBindings();
+    });
+    expect(voiceSessionBindingStore.getState().persistedBindingsByConversationSessionId[foreignBinding.conversationSessionId])
+      .toMatchObject(foreignBinding);
+    expect(getVoiceSessionPresentedBinding()).toBeNull();
+    expect(voiceConversationBindingResolver.resolveByControlSessionId({ controlSessionId: mounted.target.sessionId })).toBeNull();
+    expect(voiceConversationBindingResolver.resolveByConversationSessionId({ conversationSessionId: foreignBinding.conversationSessionId })).toBeNull();
+    expect(voiceConversationBindingResolver.resolveLatest({ controlSessionIds: [mounted.target.sessionId] })).toBeNull();
+    expect(mounted.lifecycle.getSnapshot()).toMatchObject({ sessionId: mounted.target.sessionId, status: 'connected' });
+  });
+
+  it('keeps local microphone custody when a second client syncs a binding and acknowledged continuation', async () => {
+    const mounted = await mountGeneratedElevenLabsRuntime();
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { getVoiceSessionPresentedBinding, getVoiceSessionEndedAttempt, getVoiceSessionAttemptId, getVoiceSessionArrivedAttemptId } = await import('./voiceSessionStore');
+    const { writeVoiceConversationBindingMetadata } = await import('@/voice/binding/voiceConversationBindingMetadata');
+    const { buildSystemSessionMetadataV1 } = await import('@happier-dev/protocol/sessions/control/contract');
+    const { createVoiceContinuationProjection } = await import('@/voice/transcript/voiceContinuationProjection');
+    const { createVoiceTranscriptProjector } = await import('@/voice/transcript/VoiceTranscriptProjector');
+    const { persistSessionTranscriptMessage } = await import('@happier-dev/session-core/messages');
+    const { createReducer, reducer } = await import('@happier-dev/session-core/reducer');
+    const { voiceHooks } = await import('@/voice/context/voiceHooks');
+    const { getDeviceAnalyticsId } = await import('@/track/settingsAnalytics/deviceAnalyticsIdentity');
+    const { syncPersistedVoiceConversationBindings, voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+    const { setVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+    const binding = getVoiceSessionPresentedBinding();
+    if (!binding) throw new Error('Expected the admitted local binding');
+    const attemptId = getVoiceSessionAttemptId();
+    const conversation = binding.conversationSessionAddress;
+    const boundary = storage.getState().sessions[conversation.sessionId]?.seq ?? 0;
+    const remoteDevice = `${getDeviceAnalyticsId()}-other-device`;
+    const remote = createVoiceContinuationProjection();
+    const remoteSnapshot = mounted.lifecycle.getSnapshot();
+    const note = remote.update({ snapshot: remoteSnapshot, binding, deviceId: remoteDevice, sessionSeq: boundary });
+    if (!note) throw new Error('Expected a connected second-client continuation');
+    const foreignBinding = { ...binding, conversationSessionId: 'other-client-carrier',
+      conversationSessionAddress: { ...conversation, sessionId: 'other-client-carrier' },
+      targetSessionAddress: conversation, updatedAt: binding.updatedAt + 1 };
+    await act(async () => {
+      storage.getState().applySessions([createSessionFixture({ id: foreignBinding.conversationSessionId,
+        serverId: conversation.serverId, metadata: writeVoiceConversationBindingMetadata({
+          ...createSessionFixture().metadata!, ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+        }, foreignBinding) })]);
+      syncPersistedVoiceConversationBindings();
+    });
+    expect(voiceSessionBindingStore.getState().persistedBindingsByConversationSessionId[foreignBinding.conversationSessionId])
+      .toMatchObject({ conversationSessionAddress: foreignBinding.conversationSessionAddress });
+    expect(getVoiceSessionPresentedBinding()).toMatchObject(binding);
+    expect(getVoiceSessionAttemptId()).toBe(attemptId);
+    expect(mounted.lifecycle.getSnapshot().status).toBe('connected');
+
+    // Only Home's acknowledgement is substituted. The note writer, strict codec,
+    // normalized message and mounted Sync→continuation→local End path stay real.
+    let persistence: ReturnType<typeof persistSessionTranscriptMessage> | undefined;
+    const projector = createVoiceTranscriptProjector({ getState: storage.getState,
+      persistFinal: input => {
+        persistence = persistSessionTranscriptMessage({ sessionEncryptionMode: 'plain', request: async () =>
+          Response.json({ didWrite: true, message: { id: 'remote-continuation', localId: input.localId,
+            seq: boundary + 1, createdAt: Date.now() } }) }, input);
+        return persistence;
+      } });
+    projector.projectNoteText({ conversationSessionId: conversation.sessionId, text: 'Voice continued.', continuation: note });
+    const persisted = await persistence;
+    if (!persisted) throw new Error('Expected an acknowledged continuation');
+    const received = reducer(createReducer(), [persisted.message]).messages;
+    expect(received).toHaveLength(1);
+    // Sensitivity: without the actual registered controller the same Sync note
+    // cannot reach local End. Restoring the registration must make it retire.
+    setVoiceSessionLifecycleController(null);
+    await act(async () => { voiceHooks.onMessages(conversation, received); });
+    expect(mounted.lifecycle.getSnapshot().status).toBe('connected');
+    setVoiceSessionLifecycleController(mounted.lifecycle);
+    await act(async () => { voiceHooks.onMessages(conversation, received); });
+    await vi.waitFor(() => expect(mounted.lifecycle.getSnapshot().status).toBe('disconnected'));
+    expect(getVoiceSessionEndedAttempt()).toMatchObject({ attemptId, conversationSessionAddress: conversation,
+      reason: { kind: 'continued_elsewhere', continuation: note } });
+    expect(remote.observe(conversation, received)).toBeNull();
+    expect(sdk.endSession).toHaveBeenCalledOnce();
+
+    // The arriving client hydrates the same acknowledged conversation. This uses
+    // the ordinary reducer and observed sequence before a fresh real Start.
+    await act(async () => {
+      storage.getState().applyMessages(conversation.sessionId, [persisted.message]);
+      const session = storage.getState().sessions[conversation.sessionId];
+      if (!session) throw new Error('Expected the retained synced conversation');
+      storage.getState().applySessions([{ ...session, seq: boundary + 1 }]);
+      await mounted.lifecycle.toggle(null);
+    });
+    expect(mounted.lifecycle.getSnapshot().status).toBe('connected');
+    expect(getVoiceSessionPresentedBinding()?.conversationSessionAddress).toEqual(conversation);
+    const arrivingAttemptId = getVoiceSessionAttemptId();
+    expect(arrivingAttemptId).not.toBeNull();
+    expect(getVoiceSessionArrivedAttemptId()).toBe(arrivingAttemptId);
+    await act(async () => { voiceHooks.onMessages(conversation, received); });
+    expect(mounted.lifecycle.getSnapshot().status).toBe('connected');
+  });
+
   it('does not renormalize materialized Voice settings for connectivity or Profile presentation updates', async () => {
     platformOsMock.value = 'web';
     const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
     const { storage } = await import('@/sync/domains/state/storage');
     const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { providerId: 'off' } }, storage.getState().settings));
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...storage.getState().settings.voice, providerId: 'off' } }, storage.getState().settings));
     let commits = 0;
     const screen = await renderRuntimeScreen(React.createElement(React.Profiler, {
       id: 'voice-runtime', onRender: () => { commits += 1; },
@@ -894,7 +1010,7 @@ describe('VoiceSessionRuntime', () => {
     const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
     const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
     const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { providerId: 'off' } }, storage.getState().settings));
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...storage.getState().settings.voice, providerId: 'off' } }, storage.getState().settings));
     expect(captureActiveServerAccountScopeLifetime()).toBeNull();
     const runtime = React.createElement(VoiceSessionRuntime);
     const screen = await renderRuntimeScreen(runtime);
@@ -1534,7 +1650,7 @@ describe('VoiceSessionRuntime', () => {
     sdk.startSession.mockReset();
     const { storage } = await import('@/sync/domains/state/storage');
     const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { providerId: 'unsupported_provider' } }, storage.getState().settings));
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...storage.getState().settings.voice, providerId: 'unsupported_provider' } }, storage.getState().settings));
 
     const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
     const { getVoiceSessionSnapshot } = await import('./voiceSessionStore');
@@ -1744,6 +1860,7 @@ describe('VoiceSessionRuntime', () => {
     const { storage } = await import('@/sync/domains/state/storage');
     const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
     storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: {
+      ...storage.getState().settings.voice,
       providerId: EXTERNAL_PROVIDER_ID,
       providers: { [EXTERNAL_PROVIDER_ID]: { schemaVersion: 1, config: {} } },
     } }, storage.getState().settings));

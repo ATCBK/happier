@@ -791,7 +791,14 @@ export function createVoiceConversationController(
               // Same-call transport custody retains the completed redacted
               // result after delivery failure. Reconnect, then redeliver that
               // exact call/result identity; no semantic effect is re-executed.
-              await reconnect(attempt, 'reconnect');
+              // A tool can settle after the transport pump already completed
+              // reconnect. Reuse that resumed carrier; reconnecting it again
+              // would discard the response identity we are about to validate.
+              if (result.status !== 'detached'
+                || attempt.connection === connection
+                || attempt.connection?.state() !== 'open') {
+                await reconnect(attempt, 'reconnect');
+              }
               if (
                 !owns(attempt)
                 || attempt.toolBarrier !== barrier
@@ -965,12 +972,17 @@ export function createVoiceConversationController(
         settleDisconnected(attempt, failureCode);
         return { status: 'declined', code: failureCode };
       }
-      await deps.resources?.preflight?.({
-        controlSessionId: attempt.controlSessionId,
-        attemptId: attempt.id,
-        request: attempt.request,
-        signal: attempt.abortController.signal,
-      });
+      if (deps.resources?.preflight) {
+        // Preflight can admit a non-media carrier. Its partial custody must be
+        // released if provider preparation declines or Stop interrupts it.
+        attempt.resourcesPrepared = true;
+        await deps.resources.preflight({
+          controlSessionId: attempt.controlSessionId,
+          attemptId: attempt.id,
+          request: attempt.request,
+          signal: attempt.abortController.signal,
+        });
+      }
       if (!owns(attempt) || !deps.isSelectionCurrent()) {
         await closeAttempt(attempt, { code: 'aborted' });
         settleDisconnected(attempt);

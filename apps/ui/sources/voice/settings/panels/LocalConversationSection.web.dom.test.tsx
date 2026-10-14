@@ -16,6 +16,7 @@ import { SavedSecretResourceMaterialV1Schema } from '@happier-dev/protocol/accou
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { SharedSavedSecretPromoteInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { PROFILE_ROWS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
@@ -134,7 +135,8 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
             account.home.answer(scope.serverId, PROFILE_REFERENCE_GUARD_ROUTE_V1, { body: { status: 'ready', revision: 3 } });
             for (const route of [PROFILE_TRANSFER_ROUTE_V1, REMOTE_HOST_ROWS_ROUTE_V1, NOTIFICATION_CHANNELS_ROUTE_V1,
                 '/v1/account/entity-rows/mcp', '/v1/account/entity-rows/acp',
-                '/v1/account/entity-rows/connected-accounts/configurations', '/v1/account/entity-rows/connected-accounts/purposes']) {
+                '/v1/account/entity-rows/connected-accounts/configurations', '/v1/account/entity-rows/connected-accounts/purposes',
+                '/v1/account/entity-rows/prompt-library/registry-sources']) {
                 account.home.answer(scope.serverId, route, { body: { status: 'absent' } });
             }
             account.home.answer(scope.serverId, '/v1/account/saved-secrets/resources/materials', { body: { resources: [] } });
@@ -239,7 +241,12 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
             await act(async () => press(document.querySelector<HTMLElement>('[data-testid="dropdown-option-opencode"]')!));
             if (usesPersonalApproval) {
                 const artifacts = account.home.artifacts(scope.serverId);
-                await vi.waitFor(() => expect(artifacts.list()).toHaveLength(1), { timeout: 180_000 });
+                await vi.waitFor(() => expect(artifacts.list().length > 0
+                    || document.body.textContent?.includes(t('common.saveError'))).toBe(true), { timeout: 180_000 });
+                expect(artifacts.list(), JSON.stringify({
+                    paths: account.home.requests.map(request => request.path),
+                    ui: document.body.textContent,
+                })).toHaveLength(1);
                 await act(async () => {});
                 expect(stored).toEqual(original);
                 expect(providerWrites).toBe(0);
@@ -348,7 +355,7 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
             import('@/sync/domains/settings/voiceSettingsPersistence'),
             import('@/sync/domains/state/storage'),
         ]);
-        const connectionId = 'voice-openai-compatible-chat';
+        const connectionId = ProviderConnectionIdSchema.parse('voice-openai-compatible-chat');
         const agentTargetKey = 'agent:happier.agent.opencode/opencode';
         const local = readLocalConversationVoiceSettings(voiceSettingsDefaults);
         const voice = writeLocalConversationVoiceSettings({ ...voiceSettingsDefaults, providerId: 'local_conversation' }, {
@@ -376,7 +383,7 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
         const scope = await account.restore({ settings: normalizeVoiceSettingsServerDelta({ voice }),
             machines: [createMachineFixture({ id: 'machine-a', activeAt: Date.now() })],
             features: createRootLayoutFeaturesResponse({ features: {
-                providers: { enabled: true }, voice: { enabled: true }, execution: { runs: { enabled: true } },
+                providers: { enabled: true }, voice: { enabled: true },
             } }),
         });
         // Scoped RPC verifies the current Machine's Home row before dispatching.

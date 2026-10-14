@@ -50,16 +50,21 @@ function createUiSafely(providerId: string) {
   }
 }
 
+function isConfigRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function readCatalogCredentialBindings(voice: VoiceSettings, providerId: string) {
   const entry = registry.get(providerId);
-  return entry?.declaration ? voice.credentialBindings.filter(binding =>
+  return entry && entry.kind !== 'voice.turn-support.v1' && entry.declaration ? voice.credentialBindings.filter(binding =>
     binding.contribution.pluginId === entry.pluginId && binding.contribution.localId === entry.declaration?.id) : [];
 }
 
 function readCatalogConfig(providerId: string, config: Readonly<Record<string, unknown>>) {
   const entry = registry.get(providerId);
   const owner = entry?.providerSettings;
-  const field = entry?.declaration ? readSessionVoiceSettingFieldV1(entry.declaration) : null;
+  const field = entry && entry.kind !== 'voice.turn-support.v1' && entry.declaration
+    ? readSessionVoiceSettingFieldV1(entry.declaration) : null;
   if (!owner || !field) return config;
   // Selecting a voice does not change the catalog that names it. Preserve every other
   // provider-owned input, and normalize only its declared voice field through its parser.
@@ -68,7 +73,7 @@ function readCatalogConfig(providerId: string, config: Readonly<Record<string, u
     defaultConfig: owner.defaultConfig,
     parseConfig(value: unknown) {
       const parsed = owner.parseConfig(value);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+      return isConfigRecord(parsed) ? parsed : null;
     },
   };
   return updateRealtimeProviderConfig(catalogOwner, config, field.path,
@@ -150,7 +155,8 @@ export function useBundledConversationProviderSettings(voice: VoiceSettings): Re
         client: entry && declaration ? { fetchVoiceCatalog: signal =>
           new BundledSpeechDaemonClient().fetchCatalog(entry, 'voices', signal, machineId) } : null };
     }
-    const declaration = registry.get(providerId)?.declaration ?? null;
+    const entry = registry.get(providerId);
+    const declaration = entry && entry.kind !== 'voice.turn-support.v1' ? entry.declaration ?? null : null;
     return { providerId, providerTitleKey: resolveSelectedVoiceProviderTitleKey(voice, registry),
       declaration, config: VoiceProviderSettingsJsonValueV1Schema.parse(config ?? {}),
       client: bundledUi?.client ?? null, targetKey: JSON.stringify([providerId, owner?.schemaVersion ?? envelope?.schemaVersion,

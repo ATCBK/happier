@@ -148,21 +148,18 @@ export function pickNewerVoiceBinding(
     return candidate;
 }
 
-function buildMergedBindings(
+export function mergeVoiceConversationBindings(
     runtimeBindingsByConversationSessionId: BindingsByConversationSessionId,
     persistedBindingsByConversationSessionId: BindingsByConversationSessionId,
 ): BindingsByConversationSessionId {
-    const bindings = [
-        ...Object.values(persistedBindingsByConversationSessionId),
+    // Sync describes where another client last bound its control slot. It cannot
+    // replace a binding admitted by this client, regardless of wall-clock freshness.
+    // The persisted layer still owns discovery before local admission and after cleanup.
+    return buildBindingsByConversationSessionId([
+        ...Object.values(persistedBindingsByConversationSessionId).sort((left, right) =>
+            left.updatedAt - right.updatedAt || left.conversationSessionId.localeCompare(right.conversationSessionId)),
         ...Object.values(runtimeBindingsByConversationSessionId),
-    ].sort((left, right) => {
-        if (left.updatedAt !== right.updatedAt) {
-            return left.updatedAt - right.updatedAt;
-        }
-        return left.conversationSessionId.localeCompare(right.conversationSessionId);
-    });
-
-    return buildBindingsByConversationSessionId(bindings);
+    ]);
 }
 
 export function listPersistedVoiceBindingsFromState(
@@ -211,7 +208,7 @@ export function createVoiceSessionBindingStore() {
                 return {
                     ...state,
                     runtimeBindingsByConversationSessionId,
-                    bindingsByConversationSessionId: buildMergedBindings(
+                    bindingsByConversationSessionId: mergeVoiceConversationBindings(
                         runtimeBindingsByConversationSessionId,
                         state.persistedBindingsByConversationSessionId,
                     ),
@@ -226,7 +223,7 @@ export function createVoiceSessionBindingStore() {
                 return {
                     ...state,
                     runtimeBindingsByConversationSessionId,
-                    bindingsByConversationSessionId: buildMergedBindings(
+                    bindingsByConversationSessionId: mergeVoiceConversationBindings(
                         runtimeBindingsByConversationSessionId,
                         state.persistedBindingsByConversationSessionId,
                     ),
@@ -238,7 +235,7 @@ export function createVoiceSessionBindingStore() {
                 return {
                     ...state,
                     persistedBindingsByConversationSessionId,
-                    bindingsByConversationSessionId: buildMergedBindings(
+                    bindingsByConversationSessionId: mergeVoiceConversationBindings(
                         state.runtimeBindingsByConversationSessionId,
                         persistedBindingsByConversationSessionId,
                     ),
@@ -309,7 +306,7 @@ export function unbindVoiceRuntimeAttemptBindingIfOwned(input: Readonly<{
         return {
             ...state,
             runtimeBindingsByConversationSessionId,
-            bindingsByConversationSessionId: buildMergedBindings(
+            bindingsByConversationSessionId: mergeVoiceConversationBindings(
                 runtimeBindingsByConversationSessionId,
                 state.persistedBindingsByConversationSessionId,
             ),

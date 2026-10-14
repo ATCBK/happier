@@ -101,6 +101,14 @@ afterEach(async () => {
 });
 
 describe('binding manager with real binding and persistence owners', () => {
+    it('admits an exact synced binding locally before another client changes its target', async () => {
+        const previous = seedBinding();
+        store.getState().replacePersistedBindings([previous]);
+        await manager.ensureBound(input);
+        store.getState().replacePersistedBindings([{ ...previous, targetSessionAddress: address('s2'), updatedAt: 999 }]);
+        expect(store.getState().getByControlSessionId(input.controlSessionId)?.targetSessionAddress).toEqual(address('s1'));
+    });
+
     it('stores and persists the binding from the canonical resolver', async () => {
         seedBinding();
         const binding = await manager.ensureBound(input);

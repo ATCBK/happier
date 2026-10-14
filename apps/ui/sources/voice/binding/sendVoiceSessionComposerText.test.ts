@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { z } from 'zod';
 import { createSessionFixture } from '@/dev/testkit';
+import type { VoiceAdapterController } from '@/voice/session/types';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
@@ -20,6 +21,7 @@ import { PendingLocalIdSchema } from '@happier-dev/protocol/sessions/pending/pen
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { parsePendingDeliveryStatusV1, pendingDeliveryStatusV1ToPersistedFields, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import type { PartialOptions } from '@elevenlabs/client';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'web' } }));
@@ -209,10 +211,15 @@ async function restorePendingHttpAccount() {
         },
     });
     const session = createSessionFixture({ id: 'carrier-s1', serverId: account.home.id });
+    if (!session.metadata) throw new Error('Expected canonical Session fixture metadata');
     getStorage().getState().applySessions([{ ...session, metadata: { ...session.metadata, ...buildVoiceTranscriptHistorySessionMetadata() } }]);
 }
 
 function pendingRows() { return getStorage().getState().sessionPending['carrier-s1']?.messages ?? []; }
+
+function hasTextTurn(adapter: VoiceAdapterController): adapter is VoiceAdapterController & Required<Pick<VoiceAdapterController, 'sendTextTurn'>> {
+    return typeof adapter.sendTextTurn === 'function';
+}
 
 describe('Voice composer through Sync HTTP custody', () => {
     beforeEach(async () => {
@@ -261,7 +268,7 @@ describe('Voice composer through Sync HTTP custody', () => {
 
     it('awaits exact-row HTTP settlement before the actual provider adapter continues after acceptance', async () => {
         const adapter = getVoiceAdapterRegistry().get('happier.voice.elevenlabs/realtime-elevenlabs');
-        if (!adapter?.sendTextTurn) throw new Error('Actual text-turn adapter is unavailable');
+        if (!adapter || !hasTextTurn(adapter)) throw new Error('Actual text-turn adapter is unavailable');
         // Observation only: the original controller/SDK dispatch runs unchanged.
         const dispatch = vi.spyOn(adapter, 'sendTextTurn');
         let release!: () => void;
@@ -370,12 +377,12 @@ describe('Voice composer through Sync HTTP custody', () => {
         expect(pendingRows()).toEqual([]);
     });
 
-    it('retains an ambiguous provider failure without repeating dispatch', async () => {
-        providerSendFailure = new Error('send_failed');
+    it('redacts a native provider failure while retaining ambiguous custody without repeating dispatch', async () => {
+        providerSendFailure = new Error('send_failed at /Users/private/transcript');
         const result = await sendVoiceSessionComposerText({ conversationSessionId: 'carrier-s1', text: 'hello', localId: 'provider-failed',
             getAdapter: getVoiceAdapterRegistry().get,
         });
-        expect(result).toEqual({ ok: true, localId: 'provider-failed', disposition: 'ambiguous', message: 'send_failed' });
+        expect(result).toEqual({ ok: true, localId: 'provider-failed', disposition: 'ambiguous', message: 'voice_service_unavailable' });
         expect(providerMessages).toEqual(['hello']);
         expect(pendingRows()).toEqual([expect.objectContaining({ localId: 'provider-failed', pendingDeliveryStatus: 'blocked',
             pendingDeliveryBlockedReason: 'delivery_outcome_uncertain' })]);
@@ -395,12 +402,12 @@ describe('Voice composer through Sync HTTP custody', () => {
             pendingDeliveryBlockedReason: 'delivery_outcome_uncertain' })]);
     });
 
-    it('keeps an untyped method-unavailable message uncertain rather than inferring definite rejection', async () => {
+    it('keeps an untyped native method-unavailable failure uncertain rather than inferring definite rejection', async () => {
         providerSendFailure = new Error('RPC method not available');
         const result = await sendVoiceSessionComposerText({ conversationSessionId: 'carrier-s1', text: 'hello', localId: 'untyped-error',
             getAdapter: getVoiceAdapterRegistry().get,
         });
-        expect(result).toEqual({ ok: true, localId: 'untyped-error', disposition: 'ambiguous', message: 'RPC method not available' });
+        expect(result).toEqual({ ok: true, localId: 'untyped-error', disposition: 'ambiguous', message: 'voice_service_unavailable' });
         await sync.fetchPendingMessages('carrier-s1');
         expect(pendingRows()).toEqual([expect.objectContaining({ localId: 'untyped-error', pendingDeliveryStatus: 'blocked',
             pendingDeliveryBlockedReason: 'delivery_outcome_uncertain' })]);
@@ -495,7 +502,7 @@ describe('Voice composer through Sync HTTP custody', () => {
     it('sends synthetic composer text through the real provider adapter and controller before exact-row settlement', async () => {
         const adapterId = 'happier.voice.elevenlabs/realtime-elevenlabs';
         const adapter = getVoiceAdapterRegistry().get(adapterId);
-        if (!adapter) throw new Error('Bundled ElevenLabs adapter is unavailable');
+        if (!adapter || !hasTextTurn(adapter)) throw new Error('Bundled ElevenLabs adapter is unavailable');
         expect(adapter.getSnapshot()).toMatchObject({ status: 'connected' });
         const dispatch = vi.spyOn(adapter, 'sendTextTurn');
         const result = await sendVoiceSessionComposerText({ conversationSessionId: 'carrier-s1', text: 'hello',
@@ -516,7 +523,7 @@ describe('Voice composer through Sync HTTP custody', () => {
         } } } } });
     });
 
-    it.each(['accepted', 'unacknowledged', 'aborted-settled', 'aborted-settlement-failed', 'switched-to-direct-session'] as const)('routes native composer text through the actual local controller and daemon RPC with %s delivery', async (outcome) => {
+    it.each(['accepted', 'unacknowledged', 'aborted-settled', 'aborted-settlement-failed', 'switched-to-direct-session', 'selection-unavailable'] as const)('routes native composer text through the actual local controller and daemon RPC with %s delivery', async (outcome) => {
         if (!account) throw new Error('Native composer Account is unavailable');
         await getVoiceAdapterRegistry().get('happier.voice.elevenlabs/realtime-elevenlabs')!.stop({ sessionId: 'carrier-s1' });
         const { writeVoiceConversationScopeMetadata } = await import('@/voice/persistence/voiceConversationScopeMetadata');
@@ -532,8 +539,9 @@ describe('Voice composer through Sync HTTP custody', () => {
                 agent: { ...local.agent, agentSource: 'agent', agentId: 'claude', prewarmOnConnect: false },
             }), providerId: 'local_conversation', welcome: { ...getStorage().getState().settings.voice.welcome, enabled: false } } }, getStorage().getState().settings));
         expect(readLocalConversationVoiceSettings(getStorage().getState().settings.voice).conversationMode).toBe('agent');
-        const root = createSessionFixture({ id: 'native-target', serverId: account.home.id, active: true, activeAt: Date.now(),
-            metadata: { path: '/voice/native', host: 'tester.local', machineId: 'machine-1', flavor: 'claude',
+        const root = createSessionFixture({ id: `native-target-${outcome}`, serverId: account.home.id, active: true, activeAt: Date.now(),
+            metadata: { path: '/voice/native', host: 'tester.local', machineId: 'machine-1',
+                ...(outcome === 'selection-unavailable' ? {} : { flavor: 'claude' }),
                 agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } });
         const carrier = createSessionFixture({ id: 'carrier-s1', serverId: account.home.id, active: true, activeAt: Date.now(),
             metadata: writeVoiceConversationScopeMetadata({ path: '/voice/native', host: 'tester.local', machineId: 'machine-1', flavor: 'claude',
@@ -570,7 +578,7 @@ describe('Voice composer through Sync HTTP custody', () => {
             requestedTargetSessionAddress: { serverId: account.home.id, sessionId: root.id } });
         expect(binding).toMatchObject({ conversationSessionId: carrier.id, transcriptMode: 'native_session' });
         const adapter = getVoiceAdapterRegistry().get('local_conversation');
-        if (!adapter?.sendTextTurn) throw new Error('Actual native text-turn adapter is unavailable');
+        if (!adapter || !hasTextTurn(adapter)) throw new Error('Actual native text-turn adapter is unavailable');
         const dispatch = vi.spyOn(adapter, 'sendTextTurn');
         let release!: () => void;
         let entered!: () => void;
@@ -585,7 +593,25 @@ describe('Voice composer through Sync HTTP custody', () => {
             return Response.json({ success: true });
         };
         try {
-            await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+            if (outcome === 'selection-unavailable') {
+                // This case starts a new turn admission. An already admitted
+                // run correctly retains its captured Agent despite edits.
+                await voiceAgentSessions.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+                expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(false);
+                const voice = getStorage().getState().settings.voice;
+                const config = readLocalConversationVoiceSettings(voice);
+                getStorage().getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
+                    voice: writeVoiceProviderSettingsConfig(voice, 'local_conversation', { ...config,
+                        agent: { ...config.agent, agentSource: 'session' } }),
+                }, getStorage().getState().settings));
+                // Home hydration reads the same initially unreadable identity;
+                // no earlier readable root projection may be retained here.
+                expect(resolveAgentIdFromSessionMetadata(readVoiceSessionOwnerMetadataFromState(getStorage().getState(), {
+                    serverId: account.home.id, sessionId: root.id,
+                }))).toBeNull();
+            } else {
+                await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+            }
             if (outcome === 'switched-to-direct-session') {
                 // A real preference change does not fabricate a new binding or
                 // dispatcher. The persisted native carrier still routes through
@@ -624,18 +650,22 @@ describe('Voice composer through Sync HTTP custody', () => {
                 expect(failure?.type).toBe('rejected');
                 if (failure?.type !== 'rejected' || !(failure.value instanceof Error)) throw new Error('Actual native direct-session failure was not observable');
                 expect(result).toEqual({ ok: true, localId, disposition: 'ambiguous', message: failure.value.message });
-            } else if (outcome === 'aborted-settlement-failed') expect(result).toMatchObject({ ok: true, localId,
+            } else if (outcome === 'selection-unavailable') expect(result).toEqual({ ok: false, localId,
+                reason: 'terminal_rejected', message: 'voice_agent_selection_unavailable' });
+            else if (outcome === 'aborted-settlement-failed') expect(result).toMatchObject({ ok: true, localId,
                 disposition: 'ambiguous', message: expect.stringContaining('pending settlement failed:') });
             else expect(result).toEqual(outcome === 'unacknowledged'
                 ? { ok: true, localId, disposition: 'ambiguous', message: 'voice_turn_acceptance_not_reported' }
                 : { ok: true, localId, disposition: 'settled' });
             expect(httpEvents.filter(event => event.startsWith('settle:'))).toEqual(acceptsTranscript ? [`settle:${localId}`] : []);
-            expect(providerMessages).toHaveLength(outcome === 'switched-to-direct-session' ? 0 : 1);
-            expect(daemon.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2)).toHaveLength(outcome === 'switched-to-direct-session' ? 0 : 1);
-            expect(deliveryStatus).toEqual(!acceptsTranscript ? { status: 'blocked', reason: 'delivery_outcome_uncertain' }
+            const noDispatch = outcome === 'switched-to-direct-session' || outcome === 'selection-unavailable';
+            const blockedReason = outcome === 'selection-unavailable' ? 'provider_unavailable_before_acceptance' : 'delivery_outcome_uncertain';
+            expect(providerMessages).toHaveLength(noDispatch ? 0 : 1);
+            expect(daemon.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2)).toHaveLength(noDispatch ? 0 : 1);
+            expect(deliveryStatus).toEqual(!acceptsTranscript ? { status: 'blocked', reason: blockedReason }
                 : outcome === 'aborted-settlement-failed' ? { status: 'external_handoff' } : null);
             expect(pendingRows()).toEqual(!acceptsTranscript ? [expect.objectContaining({ localId: 'native-real-turn',
-                pendingDeliveryStatus: 'blocked', pendingDeliveryBlockedReason: 'delivery_outcome_uncertain' })]
+                pendingDeliveryStatus: 'blocked', pendingDeliveryBlockedReason: blockedReason })]
                 : outcome === 'aborted-settlement-failed' ? [expect.objectContaining({ localId: 'native-real-turn', pendingDeliveryStatus: 'external_handoff' })] : []);
         } finally { release(); dispatch.mockRestore(); await voiceAgentSessions.stop(VOICE_AGENT_GLOBAL_SESSION_ID); }
     });

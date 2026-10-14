@@ -16,8 +16,9 @@ vi.mock('expo-modules-core', async original => {
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 await loadSyncSingletonForTests();
 const { getSharedVoicePcmCapture, getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
-const capture = getSharedVoicePcmCapture();
-if (!capture) throw new Error('Installed native capture unavailable');
+const installedCapture = getSharedVoicePcmCapture();
+if (!installedCapture) throw new Error('Installed native capture unavailable');
+const capture = installedCapture;
 const { createNativeVadController } = await import('./NativeVadController');
 afterAll(async () => {
     await getSharedVoiceAudioSessionCoordinator()?.dispose();

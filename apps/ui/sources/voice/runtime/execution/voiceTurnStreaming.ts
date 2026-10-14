@@ -16,6 +16,7 @@ import { buildVoiceAgentTurnPayload } from '@/voice/agent/buildVoiceAgentTurnPay
 import { readPersistedVoiceConversationRuntimePublication } from '@/voice/binding/voiceConversationBindingPersistence';
 import { readLocalConversationSettingsFromAccountSettings } from '@/voice/local/localVoiceSettings';
 import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePrivacySettings';
+import { createVoiceTextTurnRejectedBeforeEffectError } from '@/voice/session/types';
 
 export function createVoiceTurnStreaming(args: Readonly<{
     getVoiceAgentHandle: (sessionId: string) => Promise<VoiceAgentHandle>;
@@ -121,7 +122,14 @@ export function createVoiceTurnStreaming(args: Readonly<{
         };
 
         const sendWithHandle = async (displayUserText: string) => {
-            const handle = await args.getVoiceAgentHandle(sessionId);
+            const handle = await args.getVoiceAgentHandle(sessionId).catch((error: unknown) => {
+                // Selection refusal happens before this input reaches the turn
+                // transport. Preserve that positive no-effect fact for Pending.
+                if (error instanceof Error && 'code' in error && error.code === 'VOICE_AGENT_SELECTION_UNAVAILABLE') {
+                    throw createVoiceTextTurnRejectedBeforeEffectError(error, 'provider_unavailable_before_acceptance');
+                }
+                throw error;
+            });
             lastHandle = handle;
             const nextUserText = preparePayloadText();
             const transcriptBaseline = captureAssistantTextMessageBaseline(handle.rpcSessionId);

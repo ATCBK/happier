@@ -301,6 +301,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
         if (machineDetail) {
           const machineId = decodeURIComponent(machineDetail[1]);
           const machine = createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' });
+          if (!machine.access) throw new Error('Canonical Machine access missing');
           return json(machineDetail[2] ? MachineAccessGrantsListResponseV1Schema.parse({ machineId,
             custodian: machine.access.custodian, access: machine.access, canManage: true,
             grants: [], ownDirectGrant: false, ownAccessSources: [],

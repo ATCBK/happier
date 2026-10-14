@@ -188,6 +188,7 @@ describe('useVoiceDictation composed daemon readiness', () => {
         const readiness = resolveVoiceDictationReadiness({
             registry: createDefaultVoiceProviderRegistry(),
             settings: storage.getState().settings,
+            connectedPurposes: null,
             platform: 'web',
             executionMachineId: readinessMachineId,
             localAvailability: availabilityHook.getCurrent(),

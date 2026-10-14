@@ -131,6 +131,7 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
   if (machineAccess) {
     const id = decodeURIComponent(machineAccess[1]);
     const access = createPlainMachineRowFixture({ id, accountId: 'voice-account' }).access;
+    if (!access) throw new Error('Canonical Machine access missing');
     return Response.json(MachineAccessGrantsListResponseV1Schema.parse({ machineId: id, custodian: access.custodian, access,
       canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
     }));
