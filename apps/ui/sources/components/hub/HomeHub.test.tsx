@@ -23,8 +23,14 @@ import { WidgetAddSurface } from '@/components/widgets/add/WidgetAddSurface';
 import type { WidgetAddSection } from '@/components/widgets/add/widgetAddModel';
 import { SessionSurfaceEntityDragHandle, SessionSurfaceEntityTargetFeedback } from '@/components/sessions/board/SessionSurfaceEntityDrag';
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { Text } from '@/components/ui/text/Text';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// This composed screen statically imports transport consumers. Install the
+// canonical external Socket boundary before that graph, then configure it below.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 type Layout = Pick<HomeHubLayoutValue, 'order' | 'hidden'> & Partial<Pick<HomeHubLayoutValue, 'items' | 'sections'>>;
 
@@ -393,6 +399,12 @@ describe('HomeHub', () => {
         await act(async () => {
             screen.findByTestId('home-layout.automations.grip')!.props.onKeyDown({ key: 'ArrowUp', preventDefault() {} });
         });
+        const announcement = (id: string) => screen.findByTestId(id)!.findAllByType(Text)
+            .map(node => node.props.children).join('');
+        // Home also mounts surface feedback. The foreground list owns this
+        // move's announcement and its acknowledgement, so Home stays silent.
+        expect.soft(announcement('home-layout.reorder.status')).not.toBe('');
+        expect.soft(announcement('home-hub.widget-move-live-region')).toBe('');
         await act(async () => {
             screen.findByTestId('home-layout.automations.grip')!.props.onKeyDown({ key: 'Enter', preventDefault() {} });
         });
@@ -401,6 +413,8 @@ describe('HomeHub', () => {
             order: ['start', 'attention', 'automations', 'setup'],
             hidden: [],
         }));
+        expect.soft(announcement('home-layout.reorder.status')).toBe('');
+        expect.soft(announcement('home-hub.widget-move-live-region')).toBe('');
 
         screen.pressByTestId('home-layout.reset');
         await flushHookEffects({ cycles: 2 });

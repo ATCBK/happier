@@ -290,7 +290,7 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
     };
     useEntityDragSource(runtime, { id: sourceId, scope, isCurrent: current,
         getItem: () => latest.current.binding.getItem(id), getBounds: () => getBounds(),
-        describe: () => ({ title: latest.current.binding.items.find(item => item.id === id)?.title ?? '' }) });
+        describe: () => ({ title: latest.current.binding.items.find(item => item.id === id)?.title ?? '', announcementOwner: 'source' }) });
     const getBounds = () => {
         const live = readWindowBounds(rowNode.current);
         if (live) return live;
