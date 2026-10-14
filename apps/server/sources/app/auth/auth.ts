@@ -551,8 +551,13 @@ class AuthModule {
         if (needsAccountMode && !accountMode) {
             throw new ApiTokenOperationError('invalid_token');
         }
+        const inputRecord = typeof context.input === "object" && context.input !== null && !Array.isArray(context.input)
+            ? context.input as Readonly<Record<string, unknown>> : null;
+        const automationId = input.actionId === 'workflow.trigger.run_now' && typeof inputRecord?.automationId === 'string'
+            ? inputRecord.automationId : undefined;
         const supplied = ExternalActionExecutionAuthorizationBindingV1Schema.parse({
             ...input, custodianAccountId: machine.accountId, installationId: machine.installationId,
+            ...(automationId ? { automationId } : {}),
             ...(accountMode ? { accountEncryptionMode: accountMode.encryptionMode } : {}),
         });
         if ('authentication' in supplied) {
@@ -601,18 +606,18 @@ class AuthModule {
         const principal = await this.verifyCurrentApiTokenPrincipal(supplied);
         if (!principal) throw new ApiTokenOperationError("invalid_token");
         const qualifiedAction = parseQualifiedPluginActionId(supplied.actionId);
-        const inputRecord = typeof context.input === "object" && context.input !== null && !Array.isArray(context.input)
-            ? context.input as Readonly<Record<string, unknown>> : null;
         const invokedAction = supplied.actionId === "action.invoke"
             ? PluginContributionIdentityV1Schema.safeParse(inputRecord?.action) : null;
         const contributedQualifiedId = qualifiedAction ? supplied.actionId
             : invokedAction?.success ? formatQualifiedPluginActionId(invokedAction.data) : undefined;
         if (!isApiTokenGrantWithinV1(supplied.grant, principal.grant)) throw new ApiTokenOperationError('credential_scope_denied');
+        if (supplied.automationId !== automationId) throw new ApiTokenOperationError('credential_scope_denied');
         const { readExternalActionCredentialActionId } = await import('./externalActionExecutionAuthorization');
         const admission = evaluateApiTokenGrantV1({ grant: supplied.grant,
             actionId: qualifiedAction ? "action.invoke" : readExternalActionCredentialActionId(supplied), contributedQualifiedId,
             contributedActionAdmission: 'pre_open',
             target: supplied.target, targetMachineId: supplied.machineId,
+            automationId,
             ...(supplied.actionId === "session.spawn_new" && !supplied.handoffContinuation && context.input !== undefined ? { spawnInput: context.input } : {}),
         });
         if (!admission.ok) throw new ApiTokenOperationError("credential_scope_denied");
