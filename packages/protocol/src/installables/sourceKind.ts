@@ -42,7 +42,7 @@ export const GitHubReleaseBinaryInstallableSourceSchema = lazyZodSchema(() => z.
 export const ManagedPackageInstallableSourceSchema = lazyZodSchema(() => z.object({
   kind: z.literal('managed_package'),
   packageName: z.string().trim().min(1),
-  packageManager: z.literal('managed_js_runtime'),
+  packageManager: z.enum(['managed_js_runtime', 'managed_uv']),
   version: z.string().trim().min(1).optional(),
 }).strict());
 

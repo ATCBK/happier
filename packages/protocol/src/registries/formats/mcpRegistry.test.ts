@@ -64,6 +64,13 @@ describe('registered MCP Registry reader', () => {
     expect(await hostFor({ servers: [empty], metadata: { count: 1 } }).host.execute('registries.items.list', { kind: 'mcpServer' }))
       .toMatchObject({ pages: [{ items: [{ flags: { deprecated: true }, problem: { code: 'unsupported_entry' } }] }] });
   });
+  it('lists the rest of a live page when one record names its repository without a URL', async () => {
+    const odd = { ...MCP_REGISTRY_V01_READ_FIXTURE, server: { ...MCP_REGISTRY_V01_READ_FIXTURE.server, repository: { source: 'github' } } };
+    const page = { servers: [odd, ...MCP_REGISTRY_V01_PAGE_FIXTURE.servers], metadata: { count: 3 } };
+    const listed = await hostFor(page).host.execute('registries.items.list', { kind: 'mcpServer' });
+    expect(listed).toMatchObject({ pages: [{ status: { state: 'ok' } }] });
+    expect((listed as { pages: { items: unknown[] }[] }).pages[0]!.items).toHaveLength(3);
+  });
   it('refuses a version/identity mismatch instead of creating the latest or another server', async () => {
     const { host } = hostFor();
     expect(await host.fetchRequest({ op: 'read', kind: 'mcpServer', sourceId: 'builtin:mcp-registry',

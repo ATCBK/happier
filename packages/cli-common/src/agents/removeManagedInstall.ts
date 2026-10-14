@@ -2,8 +2,9 @@ import { access, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveAgentCliManagedInstallRootForRuntime, type AgentCliRuntimeDescriptor } from './resolution.js';
 import { readManagedAcpInstallNamespace } from './managedAcpInstallIdentity.js';
+import { readManagedUvAgentMetadata, type ManagedUvAgentMetadata } from './install/managedUvInstall.js';
 
-export type ManagedAgentCliAcpMetadata = Readonly<{ definitionId: string; title: string; kind: 'npm'; version: string }>;
+export type ManagedAgentCliAcpMetadata = Readonly<{ definitionId: string; title: string; kind: 'npm'; version: string }> | ManagedUvAgentMetadata;
 
 /** Observe retained current bytes independently of version, launcher health or receipt parsing. */
 export async function hasAgentCliManagedInstallForRuntime(params: Readonly<{
@@ -24,6 +25,8 @@ export async function readManagedAgentCliInstallMetadata(params: Readonly<{
   runtimeSpec: Pick<AgentCliRuntimeDescriptor, 'id'>; env?: NodeJS.ProcessEnv;
 }>): Promise<ManagedAgentCliAcpMetadata | null> {
   const root = resolveAgentCliManagedInstallRootForRuntime(params.runtimeSpec, { processEnv: params.env });
+  const uv = await readManagedUvAgentMetadata(params.runtimeSpec, params.env ?? process.env);
+  if (uv) return uv;
   try {
     const raw: unknown = JSON.parse(await readFile(join(root, 'current', 'workspace', 'package.json'), 'utf8'));
     if (!raw || typeof raw !== 'object' || !('happierManagedAcp' in raw)) return null;

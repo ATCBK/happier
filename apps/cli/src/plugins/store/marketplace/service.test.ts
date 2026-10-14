@@ -10,6 +10,7 @@ import { resolveExactMarketplaceListingForInstall } from './exactInstall';
 import {
   createMarketplaceIndexService,
   projectMarketplaceArtifactAccess,
+  resolveExactMarketplaceSourceBinding,
 } from './service';
 import {accountMarketplaceUserSourceFixture,publishAccountRegistrySourcesFixture} from '@/plugins/testkit/accountRegistrySources';
 import {resetActiveAccountSettingsSnapshotForTests} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -56,6 +57,17 @@ describe('createMarketplaceIndexService', () => {
     vi.mocked(undici.fetch).mockReset();
     resetActiveAccountSettingsSnapshotForTests();
     await Promise.all(homes.splice(0).map(home=>rm(home,{recursive:true,force:true})));
+  });
+  it('retains an Agent-only Account catalog for the plugin install handoff reached from Agent browsing', async () => {
+    const source = { ...accountMarketplaceUserSourceFixture({ sourceUrl: 'https://catalog.example/agents.json', registryProfileId: 'private-registry' }),
+      kinds: ['agent' as const], token: { secretRef: 'personal-token' } };
+    publishAccountRegistrySourcesFixture([source]);
+    expect(await resolveExactMarketplaceSourceBinding({ sourceId: source.id })).toMatchObject({
+      ok: true, source: { id: source.id, sourceUrl: source.url, origin: 'user', registryProfileId: 'private-registry',
+        registrySource: { kinds: ['agent'], token: source.token } },
+    });
+    publishAccountRegistrySourcesFixture([{ ...source, enabled: false }]);
+    expect(await resolveExactMarketplaceSourceBinding({ sourceId: source.id })).toMatchObject({ ok: false, code: 'install_unavailable' });
   });
   it('does not let a remote catalog select a host-owned private registry profile', () => {
     const entry = snapshot('https://catalog.example/private.json', 'acme.private').entries[0]!;
@@ -179,6 +191,7 @@ describe('createMarketplaceIndexService', () => {
     });
     const document = snapshot(source.sourceUrl, 'acme.private');
     document.source = { id: source.id, title: source.title, kind: 'user', sourceUrl: source.sourceUrl };
+    document.entries[0]!.review = { status: 'unreviewed', reviewedAt: null };
     document.entries[0]!.distribution.registryOrigin = 'https://registry.acme.test';
     vi.mocked(undici.fetch).mockImplementation(async()=>new undici.Response(JSON.stringify(document),{status:200}));
     const service = createMarketplaceIndexService({ happyHomeDir: home });
@@ -228,6 +241,7 @@ describe('createMarketplaceIndexService', () => {
       kind: 'user',
       sourceUrl: source.sourceUrl,
     };
+    document.entries[0]!.review = { status: 'unreviewed', reviewedAt: null };
     document.entries[0]!.distribution.registryOrigin = 'https://registry.acme.test';
     vi.mocked(undici.fetch).mockImplementation(async()=>new undici.Response(JSON.stringify(document),{status:200}));
     const service = createMarketplaceIndexService({ happyHomeDir: home });

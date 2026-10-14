@@ -23,11 +23,8 @@ import { realpathSync } from 'node:fs';
 import type { McpServerConfig } from '@/agent';
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 import { removeWrittenMcpRuntimeConfigFile, writeSecureMcpRuntimeConfigFile } from '@/mcp/runtime/writeSecureMcpRuntimeConfigFile';
-import {
-  listValueRefSecretIdsV1,
-  type McpServerCatalogEntryV1,
-  type McpServerMaterializationV1,
-} from '@happier-dev/protocol';
+import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
+import type { McpServerCatalogEntryV1, McpServerMaterializationV1 } from '@happier-dev/protocol';
 import {
   SavedSecretResolutionError,
   type SavedSecretMaterializerV1,

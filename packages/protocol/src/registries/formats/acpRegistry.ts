@@ -3,6 +3,8 @@ import { AcpRegistryAgentV1Schema, RegistryItemV1Schema, type AcpRegistryAgentV1
 import { RegistryFetchErrorV1 } from '../registryListV1.js';
 import type { RegistrySourceV1 } from '../registrySourcesV1.js';
 import type { RegistryFetchContextV1, RegistryFormatAdapterV1 } from './registryFormatAdapterV1.js';
+import { ACP_REGISTRY_PLATFORM_TARGETS_V1 as targets } from '../../acp/catalog/registry/acpPlatformTargetsV1.js';
+import { summarizeAcpRegistryDistributionV1 } from '../../acp/catalog/registry/acpPlatformFitV1.js';
 
 // ACP Registry envelope 1.0.0 and agent.schema.json, observed from the public CDN on 2026-10-13.
 const metadataSchema = z.object({ id: z.string().regex(/^[a-z][a-z0-9-]*$/), name: z.string().min(1),
@@ -13,9 +15,6 @@ const targetSchema = z.object({ archive: z.string().url(), cmd: z.string().min(1
   env: z.record(z.string(), z.string()).default({}), sha256: z.string().regex(/^[a-fA-F0-9]{64}$/).optional() }).strict();
 const packageSchema = z.object({ package: z.string().min(1), args: z.array(z.string()).default([]),
   env: z.record(z.string(), z.string()).default({}) }).strict();
-const targets = { 'darwin-aarch64': 'darwin-arm64', 'darwin-x86_64': 'darwin-x64',
-  'linux-aarch64': 'linux-arm64', 'linux-x86_64': 'linux-x64',
-  'windows-aarch64': 'win32-arm64', 'windows-x86_64': 'win32-x64' } as const;
 const distributionSchema = z.object({ binary: z.partialRecord(z.enum(Object.keys(targets) as [keyof typeof targets, ...(keyof typeof targets)[]]), targetSchema).optional(),
   npx: packageSchema.optional(), uvx: packageSchema.optional() }).strict();
 const entrySchema = metadataSchema.extend({ distribution: distributionSchema });
@@ -63,6 +62,7 @@ function summary(source: RegistrySourceV1, entry: Awaited<ReturnType<typeof read
   const { metadata, agent } = entry;
   return { sourceId: source.id, kind: 'agent', itemId: metadata.id, title: metadata.name, description: metadata.description,
     version: metadata.version, ...(metadata.icon ? { iconUrl: metadata.icon } : {}),
+    ...(agent ? { agentDistribution: summarizeAcpRegistryDistributionV1(agent.distributions) } : {}),
     ...(metadata.authors?.length ? { publisher: { name: metadata.authors.join(', ') } } : {}),
     ...(metadata.license ? { license: metadata.license } : {}),
     ...(metadata.repository || metadata.website ? { links: { ...(metadata.repository ? { repository: metadata.repository } : {}), ...(metadata.website ? { website: metadata.website } : {}) } } : {}),

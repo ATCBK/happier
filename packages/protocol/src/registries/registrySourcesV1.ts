@@ -15,7 +15,7 @@ export const RegistryKindV1Schema = lazyZodSchema(() => z.enum(['skill', 'mcpSer
 export type RegistryKindV1 = z.infer<typeof RegistryKindV1Schema>;
 export const REGISTRY_FORMAT_KINDS_V1: Readonly<Record<RegistryFormatV1, readonly RegistryKindV1[]>> = {
   'skills-sh': ['skill'], git: ['skill'], 'claude-marketplace': ['skill'], 'mcp-registry': ['mcpServer'],
-  'acp-registry': ['agent'], 'happier-catalog': ['skill', 'mcpServer', 'agent', 'plugin'], 'happier-npm': ['plugin'],
+  'acp-registry': ['agent'], 'happier-catalog': ['skill', 'mcpServer', 'agent', 'plugin'], 'happier-npm': ['plugin', 'agent'],
 };
 export const RegistrySourceTokenV1Schema = lazyZodSchema(() => z.object({ secretRef: z.string().min(1),
   header: z.object({ name: z.string().min(1), scheme: z.enum(['Bearer', 'token']).optional() }).strict().optional(),
@@ -123,7 +123,7 @@ export const BUILT_IN_REGISTRY_SOURCES_V1: readonly RegistrySourceDescriptorV1[]
   url: 'https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json', enabled: true,
   addedAt: 0, origin: { kind: 'built_in' }, removable: false,
 }, {
-  id: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1, title: 'Community npm', format: 'happier-npm', kinds: ['plugin'],
+  id: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1, title: 'Community npm', format: 'happier-npm', kinds: ['plugin', 'agent'],
   url: `${PUBLIC_NPM_REGISTRY_ORIGIN_V1}/-/v1/search`, enabled: true, addedAt: 0, origin: { kind: 'built_in' }, removable: false,
 }];
 export function listRegistrySourcesV1(input: Readonly<{ record: RegistrySourcesRecordV1; pluginSources: readonly RegistrySourceDescriptorV1[] }>): readonly RegistrySourceDescriptorV1[] {
@@ -132,6 +132,11 @@ export function listRegistrySourcesV1(input: Readonly<{ record: RegistrySourcesR
   return [...BUILT_IN_REGISTRY_SOURCES_V1, ...input.pluginSources,
     ...input.record.sources.map(source => ({ ...source, origin: { kind: 'user' as const }, removable: true }))]
     .filter(source => { if (seen.has(source.id)) return false; seen.add(source.id); return true; })
+    // Existing plugin-only declarations also provide Agent plugin discovery.
+    // This is a source projection, not a rewrite of the person's stored kinds.
+    .map(source => source.kinds.includes('plugin') && !source.kinds.includes('agent')
+      && REGISTRY_FORMAT_KINDS_V1[source.format].includes('agent')
+      ? { ...source, kinds: [...source.kinds, 'agent' as const] } : source)
     .map(source => source.origin.kind === 'user' ? source : { ...source, enabled: !disabled.has(source.id) });
 }
 export function resolveLegacyRegistrySourceRefV1(sourceId: string): string {

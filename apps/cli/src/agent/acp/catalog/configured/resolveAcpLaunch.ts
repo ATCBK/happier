@@ -2,6 +2,7 @@ import {
   installAgentCliForRuntime, resolveAgentCliCommandForRuntime,
   resolvePlatformFromNodePlatform, type AgentCliRuntimeDescriptor,
   managedAcpInstallId, hasAgentCliManagedInstallForRuntime,
+  buildManagedUvAgentEnvironment, installManagedUvAgent, resolveManagedUvAgentCommand, type ManagedUvAgentSpec,
 } from '@happier-dev/cli-common/agents';
 import type { AccountSettings, InstallableDependencyDescriptor } from '@happier-dev/protocol';
 import { InstallableDependencyDescriptorSchema } from '@happier-dev/protocol/installables';
@@ -12,6 +13,7 @@ import { getRuntimeInstallableAdapterForDescriptor } from '@/packagedRuntime/ins
 import { ensureRuntimeInstallableDescriptorForLaunch } from '@/packagedRuntime/installables/ensureForLaunch';
 import { resolveEffectiveInstallablePolicy } from '@happier-dev/protocol/installablesPolicy';
 import { hasPinnedArchiveManagedInstall } from '@/packagedRuntime/installables/sourceAdapters/pinnedArchive';
+import { executeInstallCommand } from '@/capabilities/installJobs/executeInstallCommand';
 
 export type AcpLaunchDefinition = Pick<AcpBackendDefinitionV1, 'id' | 'title' | 'launch'>;
 export type AcpLaunchResolution =
@@ -58,6 +60,12 @@ export function getAcpNpmRuntimeSpec(definition: AcpLaunchDefinition, accountId:
   };
 }
 
+export function getAcpUvRuntimeSpec(definition: AcpLaunchDefinition, accountId: string): ManagedUvAgentSpec | null {
+  const launch = definition.launch;
+  return launch.kind === 'uv' ? { id: getAcpManagedInstallId(definition, accountId), definitionId: definition.id,
+    title: definition.title, package: launch.package, version: launch.version, ...(launch.command ? { command: launch.command } : {}) } : null;
+}
+
 function archiveHost(params: AcpLaunchParams) {
   const fit = resolveAcpPlatformFitV1(params.definition.launch, { platform: params.platform, arch: params.arch });
   if (fit.kind !== 'can_run' || !fit.target) throw new Error('Archive launch has no supported host target');
@@ -79,7 +87,14 @@ export async function resolveAcpLaunch(params: AcpLaunchParams): Promise<AcpLaun
   }
   const fit = resolveAcpPlatformFitV1(launch, { platform: params.platform, arch: params.arch });
   if (fit.kind !== 'can_run') return { kind: 'cant_run', fit };
-  if (launch.kind === 'uv') return { kind: 'cant_run', fit: { kind: 'cant_run', reason: 'managed_uv_unavailable' } };
+  if (launch.kind === 'uv') {
+    const spec = getAcpUvRuntimeSpec(params.definition, params.accountId ?? '')!;
+    const command = await resolveManagedUvAgentCommand(spec, params.env);
+    return command ? { kind: 'ready', command, args: launch.args, env: {}, runtimeEnv: buildManagedUvAgentEnvironment(spec, params.env) }
+      : { kind: 'needs_install', installable: buildInstallable(params.definition, {
+        kind: 'managed_package', packageName: launch.package, version: launch.version, packageManager: 'managed_uv',
+      }, params.accountId ?? '') };
+  }
   if (launch.kind === 'npm') {
     const command = resolveAgentCliCommandForRuntime(getAcpNpmRuntimeSpec(params.definition, params.accountId ?? '')!, { processEnv: params.env, sourcePolicy: 'managed_only' });
     return command ? { kind: 'ready', command: command.command, args: launch.args, env: {} }
@@ -120,6 +135,10 @@ export async function installAcpLaunch(params: AcpLaunchInstallParams,
     const result = await installAgentCliForRuntime({ runtimeSpec, platform, env: params.env, sourcePolicy: 'managed_only',
       skipIfInstalled: !params.force && resolution.kind === 'ready', intent: params.intent, signal: params.signal, onProgress: params.onProgress, deps: deps.installerDeps });
     if (!result.ok) return result;
+  } else if (params.definition.launch.kind === 'uv') {
+    await installManagedUvAgent({ spec: getAcpUvRuntimeSpec(params.definition, params.accountId ?? '')!,
+      env: params.env, signal: params.signal, onProgress: params.onProgress,
+      runCommand: deps.installerDeps?.execFileWithDeadline ?? executeInstallCommand });
   } else if (params.definition.launch.kind === 'archive') {
     const descriptor = getAcpArchiveInstallableDescriptor(params.definition, params.accountId ?? '')!;
     const adapter = await getRuntimeInstallableAdapterForDescriptor(descriptor, { ownerId: descriptor.id }, archiveHost(params));
@@ -144,10 +163,11 @@ export async function ensureAcpLaunchForSession(params: AcpLaunchParams & Readon
     if (!policy.autoInstallWhenNeeded) throw new Error('Configured ACP automatic installation is disabled');
     const archive = getAcpArchiveInstallableDescriptor(params.definition, params.accountId ?? '');
     const npm = getAcpNpmRuntimeSpec(params.definition, params.accountId ?? '');
+    const uv = getAcpUvRuntimeSpec(params.definition, params.accountId ?? '');
     // Session first-use has no daemon live-use authority to repair retained bytes.
     // A changed pin has a different root and remains an ordinary first acquisition.
     if (archive ? await hasPinnedArchiveManagedInstall({ installId: archive.capabilityId, env: params.env })
-      : npm && await hasAgentCliManagedInstallForRuntime({ runtimeSpec: npm, env: params.env })) {
+      : (npm ?? uv) && await hasAgentCliManagedInstallForRuntime({ runtimeSpec: (npm ?? uv)!, env: params.env })) {
       throw new Error('Existing managed ACP version is unavailable; remove or repair it after stopping its sessions');
     }
     const result = params.definition.launch.kind === 'archive'

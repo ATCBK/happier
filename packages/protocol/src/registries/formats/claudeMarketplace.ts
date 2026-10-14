@@ -31,7 +31,8 @@ function pluginSource(source:RegistrySourceV1,plugin:z.infer<typeof pluginSchema
   return null;
 }
 function count(value:unknown):number {return Array.isArray(value)?value.length : value && typeof value === 'object'?Object.keys(value).length : value ? 1 : 0;}
-export const claudeMarketplaceRegistryAdapterV1:RegistrySkillFormatAdapterV1={
+export function createClaudeMarketplaceRegistryAdapterV1(github: RegistrySkillFormatAdapterV1): RegistrySkillFormatAdapterV1 {
+return {
   format:'claude-marketplace',kinds:['skill'],supportsQuery:true,browserFetchable:source=>readGitHubRepositoryV1(source.url)!==null || /^https:\/\//.test(source.url),
   async list(ctx,req) {
     const catalog=await plugins(ctx,req.source);
@@ -39,7 +40,7 @@ export const claudeMarketplaceRegistryAdapterV1:RegistrySkillFormatAdapterV1={
     for(const plugin of catalog.items) {
       const source=pluginSource(catalog.source,plugin,catalog.repo);
       if (!source) {items.push({sourceId:req.source.id,kind:'skill' as const,itemId:plugin.name+'/',title:plugin.name,problem:{code:'unsupported_entry' as const,reason:'distribution' as const}});continue;}
-      const page=await githubRegistryAdapterV1.list(ctx,{source,kind:'skill',query:req.query});
+      const page=await github.list(ctx,{source,kind:'skill',query:req.query});
       if(page.status.state !== 'ok') return {...page,sourceId:req.source.id};
       items.push(...page.items.map(item=>({...item,itemId:`${plugin.name}/${item.itemId}`})));
     }
@@ -51,7 +52,7 @@ export const claudeMarketplaceRegistryAdapterV1:RegistrySkillFormatAdapterV1={
     const plugin=catalog.items.find(item=>item.name === req.itemId.slice(0,slash));
     const source=plugin && pluginSource(catalog.source,plugin,catalog.repo);
     if(!plugin || !source) throw new RegistryFetchErrorV1({state:'invalid_source'});
-    const item=await githubRegistryAdapterV1.read(ctx,{source,kind:'skill',itemId:req.itemId.slice(slash+1),version:req.version});
+    const item=await github.read(ctx,{source,kind:'skill',itemId:req.itemId.slice(slash+1),version:req.version});
     const repo=readGitHubRepositoryV1(source.url)!;
     const manifest=await ctx.http.getJson(`https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${item.payload.skill.ref.commit}/${source.path?source.path+'/':''}.claude-plugin/plugin.json`,{source});
     if(!manifest.ok&&manifest.status.state!=='invalid_source')throw new RegistryFetchErrorV1(manifest.status);
@@ -86,9 +87,11 @@ export const claudeMarketplaceRegistryAdapterV1:RegistrySkillFormatAdapterV1={
       getJson:url=>ctx.http.getJson(url,{source}),getText:url=>ctx.http.getText(url,{source}),getBytes:url=>ctx.http.getBytes(url,{source}),
     }};
     for(const group of groups.values()){
-      const latest=await githubRegistryAdapterV1.latest(scoped,group.items.map(item=>item.provenance),{source:group.source});
+      const latest=await github.latest(scoped,group.items.map(item=>item.provenance),{source:group.source});
       for(const item of group.items){const ref=latest.get(item.provenance.itemId);if(ref!==undefined)result.set(item.original,ref);}
     }
     return result;
   },
 };
+}
+export const claudeMarketplaceRegistryAdapterV1 = createClaudeMarketplaceRegistryAdapterV1(githubRegistryAdapterV1);

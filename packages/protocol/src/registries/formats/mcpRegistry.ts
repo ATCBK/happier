@@ -12,7 +12,7 @@ const argument = input.extend({ type: z.enum(['named', 'positional']), name: z.s
   valueHint: z.string().optional(), variables: z.record(z.string(), input).optional() });
 const remote = z.object({ type: z.enum(['streamable-http', 'sse']), url: z.string(), headers: z.array(keyInput).nullable().optional(), variables: z.record(z.string(), input).optional() });
 const wireServer = z.object({ name: z.string().min(1), description: z.string(), version: z.string().min(1), title: z.string().optional(),
-  repository: z.object({ url: z.string() }).optional(), websiteUrl: z.string().optional(), icons: z.array(z.object({ src: z.string() })).nullable().optional(),
+  repository: z.object({ url: z.string().optional() }).optional(), websiteUrl: z.string().optional(), icons: z.array(z.object({ src: z.string() })).nullable().optional(),
   remotes: z.array(remote).nullable().optional(), packages: z.array(z.object({ registryType: z.string(), identifier: z.string().min(1),
     version: z.string().optional(), transport: z.object({ type: z.enum(['stdio', 'streamable-http', 'sse']) }), fileSha256: z.string().optional(),
     runtimeArguments: z.array(argument).nullable().optional(), packageArguments: z.array(argument).nullable().optional(),
@@ -43,7 +43,7 @@ function normalize(item: z.infer<typeof record>) {
   return McpRegistryServerV1Schema.parse({ name: server.name, description: server.description, version: server.version,
     ...(server.title ? { title: server.title } : {}), status: meta?.status === 'deprecated' ? 'deprecated' : 'active',
     ...(meta?.publishedAt && Number.isFinite(Date.parse(meta.publishedAt)) ? { publishedAt: Date.parse(meta.publishedAt) } : {}),
-    ...(server.repository ? { repository: server.repository.url } : {}), ...(server.websiteUrl ? { websiteUrl: server.websiteUrl } : {}), ...(server.icons?.[0] ? { iconUrl: server.icons[0].src } : {}),
+    ...(server.repository?.url ? { repository: server.repository.url } : {}), ...(server.websiteUrl ? { websiteUrl: server.websiteUrl } : {}), ...(server.icons?.[0] ? { iconUrl: server.icons[0].src } : {}),
     remotes: (server.remotes ?? []).map(remote => ({ transport: remote.type, url: remote.url,
       inputs: [...inputs(remote.headers ?? [], 'header'), ...Object.entries(remote.variables ?? {}).map(([name, item]) => ({ ...variable(item), name, target: 'url-variable' as const }))] })),
     packages: (server.packages ?? []).flatMap(pkg => ['npm', 'pypi', 'oci', 'mcpb', 'nuget', 'cargo'].includes(pkg.registryType) ? [{

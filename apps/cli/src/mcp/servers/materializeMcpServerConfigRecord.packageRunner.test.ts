@@ -16,6 +16,8 @@ import { resolveCliTsxTsconfigPath, resolveTsxImportHookPath } from '@/utils/spa
 import { McpServerProbeError, probeMcpStdioServerTools } from './probeMcpStdioServerTools';
 import { materializeMcpServerConfigRecord } from './materializeMcpServerConfigRecord';
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
+import { mapMcpRegistryServerV1 } from '@happier-dev/protocol/mcp/servers/registry/mapMcpRegistryServerV1';
+import { McpRegistryServerV1Schema } from '@happier-dev/protocol/registries';
 
 const releaseNetwork = vi.hoisted(() => ({ origin: '' }));
 
@@ -93,6 +95,49 @@ if (!goodCwd || !fixtureServer || process.cwd() !== goodCwd || args[0] !== 'dlx'
 }
 
 describe.runIf(process.platform !== 'win32')('materializeMcpServerConfigRecord package-runner integration', () => {
+  it('runs a registry pypi producer through the real resolver, private launcher and MCP consumer with no system uv', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-p9d-pypi-mcp-'));
+    const serverPath = join(root, 'server.mjs');
+    const uv = join(root, 'tools', 'uv', 'current', 'bin', 'uv');
+    await mkdir(join(root, 'tools', 'uv', 'current', 'bin'), { recursive: true });
+    await writeFile(serverPath, buildFixtureServerScript());
+    // The external uv/package process is a fixture, while the actual MCP
+    // launcher and SDK handshake remain composed through production wiring.
+    await writeFile(uv, `#!${process.execPath}\nconst {spawn} = require('node:child_process');
+if (process.argv.slice(2).join(' ') !== 'tool run fixture-mcp==1.0.0' || process.env.UV_PYTHON_PREFERENCE !== 'only-managed' || process.env.UV_INDEX_URL !== 'https://authored.invalid') throw new Error('Wrong uv launch');
+const child = spawn(${JSON.stringify(process.execPath)}, [process.env.FIXTURE_SERVER], {stdio:'inherit',env:process.env});
+child.on('exit', code => process.exit(code ?? 1));\n`);
+    await chmod(uv, 0o755);
+    const mapped = mapMcpRegistryServerV1({ id: 'pypi', name: 'pypi', nowMs: 1, server: McpRegistryServerV1Schema.parse({
+      name: 'example/pypi', version: '1.0.0', status: 'active', description: 'Fixture Python MCP', packages: [{ ecosystem: 'pypi',
+        identifier: 'fixture-mcp', version: '1.0.0', transport: 'stdio', environment: [], packageArguments: [], runtimeArguments: [] }], remotes: [],
+    }) });
+    expect(mapped.ok).toBe(true); if (!mapped.ok) throw new Error('Expected pypi producer');
+    expect(mapped.entry.stdio).toMatchObject({ command: 'uvx', args: ['fixture-mcp==1.0.0'] });
+    const entry = { ...mapped.entry, env: { FIXTURE_SERVER: { t: 'literal' as const, v: serverPath },
+      UV_INDEX_URL: { t: 'literal' as const, v: 'https://authored.invalid' } } };
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [entry], bindings: [{
+      id: 'on', serverId: entry.id, enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1,
+    }] });
+    const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesV1({
+      context: { machineId: 'machine', directory: root, machinePlatform: null, projectKey: null, agentId: null },
+      mcp: settings, skills: null, selection: {}, agentAcceptsUserMcp: true,
+    }), root);
+    const processEnv = { ...process.env, HAPPIER_HOME_DIR: root, HOME: root, PATH: '', UV_INDEX_URL: 'https://host.invalid',
+      HAPPIER_JS_RUNTIME_PATH: process.execPath };
+    let materialized: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>> | undefined;
+    try {
+      materialized = await materializeMcpServerConfigRecord({ resolved, processEnv, tmpDir: root, deps: {
+        resolveStdioLauncherCommand: () => resolveNodeBackedMcpServerCommand({
+          distEntrypointSegments: ['mcp', 'launchers', 'stdioMcpServerLauncher.mjs'],
+          sourceEntrypointSegments: ['mcp', 'launchers', 'stdioMcpServerLauncher.ts'], preferSourceEntrypoint: true,
+        }),
+      } });
+      expect(materialized.warnings).toEqual([]);
+      expect((await probeFixture({ config: materialized.mcpServers.pypi, baseEnv: processEnv })).tools).toMatchObject([{ name: 'fixture_tool' }]);
+    } finally { materialized?.cleanup(); await rm(root, { recursive: true, force: true }); }
+  });
+
   it('provisions pnpm on first MCP launch, reuses it, and fails closed when release acquisition is unavailable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-fix7-mcp-composed-'));
     const goodHome = join(root, 'home');

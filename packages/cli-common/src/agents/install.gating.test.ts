@@ -6,6 +6,8 @@ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFileWithDeadline } from '../process/index.js';
+import { runLoggedAgentCommand } from './install/vendorRecipeInstall.js';
 
 import {
   installAgentCli,
@@ -82,6 +84,42 @@ const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'pla
 const originalArchDescriptor = Object.getOwnPropertyDescriptor(process, 'arch');
 
 describe('installAgentCli vendor_recipe execution gating', () => {
+  it.skipIf(process.platform === 'win32')('preserves a Windows Path-only environment when executing a vendor recipe', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-vendor-windows-path-'));
+    if (!originalPlatformDescriptor) throw new Error('Expected configurable platform');
+    const previousPath = process.env.PATH;
+    try {
+      // Harmless OS executables keep install planning, Windows invocation and
+      // process capture real without running a vendor installer.
+      await writeFile(join(homeDir, 'powershell.exe'), '#!/bin/sh\nif [ -z "$PATH" ]; then printf empty-path-shadow >&2; exit 42; fi\nprintf vendor-process-started\n', 'utf8');
+      await chmod(join(homeDir, 'powershell.exe'), 0o755);
+      delete process.env.PATH;
+      Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
+      let capturedStdout = '';
+      const result = await runLoggedAgentCommand({
+        runtimeSpec: {
+          id: 'path-fixture', title: 'Path fixture', binaryName: 'missing-agent',
+          sourcePreferenceDefault: 'system-first', acceptsJavaScriptFileOverride: false,
+          managedInstall: null, manualInstallKind: 'vendor_recipe',
+          manualInstallRecipes: { win32: [{ cmd: 'powershell.exe', args: [] }] },
+        },
+        command: { cmd: join(homeDir, 'powershell.exe'), args: [] },
+        env: { Path: homeDir, HAPPIER_HOME_DIR: homeDir },
+        logPath: join(homeDir, 'install.log'), vendorScratchDir: null,
+        runCommand: execFileWithDeadline,
+        appendCommandLog: (_path, _cmd, _args, stdout) => { capturedStdout = stdout; },
+        appendLogLine: () => {},
+      });
+      expect(result.ok, result.ok ? undefined : result.errorMessage).toBe(true);
+      expect(capturedStdout).toBe('vendor-process-started');
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('selects the declared PowerShell recipe for the injected Windows platform', () => {
     const result = planAgentCliInstallForRuntime({
       runtimeSpec: {

@@ -1,7 +1,12 @@
 import { MarketplaceIndexSourceSnapshotV1Schema, type MarketplaceIndexEntryV1, type MarketplaceIndexSourceSnapshotV1 } from '../../marketplace/marketplaceIndexV1.js';
 import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL } from '../../marketplace/marketplaceSourceRegistryV1.js';
-import type { RegistrySourceV1 } from '../registrySourcesV1.js';
+import type { RegistryKindV1, RegistrySourceV1 } from '../registrySourcesV1.js';
 import type { RegistryItemSummaryV1, RegistryItemV1 } from '../registryItemsV1.js';
+
+/** Agent browsing selects plugin listings; their identity and install handoff stay plugin-owned. */
+export function registryPluginSupportsKindV1(listing: MarketplaceIndexEntryV1, kind: RegistryKindV1): boolean {
+  return kind === 'plugin' || kind === 'agent' && listing.summary.contributions.includes('agents');
+}
 
 export function registryMarketplaceSourceV1(source: RegistrySourceV1): MarketplaceIndexSourceSnapshotV1['source'] {
   return MarketplaceIndexSourceSnapshotV1Schema.shape.source.parse({

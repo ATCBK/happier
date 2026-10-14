@@ -1,5 +1,6 @@
 import {EventEmitter} from 'node:events';
 import {Readable} from 'node:stream';
+import {join} from 'node:path';
 import * as https from 'node:https';
 import type {ClientRequest,IncomingMessage} from 'node:http';
 import * as undici from 'undici';
@@ -87,7 +88,8 @@ describe('exact Account marketplace install',()=>{
     const source=curatedMarketplaceSourceFixture();
     vi.mocked(undici.fetch).mockImplementation(async()=>new undici.Response(JSON.stringify(snapshot(source)),{status:200}));
     daemonBoundary.request.mockImplementation(committedChange());
-    const host=await createPluginCliActionHost({happyHomeDir:await home()});
+    const happyHomeDir=await home();
+    const host=await createPluginCliActionHost({happyHomeDir});
     try {
       const input={machineId:'machine-2',source:{kind:'marketplace',sourceId:source.id,pluginId:SAMPLE_PLUGIN_ID,version:'1.0.0'}};
       const result=await host.executeInstall(input);
@@ -105,6 +107,11 @@ describe('exact Account marketplace install',()=>{
       expect(await host.executeInstall(input,{externalActionTarget:{kind:'machine',machineId:'machine-2'}},'machine-1'))
         .toMatchObject({ok:false,errorCode:'target_unavailable'});
       expect(host.delivered).toHaveLength(3);
+      const localInput={path:join(happyHomeDir,'missing-plugin'),kind:'path'};
+      expect(await host.executeInstall(localInput,{},'machine-2'))
+        .toMatchObject({ok:true,result:{ok:false,kind:'plugins_install'}});
+      expect(host.delivered).toHaveLength(4);
+      expect(host.delivered[3]).toMatchObject({target:{kind:'machine',machineId:'machine-2'},input:localInput});
     } finally {await host.dispose();}
   });
   it('routes a pinned marketplace Action through the real CLI composition and refuses a substituted release',async()=>{

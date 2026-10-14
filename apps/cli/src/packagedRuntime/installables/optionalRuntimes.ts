@@ -1,5 +1,6 @@
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
 import {
@@ -15,6 +16,7 @@ import { configuration } from '@/configuration';
 import { readSettings } from '@/persistence';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { logger } from '@/ui/logger';
+import { resolveAuthoritativePackagedRuntimeProjectRoot } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
 
 import { ensureRuntimeInstallablesForLaunch } from './ensureForLaunch';
 import type { RuntimeInstallableAdapter, RuntimeInstallableInstallResult } from './registry';
@@ -45,15 +47,39 @@ function resolveEntryPath(key: OptionalRuntimeKey, root: string): string {
   return join(root, `${component.binaryRelativePath}${process.platform === 'win32' ? '.exe' : ''}`);
 }
 
-export async function resolveInstalledOptionalRuntime(key: OptionalRuntimeKey): Promise<string | null> {
-  const path = resolveEntryPath(key, resolveFirstPartyVersionInstallPath(installParameters(key)));
+async function resolveInstalledOptionalRuntimeLocation(key: OptionalRuntimeKey) {
+  // Source bundles already retain the CLI's pinned native dependency tree. Their
+  // package version is not a published release identity, so use that tree through
+  // the same owner as detection, explicit installation and first-use loading.
+  if (key === INSTALLABLE_KEYS.LOCAL_VOICE_RUNTIME) {
+    const runtime = resolveAuthoritativePackagedRuntimeProjectRoot({ moduleUrl: import.meta.url });
+    if (runtime?.provenance === 'source-module' || runtime?.provenance === 'source-snapshot') {
+      const entry = getFirstPartyComponentCatalogEntry(componentIdFor(key)).nodeEntrypointRelativePath;
+      if (entry) {
+        try {
+          const binPath = createRequire(join(runtime.root, 'package.json')).resolve(entry.replace(/^node_modules\//, ''));
+          await access(binPath, constants.F_OK);
+          return { binPath, installDir: runtime.root };
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'MODULE_NOT_FOUND' && code !== 'ENOENT' && code !== 'EACCES') throw error;
+        }
+      }
+    }
+  }
+  const installDir = resolveFirstPartyVersionInstallPath(installParameters(key));
+  const path = resolveEntryPath(key, installDir);
   try {
     await access(path, key === INSTALLABLE_KEYS.DIFFTASTIC && process.platform !== 'win32' ? constants.X_OK : constants.F_OK);
-    return path;
+    return { binPath: path, installDir };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'EACCES') return null;
     throw error;
   }
+}
+
+export async function resolveInstalledOptionalRuntime(key: OptionalRuntimeKey): Promise<string | null> {
+  return (await resolveInstalledOptionalRuntimeLocation(key))?.binPath ?? null;
 }
 
 function installLogPath(key: OptionalRuntimeKey): string {
@@ -99,13 +125,15 @@ export function installOptionalRuntime(key: OptionalRuntimeKey): Promise<Runtime
     try {
       await mkdir(dirname(logPath), { recursive: true });
       await writeFile(logPath, `Installing ${key} for CLI ${configuration.currentCliVersion}\n`);
-      await ensureInstalledFirstPartyComponent({
-        ...installParameters(key),
-        exactVersion: true,
-        validatePayload: async (root) => {
-          await access(resolveEntryPath(key, root), key === INSTALLABLE_KEYS.DIFFTASTIC && process.platform !== 'win32' ? constants.X_OK : constants.F_OK);
-        },
-      });
+      if (!await resolveInstalledOptionalRuntime(key)) {
+        await ensureInstalledFirstPartyComponent({
+          ...installParameters(key),
+          exactVersion: true,
+          validatePayload: async (root) => {
+            await access(resolveEntryPath(key, root), key === INSTALLABLE_KEYS.DIFFTASTIC && process.platform !== 'win32' ? constants.X_OK : constants.F_OK);
+          },
+        });
+      }
       if (!await resolveInstalledOptionalRuntime(key)) throw new Error(`Installed ${key} has no usable runtime entry point`);
       await writeFile(logPath, `Installed ${key} for CLI ${configuration.currentCliVersion}\n`);
       publishOptionalRuntimeInstallSuccess(key);
@@ -126,12 +154,13 @@ export function installOptionalRuntime(key: OptionalRuntimeKey): Promise<Runtime
 }
 
 export async function getOptionalRuntimeStatus(key: OptionalRuntimeKey) {
-  const binPath = await resolveInstalledOptionalRuntime(key);
+  const location = await resolveInstalledOptionalRuntimeLocation(key);
+  const binPath = location?.binPath ?? null;
   const logPath = installLogPath(key);
   const hasLog = await access(logPath).then(() => true, () => false);
   return {
     installed: binPath !== null,
-    installDir: resolveFirstPartyVersionInstallPath(installParameters(key)),
+    installDir: location?.installDir ?? resolveFirstPartyVersionInstallPath(installParameters(key)),
     binPath,
     installedVersion: binPath ? configuration.currentCliVersion : null,
     sourceKind: 'first_party_runtime' as const,

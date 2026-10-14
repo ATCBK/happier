@@ -1,7 +1,8 @@
 import { decodeBase64,encodeBase64 } from '../crypto/base64.js';
 import { REGISTRY_ACTION_INPUT_SCHEMAS_V1,REGISTRY_ACTION_OUTPUT_SCHEMAS_V1,type RegistryActionIdV1 } from './registryActionsV1.js';
 import { REGISTRY_FORMAT_ADAPTERS_V1 } from './formats/index.js';
-import { githubRegistryAdapterV1,readGitHubRepositoryV1 } from './formats/github.js';
+import { githubRegistryAdapterV1,createGitHubRegistryOperationV1,readGitHubRepositoryV1 } from './formats/github.js';
+import { createClaudeMarketplaceRegistryAdapterV1 } from './formats/claudeMarketplace.js';
 import type { RegistryDetectedSourceV1,RegistryFetchContextV1,RegistryHttpV1,RegistryFormatAdapterV1 } from './formats/registryFormatAdapterV1.js';
 import { HAPPIER_PICKS_SOURCE_ID,deriveRegistrySourceIdV1,normalizeRegistrySourceUrlV1,resolveLegacyRegistrySourceRefV1,type RegistrySourceV1,type RegistrySourceDescriptorV1 } from './registrySourcesV1.js';
 import { RegistryFetchErrorV1 } from './registryListV1.js';
@@ -37,14 +38,17 @@ export async function detectRegistrySourceV1(ctx:RegistryFetchContextV1,url:stri
   const repo=readGitHubRepositoryV1(normalized);
   if(repo) {
     const marketplace=await ctx.http.getJson(`https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/HEAD/.claude-plugin/marketplace.json`);
+    if (!marketplace.ok && marketplace.status.state === 'rate_limited') throw new RegistryFetchErrorV1(marketplace.status);
     if(marketplace.ok && marketplace.value && typeof marketplace.value==='object' && 'plugins' in marketplace.value) return {format:'claude-marketplace',kinds:['skill'],title:repo.repo};
     const response=await ctx.http.getJson(`https://api.github.com/repos/${repo.owner}/${repo.repo}`);
+    if (!response.ok && response.status.state === 'rate_limited') throw new RegistryFetchErrorV1(response.status);
     if(!response.ok) return {unsupported:response.status.state==='auth_failed'?'needs_token':'unreachable'};
     return {format:'git',kinds:['skill'],title:repo.repo};
   }
   if(/^https:\/\/github\.com\/[^/?#]+\/?$/.test(normalized)) return {unsupported:'organisation'};
   if(normalized.endsWith('/marketplace.json')) {
     const response=await ctx.http.getJson(normalized);
+    if (!response.ok && response.status.state === 'rate_limited') throw new RegistryFetchErrorV1(response.status);
     return response.ok?{format:'claude-marketplace',kinds:['skill'],title:new URL(normalized).hostname}:{unsupported:response.status.state==='auth_failed'?'needs_token':'unreachable'};
   }
   if(new URL(normalized).hostname==='skills.sh') return {format:'skills-sh',kinds:['skill'],title:'skills.sh'};
@@ -198,7 +202,8 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
   const linkSource = async (url: string): Promise<RegistrySourceDescriptorV1> => {
     const normalized = normalizeRegistrySourceUrlV1(url);
     const detected = await detectRegistrySourceV1(ctx, normalized);
-    if ('unsupported' in detected) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
+    if ('unsupported' in detected) throw new RegistryFetchErrorV1({ state: detected.unsupported === 'needs_token'
+      ? 'auth_failed' : detected.unsupported === 'unreachable' ? 'unreachable' : 'invalid_source' });
     return {
       id: deriveRegistrySourceIdV1(normalized), title: detected.title, format: detected.format,
       kinds: [...detected.kinds], url: normalized, enabled: true, addedAt: Date.now(),
@@ -239,7 +244,9 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
     const source = request.ref ? {
       ...detectedSource, format: 'git' as const, url: request.ref.repo, ref: request.ref.commit, path: request.ref.path,
     } : detectedSource;
-    const adapter = adapterFor(source);
+    const github = createGitHubRegistryOperationV1();
+    const adapter = source.format === 'git' ? github : source.format === 'claude-marketplace'
+      ? createClaudeMarketplaceRegistryAdapterV1(github) : adapterFor(source);
     const placements = resolveRegistryFetchPlanV1({ host: deps.host, adapter, source, op: request.op === 'link' ? 'list' : 'files' });
     for (const [index, placement] of placements.entries()) {
       try {
@@ -292,9 +299,36 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
   };
   const fetchLinkSkillFiles = async (url: string, item: RegistryItemV1): Promise<readonly RegistrySkillFileBytesV1[]> => {
     if (item.payload.kind !== 'skill') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
-    const response = await fetchRequest({
-      op: 'linkFiles', url, itemId: item.summary.itemId, version: item.payload.skill.ref.commit, ref: item.payload.skill.ref,
-    });
+    const skill = item.payload.skill;
+    const request = { op: 'linkFiles' as const, url, itemId: item.summary.itemId, version: skill.ref.commit, ref: skill.ref };
+    if (readGitHubRepositoryV1(skill.ref.repo)) {
+      if (item.summary.problem) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
+      const source: RegistrySourceDescriptorV1 = {
+        id: deriveRegistrySourceIdV1(normalizeRegistrySourceUrlV1(url)), title: url, url: skill.ref.repo,
+        format: 'git', kinds: ['skill'], path: skill.ref.path, ref: skill.ref.commit,
+        enabled: true, addedAt: 0, origin: { kind: 'user' }, removable: true,
+      };
+      const placements = resolveRegistryFetchPlanV1({ host: deps.host, adapter: githubRegistryAdapterV1, source, op: 'files' });
+      for (const [index, placement] of placements.entries()) {
+        try {
+          // The canonical reader already pinned and validated this item.
+          // Its file verifier checks those exact blob/tree hashes without
+          // resolving the same commit/tree again for each previewed skill.
+          if (placement === 'direct') return await fetchFiles(skill, source);
+          const response = RegistryFetchResponseV1Schema.parse(await viaDaemon(request));
+          if (response.op !== 'files') throw new RegistryFetchErrorV1(response.op === 'error' && response.status.state !== 'ok'
+            ? response.status : { state: 'invalid_source' });
+          return response.files.map(file => ({ path: file.path, unixMode: file.unixMode, bytes: decodeBase64(file.contentBase64) }));
+        } catch (error) {
+          if (error instanceof RegistryTransportFailureV1) {
+            if (placement === 'direct' && index + 1 < placements.length) continue;
+            throw new RegistryFetchErrorV1({ state: 'unreachable' });
+          }
+          throw error;
+        }
+      }
+    }
+    const response = await fetchRequest(request);
     if (response.op !== 'files') {
       throw new RegistryFetchErrorV1(response.op === 'error' && response.status.state !== 'ok'
         ? response.status : { state: 'invalid_source' });

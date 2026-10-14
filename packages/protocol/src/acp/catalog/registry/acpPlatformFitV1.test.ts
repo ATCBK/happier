@@ -17,8 +17,11 @@ describe('resolveAcpPlatformFitV1', () => {
     expect(resolveAcpPlatformFitV1({ ...archive, assetsByPlatform: { 'linux-x64': asset } }, { platform: 'linux', arch: 'x64' })).toEqual({ kind: 'cant_run', reason: 'archive_type_unsupported' });
     expect(resolveAcpPlatformFitV1({ ...archive, assetsByPlatform: { 'linux-x64': { ...asset, kind: 'executable' } } }, { platform: 'linux', arch: 'x64' })).toMatchObject({ kind: 'can_run' });
   });
-  it('reports uv unavailable until the managed uv consumer lands', () => {
-    expect(resolveAcpPlatformFitV1({ kind: 'uv', package: 'agent', version: '1', args: [] }, { platform: 'linux', arch: 'x64' })).toEqual({ kind: 'cant_run', reason: 'managed_uv_unavailable' });
+  it('admits managed uv on supported hosts without guessing missing platform facts', () => {
+    for (const platform of ['linux', 'darwin', 'win32']) for (const arch of ['x64', 'arm64']) {
+      expect(resolveAcpPlatformFitV1({ kind: 'uv', package: 'agent', version: '1', args: [] }, { platform, arch })).toEqual({ kind: 'can_run', via: 'uv' });
+    }
+    expect(resolveAcpPlatformFitV1({ kind: 'uv', package: 'agent', version: '1', args: [] }, { platform: 'linux', arch: null })).toEqual({ kind: 'unknown', reason: 'arch_unknown' });
   });
   it('uses the same distribution preference for registry previews as mapped launches', () => {
     expect(resolveAcpPlatformFitV1({ npm: { package: 'agent', version: '1.0.0', args: [], env: {} } }, { platform: 'linux', arch: 'x64' })).toEqual({ kind: 'can_run', via: 'npm' });

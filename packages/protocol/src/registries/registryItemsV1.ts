@@ -26,6 +26,14 @@ export const RegistryItemProblemV1Schema = lazyZodSchema(() => z.discriminatedUn
   z.object({ code: z.literal('removed_from_source') }).strict(),
 ]));
 export type RegistryItemProblemV1 = z.infer<typeof RegistryItemProblemV1Schema>;
+/** Selected distribution only; list fit needs targets/extraction support, never executable operands. */
+export const RegistryAgentDistributionV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('npm') }).strict(),
+  z.object({ kind: z.literal('uv') }).strict(),
+  z.object({ kind: z.literal('archive'), platforms: z.partialRecord(PinnedArchivePlatformSchema,
+    z.enum(['supported', 'archive_type_unsupported'])) }).strict(),
+]));
+export type RegistryAgentDistributionV1 = z.infer<typeof RegistryAgentDistributionV1Schema>;
 export const RegistryItemSummaryV1Schema = lazyZodSchema(() => z.object({
   sourceId: z.string().min(1), kind: RegistryKindV1Schema, itemId: z.string(), title: z.string().min(1),
   description: z.string().optional(), version: z.string().min(1).optional(), iconUrl: z.string().optional(),
@@ -34,6 +42,7 @@ export const RegistryItemSummaryV1Schema = lazyZodSchema(() => z.object({
   links: z.object({ repository: z.string().optional(), website: z.string().optional() }).strict().optional(),
   flags: z.object({ deprecated: z.literal(true).optional(), pick: z.literal(true).optional() }).strict().optional(),
   problem: RegistryItemProblemV1Schema.optional(),
+  agentDistribution: RegistryAgentDistributionV1Schema.optional(),
 }).strict());
 export type RegistryItemSummaryV1 = z.infer<typeof RegistryItemSummaryV1Schema>;
 export const RegistrySkillSourceV1Schema = lazyZodSchema(() => z.object({

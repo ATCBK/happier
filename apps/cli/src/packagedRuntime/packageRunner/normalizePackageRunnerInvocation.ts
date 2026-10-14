@@ -2,6 +2,7 @@ import { basename, delimiter } from 'node:path';
 import { resolveJavaScriptRuntimePathEntries } from '@happier-dev/cli-common/agents';
 
 import { buildManagedPnpmEnvironment, ensureManagedPnpmCommand } from '@/packagedRuntime/managedTools/pnpm/managedPnpm';
+import { buildManagedUvEnvironment, ensureManagedUvCommand } from '@/packagedRuntime/managedTools/uv/managedUv';
 import { ensureJavaScriptRuntimeExecutable } from '@/packagedRuntime/js/ensureJavaScriptRuntimeExecutable';
 import { isBun } from '@/utils/runtime';
 import { mergeProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
@@ -13,7 +14,7 @@ export type NormalizedPackageRunnerInvocation = Readonly<{
   env?: Readonly<Record<string, string>>;
 }>;
 
-const PACKAGE_RUNNER_COMMANDS = new Set(['node', 'node.exe', 'npx', 'npx.cmd', 'npm', 'npm.cmd', 'pnpm', 'pnpm.cmd', 'yarn', 'yarn.cmd', 'yarnpkg', 'yarnpkg.cmd', 'bunx', 'bunx.cmd']);
+const PACKAGE_RUNNER_COMMANDS = new Set(['node', 'node.exe', 'npx', 'npx.cmd', 'npm', 'npm.cmd', 'pnpm', 'pnpm.cmd', 'yarn', 'yarn.cmd', 'yarnpkg', 'yarnpkg.cmd', 'bunx', 'bunx.cmd', 'uv', 'uv.exe', 'uvx', 'uvx.exe']);
 
 export function isPackageRunnerCommand(command: string): boolean {
   return PACKAGE_RUNNER_COMMANDS.has(basename(command).toLowerCase());
@@ -58,6 +59,14 @@ export async function normalizePackageRunnerInvocation(params: Readonly<{
   const processEnv = params.processEnv ?? process.env;
   const normalized = basename(params.command).toLowerCase();
   const args = [...params.args];
+
+  if (normalized === 'uvx' || normalized === 'uvx.exe' || normalized === 'uv' || normalized === 'uv.exe') {
+    if ((normalized === 'uv' || normalized === 'uv.exe') && (args[0] !== 'tool' || args[1] !== 'run')) return null;
+    const command = await ensureManagedUvCommand(processEnv);
+    if (!command) return null;
+    return { command, args: normalized === 'uvx' || normalized === 'uvx.exe' ? ['tool', 'run', ...args] : args,
+      cwdPolicy: 'neutral', env: buildManagedUvEnvironment(processEnv) };
+  }
 
   if (normalized === 'node' || normalized === 'node.exe') {
     const command = await ensureJavaScriptRuntimeExecutable({ isBunRuntime: isBun(), processEnv });

@@ -50,7 +50,8 @@ function skillPaths(tree: z.infer<typeof treeSchema>, source: RegistrySourceV1):
     .filter(path => !root || path === root || path.startsWith(root + '/'))
     .map(path => root ? path.slice(root.length).replace(/^\//, '') : path);
 }
-export const githubRegistryAdapterV1: RegistrySkillFormatAdapterV1 = {
+function createGitHubRegistryAdapterV1(readRepositoryTree: typeof readTree): RegistrySkillFormatAdapterV1 {
+return {
   format:'git', kinds:['skill'], browserFetchable: source => readGitHubRepositoryV1(source.url) !== null, supportsQuery:true,
   async list(ctx, req): Promise<RegistryListPageV1> {
     if (!readGitHubRepositoryV1(req.source.url)) {
@@ -58,7 +59,7 @@ export const githubRegistryAdapterV1: RegistrySkillFormatAdapterV1 = {
       throw new RegistryFetchErrorV1({state:'needs_machine'});
     }
     try {
-      const {tree,commit,fetchedAt} = await readTree(ctx,req.source);
+      const {tree,commit,fetchedAt} = await readRepositoryTree(ctx,req.source);
       const query = req.query?.trim().toLowerCase();
       const paths = skillPaths(tree,req.source).filter(path => !query || path.toLowerCase().includes(query));
       return {sourceId:req.source.id,status:{state:'ok',fetchedAt},nextCursor:null,total:paths.length,
@@ -74,7 +75,7 @@ export const githubRegistryAdapterV1: RegistrySkillFormatAdapterV1 = {
       if (ctx.git) return ctx.git.read(ctx,req);
       throw new RegistryFetchErrorV1({state:'needs_machine'});
     }
-    const {repo,commit,tree,fetchedAt} = await readTree(ctx,req.source,req.version);
+    const {repo,commit,tree,fetchedAt} = await readRepositoryTree(ctx,req.source,req.version);
     const path = registryRelativePathV1([req.source.path ?? repo.path,registryRelativePathV1(req.itemId)].filter(Boolean).join('/'));
     const prefix = path ? `${path}/` : '';
     const entries = tree.tree.filter(entry => entry.path.startsWith(prefix) && entry.type !== 'tree');
@@ -125,3 +126,26 @@ export const githubRegistryAdapterV1: RegistrySkillFormatAdapterV1 = {
     return result;
   },
 };
+}
+export const githubRegistryAdapterV1 = createGitHubRegistryAdapterV1(readTree);
+
+/** One link listing and its pinned reads share the repository result. The
+ * caller creates this reader per operation; no result survives that operation. */
+export function createGitHubRegistryOperationV1(): RegistrySkillFormatAdapterV1 {
+  const reads = new Map<string, ReturnType<typeof readTree>>();
+  const keyFor = (source: RegistrySourceV1, ref: string) => JSON.stringify([
+    readGitHubRepositoryV1(source.url)?.url, ref, source.token ?? null,
+  ]);
+  return createGitHubRegistryAdapterV1((ctx, source, version) => {
+    const ref = version ?? source.ref ?? readGitHubRepositoryV1(source.url)?.ref ?? 'HEAD';
+    const key = keyFor(source, ref);
+    const existing = reads.get(key);
+    if (existing) return existing;
+    const pending = readTree(ctx, source, version).then(result => {
+      reads.set(keyFor(source, result.commit), Promise.resolve(result));
+      return result;
+    });
+    reads.set(key, pending);
+    return pending;
+  });
+}
