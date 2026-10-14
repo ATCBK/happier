@@ -1,4 +1,5 @@
-import { createProviderErrorV1, type ProviderSettingsReadResultV1 } from '@happier-dev/protocol';
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import type { ProviderSettingsReadResultV1 } from '@happier-dev/protocol';
 import { composeProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 

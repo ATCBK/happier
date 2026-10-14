@@ -226,7 +226,7 @@ async function main(argv) {
     // These are the existing unit lane's post-suite checks. Keeping them with
     // the runner lets Yarn append caller filters to one command on every OS.
     for (const invocation of [
-      { command: process.execPath, args: ['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs'] },
+      { command: process.execPath, args: ['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs', 'scripts/__tests__/daemonStartupImportBoundary.test.mjs'] },
       resolveYarnCommandInvocation(['-s', 'test:import-cycles']),
     ]) {
       const { windowsVerbatimArguments, ...command } = invocation;

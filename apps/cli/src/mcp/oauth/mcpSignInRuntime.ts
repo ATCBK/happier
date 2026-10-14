@@ -1,13 +1,4 @@
 import { z } from 'zod';
-import {
-    discoverAuthorizationServerMetadata,
-    discoverOAuthProtectedResourceMetadata,
-    exchangeAuthorization,
-    extractWWWAuthenticateParams,
-    refreshAuthorization,
-    registerClient,
-    selectClientAuthMethod,
-} from '@modelcontextprotocol/sdk/client/auth.js';
 import type { AuthorizationServerMetadata, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
@@ -167,6 +158,7 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
             async begin(input, context) {
                 const network = transport(context.signal);
                 try {
+                    const { discoverAuthorizationServerMetadata, discoverOAuthProtectedResourceMetadata, extractWWWAuthenticateParams, registerClient } = await import('@modelcontextprotocol/sdk/client/auth.js');
                     const configuration = ConfigurationSchema.parse(context.configuration.values);
                     const resource = resourceUrl(configuration.resource);
                     // A successful grant must be usable through the incumbent
@@ -245,6 +237,7 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
             async complete(input, context) {
                 const network = transport(context.signal);
                 try {
+                    const { exchangeAuthorization } = await import('@modelcontextprotocol/sdk/client/auth.js');
                     const configuredResource = resourceUrl(ConfigurationSchema.parse(context.configuration.values).resource);
                     if (!resourceCanBeMaterialized(configuredResource)) return resourceRefused();
                     const raw = await context.attemptCredentials.get(completionKey);
@@ -268,6 +261,7 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
         async refresh(context) {
             const network = transport(context.signal);
             try {
+                const { refreshAuthorization } = await import('@modelcontextprotocol/sdk/client/auth.js');
                 const { configuration, issuer, registration, clientSecret } = await established(context);
                 const refreshToken = await context.credentials.get('refreshToken');
                 if (!refreshToken) return { status: 'reconnectRequired', diagnostic: diagnostic('mcp_oauth_refresh_missing') };
@@ -286,6 +280,7 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
         async revoke(context) {
             const network = transport(context.signal);
             try {
+                const { selectClientAuthMethod } = await import('@modelcontextprotocol/sdk/client/auth.js');
                 const { registration, clientSecret } = await established(context);
                 if (!registration.revocationEndpoint) return { status: 'remoteUnsupported' };
                 const token = await context.credentials.get('refreshToken') ?? await context.credentials.get('accessToken');

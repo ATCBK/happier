@@ -21,14 +21,19 @@ import {
 import {
   resolveAuthoritativePackagedRuntimeProjectRoot,
 } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
-import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
+import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 import {
   findRepoRoot,
   materializePrepublicationWorkspacePackageRoots,
   readBundledWorkspacePackageNames,
   resolveWorkspaceBundlesFromPackageJson,
+  resolveWorkspaceSourceDir,
 } from '@happier-dev/cli-common/workspaces';
+import {
+  assertResolvedRuntimeDependencyMatchesDeclaration,
+  resolveInstalledRuntimePackage,
+} from '@happier-dev/cli-common/workspaceRuntimeDependencies';
 import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
 
 import { readPluginManifest } from '@/plugins/manifest/read';
@@ -648,6 +653,65 @@ export type ManagedPluginPnpmRunResult =
   | Readonly<{ ok: true; result: PluginAuthorToolchainSpawnResult }>
   | Readonly<{ ok: false; message: string }>;
 
+/** Source-workspace dependencies belong to the repository installer, not pnpm's author install. */
+function prepareSourceWorkspacePluginDependencies(projectRoot: string): boolean {
+  let packageJson: unknown;
+  try {
+    packageJson = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
+  } catch {
+    // Malformed/missing author metadata is still diagnosed by the materializer.
+    return false;
+  }
+  if (!isRecord(packageJson) || typeof packageJson.name !== 'string'
+    || !packageJson.name.startsWith('@happier-dev/plugins-')) return false;
+  let repoRoot: string;
+  try {
+    repoRoot = findRepoRoot(projectRoot);
+  } catch {
+    return false;
+  }
+  const workspaceRoot = resolveWorkspaceSourceDir({ repoRoot, packageName: packageJson.name });
+  try {
+    const physicalProjectRoot = realpathSync(projectRoot);
+    if (!isCanonicalAbsolutePathInsideRoot(realpathSync(repoRoot), physicalProjectRoot)
+      || !canonicalAbsolutePathsEqual(physicalProjectRoot, realpathSync(workspaceRoot))) return false;
+  } catch (error) {
+    if (error && typeof error === 'object' && Reflect.get(error, 'code') === 'ENOENT') return false;
+    throw error;
+  }
+
+  // Check the declarations through ordinary package resolution. No host alias,
+  // public-author override, install or shared-tree refresh is involved. Missing
+  // required dependencies remain an explicit preparation failure.
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies'] as const) {
+    const dependencies = packageJson[field];
+    if (dependencies === undefined) continue;
+    if (!isRecord(dependencies)) throw new Error(`Plugin workspace ${field} must be an object`);
+    for (const [packageName, declaredSpec] of Object.entries(dependencies)) {
+      if (typeof declaredSpec !== 'string' || !declaredSpec.trim()) {
+        throw new Error(`Plugin workspace dependency '${packageName}' has an invalid declaration`);
+      }
+      let installed: ReturnType<typeof resolveInstalledRuntimePackage>;
+      try {
+        installed = resolveInstalledRuntimePackage({
+          packageName,
+          resolveFromPackageJsonPath: join(projectRoot, 'package.json'),
+        });
+      } catch (error) {
+        const code = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined;
+        if (field === 'optionalDependencies' && (code === 'MODULE_NOT_FOUND' || code === 'ENOENT')) continue;
+        throw error;
+      }
+      assertResolvedRuntimeDependencyMatchesDeclaration({
+        dependency: { name: packageName, optional: field === 'optionalDependencies', declaredSpec },
+        resolvedPackageJsonPath: installed.packageJsonPath,
+        resolvedPackageJson: installed.packageJson,
+      });
+    }
+  }
+  return true;
+}
+
 /**
  * The sole author-root dependency preparation owner. Every author command
  * that resolves project-local tooling reaches this function before evaluation,
@@ -684,6 +748,9 @@ export async function runManagedPluginPnpm(
 ): Promise<ManagedPluginPnpmRunResult> {
   const projectRoot = resolveProjectRoot(params.projectRoot);
   const registryOrigin = normalizePluginSdkRegistryOrigin(params.sdkRegistryOrigin);
+  if (!params.signal?.aborted && params.args[0] === 'install' && prepareSourceWorkspacePluginDependencies(projectRoot)) {
+    return { ok: true, result: { exitCode: 0, signal: null, stdout: '', stderr: '' } };
+  }
   const pnpmCommand = await deps.ensureManagedPnpmCommand(deps.processEnv);
   if (!pnpmCommand) {
     return { ok: false, message: 'The Happier-managed package materializer is unavailable' };

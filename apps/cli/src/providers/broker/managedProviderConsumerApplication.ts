@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { ManagedServiceRequest } from '@happier-dev/plugin-sdk/managed-services';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import type { ProviderCredentialTransportV1 } from '@happier-dev/protocol';
-import { ProviderPublicHeadersV1Schema } from '@happier-dev/protocol';
+import { ProviderPublicHeadersV1Schema } from '@happier-dev/protocol/providers/public-headers';
 
 import { renderProviderProbeCredential } from '@/providers/spawn/runtimeCredential';
 import { startProviderBrokerApplicationServer } from './providerBrokerApplicationServer';

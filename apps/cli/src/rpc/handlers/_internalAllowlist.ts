@@ -466,11 +466,6 @@ export const INTERNAL_ONLY_RPC_METHODS = Object.freeze([
         ownerPacket: 'SIM-4',
     },
     {
-        method: RPC_METHODS.DAEMON_PROMPT_ASSETS_LIST_TYPES,
-        rationale: 'PMS-5 direct-eligible daemon read projection; remains internal transport, not a public action surface.',
-        ownerPacket: 'PMS-5',
-    },
-    {
         method: RPC_METHODS.DAEMON_REGISTRIES_FETCH,
         rationale: 'PMS-5 direct-eligible daemon read projection; remains internal transport, not a public action surface.',
         ownerPacket: 'PMS-5',
@@ -499,26 +494,6 @@ export const INTERNAL_ONLY_RPC_METHODS = Object.freeze([
         method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_ALL,
         rationale: 'PMS-5 daemon session-runner bulk restart bridge; command-receipted machine RPC delegates to local runtime supervision.',
         ownerPacket: 'PMS-5',
-    },
-    {
-        method: RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT,
-        rationale: PROMPT_TRANSFER_CONTROL_RATIONALE,
-        ownerPacket: 'A.12-daemon-admin',
-    },
-    {
-        method: RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_CHUNK,
-        rationale: PROMPT_TRANSFER_CONTROL_RATIONALE,
-        ownerPacket: 'A.12-daemon-admin',
-    },
-    {
-        method: RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_FINALIZE,
-        rationale: PROMPT_TRANSFER_CONTROL_RATIONALE,
-        ownerPacket: 'A.12-daemon-admin',
-    },
-    {
-        method: RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_ABORT,
-        rationale: PROMPT_TRANSFER_CONTROL_RATIONALE,
-        ownerPacket: 'A.12-daemon-admin',
     },
     {
         method: RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT,

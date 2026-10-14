@@ -7,7 +7,8 @@
  */
 
 import { expandEnvironmentVariables } from '@/utils/expandEnvVars';
-import { resolveValueRefPlaintextV1, type ValueRefV1, type SessionAttestedContextV1 } from '@happier-dev/protocol';
+import { resolveValueRefPlaintextV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
+import type { ValueRefV1, SessionAttestedContextV1 } from '@happier-dev/protocol';
 import type {
   SavedSecretMaterializerV1,
   SavedSecretResolutionFailureStatusV1,

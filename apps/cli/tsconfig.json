@@ -50,6 +50,7 @@
   },
   "exclude": [
     "node_modules",
+    "**/*.composed.*",
     // Self-declared temporary measurement scratch. Files named `*.tmp.test.ts` are written
     // to record a number and deleted afterwards, and while they exist they may import
     // directly across package boundaries, which pulls foreign sources into this program and

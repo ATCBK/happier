@@ -145,15 +145,6 @@ export const EXTERNAL_SESSION_REQUIRED_GENERIC_RPC_SCOPES = Object.freeze([
     },
 ] satisfies readonly ActionSpecRpcRegistrationScope[]);
 
-export const PROMPT_ASSET_RPC_SCOPES = Object.freeze([
-    {
-        id: 'daemon.admin.promptAssets',
-        methods: [
-            RPC_METHODS.DAEMON_PROMPT_ASSETS_DELETE,
-        ],
-    },
-] satisfies readonly ActionSpecRpcRegistrationScope[]);
-
 export const SKILL_MACHINE_RPC_SCOPES = Object.freeze([
     {
         id: 'daemon.admin.skills',
@@ -195,7 +186,6 @@ export const BUG_REPORT_RPC_SCOPES = Object.freeze([
 ] satisfies readonly ActionSpecRpcRegistrationScope[]);
 
 export const DAEMON_ADMIN_RPC_SCOPES = Object.freeze([
-    ...PROMPT_ASSET_RPC_SCOPES,
     ...SKILL_MACHINE_RPC_SCOPES,
     ...FILESYSTEM_RPC_SCOPES,
     ...MACHINE_FILE_BROWSER_RPC_SCOPES,
