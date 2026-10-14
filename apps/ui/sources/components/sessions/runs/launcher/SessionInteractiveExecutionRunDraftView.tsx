@@ -635,12 +635,15 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     // Who answers: the one engine popover, led by the Roles rail (lab `convo-S2`), when one Agent
     // takes the start. A review asks for several at once, so its reviewers and role are chips instead.
     const selectedChoice = options.selectedBackendChoice;
+    // The Roles row makes the popover a detailed one, where a row commits only through its own
+    // `onSelectImmediate` (as every other detailed picker's rows do); a plain row would just take focus.
     const engineOptions = React.useMemo<ReadonlyArray<AgentInputChipPickerOption>>(() => options.backendChoices.map((choice) => ({
         id: choice.targetKey,
         label: choice.title,
         icon: <ExecutionRunAgentMark agentId={choice.agentId} size={12} />,
         ...(choice.disabled ? { muted: true } : {}),
-    })), [options.backendChoices]);
+        onSelectImmediate: () => selectBackend(choice.targetKey),
+    })), [options.backendChoices, selectBackend]);
     const roleName = chosenRoleId ? roleItem?.name ?? chosenRoleId : null;
     const engine = React.useMemo<ParticipantComposerEngine | null>(() => (
         intent !== 'review' && selectedChoice && engineOptions.length > 0
