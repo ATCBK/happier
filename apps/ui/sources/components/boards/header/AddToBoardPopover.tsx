@@ -156,7 +156,7 @@ function BoardWidgetGallery(props: Readonly<{
     initialEntryId?: string;
     onRequestClose: () => void;
 }>): React.ReactElement {
-    const sections = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
+    const { sections } = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
         addInstance: props.addWidget, labels: BOARD_WIDGET_LABELS, testID: 'board-add.gallery' });
     return (
         <WidgetAddSurface
@@ -199,7 +199,7 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
     const activeServerId = props.homes.activeServerId;
     const refsRef = React.useRef(new Map<string, BoardItemRefV1>());
     const widgetsRef = React.useRef(new Map<string, WidgetAddEntry>());
-    const widgetSections = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
+    const { sections: widgetSections } = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
         addInstance: props.addWidget, labels: BOARD_WIDGET_LABELS, testID: 'board-add.widgets' });
 
     const step = React.useMemo<SelectionListStep>(() => {

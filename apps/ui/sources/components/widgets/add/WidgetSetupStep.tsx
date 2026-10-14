@@ -157,7 +157,7 @@ export function WidgetSetupStep(props: Readonly<{
             const result = await setup.submit(draft);
             if (result.ok) {
                 AccessibilityInfo.announceForAccessibility?.(result.approvalPending ? t('widgetAdd.areaApprovalPending') : t('widgetAdd.saved', { widget: setup.title }));
-                setAdded(true);
+                if (!result.approvalPending) setAdded(true);
                 props.onDone(result);
                 return;
             }

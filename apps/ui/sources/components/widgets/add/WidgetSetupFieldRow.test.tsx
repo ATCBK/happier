@@ -130,16 +130,21 @@ describe('widget setup fields share the typed-field owners', () => {
         expect(entry.field.title).toBe('Repository');
     });
     it('offers the Usage Period in place as its named choices, never a dialog holding one dropdown (final-acceptance 4)', async () => {
-        const { buildSessionActionFieldOptionsResolver } = await import('@/components/sessions/actions/sessionActionFieldOptions');
-        const { readUsagePeriodOptions } = await import('@happier-dev/protocol/inputs/usageQuery');
+        const { readUsagePeriodOptions } = await import('@happier-dev/protocol/inputs');
+        const { StrictJsonValueSchema } = await import('@happier-dev/protocol/json/strictJsonValue');
         const candidate = selectBuiltinWidgetCandidates().find(candidate => candidate.definition?.kind === 'builtin'
             && candidate.definition.id === 'usage_daily')!;
         const setup = buildWidgetCandidateSetup({ candidate, context: {}, audience: 'personal',
             mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }) });
-        const entry = setup.fields.find(entry => entry.field.path === 'period')!;
-        const options = buildSessionActionFieldOptionsResolver({ 'usage.query.period': readUsagePeriodOptions(undefined) })(entry.field)
-            .map(option => ({ value: option.value as never, label: option.label }));
-        expect(options.map(option => option.label)).toContain('usage.last7Days');
+        const declared = setup.fields.find(entry => entry.field.path === 'period')!;
+        const { optionsSourceId: _explicitSource, ...field } = declared.field;
+        const entry = { ...declared, field };
+        const custom = { startMs: 100, endMs: 200 };
+        // The Protocol inventory suite proves admitted type-only discovery reaches this
+        // producer. Here its real output crosses the public field/selection boundary.
+        const options = readUsagePeriodOptions(custom)
+            .map(option => ({ value: StrictJsonValueSchema.parse(option.value), label: option.label }));
+        expect(options.map(option => option.value)).toContainEqual({ relative: '7days' });
         const port = createInputTypePickerPort({
             resolveType: () => null, canOpenPicker: () => false,
             openPicker: async () => { throw new Error('no plugin picker'); },
@@ -156,6 +161,9 @@ describe('widget setup fields share the typed-field owners', () => {
         await screen.pressByTestIdAsync('usage.period.control.trigger');
         await screen.pressByTestIdAsync('usage.period.option.1');
         expect(onChange).toHaveBeenLastCalledWith({ kind: 'pin', value: { relative: '7days' } });
+        await screen.pressByTestIdAsync('usage.period.control.trigger');
+        await screen.pressByTestIdAsync(`usage.period.option.${options.length - 1}`);
+        expect(onChange).toHaveBeenLastCalledWith({ kind: 'pin', value: custom });
         await screen.unmount();
     });
     it('chooses the Usage Session in place from the real Usage declaration in both Add and Edit, with no picker dialog', async () => {

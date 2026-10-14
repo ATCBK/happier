@@ -28,6 +28,7 @@ type CommandId = Extract<ActionId,
     | 'widgets.definition.duplicate'
     | 'widgets.definition.saveFromSession'
     | 'widgets.item.add'
+    | 'widgets.item.remove'
     | 'widgets.item.size.set'
     | 'widgets.item.refresh'
     | 'widgets.snapshot.post'>;

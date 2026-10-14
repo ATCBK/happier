@@ -255,6 +255,7 @@ describe('widget definition flows', () => {
 
     it('offers saved widgets on a shared Board and submits an admitted inline copy to real approval custody', async () => {
         const serverId = await addDefinitionHome();
+        await harness.requireUiApproval(serverId, 'widgets.item.add');
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { storage } = await import('@/sync/domains/state/storage');
         const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
@@ -480,6 +481,7 @@ describe('widget definition flows', () => {
         const { widgetProjectionOf, widgetInstalledPackage } = await import('@/dev/testkit/fixtures/pluginWidgetProjectionFixtures');
         const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
         const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const { router } = await import('expo-router');
         const { SessionCompanionItemFrame } = await import('@/components/sessions/companion/SessionCompanionItemFrame');
         const { PluginGlance } = await import('@/components/sessions/companion/glances/PluginGlance');
         const { WidgetArea } = await import('@/components/widgets/area/WidgetArea');
@@ -515,7 +517,7 @@ describe('widget definition flows', () => {
                     machineId: 'machine-1', serverId, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' },
                     reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} },
                 children: React.createElement(DestinationInstanceHost, { tabId: 'retained', ref: { kind: 'plugins', params: {} },
-                    pathname: '/plugins', focused: false, visible: true, children: frame }),
+                    pathname: '/plugins', focused: false, visible: true, navigation: router, children: frame }),
             }));
             try {
                 await vi.waitFor(() => { expect(screen.getTextContent()).toContain(DRAFT.name); });
@@ -617,7 +619,9 @@ describe('widget definition flows', () => {
             const { WidgetAboutPanel } = await import('./WidgetAboutPanel');
             const uuid = vi.spyOn(uuidBoundary, 'randomUUID').mockImplementationOnce(() => { throw new Error('UUID unavailable'); });
             restoreUuid = () => uuid.mockRestore();
-            await expect((async () => screen.tree.root.findByType(WidgetAboutPanel).props.onDuplicate())()).resolves.toBeNull();
+            const duplicate = screen.tree.root.findByType(WidgetAboutPanel).props.onDuplicate;
+            if (!duplicate) throw new Error('Expected the saved widget to offer Duplicate');
+            await expect(duplicate()).resolves.toBeNull();
             expect(harness.artifacts(serverId).list()).toHaveLength(before.size);
             uuid.mockRestore();
             await act(async () => { await screen.pressByTestIdAsync('card.about.duplicate'); });
@@ -784,6 +788,7 @@ describe('widget definition flows', () => {
 
     it.each(['hostedHtml', 'builtin'] as const)('keeps the saved %s copy on its original Home while a refused link is retried after switching Homes', async kind => {
         const serverId = await addDefinitionHome();
+        if (kind === 'builtin') await harness.requireUiApproval(serverId, 'widgets.definition.saveFromSession');
         const disconnect = kind === 'builtin' ? await applyDefinitionHomeConnection() : null;
         const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
         const { SessionVisualCopyPanel } = await import('@/components/sessions/board/SessionVisualCopyPanel');
@@ -856,7 +861,9 @@ describe('widget definition flows', () => {
                 }, { serverId, surface: 'ui', authority: 'present_user' });
                 expect(read).toMatchObject({ ok: true });
                 if (!read.ok) throw new Error('The saved builtin definition must remain readable');
-                expect(getActionSpec('widgets.definition.get').outputSchema.parse(read.result)).toMatchObject({
+                const outputSchema = getActionSpec('widgets.definition.get').outputSchema;
+                if (!outputSchema) throw new Error('Expected the widget definition read output schema');
+                expect(outputSchema.parse(read.result)).toMatchObject({
                     definition: { body: { kind: 'builtin', id: 'usage_period_summary' } },
                 });
                 await screen.unmount();
