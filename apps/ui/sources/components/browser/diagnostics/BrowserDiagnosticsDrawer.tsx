@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, PanResponder, ScrollView, View } from 'react-native';
+import { Platform, PanResponder, ScrollView, View, type LayoutChangeEvent } from 'react-native';
 import Animated, {
     cancelAnimation,
     useAnimatedStyle,
@@ -116,17 +116,21 @@ export function resetBrowserDiagnosticsDrawerStateForTests(): void {
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-    // The handle row (grabber, title, Hide) and the section bar keep their own height: a squeezed
-    // root laid them out beneath the shell's bottom bar, sharing hit area with its overflow icon.
-    // Only the body below yields (`bodyClip`).
+    // One of the shell column's flexible regions: on a short pane the drawer yields with the page and
+    // the plugin panels. Its floor is its own header (grabber, title, Hide, section bar), measured,
+    // so only the body ever gives way and the header is never pushed under the next row.
     root: {
-        flexShrink: 0,
+        flexShrink: 1,
+        overflow: 'hidden',
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
     },
     // The grab strip. It is the whole header row, not a decorative pill: a 6pt grabber is a target
     // nobody can hit, and the row is already there.
+    header: {
+        flexShrink: 0,
+    },
     handleRow: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -390,6 +394,12 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
         },
     }), [animatedHeight, bodyHeightForState, collapsedHeight, expandedHeight, reducedMotion]);
 
+    const [headerHeightPx, setHeaderHeightPx] = React.useState(0);
+    const onHeaderLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const height = Math.ceil(event.nativeEvent.layout.height);
+        setHeaderHeightPx((current) => (current === height ? current : height));
+    }, []);
+
     const bodyAnimatedStyle = useAnimatedStyle(() => ({
         height: animatedHeight.value,
     }), []);
@@ -423,104 +433,106 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
     );
 
     return (
-        <View testID={`${testID}-container-${drawerState}`} style={stylesheet.root}>
-            <View {...dragResponder.panHandlers}>
-                <View
-                    style={stylesheet.grabberSlot}
-                    accessibilityElementsHidden
-                    importantForAccessibility="no-hide-descendants"
-                >
+        <View testID={`${testID}-container-${drawerState}`} style={[stylesheet.root, { minHeight: headerHeightPx }]}>
+            <View testID={`${testID}-header`} style={stylesheet.header} onLayout={onHeaderLayout}>
+                <View {...dragResponder.panHandlers}>
                     <View
-                        testID={`${testID}-grabber`}
-                        style={[stylesheet.grabber, dragging ? stylesheet.grabberActive : null]}
-                    />
-                </View>
-                <View style={stylesheet.handleRow}>
-                    <Icon name="bug" size={16} color={theme.colors.text.secondary} />
-                    <View style={stylesheet.titleColumn}>
-                        <Text style={stylesheet.title}>{t('browserShell.devtools.title')}</Text>
-                    </View>
-                    {drawerState === 'closed' ? (
-                        <IconButton
-                            testID={`${testID}-open`}
-                            iconName="caret-up"
-                            accessibilityLabel={t('browserShell.devtools.open')}
-                            tooltip={t('browserShell.devtools.open')}
-                            size={30}
-                            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                            interactiveTargetGapPx={8}
-                            iconSize={16}
-                            onPress={() => setDrawerState('expanded')}
+                        style={stylesheet.grabberSlot}
+                        accessibilityElementsHidden
+                        importantForAccessibility="no-hide-descendants"
+                    >
+                        <View
+                            testID={`${testID}-grabber`}
+                            style={[stylesheet.grabber, dragging ? stylesheet.grabberActive : null]}
                         />
-                    ) : (
-                        <>
-                            {drawerState === 'expanded' ? (
-                                <IconButton
-                                    testID={`${testID}-collapse`}
-                                    iconName="caret-down"
-                                    accessibilityLabel={t('browserShell.devtools.collapse')}
-                                    tooltip={t('browserShell.devtools.collapse')}
-                                    size={30}
-                                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                                    interactiveTargetGapPx={8}
-                                    iconSize={16}
-                                    onPress={() => setDrawerState('collapsed')}
-                                />
-                            ) : (
-                                <IconButton
-                                    testID={`${testID}-expand`}
-                                    iconName="caret-up"
-                                    accessibilityLabel={t('browserShell.devtools.expand')}
-                                    tooltip={t('browserShell.devtools.expand')}
-                                    size={30}
-                                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                                    interactiveTargetGapPx={8}
-                                    iconSize={16}
-                                    onPress={() => setDrawerState('expanded')}
-                                />
-                            )}
+                    </View>
+                    <View style={stylesheet.handleRow}>
+                        <Icon name="bug" size={16} color={theme.colors.text.secondary} />
+                        <View style={stylesheet.titleColumn}>
+                            <Text style={stylesheet.title}>{t('browserShell.devtools.title')}</Text>
+                        </View>
+                        {drawerState === 'closed' ? (
                             <IconButton
-                                testID={`${testID}-close`}
-                                iconName="x"
-                                accessibilityLabel={t('browserShell.devtools.close')}
-                                tooltip={t('browserShell.devtools.close')}
+                                testID={`${testID}-open`}
+                                iconName="caret-up"
+                                accessibilityLabel={t('browserShell.devtools.open')}
+                                tooltip={t('browserShell.devtools.open')}
                                 size={30}
                                 minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                                 interactiveTargetGapPx={8}
                                 iconSize={16}
-                                onPress={() => setDrawerState('closed')}
+                                onPress={() => setDrawerState('expanded')}
                             />
-                        </>
-                    )}
+                        ) : (
+                            <>
+                                {drawerState === 'expanded' ? (
+                                    <IconButton
+                                        testID={`${testID}-collapse`}
+                                        iconName="caret-down"
+                                        accessibilityLabel={t('browserShell.devtools.collapse')}
+                                        tooltip={t('browserShell.devtools.collapse')}
+                                        size={30}
+                                        minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                                        interactiveTargetGapPx={8}
+                                        iconSize={16}
+                                        onPress={() => setDrawerState('collapsed')}
+                                    />
+                                ) : (
+                                    <IconButton
+                                        testID={`${testID}-expand`}
+                                        iconName="caret-up"
+                                        accessibilityLabel={t('browserShell.devtools.expand')}
+                                        tooltip={t('browserShell.devtools.expand')}
+                                        size={30}
+                                        minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                                        interactiveTargetGapPx={8}
+                                        iconSize={16}
+                                        onPress={() => setDrawerState('expanded')}
+                                    />
+                                )}
+                                <IconButton
+                                    testID={`${testID}-close`}
+                                    iconName="x"
+                                    accessibilityLabel={t('browserShell.devtools.close')}
+                                    tooltip={t('browserShell.devtools.close')}
+                                    size={30}
+                                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                                    interactiveTargetGapPx={8}
+                                    iconSize={16}
+                                    onPress={() => setDrawerState('closed')}
+                                />
+                            </>
+                        )}
+                    </View>
                 </View>
-            </View>
 
-            {bodyVisible && activeSection !== null && tabs.length > 0 ? (
-                <View style={stylesheet.sectionBar}>
-                    {/*
-                      * The canonical tab bar, not eight hand-rolled `role="tab"` Pressables in a
-                      * plain View. It brings the `tablist` container the old markup never had,
-                      * arrow-key roving focus, the sliding thumb and WCAG 2.5.8 sizing — all of
-                      * which already existed one import away.
-                      */}
-                    <ScrollView
-                        testID={`${testID}-sections`}
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={stylesheet.sectionBarContent}
-                    >
-                        <SegmentedTabBar<SectionKey>
-                            testIDPrefix={`${testID}-tab`}
-                            tabs={tabs}
-                            activeTabId={activeSection}
-                            onSelectTab={setActiveSection}
-                            compact
-                            segmentSizing="content"
-                            accessibilityLabel={t('browserShell.devtools.title')}
-                        />
-                    </ScrollView>
-                </View>
-            ) : null}
+                {bodyVisible && activeSection !== null && tabs.length > 0 ? (
+                    <View style={stylesheet.sectionBar}>
+                        {/*
+                          * The canonical tab bar, not eight hand-rolled `role="tab"` Pressables in a
+                          * plain View. It brings the `tablist` container the old markup never had,
+                          * arrow-key roving focus, the sliding thumb and WCAG 2.5.8 sizing — all of
+                          * which already existed one import away.
+                          */}
+                        <ScrollView
+                            testID={`${testID}-sections`}
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={stylesheet.sectionBarContent}
+                        >
+                            <SegmentedTabBar<SectionKey>
+                                testIDPrefix={`${testID}-tab`}
+                                tabs={tabs}
+                                activeTabId={activeSection}
+                                onSelectTab={setActiveSection}
+                                compact
+                                segmentSizing="content"
+                                accessibilityLabel={t('browserShell.devtools.title')}
+                            />
+                        </ScrollView>
+                    </View>
+                ) : null}
+            </View>
 
             {bodyVisible ? (
                 <Animated.View testID={`${testID}-body-clip`} style={[stylesheet.bodyClip, bodyAnimatedStyle]}>

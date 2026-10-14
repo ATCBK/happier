@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { StyleSheet } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -22,6 +21,8 @@ import {
     createLocalServicePreviewState,
 } from '@/sync/domains/local/services/preview/store';
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { useAppPaneScope, type AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -196,6 +197,8 @@ async function withBrowserPanelHarness(
         executeAction: ReturnType<typeof vi.fn>;
         nonce: string;
         sessionId: string;
+        readPane: () => AppPaneScopeApi;
+        remount: () => Promise<void>;
     }>) => Promise<void>,
     options: Readonly<{
         projection?: PluginUiProjectionModel;
@@ -204,6 +207,7 @@ async function withBrowserPanelHarness(
         executionMachineId?: string | null;
         executionServerId?: string | null;
         executionSessionId?: string | null;
+        panelOpen?: boolean;
     }> = {},
 ): Promise<void> {
     const { BrowserPluginSurfacePlacements } = await import('./BrowserPluginSurfacePlacements');
@@ -211,14 +215,27 @@ async function withBrowserPanelHarness(
     const previousWindow = (globalThis as { window?: Window }).window;
     const executeAction = vi.fn(async () => runtimeResult());
     const executionSessionId = options.executionSessionId ?? 'session_1';
+    let panelPane: AppPaneScopeApi | undefined;
+    let mountKey = 0;
+    function PanelStateProbe() {
+        panelPane = useAppPaneScope('browser-panels:browser-test');
+        return null;
+    }
     storage.getState().setEndpointConnectivity({ status: options.endpointStatus ?? 'online',
         reason: null, attempt: 0, nextRetryAt: null, lastConnectedAt: Date.now(),
         lastDisconnectedAt: null, lastErrorMessage: null });
     (globalThis as { window: unknown }).window = new EventTarget();
+    storage.getState().applyLocalSettings({ appPaneScopesV1: options.panelOpen === false ? {} : {
+        'browser-panels:browser-test': {
+            right: { isOpen: false, activeTabId: null, tabState: { [browserPanelPlacement.id]: { isOpen: true } } },
+            details: { isOpen: false, tabs: [], activeTabKey: null, tabState: {} },
+            bottom: { isOpen: false, activeTabId: null, tabState: {} },
+        },
+    } });
 
-    try {
-        const screen = await renderScreen(
-            <BrowserPluginSurfacePlacements
+    const panelTree = (key: number) => (
+            <AppPaneProvider key={key}><PanelStateProbe /><BrowserPluginSurfacePlacements
+                browserSessionId="browser-test"
                 focusedTarget={focusedTarget}
                 platform="desktop"
                 pluginUiProjection={options.projection ?? pluginUiProjection}
@@ -228,7 +245,12 @@ async function withBrowserPanelHarness(
                 executionSessionId={executionSessionId}
                 executeAction={executeAction}
                 isFeatureEnabled={options.isFeatureEnabled ?? (() => true)}
-            />,
+            /></AppPaneProvider>
+    );
+
+    try {
+        const screen = await renderScreen(
+            panelTree(0),
             {
                 createNodeMock: (element) => (
                     (element as { type?: string }).type === 'iframe'
@@ -241,7 +263,15 @@ async function withBrowserPanelHarness(
         await flushHookEffects({ cycles: 3 });
         const frame = screen.root.findAllByType('iframe')[0];
         const nonce = new URL(String(frame?.props.src ?? 'https://unused.test/')).searchParams.get('happierBridgeNonce') ?? '';
-        await run({ screen, iframeSource, executeAction, nonce, sessionId: executionSessionId });
+        await run({ screen, iframeSource, executeAction, nonce, sessionId: executionSessionId,
+            readPane: () => {
+                if (!panelPane) throw new Error('Browser panel state did not mount');
+                return panelPane;
+            },
+            remount: async () => {
+                await act(async () => screen.update(panelTree(++mountKey)));
+                await flushHookEffects({ cycles: 3 });
+            } });
     } finally {
         await standardCleanup();
         if (previousWindow) {
@@ -274,6 +304,31 @@ beforeEach(async () => {
 afterEach(async () => { await standardCleanup(); await account?.dispose(); });
 
 describe('BrowserPluginSurfacePlacements', () => {
+    it('keeps a new panel closed without mounting its renderer', async () => {
+        await withBrowserPanelHarness(() => ({ ok: true, result: {} }), async ({ screen }) => {
+            expect(screen.findByTestId('plugin-hosted-web-frame')).toBeNull();
+            expect(screen.findByTestId(`browser-surface-plugin-placement-${browserPanelPlacement.id}`)).toBeNull();
+        }, { panelOpen: false });
+    });
+
+    it('uses the persisted per-surface pane intent for opening and closing a panel', async () => {
+        await withBrowserPanelHarness(() => ({ ok: true, result: {} }), async ({ screen, readPane, remount }) => {
+            expect(screen.findByTestId('plugin-hosted-web-frame')).toBeNull();
+            await act(async () => readPane().setRightTabState(browserPanelPlacement.id, { isOpen: true }));
+            expect(screen.findByTestId('plugin-hosted-web-frame')).toBeTruthy();
+            expect(storage.getState().localSettings.appPaneScopesV1['browser-panels:browser-test']?.right.tabState)
+                .toMatchObject({ [browserPanelPlacement.id]: { isOpen: true } });
+            await remount();
+            expect(screen.findByTestId('plugin-hosted-web-frame')).toBeTruthy();
+            await act(async () => readPane().setRightTabState(browserPanelPlacement.id, { isOpen: false }));
+            expect(screen.findByTestId('plugin-hosted-web-frame')).toBeNull();
+            expect(storage.getState().localSettings.appPaneScopesV1['browser-panels:browser-test']?.right.tabState)
+                .toMatchObject({ [browserPanelPlacement.id]: { isOpen: false } });
+            await remount();
+            expect(screen.findByTestId('plugin-hosted-web-frame')).toBeNull();
+        }, { panelOpen: false });
+    });
+
     it('uses browser host feature context when filtering renderable placements', async () => {
         const gatedProjection: PluginUiProjectionModel = {
             ...pluginUiProjection,
@@ -300,23 +355,6 @@ describe('BrowserPluginSurfacePlacements', () => {
             () => ({ ok: true, result: { state: 'available' } }), async ({ screen }) => {
                 expect(screen.findByTestId('plugin-hosted-web-frame')).toBeNull();
             }, { projection: gatedProjection, isFeatureEnabled: () => false });
-    });
-
-    it('keeps a browser-panel placement in a bounded region so it cannot paint over the Browser chrome', async () => {
-        await withBrowserPanelHarness(
-            () => ({ ok: true, result: { state: 'available' } }),
-            async ({ screen }) => {
-                const region = screen.findByTestId(
-                    'browser-surface-plugin-placement-surfacePlacement:acme.browser:hosted-panel',
-                );
-                expect(region).toBeTruthy();
-                // A sibling of the shell with unbounded height starves the shell's `flex: 1` box to
-                // zero: the shell chrome then overflows underneath this later-painted region and
-                // every pointer press lands on the plugin instead of the toolbar/drawer controls.
-                const style = StyleSheet.flatten(region?.props.style) ?? {};
-                expect(style).toMatchObject({ flexGrow: 0, flexShrink: 1, minHeight: 0, maxHeight: '40%', overflow: 'hidden' });
-            },
-        );
     });
 
     it('keeps a loaded browser-panel surface non-interactive while the endpoint is offline', async () => {

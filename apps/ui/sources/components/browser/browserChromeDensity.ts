@@ -106,6 +106,12 @@ const PRECISE_CHROME_METRICS: BrowserChromeControlMetrics = Object.freeze({
  */
 export const BROWSER_DRAWER_MAX_HEIGHT_FRACTION = 0.45;
 
+/**
+ * The page's flex basis: the share of the surface the expanded drawer leaves it. On a short pane
+ * the page then yields in proportion with the drawer body and plugin panels rather than alone.
+ */
+export const BROWSER_PAGE_BASIS = `${Math.round((1 - BROWSER_DRAWER_MAX_HEIGHT_FRACTION) * 100)}%` as const;
+
 export function resolveBrowserChromeDensity(input: Readonly<{
     containerWidthPx: number;
     windowWidthPx: number;

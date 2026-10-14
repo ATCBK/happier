@@ -69,7 +69,7 @@ import {
 } from './toolbar';
 import { useBrowserToolbarOverflowItems } from './toolbar/useBrowserToolbarOverflowItems';
 import { useBrowserPluginActions } from './useBrowserPluginActions';
-import { BROWSER_CHROME_WIDTH, resolveBrowserChromeControlMetrics, useBrowserChromeDensity } from './browserChromeDensity';
+import { BROWSER_CHROME_WIDTH, BROWSER_PAGE_BASIS, resolveBrowserChromeControlMetrics, useBrowserChromeDensity } from './browserChromeDensity';
 import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { BrowserStatusBar } from './BrowserStatusBar';
 import { BrowserToolbar } from './BrowserToolbar';
@@ -100,11 +100,15 @@ import { getPreferredLanguage } from '@/text';
 
 const stylesheet = StyleSheet.create((theme) => ({
     // No box of its own: the pane or the Details column owns separation, the page is the hero.
+    //
+    // The short-pane rule (one column, page first, nothing overlaps): the chrome rows (address bar,
+    // diagnostics header, bottom bar) keep their height; the page, the diagnostics body and every
+    // plugin panel are the flexible regions and yield TOGETHER, each in proportion to its size, so
+    // none is starved to zero; each clips or scrolls inside its own box. Plugin panels render inside
+    // this column (`panels`), above the bottom bar, so no sibling can be painted over Browser chrome.
     root: {
         flex: 1,
         minHeight: 0,
-        // The shell paints only inside its own box: when a sibling panel shares the column and
-        // squeezes it, chrome can never overflow beneath that panel and lose its hit area.
         overflow: 'hidden',
         backgroundColor: theme.colors.surface.base,
     },
@@ -131,13 +135,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
         marginHorizontal: theme.space.s4,
     },
-    // The page and its in-page controls. It is the ONE region that yields when the pane is short:
-    // the toolbar, the drawer handle and the bottom bar keep their height, so no toolbar control is
-    // pushed outside the shell box (where a sibling panel would catch its pointer hits). It clips
-    // its own content, so a squeezed page can never paint over the drawer either.
+    // The page and its in-page controls. Its basis is the share the diagnostics drawer leaves it, so
+    // on a short pane it yields alongside the drawer body and the plugin panels instead of being the
+    // only region that gives way; it grows into whatever room is left and clips its own content.
     viewHost: {
-        flex: 1,
+        flexGrow: 1,
         flexShrink: 1,
+        flexBasis: BROWSER_PAGE_BASIS,
         minHeight: 0,
         overflow: 'hidden',
     },
@@ -308,6 +312,12 @@ export function BrowserShell(props: Readonly<{
     navigationEffect?: BrowserControlCommandEffect | null;
     supplementalDiagnostics?: BrowserDiagnosticsPanelProjection | null;
     searchUrlTemplate?: string;
+    /**
+     * Panels that belong to this column (the host's plugin `browserPanel` placements). They render
+     * beneath the diagnostics drawer and above the status and bottom bars, and share the column's
+     * short-pane yielding with the page and the drawer body.
+     */
+    panels?: React.ReactNode;
     nowMs?: () => number;
     testID?: string;
 }>): React.ReactElement {
@@ -780,6 +790,7 @@ export function BrowserShell(props: Readonly<{
                     testID={`${testID}-diagnostics`}
                 />
             ) : null}
+            {props.panels}
             <BrowserStatusBar
                 testID={`${testID}-status`}
                 view={activeView}

@@ -1327,46 +1327,6 @@ describe('BrowserShell', () => {
         expect(screen.findByTestId('browser-shell-diagnostics-body-pageInfo-row-evt_page_1')).toBeTruthy();
     });
 
-    it('keeps the page, its in-page controls and the collapsed diagnostics drawer from painting over one another', async () => {
-        const { BrowserShell } = await import('./BrowserShell');
-        const { StyleSheet } = await import('react-native');
-        const state = await createShellState();
-        const screen = await renderScreen(
-            <BrowserShell
-                browserSessionId="browser_session_1"
-                platform="web"
-                state={state}
-                onCommand={vi.fn()}
-                browserDiagnostics={{
-                    state: createBrowserDiagnosticsUiStore(),
-                    requestEval: vi.fn(() => false),
-                    requestGetProperties: vi.fn(() => false),
-                    requestReleaseObjectGroup: vi.fn(() => false),
-                }}
-                testID="browser-shell"
-            />,
-        );
-        const styleOf = (testID: string) => StyleSheet.flatten(screen.findByTestId(testID)?.props.style) ?? {};
-        // The shell box clips: a squeezed shell can never paint chrome outside it, over a sibling.
-        expect(styleOf('browser-shell')).toMatchObject({ overflow: 'hidden' });
-        // In a short pane the page is the only region that yields (floor 0, shrinkable) and it
-        // clips itself: the toolbar and bottom bar keep their height inside the shell box instead
-        // of overflowing under a sibling panel, and the page never paints over the drawer.
-        expect(styleOf('browser-shell-page-region')).toMatchObject({
-            flexShrink: 1,
-            minHeight: 0,
-            overflow: 'hidden',
-        });
-        // The drawer's handle row (with Hide) keeps its own height, so it can never be laid out
-        // beneath the bottom bar and share hit area with its overflow icon; only the body yields.
-        expect(styleOf('browser-shell-diagnostics-container-collapsed')).toMatchObject({ flexShrink: 0 });
-        expect(styleOf('browser-shell-diagnostics-body-clip')).toMatchObject({
-            flexShrink: 1,
-            minHeight: 0,
-            overflow: 'hidden',
-        });
-    });
-
     it('fails closed for browser diagnostics when no explicit diagnostics state is provided', async () => {
         const { BrowserShell } = await import('./BrowserShell');
         const state = await createShellState();

@@ -4,6 +4,7 @@ import type {
     BrowserEventV1,
     BrowserViewTargetV1,
 } from '@happier-dev/protocol';
+import { AccountProfileSchema } from '@happier-dev/protocol';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,6 +41,8 @@ beforeEach(async () => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            // Mounted Browser dispatch is fenced by the hydrated Account content lifetime.
+            if (path === '/v1/account/profile') return Response.json({ profile: AccountProfileSchema.parse({ id: 'account-a' }) });
             if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({
                 features: { browser: { enabled: true, internal: { enabled: true }, automation: { enabled: true }, viewTargets: { enabled: true } } },
             }));

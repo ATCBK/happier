@@ -12,7 +12,7 @@ import {
     buildQualifiedPluginContributionKey,
     PluginProjectionInstalledPackageV2Schema,
     PluginProjectedActionV2Schema,
-    type PluginMachineExecutionOriginV1,
+    PluginMachineMaterializationExecutionOriginV1Schema,
 } from '@happier-dev/protocol';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
@@ -376,14 +376,14 @@ const BROWSER_CLIENT_ACTION_TARGET = Object.freeze({
     exportName: 'execute',
     platform: 'web' as const,
 });
-const BROWSER_CLIENT_ACTION_ORIGIN: PluginMachineExecutionOriginV1 = Object.freeze({
+const BROWSER_CLIENT_ACTION_ORIGIN = Object.freeze(PluginMachineMaterializationExecutionOriginV1Schema.parse({
     serverIdentityId: 'srv_browser_client_action',
     materializationRef: Object.freeze({
         pluginId: BROWSER_CLIENT_ACTION_PLUGIN_ID,
         machineId: target.machineId,
         materializationId: 'materialization-browser-client-action',
     }),
-});
+}));
 const BROWSER_CLIENT_ACTION_ORIGIN_PROJECTION = Object.freeze({
     machineId: target.machineId,
     serverId: 'srv_browser_client_action',
@@ -439,8 +439,7 @@ function createBrowserClientActionFixture(handler: PluginClientActionHandler): R
             },
             platforms: [BROWSER_CLIENT_ACTION_TARGET.platform],
         },
-        serverIdentityId: BROWSER_CLIENT_ACTION_ORIGIN.serverIdentityId,
-        materializationRef: BROWSER_CLIENT_ACTION_ORIGIN.materializationRef,
+        executionOrigin: BROWSER_CLIENT_ACTION_ORIGIN,
         dangerLevel: 'writesRemote',
         confirmation: {
             title: 'Confirm preview refresh',
@@ -1447,6 +1446,87 @@ describe('BrowserSurfaceHost', () => {
                 ]),
             );
         });
+    });
+
+    it('renders browser panel plugins inside the Browser column, between the diagnostics drawer and the bottom chrome', async () => {
+        // The short-pane layout rule depends on this wiring: a plugin panel rendered as a SIBLING of
+        // the shell (rounds 1–4) squeezed the shell's box, and its later-painted region caught the
+        // pointer presses meant for Reload, Create public link and Hide diagnostics.
+        const { BrowserSurfaceHost } = await import('./BrowserSurfaceHost');
+        const initialBrowserState = openBrowserTarget(createBrowserViewState(), target, {
+            platform: 'web',
+            currentUrl: 'https://preview.happier.test/',
+        });
+        const localServicePreviewState = applyLocalServicePreviewSnapshot(createLocalServicePreviewState(), {
+            generatedAt: 100,
+            refreshState: 'idle',
+            diagnostics: [],
+            previews: [{
+                previewId: 'preview_1',
+                accessUrl: 'https://preview.happier.test/plugin/acme/',
+                expiresAt: null,
+                diagnostics: [],
+                resource: {
+                    previewId: 'preview_1',
+                    sessionId: 'session_1',
+                    machineId: 'machine_1',
+                    owner: { kind: 'session', id: 'session_1' },
+                    target: {
+                        scheme: 'https',
+                        host: 'localhost',
+                        port: 5173,
+                    },
+                    initialPath: { pathname: '/', search: '' },
+                    display: {
+                        title: 'Preview',
+                        addressLabel: 'localhost:5173',
+                    },
+                    originMode: 'host',
+                    browserTarget: target,
+                },
+            }],
+        });
+
+        const screen = await renderScreen(
+            <BrowserSurfaceHost
+                browserSessionId="browser_session_default"
+                platform="web"
+                initialBrowserState={initialBrowserState}
+                policy={{
+                    browserEnabled: true,
+                    viewTargetsEnabled: true,
+                    diagnosticsEnabled: true,
+                    contextEnabled: false,
+                }}
+                localServicePreviewState={localServicePreviewState}
+                supplementalDiagnostics={previewDiagnostics}
+                pluginUiProjection={hostedWebBrowserPanelProjection}
+                pluginBrowserActionContext={{
+                    machineId: 'machine_1',
+                    serverId: 'srv_browser_client_action',
+                    sessionId: 'session_1',
+                }}
+                testID="browser-surface"
+            />,
+        );
+
+        const placementTestID = 'browser-surface-plugin-placement-surfacePlacement:acme.browser:panel';
+        const shell = screen.findByTestId('browser-surface');
+        expect(shell).not.toBeNull();
+        expect(shell!.findAll((node) => node.props.testID === placementTestID)).not.toHaveLength(0);
+
+        const hostOrder = screen.root.findAll((node) => (
+            typeof node.type === 'string' && typeof node.props.testID === 'string'
+        )).map((node) => node.props.testID as string);
+        const indexOf = (predicate: (id: string) => boolean) => hostOrder.findIndex(predicate);
+        const page = indexOf((id) => id === 'browser-surface-page-region');
+        const drawer = indexOf((id) => id.startsWith('browser-surface-diagnostics-container-'));
+        const panel = indexOf((id) => id === placementTestID);
+        const status = indexOf((id) => id.startsWith('browser-surface-status'));
+        expect(page).toBeGreaterThanOrEqual(0);
+        expect(drawer).toBeGreaterThan(page);
+        expect(panel).toBeGreaterThan(drawer);
+        if (status >= 0) expect(status).toBeGreaterThan(panel);
     });
 
     it('does not mount browser panel plugin placements without an active browser target', async () => {

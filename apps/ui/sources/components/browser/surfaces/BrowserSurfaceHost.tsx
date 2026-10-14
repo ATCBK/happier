@@ -855,18 +855,20 @@ export function BrowserSurfaceHost(props: Readonly<{
                 browserProfile={productModels?.browserProfile}
                 navigationEffect={surfaceState.navigationEffect}
                 supplementalDiagnostics={policy.diagnosticsEnabled ? productModels?.supplementalDiagnostics : null}
-                nowMs={props.nowMs}
-                testID={props.testID}
-            />
-            <BrowserPluginSurfacePlacements
-                focusedTarget={focusedView?.target}
-                platform={props.platform}
-                pluginUiProjection={props.pluginUiProjection}
-                projectionInteractionEnabled={props.pluginUiInteractionEnabled}
-                localServicePreviewState={props.localServicePreviewState}
-                executionMachineId={props.pluginBrowserActionContext?.machineId}
-                executionServerId={props.pluginBrowserActionContext?.serverId}
-                executionSessionId={props.pluginBrowserActionContext?.sessionId}
+                panels={(
+                    <BrowserPluginSurfacePlacements
+                        focusedTarget={focusedView?.target}
+                        platform={props.platform}
+                        pluginUiProjection={props.pluginUiProjection}
+                        projectionInteractionEnabled={props.pluginUiInteractionEnabled}
+                        localServicePreviewState={props.localServicePreviewState}
+                        executionMachineId={props.pluginBrowserActionContext?.machineId}
+                        executionServerId={props.pluginBrowserActionContext?.serverId}
+                        executionSessionId={props.pluginBrowserActionContext?.sessionId}
+                        nowMs={props.nowMs}
+                        testID={props.testID}
+                    />
+                )}
                 nowMs={props.nowMs}
                 testID={props.testID}
             />
