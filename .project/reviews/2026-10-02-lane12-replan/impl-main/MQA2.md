@@ -653,3 +653,118 @@ Round 10b continuation 5 independently disproved continuation 4's Agent-Action a
 - Environment gap: selected and loaded runtime identities never changed, so the source fix is not live-certified. Script/output, operations, approval, live-only custody, and full memory-window behavior remain unverified. The stuck Plan/goal fixture and composer projection failure require owner-level follow-up; this source repair does not claim to fix them.
 
 STATUS: BLOCKED
+
+## Round 10b continuation 6
+
+### Outcome
+
+Round 10b continuation 6 is **BLOCKED by the required second connected Codex Account failing before it could execute an Action**. MFIX36's loaded mode projection/reset was independently observed, but goal projection and every remaining Action-dependent parity row could not be exercised. No product source or visual styling changed.
+
+### Live evidence
+
+- The loaded stack remained reachable with server identity `a07355a7077639c1` and daemon identity `92706f2d5f443a6c`; server health returned HTTP 200. No stack or daemon was restarted or stopped.
+- The required Project was `~/mqa2-cont2-project` on `NLDW3-5-36-33 · 58f6`. The fresh composer independently showed the second connected ChatGPT Account, GPT 6.1 Sol, Low reasoning, and Default mode before launch.
+- On existing Session `cmv6hb0uo01tqmczz6p8s5oqc`, the loaded composer visibly showed the `plan` chip. Clicking that chip and selecting Default removed the chip, independently proving the MFIX36 mode projection and UI reset effect rather than relying on Agent narration.
+- The same Session could not execute the queued `session.goal.set`: Resume ended with `process-exited-before-webhook` before any Action call. Stack-owned exit records contained 15 occurrences of that exit class with code 1, including PID `1108151`; the UI remained at `Usage: 0% left`.
+- After the prescribed retry interval, a clean draft again selected the second connected Account, GPT 6.1 Sol, Low reasoning, and `~/mqa2-cont2-project`. It created fresh Session `cmv6qcsae018omcyhj5lnwkpr`, but the Session had no messages, was immediately inactive, showed `Use CLI settings`, and rejected Send with `session_input_target_unavailable` before an Action could run.
+- The browser target became unresponsive once while Chromium CDP remained healthy. A fresh product target was opened inside the same single browser process; the final retry above then reproduced the Agent failure. The browser owner was ended with SIGINT and CDP closure was independently confirmed.
+
+### Scenario verdicts
+
+| Required row | Independently observed result | Verdict |
+| --- | --- | --- |
+| MFIX36 mode projection/reset | Plan chip visible on the loaded Session; UI reset removed it. | **PASS** |
+| MFIX36 goal set/projection and in-plan goal clear/reset | No Action executed after reload; the old queued turn and fresh Session both lost their Agent input target. | **BLOCKED** |
+| Plan-mode mutation policy | No post-reload Agent turn ran, so allowed clear/reset and refused unrelated mutation could not be discriminated. | **BLOCKED** |
+| `projects.list` coverage | The required Agent could not issue the Action. | **BLOCKED** |
+| Settings get/set/reset | The required Agent could not issue the Actions; MFIX36 live certification therefore did not cover the continuation-5 settings repair. | **BLOCKED** |
+| Registered Project script run/output open | No Action execution or approval target was reachable. | **BLOCKED** |
+| Exact server/machine operations | No Action execution was reachable. | **BLOCKED** |
+| Memory status/window | No Action execution was reachable. | **BLOCKED** |
+| Dangerous deny/approve and fresh plain summary | No approval was created; zero dangerous effects occurred. | **BLOCKED safely** |
+| Existing disposable live-only secret channel | Availability could not be re-read independently; no secret value was entered, persisted, or displayed. | **BLOCKED safely** |
+
+### Adversarial closeout and residual risk
+
+- Alternative cause checked: the first reconnect/browser-target problem was not treated as the Agent blocker. After a full retry interval and recovery within the same browser process, a clean second-account Session independently reproduced an unavailable input target, while the server stayed reachable.
+- Hypothesis limit: the safe exit metadata proves repeated pre-webhook termination, but does not identify whether Account capacity, Codex runtime startup, or Happier launch integration caused code 1. Treating it as a canonical Happier defect would be speculation, so no RED test or source patch was manufactured.
+- No focused test, package check, or commit was applicable because no production file changed. The only local addition is this QA evidence in the already shared, pre-dirty tracker.
+
+Residual risk is every blocked row above, especially goal projection/clear, the continuation-5 settings repair in loaded runtime, script/output, operations, memory window, and approval denial/approval. Resume only with a second connected Codex Account that can keep a fresh Session alive through its first webhook.
+
+STATUS: BLOCKED
+
+## Round 10b continuation 7
+
+### Outcome
+
+Round 10b continuation 7 is **BLOCKED by the known Claude first-turn non-termination**. A genuine connected Claude/Sonnet 5/Low first turn reached Happier Actions, but the turn never terminated; the next fresh group remained queued even after its visible `Send now` confirmation. No product source, test, or visual styling changed.
+
+### Live evidence
+
+- The loaded `agent-qa-l12-main` stack remained healthy on nl3 with selected/loaded server `2bf21d8b711910ab` and daemon `66460a6f1c4ce1f2`. The independently observed Home id was `srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN`; the only reachable machine was `NLDW3-5-36-33 · 58f6`, full id `58f6e63a-cd69-4302-83f1-325d10da7ec3`.
+- Fresh Session `cmv6xbm0l01vjmcrqc0ykhy3s` used the connected Claude profile, Sonnet 5, Low reasoning, and `~/mqa2-cont2-project`. Visible Action-result payloads independently returned `unsupported_action` for `session.goal.set`, `session.goal.get`, and `session.mode.set`; neither a goal nor mode chip appeared. Its subsequent `projects.list` call remained pending and the first turn never reached a terminal state.
+- Source tracing found one Action executor owner, not a duplicate: the UI supplies goal dependencies in `defaultActionExecutor.ts`; protocol returns `unsupported_action` when those dependencies decline the operation; CLI routing delegates to the Session goal-control RPC; and Claude advertises native goal controls only when its runtime supplies both operations. The connected Claude runtime did not advertise those controls. No evidence established that manufacturing non-native goal state would satisfy the provider contract, so no speculative source change was made.
+- Fresh settings-group Session `cmv6xqfw4022zmcrqxn1xocu6` was created with one first-turn prompt. Its prompt remained visibly queued behind the non-terminating run; confirming `Send now` did not start an Action. Per the continuation instruction, the blocked lifecycle was recorded rather than chased, and later independent groups were not started because they would exercise the same blocked queue rather than their requested effects.
+
+### Scenario verdicts
+
+| Required row | Independently observed result | Verdict |
+| --- | --- | --- |
+| MFIX36 goal projection and clear | Goal set/get both returned `unsupported_action`; no goal chip appeared. | **BLOCKED by connected-Claude capability** |
+| MFIX36 mode set/reset and plan policy | Mode set returned `unsupported_action`; no mode transition occurred. | **BLOCKED by connected-Claude capability** |
+| `projects.list` | The Action started but never produced a result before the turn stalled. | **BLOCKED by turn non-termination** |
+| Settings get/set/reset | Fresh Session created; its sole prompt remained queued after `Send now`. No setting effect occurred. | **BLOCKED safely** |
+| Script run/output, exact operations, memory status/window | Not started after the common fresh-turn lifecycle blocker was proven. | **BLOCKED** |
+| Dangerous deny/approve and fresh one-sentence detail | No approval was created and zero dangerous effects occurred. | **BLOCKED safely** |
+| Existing disposable live-only channel | Not reached; no secret value was entered, persisted, or displayed. | **BLOCKED safely** |
+
+### Adversarial closeout and residual risk
+
+- Alternative causes checked: Action availability itself was not the blocker—the first Session produced real Action payloads. The second Session and its queued prompt prove the remaining groups were blocked before their Actions, while the stack and machine stayed reachable.
+- The unsupported goal/mode results were checked against current owner wiring and Claude capability publication. Without evidence that the connected runtime supports native controls, treating those results as an owner defect would risk creating a second Session-state authority.
+- No focused test or commit was applicable because no production behavior changed. The stack was neither restarted nor stopped. The sole browser owner was ended after this evidence and its CDP endpoint was checked closed.
+
+Residual risk is all blocked rows above. Resume with the Claude turn-termination/queue defect repaired or with a connected Claude runtime that can complete each fresh first turn and advertise the required native goal/mode controls.
+
+STATUS: BLOCKED
+
+## Round 10b continuation 8
+
+STATUS: RUNNING
+
+### Outcome
+
+TURNEND is a **PASS** for the observed connected Claude flow: fresh Session `cmv7dxwku00lxmcvkajcug3a7` completed `FIRST_OK`, accepted a follow-up, completed `SECOND_OK` as a distinct turn, and returned to Ready. The full Agent-parity matrix is **BLOCKED** because the actual lane daemon and every spawned Session runner use an older source bundle that lacks both required corrections, while several Action results were not independently observable. No product source or visual styling changed.
+
+### Runtime identity and loaded-byte check
+
+- Stack info continued to report healthy selected/loaded server `4db709539a3ff96a` and daemon `66460a6f1c4ce1f2`, with Home `srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN` and Machine `NLDW3-5-36-33 · 58f6` (`58f6e63a-cd69-4302-83f1-325d10da7ec3`).
+- The live lane daemon was independently resolved from the remote runtime state and `/proc`: PID `1448392`, launched from source bundle `runtime-afc18c20e2923df4dd7fb3392eeb8dd311952cfa9eec6e0a09da8b7d993cbb86-lbxxAE` (built 2026-10-13 18:11 CEST). Every fresh Claude runner observed in this round used that same bundle.
+- The actual `runtime-afc…` compiled bytes have `stageSessionStateMutation` but not MFIX37's adjacent `stageWorkStateMutation` binding in `createHappierMcpServer`, and contain no `session_turn_mutation_rejected` TURNEND journaling path. This disproves the control-plane selected/loaded label as evidence that the required code is loaded.
+- A different nl3 stack's newer bundle, `runtime-fdad4bb…` (built 2026-10-14 02:07 CEST), contains both the MFIX37 binding and the TURNEND rejection-journaling code, but it is not the `agent-qa-l12-main` daemon or Session runtime and was not used as QA evidence.
+
+### Scenario results
+
+| Required row | Independently observed result | Verdict |
+| --- | --- | --- |
+| TURNEND first turn + next turn | `FIRST_OK` completed; `SECOND_OK` started and completed as a distinct follow-up; Session returned to Ready. | **PASS** |
+| Goal set → composer → clear | In fresh Session `cmv7e4uaj00ocmcvk91wek4x3`, two visible native goal-set results returned `inactive_agent_runtime_unavailable`; the composer remained `Set goal`, so clear was not a valid follow-up. | **FAIL on stale loaded bundle** |
+| Mode | `session.mode.set` returned success for `plan`; the composer independently displayed the `Plan` chip. | **PASS** |
+| `projects.list` | In Session `cmv7f0s3y00utmcvkwumvr16g`, a visible `action_execute` card invoked `projects.list` with `{}` and the turn completed. The card exposed input but no output; the model narrated an external-authorization refusal, which was not accepted as independent evidence. | **BLOCKED — result not observable** |
+| Settings get/set/reset | Fresh Session `cmv7eofz500ssmcvkadp9v987` started after delayed queue admission. The agent attempted an unrequested terminal lookup instead of the named Actions; that approval was denied and the provider turn then failed. No setting mutation occurred. | **BLOCKED safely** |
+| Script run + output open | Fresh Session `cmv7f0s3y00utmcvkwumvr16g` took 152 seconds to spawn and needed repeated `Send now` confirmation before its turn started. Because the prerequisite `projects.list` result was not observable, no script run or output-open Action followed. | **BLOCKED by Project-list result** |
+| Exact operations + memory status/window | After the required delayed retry, fresh Session `cmv7fq8lm00yemcvk2y52t164` admitted the queued prompt and completed. Two visible `action_execute` cards independently proved Action invocation, including `action.operations.list` with the exact Home and Machine ids; their detail panels exposed inputs but no result payload, and no independently observable `memory.get_window` call followed. The model's narrated error was not accepted as evidence. | **BLOCKED — results not observable** |
+| Dangerous deny/approve + plain detail | The unrequested terminal lookup was denied and had no effect, but no qualifying requested dangerous Action was approved and no fresh Action approval detail was available. | **PARTIAL deny only; approve/detail BLOCKED** |
+| Existing disposable live-only channel | No disposable channel was established in this continuation; no live-only value was entered, persisted, or disclosed. | **NOT APPLICABLE safely** |
+
+### Defect adjudication and residual risk
+
+- The observed goal failure does not justify a new product patch against current source: MFIX37 already corrects the missing MCP composition sink, and the exact live runner bytes predate it. Patching the current router or inactive adapter would create a second response to a deployment mismatch rather than fix the loaded owner.
+- Independent current-source validation passed: `./apps/stack/bin/hstack-exec --target=nl3 --cwd=apps/cli -- yarn exec -- vitest run --config vitest.g3-composed.config.ts src/mcp/createHappierMcpServer.goalParity.test.ts` completed 1/1 green and exercised the real Claude goal Action through the durable work-state owner.
+- The settings turn shows model/tool-choice failure plus provider failure, not a settings-owner reproduction. Fresh-session admission was severely delayed but recovered on the mandated retry while the stack control plane and daemon process remained alive; its cause was not proven, so no speculative test or source fix was added.
+- The stale `Send now` affordance once surfaced a 404 after the follow-up had already started. The successful second turn disproves it as a TURNEND failure; it remains an adjacent UI race candidate, not an independently reproduced functional defect in this round.
+- Required reload/restart authority was explicitly withheld, so the stale lane runtime cannot be replaced here. Operations, memory, requested dangerous approval/effect, approval-detail copy, and script/output remain unverified.
+- The sole browser owner was ended with SIGINT after QA. Both a direct CDP request and the browser session lookup then failed with connection refused; the stack was neither restarted nor stopped.
+
+STATUS: BLOCKED
