@@ -1,9 +1,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAgentModelConfig } from '@happier-dev/agents';
 import { FeaturesResponseSchema, ExecutionRunEnsureOrStartRequestSchema, type ExecutionRunEnsureOrStartRequest, buildBackendTargetKeyV2 } from '@happier-dev/protocol';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ExecutionRunVoiceAgentIntentInputV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionRunnerRuntimeStatusFixture } from '@/dev/testkit/fixtures/sessionRunnerRuntimeFixtures';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { storage } from '@/sync/domains/state/storage';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -12,10 +14,14 @@ import { ExecutionRunPublicStateSchema } from '@happier-dev/protocol/execution/r
 import type { SessionExecutionRunGetResult, SessionExecutionRunListResult } from '@/sync/ops/sessionExecutionRuns';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { readLocalConversationSettingsFromAccountSettings } from '@/voice/local/localVoiceSettings';
+import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
+import { SessionAppliedModelV1Schema } from '@happier-dev/protocol/providers/model-selection';
 
 // Synthetic daemon ACKs only; the client, Run operations and installable owners stay real.
 const start = vi.fn(async (_request: ExecutionRunEnsureOrStartRequest) => ({ ok: true as const, runId: 'voice-agent-1', created: true }));
 const rpcTargets: Array<{ sessionId: string; method: string }> = [];
+let rootRunnerPid = 123;
 function admittedStart() {
     const request = start.mock.calls.at(-1)?.[0];
     if (!request?.start) throw new Error('Expected the real daemon start admission');
@@ -102,6 +108,7 @@ function omitIncidentalProfile() {
     const session = current.sessions.s1;
     const row = current.sessionListRowsByServerId[serverId].s1;
     const metadata = readVoiceSessionOwnerMetadataFromState(current, { serverId, sessionId: 's1' });
+    if (!metadata) throw new Error('Target Session metadata missing');
     storage.setState({ sessions: { ...current.sessions,
         s1: createSessionFixture({ ...session, metadataLayoutVersion: 0, ownerMetadataView: undefined,
             metadata: { ...metadata, profileId: undefined } }),
@@ -132,7 +139,10 @@ installDisconnectedServerSocketBoundary(socket => {
         const method = request.method.slice(separator + 1);
         rpcTargets.push({ sessionId, method });
         let result: unknown;
-        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) result = await sessionExecutionRunList(sessionId, request.params);
+        if (method === RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET) {
+            const params = request.params as { sessionId: string };
+            result = createSessionRunnerRuntimeStatusFixture({ sessionId: params.sessionId, machineId: sessionId, pid: rootRunnerPid, wrapperPid: 122 });
+        } else if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) result = await sessionExecutionRunList(sessionId, request.params);
         else if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) result = await sessionExecutionRunGet(sessionId, request.params);
         else if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) result = await sessionExecutionRunStop(sessionId, request.params);
         else if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START || method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) {
@@ -174,6 +184,8 @@ describe('initializeVoiceAgentHandle', () => {
                 if (path === '/v2/cursor') return respond({ cursor: 0, changesFloor: 0 });
                 if (path === '/v1/features' || path === '/v1/features/authenticated') return respond(FeaturesResponseSchema.parse({ features: { voice: { enabled: true } }, capabilities: {} }));
                 if (path === '/v1/account/encryption') return respond({ mode: 'plain', updatedAt: 0 });
+                if (path === '/v1/machines') return respond([createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' })]);
+                if (path === '/v1/machines/machine-1') return respond({ machine: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }) });
                 if (path.endsWith('/messages')) return respond({ messages: [], hasMore: false });
                 if (path === '/v1/account/encryption/currentness') return respond({ mode: 'plain', version: 0,
                     signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
@@ -202,6 +214,7 @@ describe('initializeVoiceAgentHandle', () => {
         state.sessions.s1.presence = 'online';
         state.sessions.s1.encryptionMode = 'plain';
         start.mockClear();
+        rootRunnerPid = 123;
         rpcTargets.length = 0;
         sessionExecutionRunList.mockClear();
         sessionExecutionRunGet.mockClear();
@@ -242,6 +255,7 @@ describe('initializeVoiceAgentHandle', () => {
     });
 
     it('prefers visible lookup session metadata when deriving daemon startup models and profile data', async () => {
+        expect(readLocalConversationSettingsFromAccountSettings(storage.getState().settings).agent.transcript.persistenceMode).toBe('ephemeral');
         const { initializeVoiceAgentHandle } = await import('./initializeVoiceAgentHandle');
 
         const handle = await initializeVoiceAgentHandle({
@@ -255,10 +269,84 @@ describe('initializeVoiceAgentHandle', () => {
         expect(handle.agentBackendId).toBe('codex');
         expect(buildBackendTargetKeyV2(admittedStart().backendTarget)).toBe(buildAgentUniverseBackendTargetKey('codex'));
         expect(admittedStart()).toMatchObject({
-                profileId: 'cached-profile',
-                chatModelId: getAgentModelConfig('codex')?.defaultMode,
+                launchProfileId: 'cached-profile',
+                modelSelection: null,
                 commitModelId: getAgentModelConfig('codex')?.defaultMode,
+                transcript: { persistenceMode: 'persistent', epoch: 0 },
+                retentionPolicy: 'resumable',
             });
+        expect(admittedStart().chatModelId).toBeUndefined();
+    });
+
+    it.each(['current', 'missing', 'stale'])('starts on a hidden carrier with the bound root Agent, model and Launch Profile only when applied model is known (%s)', async applied => {
+        const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+        const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
+        const carrierId = 'hidden-selection-carrier';
+        const current = storage.getState();
+        const previousSettings = current.settings;
+        const previousRoot = current.sessions.s1;
+        if (!previousRoot.metadata) throw new Error('The coding root requires owner metadata');
+        const localSettings = readLocalConversationSettingsFromAccountSettings(previousSettings);
+        if (applied === 'stale') rootRunnerPid = 124;
+        const targetAddress = { serverId: connection.home.id, sessionId: 's1' };
+        const rootMetadata = { ...previousRoot.metadata, flavor: 'claude', profileId: 'root-launch-profile',
+            modelOverrideV1: { v: 1 as const, modelId: 'pending-unapplied-model', updatedAt: 20 },
+            machineId: 'machine-1',
+            sessionModelsV1: { v: 1 as const, agentId: 'claude', updatedAt: 30, currentModelId: 'claude-haiku-4-5',
+                availableModels: [{ id: 'claude-haiku-4-5', name: 'Haiku' }],
+                ...(applied !== 'missing' ? { activeSelectionV1: { v: 1 as const, source: 'runtime_apply' as const,
+                    selection: { agentTargetKey: buildAgentUniverseBackendTargetKey('claude'), providerConnectionId: null, modelId: 'claude-haiku-4-5' },
+                    runner: { pid: 123, processStartTimeMs: 1000 },
+                } } : {}),
+            },
+            sessionAppliedModelV1: SessionAppliedModelV1Schema.parse({ v: 1, provider: 'claude', modelId: 'last-accepted-model', updatedAt: 10,
+                selection: { agentTargetKey: buildAgentUniverseBackendTargetKey('claude'),
+                    providerConnectionId: null, modelId: 'last-accepted-model' } }) };
+        storage.setState({ sessions: { ...current.sessions,
+            s1: createSessionFixture({ ...previousRoot, metadataLayoutVersion: 1,
+                metadata: { path: previousRoot.metadata.path, host: previousRoot.metadata.host,
+                    summary: { text: 'Coding root', updatedAt: 1 } }, ownerMetadataView: rootMetadata }),
+            [carrierId]: createSessionFixture({ id: carrierId, serverId: connection.home.id, active: true,
+                presence: 'online', encryptionMode: 'plain', metadata: { ...rootMetadata,
+                    flavor: 'unknown-agent', profileId: 'carrier-is-not-a-profile', modelOverrideV1: undefined, machineId: undefined } }),
+        }, machines: { ...current.machines, 'machine-1': createMachineFixture({ id: 'machine-1', storageMode: 'plain' }) },
+        settings: { ...previousSettings, voice: voiceSettingsParse({ ...previousSettings.voice,
+            providers: { ...previousSettings.voice.providers, local_conversation: { schemaVersion: 1, config: {
+                ...localSettings, agent: {
+                    ...localSettings.agent,
+                    agentSource: 'session', chatModelSource: 'session', commitModelSource: 'session',
+                },
+            } } },
+        }) } });
+        voiceSessionBindingStore.getState().bind({ adapterId: 'local_conversation',
+            controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID, conversationSessionId: carrierId,
+            conversationSessionAddress: { serverId: connection.home.id, sessionId: carrierId },
+            lifetime: 'runtime_attempt', transcriptMode: 'synthetic', targetSessionAddress: targetAddress, updatedAt: 1 });
+        try {
+            const { initializeVoiceAgentHandle } = await import('./initializeVoiceAgentHandle');
+            const initializing = initializeVoiceAgentHandle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+                getDaemonVoiceAgentClient: scope => new DaemonVoiceAgentClient(scope),
+                setDeferredTargetSessionContext: vi.fn() });
+            if (applied !== 'current') {
+                await expect(initializing).rejects.toMatchObject({ code: 'VOICE_AGENT_SELECTION_UNAVAILABLE' });
+                expect(start).not.toHaveBeenCalled();
+                return;
+            }
+            const handle = await initializing;
+            expect(handle.rpcSessionId).toBe(carrierId);
+            expect(handle.agentBackendId).toBe('claude');
+            expect(admittedStart()).toMatchObject({ launchProfileId: 'root-launch-profile',
+                modelSelection: { agentTargetKey: buildAgentUniverseBackendTargetKey('claude'),
+                    providerConnectionId: null, modelId: 'claude-haiku-4-5' } });
+            expect(ExecutionRunVoiceAgentIntentInputV1Schema.parse(admittedStart().intentInput).commitModelSelection)
+                .toMatchObject({ modelId: 'claude-haiku-4-5' });
+        } finally {
+            voiceSessionBindingStore.getState().unbind(carrierId);
+            const sessions: typeof current.sessions = { ...storage.getState().sessions, s1: previousRoot };
+            delete sessions[carrierId];
+            storage.setState({ sessions, settings: previousSettings });
+            state = storage.getState();
+        }
     });
 
     it('admits the exact Session default greeting into the run policy before the daemon starts', async () => {
@@ -366,7 +454,9 @@ describe('initializeVoiceAgentHandle', () => {
                 setDeferredTargetSessionContext: vi.fn() });
             expect(rpcTargets.filter(target => target.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
                 || target.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1).at(-1)?.sessionId).toBe(history);
-            expect(admittedStart().profileId).toBe(bound ? 'cached-profile' : undefined);
+            expect(admittedStart().launchProfileId).toBe(bound ? 'cached-profile' : undefined);
+            expect(admittedStart().profileId).toBeUndefined();
+            expect(admittedStart().profileSourceCustody).toBeUndefined();
             const { resolveVoiceWelcomeText } = await import('./voiceWelcomeText');
             if (!bound) expect(admittedPolicy()?.welcome?.text).toBe(resolveVoiceWelcomeText('en'));
         } finally {
@@ -425,7 +515,7 @@ describe('initializeVoiceAgentHandle', () => {
                 setDeferredTargetSessionContext: vi.fn(),
             });
             expect(buildBackendTargetKeyV2(admittedStart().backendTarget)).toBe(buildAgentUniverseBackendTargetKey('claude'));
-            expect(admittedStart()).toMatchObject({ profileId: 'raw-profile' });
+            expect(admittedStart()).toMatchObject({ launchProfileId: 'raw-profile' });
             expect(admittedStart().chatModelId).toBeUndefined();
             expect(admittedStart().commitModelId).toBeUndefined();
         } finally {
@@ -515,7 +605,7 @@ describe('initializeVoiceAgentHandle', () => {
         }
     });
 
-    it('routes the released OpenAI-compatible settings through migration and daemon startup', async () => {
+    it('requires explicit Provider import before starting with retained OpenAI-compatible settings', async () => {
         const { settingsParse } = await import('@/sync/domains/settings/settings');
         const { initializeVoiceAgentHandle } = await import('./initializeVoiceAgentHandle');
         const originalSettings = state.settings;
@@ -557,23 +647,15 @@ describe('initializeVoiceAgentHandle', () => {
         storage.setState({ settings: state.settings });
 
         try {
-            await initializeVoiceAgentHandle({
+            await expect(initializeVoiceAgentHandle({
                 sessionId: 's1',
                 getDaemonVoiceAgentClient: scope => new DaemonVoiceAgentClient(scope),
                 setDeferredTargetSessionContext: vi.fn(),
+            })).rejects.toMatchObject({
+                code: 'VOICE_AGENT_PROVIDER_CHAT_MIGRATION_REQUIRED',
             });
-
-            expect(buildBackendTargetKeyV2(admittedStart().backendTarget)).toBe(buildAgentUniverseBackendTargetKey('opencode'));
-            expect(admittedStart()).toMatchObject({
-                chatModelId: 'qwen-chat',
-                commitModelId: 'qwen-commit',
-                modelSelection: expect.objectContaining({
-                    providerConnectionId: 'voice-openai-compatible-chat',
-                }),
-                intentInput: { commitModelSelection: expect.objectContaining({
-                    providerConnectionId: 'voice-openai-compatible-chat',
-                }) },
-            });
+            expect(start).not.toHaveBeenCalled();
+            expect(storage.getState().settings).toBe(state.settings);
         } finally {
             state.settings = originalSettings;
             storage.setState({ settings: originalSettings });
