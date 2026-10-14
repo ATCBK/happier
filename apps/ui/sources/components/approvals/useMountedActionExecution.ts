@@ -1,13 +1,12 @@
 import * as React from 'react';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
-import type { ActionExecutorContext } from '@happier-dev/protocol';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { resumeActionExecutionResult, type ActionApprovalContinuation } from './actionApprovalContinuation';
 import { useActionApprovalContinuation } from './useActionApprovalContinuation';
 import { areServerAccountScopesEqual, serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { createFrontDoorActionExecute, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
 
@@ -16,7 +15,7 @@ const retired = (): ActionExecuteResult => ({ ok: false, errorCode: 'action_acco
 
 /** Reconnect a mounted author's original public Action to its typed approval result. */
 export function useMountedActionExecution(scopeOrHome: ServerAccountScope | string | null | undefined,
-    options?: Readonly<{ onApprovalPending?: (registration: ActionApprovalContinuation) => void; runner?: SystemTaskRunner }>) {
+    options?: Readonly<{ onApprovalPending?: (registration: ActionApprovalContinuation) => void; openOnRequest?: boolean; runner?: SystemTaskRunner }>) {
     const { binding, resolution } = useServerCredentialAccountScopeBinding(typeof scopeOrHome === 'string' ? scopeOrHome : scopeOrHome?.serverId ?? null);
     const scope = typeof scopeOrHome === 'string' ? binding?.scope : scopeOrHome;
     const lifetime = React.useMemo(() => ({ controller: new AbortController() }), [binding]);
@@ -30,7 +29,8 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
     const isCurrent = React.useCallback(() => Boolean(binding?.isCurrent()
         && areServerAccountScopesEqual(binding.scope, scope) && !lifetime.controller.signal.aborted), [binding, lifetime, scope]);
     const scopeKey = binding ? `${serverAccountScopeKeySuffix(binding.scope)}:${binding.revision}` : JSON.stringify(['unbound', scopeOrHome]);
-    const approval = useActionApprovalContinuation({ scopeKey, serverId: scope?.serverId ?? '', onExecuted });
+    const approval = useActionApprovalContinuation({ scopeKey, serverId: scope?.serverId ?? '', onExecuted,
+        openOnRequest: options?.openOnRequest });
     const frontDoor = React.useMemo(() => createFrontDoorActionExecute(undefined, {
         homeRuntimeRunner: options?.runner,
         onBlockingApprovalPending: ({ artifactId, signal }) => {
@@ -48,7 +48,7 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
         },
     }), [approval.requestApproval, binding, isCurrent, lifetime, options?.onApprovalPending, options?.runner]);
     const execute = React.useCallback(async (actionId: ActionId, input: unknown,
-        operation?: Readonly<{ signal?: AbortSignal; defaultSessionId?: ActionExecutorContext['defaultSessionId']; actionRequestId?: ActionExecutorContext['actionRequestId']; onTransportIssued?: ActionExecutorContext['onTransportIssued']; presentUserConfirmation?: ActionExecutorContext['presentUserConfirmation'] }>): Promise<ActionExecuteResult> => {
+        operation?: UiActionOperation): Promise<ActionExecuteResult> => {
         if (!binding || !scope || !isCurrent()) return retired();
         const cancellation = mergeAbortSignals([lifetime.controller.signal, operation?.signal]);
         try {
