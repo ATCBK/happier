@@ -33,10 +33,19 @@ object ActivityNotificationPresenter {
   @JvmStatic
   fun present(context: Context, remoteMessage: RemoteMessage, alert: MachineRemoteAlert) {
     val delegate = ExpoPresentationDelegate(context)
-    if (alert.phase == "recovered") {
+    if (alert.phase == "recovered" && remoteMessage.data["message"].isNullOrBlank()) {
       if (ActivityPreparedContext.home(context, alert.serverId, alert.accountId) == null) return
-      // Clearing the established identity never posts a recovery notification.
-      delegate.dismissNotifications(listOf(alert.replacementTag))
+      // Data-only recovery clears the established identity. A requested return
+      // has visible Home-approved content and uses the same presenter below.
+      val offlineIds = delegate.getAllPresentedNotifications().mapNotNull { notification ->
+        val request = notification.notificationRequest
+        val notice = request.content.body?.let { MachineRemoteAlert.parse(it) }
+        if (notice?.phase == "offline" && notice.serverId == alert.serverId
+            && notice.accountId == alert.accountId && notice.machineId == alert.machineId) request.identifier else null
+      }
+      if (offlineIds.isNotEmpty() && ActivityPreparedContext.home(context, alert.serverId, alert.accountId) != null) {
+        delegate.dismissNotifications(offlineIds)
+      }
       return
     }
     val presented = enrichedMessage(context, remoteMessage, alert)

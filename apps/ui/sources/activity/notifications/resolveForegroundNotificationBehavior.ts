@@ -91,14 +91,17 @@ function resolveArrival(content: Readonly<{ data?: unknown; categoryIdentifier?:
  */
 export async function resolveForegroundNotificationBehavior(params: Readonly<{
     /** The arriving Expo notification content. */
-    content: Readonly<{ data?: unknown; categoryIdentifier?: unknown }>;
+    content: Readonly<{ data?: unknown; categoryIdentifier?: unknown; body?: string | null }>;
     localSettings: Partial<LocalSettings> | null | undefined;
     now: Date;
     isSessionVisible: (address: SessionAddress) => boolean;
 }>): Promise<ForegroundNotificationBehavior> {
     const machine = resolveIncomingMachineRemoteAlert(params.content.data);
     if (machine.kind !== 'not_machine_alert') {
-        if (machine.kind !== 'routable' || machine.alert.phase !== 'offline') return 'off';
+        if (machine.kind !== 'routable') return 'off';
+        // Data-only recovery dismisses the offline notice. A requested return
+        // carries the Home-approved visible body through the same presenter.
+        if (machine.alert.phase === 'recovered' && !params.content.body?.trim()) return 'off';
         const scope = await resolveServerCredentialAccountScope(machine.serverId);
         if (scope.kind !== 'bound' || scope.scope.accountId !== machine.alert.accountId) return 'off';
         const accountSettings = readExactHomeAccountSettings(scope.scope);
