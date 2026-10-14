@@ -7,6 +7,10 @@ import { transform } from 'esbuild';
 import { ConversationProvidersContributionProtocolV1 } from '@happier-dev/channels-protocol/v1';
 import { PluginCollectionMutationRequestV1Schema } from '@happier-dev/protocol';
 import { UsageCoachFindingSchema } from '@happier-dev/protocol/usage/coach/coachFinding';
+import { DaemonPluginUiResourceReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
+import { registerDaemonContributionRegistryProjectionHandler } from '@/rpc/handlers/daemonContributionRegistryProjection';
 
 import {
     inspectAction,
@@ -101,6 +105,7 @@ async function seedFixture(options: Readonly<{
     sessionScoped?: boolean;
     inputType?: boolean;
     usageCoach?: boolean;
+    admissionFailure?: string;
 }> = {}): Promise<Readonly<{ happyHomeDir: string; pluginRoot: string }>> {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-live-resources-home-'));
     const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-live-resources-plugin-'));
@@ -162,7 +167,8 @@ async function seedFixture(options: Readonly<{
             loader: 'ts',
             format: 'esm',
         })).code
-        : `export function activate(api) {
+        : `${options.admissionFailure ? "import { PluginError } from '@happier-dev/plugin-sdk';" : ''}
+        export function activate(api) {
         const usesAccountStorage = ${options.accountStorage === true ? 'true' : 'false'};
         const registersDynamicResource = ${options.registerDynamicProducer !== false ? 'true' : 'false'};
         const sessionScoped = ${options.sessionScoped === true ? 'true' : 'false'};
@@ -181,7 +187,9 @@ async function seedFixture(options: Readonly<{
         });` : ''}
         if (registersDynamicResource) {
             api.resources.registerDynamicResource('live-status', {
-                read: async (options) => sessionScoped
+                read: async (options) => {
+                    ${options.admissionFailure ? `throw new PluginError({ code: ${JSON.stringify(options.admissionFailure)} });` : ''}
+                    return sessionScoped
                     ? JSON.stringify({
                         sessionId: options.context.kind === 'session' ? options.context.sessionId : null,
                     })
@@ -192,7 +200,8 @@ async function seedFixture(options: Readonly<{
                                 account: entry && 'value' in entry ? entry.value : null,
                             });
                         })()
-                        : control.value,
+                        : control.value;
+                },
                 observe: (invalidate, options) => {
                     control.observedAccountStorage = usesAccountStorage
                         ? options.accountStorage !== undefined
@@ -282,6 +291,32 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 describe('executable plugin dynamic resource observation (EU-4b)', () => {
+    it('preserves a refused Resource producer reason through public registration and the daemon RPC', async () => {
+        const { happyHomeDir, pluginRoot } = await seedFixture({ admissionFailure: 'plugin_collection_contract_conflict' });
+        let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+        try {
+            runtime = await resolveExecutablePluginRuntimeRegistry({
+                happyHomeDir, contributes: await resolveScopedDynamicResourceFixtureContributes(happyHomeDir),
+            });
+            const handlers = new Map<string, RpcHandler>();
+            const registrar: RpcHandlerRegistrar = { registerHandler: (method, handler) => { handlers.set(method, handler); } };
+            registerDaemonContributionRegistryProjectionHandler(registrar, { resolveRuntimeRegistry: async () => runtime! });
+            const response = DaemonPluginUiResourceReadResponseSchema.parse(await handlers.get(RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ)!({
+                machineId: 'machine-resource-test',
+                expectedCallerOccurrenceId: requirePluginOccurrenceId(runtime, PLUGIN_ID),
+                callerPluginId: PLUGIN_ID, resource: { pluginId: PLUGIN_ID, localId: 'live-status' },
+            }));
+            expect(response).toEqual({ ok: false, code: 'plugin_collection_contract_conflict', reason: 'unavailable' });
+            await expect(runtime.readUiResource?.({
+                expectedCallerOccurrenceId: requirePluginOccurrenceId(runtime, PLUGIN_ID), callerPluginId: PLUGIN_ID, resourceId: 'style-guide',
+            })).resolves.toMatchObject({ bytes: new Uint8Array(Buffer.from('# Style guide\n')) });
+        } finally {
+            await runtime?.dispose();
+            delete globalThis.__HAPPIER_LIVE_RESOURCE_FIXTURE__;
+            await rm(happyHomeDir, { recursive: true, force: true });
+            await rm(pluginRoot, { recursive: true, force: true });
+        }
+    }, 60_000);
     it('admits a public-author Coach finding Resource and Action and retires their occurrence', async () => {
         const { happyHomeDir, pluginRoot } = await seedFixture({ usageCoach: true });
         let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;

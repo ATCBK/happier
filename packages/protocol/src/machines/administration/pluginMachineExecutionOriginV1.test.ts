@@ -23,6 +23,26 @@ describe('PluginMachineExecutionOriginV1', () => {
     expect(PluginMachineExecutionOriginV1Schema.safeParse({
       ...origin, sourceRef: { ...origin.sourceRef, materializationId: 'invented' },
     }).success).toBe(false);
+    expect(arePluginMachineExecutionOriginsEqual(origin, origin)).toBe(true);
+    expect(arePluginMachineExecutionOriginsEqual(origin, {
+      ...origin,
+      sourceRef: { ...origin.sourceRef, sourceCustody: { kind: 'development', registeredRootId: 'registered-source-b' } },
+    })).toBe(false);
+    expect(arePluginMachineExecutionOriginsEqual(origin, {
+      ...origin,
+      sourceRef: { ...origin.sourceRef, machineId: 'machine-b' },
+    })).toBe(false);
+    expect(arePluginMachineExecutionOriginsEqual(origin, {
+      ...origin,
+      sourceRef: { ...origin.sourceRef, pluginId: 'acme.other' },
+    })).toBe(false);
+    expect(arePluginMachineExecutionOriginsEqual(origin, {
+      ...origin, serverIdentityId: 'srv_account_two',
+    })).toBe(false);
+    expect(arePluginMachineExecutionOriginsEqual(origin, {
+      serverIdentityId: origin.serverIdentityId,
+      materializationRef: { machineId: 'machine-a', pluginId: 'acme.plugin', materializationId: 'registered-source-a' },
+    })).toBe(false);
   });
   it('projects its exact portable identity as a reusable plugin JSON Schema fragment', () => {
     const validates = compilePluginJsonSchema(PluginMachineExecutionOriginV1JsonSchema);

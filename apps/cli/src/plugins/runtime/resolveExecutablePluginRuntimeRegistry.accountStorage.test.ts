@@ -9,6 +9,12 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { loadInstalledPlugins } from '@/plugins/discovery/load/installed';
+import { createPluginReloadController } from './reload/controller';
+import { createDaemonPluginRuntimeOwner } from '@/plugins/daemon/runtimeOwner';
+import { createPackedTestConnectedAccountsRuntime } from '@/plugins/daemon/packedTestConnectedAccounts';
+import { logger } from '@/ui/logger';
 import { evaluateManifestPluginDevelopmentCandidate } from '@/plugins/authoring/sourceModule';
 import { resolveLocalPathPluginSource } from '@/plugins/discovery/sources/localPath';
 import { bindPluginRuntimeSourceAuthority } from './sourceAuthority';
@@ -36,7 +42,21 @@ import {
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 
-import { resolveExecutablePluginRuntimeRegistry } from './resolveExecutablePluginRuntimeRegistry';
+import { resolveExecutablePluginRuntimeRegistry as resolveExecutablePluginRuntimeRegistryProduction } from './resolveExecutablePluginRuntimeRegistry';
+
+// These Account boundary fixtures serve the installed test declarations, not
+// every bundled plugin's distinct Account/service requirements. Discovery,
+// declaration normalization, activation and storage remain the real owners.
+async function resolveExecutablePluginRuntimeRegistry(
+    params: NonNullable<Parameters<typeof resolveExecutablePluginRuntimeRegistryProduction>[0]>,
+) {
+    return resolveExecutablePluginRuntimeRegistryProduction({
+        ...params,
+        contributes: params.contributes ?? createResolvedContributionRegistry(
+            await resolvePluginContributes({ happyHomeDir: params.happyHomeDir, existingAgentIds: new Set() }),
+        ),
+    });
+}
 
 const accountDataBoundary = vi.hoisted(() => ({
     readStoredCredentials: vi.fn<() => Promise<StoredCredentials | null>>(async () => null),
@@ -142,11 +162,13 @@ async function seedAccountCollectionsActionFixture(params: Readonly<{
     pluginRoot: string;
     declareAccountStorage?: boolean;
     includePage?: boolean;
+    pluginId?: string;
+    includeAvailability?: boolean;
 }>): Promise<void> {
     await mkdir(join(params.pluginRoot, '.happier-plugin'), { recursive: true });
     await writeFile(join(params.pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify({
         schemaVersion: 2,
-        id: PLUGIN_ID,
+        id: params.pluginId ?? PLUGIN_ID,
         version: '1.0.0',
         displayName: 'Account Collections fixture',
         engines: { happier: '^0.2.0' },
@@ -224,9 +246,10 @@ async function seedAccountCollectionsActionFixture(params: Readonly<{
     await seedCurrentLocalPathPluginFixture({
         happyHomeDir: params.happyHomeDir,
         pluginRoot: params.pluginRoot,
-        pluginId: PLUGIN_ID,
+        pluginId: params.pluginId ?? PLUGIN_ID,
         manifestVersion: '1.0.0',
         ...(params.includePage ? { devWatch: true } : {}),
+        ...(params.includeAvailability ? { includeAvailability: true } : {}),
     });
 }
 
@@ -465,6 +488,71 @@ describe('executable plugin Account Collections binding', () => {
         resetActiveAccountSettingsSnapshotForTests();
     });
 
+    it('reports each refused Account declaration with its plugin id and typed reason through the daemon owner', async () => {
+        const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-publication-refusals-home-'));
+        const pluginRoots = await Promise.all([0, 1].map(() => mkdtemp(join(tmpdir(), 'happier-publication-refusals-plugin-'))));
+        const pluginIds = [PLUGIN_ID, 'acme.publication-peer'];
+        const attempted: string[] = [];
+        let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+        let controller: ReturnType<typeof createPluginReloadController> | null = null;
+        let owner: ReturnType<typeof createDaemonPluginRuntimeOwner> | null = null;
+        const debug = vi.spyOn(logger, 'debug');
+        try {
+            for (const [index, pluginRoot] of pluginRoots.entries()) {
+                await seedAccountCollectionsActionFixture({ happyHomeDir, pluginRoot, pluginId: pluginIds[index], includePage: true, includeAvailability: true });
+            }
+            const loaded = projectLoadedPluginContributes({
+                loadResult: await loadInstalledPlugins({ happyHomeDir }), provenance: 'external', existingAgentIds: new Set(),
+            });
+            const graphs = await Promise.all((loaded.activationTargets ?? []).map(async (target) => {
+                if (!target.devDaemonEntryPath) throw new Error('Expected development fixture entry');
+                const source = await resolveLocalPathPluginSource({ locator: dirname(target.devDaemonEntryPath) });
+                if (!source.ok) throw new Error('Expected development fixture source');
+                const authority = bindPluginRuntimeSourceAuthority({
+                    custody: { kind: 'development', registeredRootId: source.pluginRootPath },
+                    resolvedRoot: source.pluginRootPath, observedRevision: 1,
+                });
+                if (authority.kind !== 'development') throw new Error('Expected development fixture authority');
+                const candidate = await evaluateManifestPluginDevelopmentCandidate({ source, sourceAuthority: authority });
+                return [target.pluginId, candidate.graph] as const;
+            }));
+            const dependencies = createFixtureAccountStorageDependencies({ token: 'publication-refusal-token', encryption: null });
+            runtime = await resolveExecutablePluginRuntimeRegistry({
+                happyHomeDir, contributes: createResolvedContributionRegistry(loaded),
+                preparedDevelopmentActivationGraphsByPluginId: new Map(graphs),
+                accountStorageDependencies: {
+                    ...dependencies,
+                    http: { ...dependencies.http, async post(_url, body) {
+                        const request = JSON.parse(body) as { manifest: { id: string } };
+                        attempted.push(request.manifest.id);
+                        return { status: 409, data: { error: 'plugin_collection_contract_conflict' } };
+                    } },
+                },
+            });
+            expect(runtime.readPluginSourceCustody?.(PLUGIN_ID)).toMatchObject({ kind: 'development' });
+            controller = createPluginReloadController({ resolveRuntimeRegistry: async () => runtime! });
+            const initialLease = await controller.acquireRuntimeRegistry();
+            await initialLease.release();
+            owner = createDaemonPluginRuntimeOwner({
+                happyHomeDir, reloadController: controller, staleCandidateCleanup: 'disabled',
+                connectedAccounts: createPackedTestConnectedAccountsRuntime({ happyHomeDir, pluginId: PLUGIN_ID }).owner,
+                availabilityReporter: { report: async () => undefined },
+            });
+            owner.reportCurrentAvailability();
+            await vi.waitFor(() => expect(debug).toHaveBeenCalledWith(
+                '[PLUGIN RUNTIME] Plugin availability report failed (non-fatal)',
+                expect.objectContaining({ failures: pluginIds.map(pluginId => ({ pluginId, code: 'plugin_collection_contract_conflict' })) }),
+            ));
+            expect(attempted).toEqual(pluginIds);
+        } finally {
+            debug.mockRestore();
+            await owner?.changeService.shutdown();
+            await controller?.shutdown();
+            await runtime?.dispose();
+            for (const path of [happyHomeDir, ...pluginRoots]) await rm(path, { recursive: true, force: true });
+        }
+    }, 60_000);
+
     it('keeps release-less Account declaration identity out of app-page origin selection', async () => {
         const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-release-less-page-home-'));
         const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-release-less-page-plugin-'));
@@ -639,6 +727,12 @@ describe('executable plugin Account Collections binding', () => {
                 pluginId: PLUGIN_ID,
                 collectionId: COLLECTION_ID,
                 rowId: 'connection-1',
+                readerContext: expect.objectContaining({
+                    pluginId: PLUGIN_ID,
+                    collectionId: COLLECTION_ID,
+                    schemaVersion: 1,
+                    contractDigest: runtime?.contributes.accountCollections?.find(entry => entry.pluginId === PLUGIN_ID)?.definition.contractDigest,
+                }),
             });
             return {
                 status: 200,

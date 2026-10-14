@@ -1186,7 +1186,11 @@ export function resolvePluginCollectionContractAccessV1(input: Readonly<{
     input.currentWriter.schemaVersion === input.requested.schemaVersion
     && input.currentWriter.contractDigest === input.requested.contractDigest
   ) return 'writable';
-  if (input.currentWriter.schemaVersion === input.requested.schemaVersion) return null;
+  if (input.currentWriter.schemaVersion === input.requested.schemaVersion) {
+    return isPluginCollectionSchemaWideningV1({ source: input.requested, target: input.currentWriter })
+      || isPluginCollectionSchemaWideningV1({ source: input.currentWriter, target: input.requested })
+      ? 'readOnly' : null;
+  }
   if (!input.requested.readableSchemaVersions.includes(input.currentWriter.schemaVersion)) return null;
 
   // A forward-readable logical schema declaration is necessary but cannot by
@@ -1232,14 +1236,14 @@ function canonicalJson(value: unknown): string {
 }
 
 /**
- * The one no-rewrite Collection evolution admitted by the Data contract:
- * a newer declared reader adds only optional private top-level fields while
+ * Data's no-rewrite Collection evolution: the target schema accepts every
+ * source value, including nested optional additions and wider value domains, while
  * every server-owned projection, index, relation, query, identity, and quota
  * semantic remains byte-equivalent. Activation may adopt the target contract
  * identity in place while preserving each row's payload bytes and revision;
  * a later write naturally emits the current logical shape.
  */
-export function isPluginCollectionOptionalPrivateSchemaAdditionV1(input: Readonly<{
+export function isPluginCollectionSchemaWideningV1(input: Readonly<{
   source: NormalizedPluginAccountCollectionContractV1;
   target: NormalizedPluginAccountCollectionContractV1;
 }>): boolean {
@@ -1247,7 +1251,7 @@ export function isPluginCollectionOptionalPrivateSchemaAdditionV1(input: Readonl
   if (
     source.pluginId !== target.pluginId
     || source.collectionId !== target.collectionId
-    || target.schemaVersion <= source.schemaVersion
+    || target.schemaVersion < source.schemaVersion
     || !target.readableSchemaVersions.includes(source.schemaVersion)
     || source.rowIdField !== target.rowIdField
   ) return false;
@@ -1260,6 +1264,10 @@ export function isPluginCollectionOptionalPrivateSchemaAdditionV1(input: Readonl
   ] as const) {
     if (canonicalJson(source[field]) !== canonicalJson(target[field])) return false;
   }
+  for (const field of source.serverReadable) {
+    if (getPluginCollectionScalarKindV1({ schema: source.schema, field })
+      !== getPluginCollectionScalarKindV1({ schema: target.schema, field })) return false;
+  }
   if (
     (source.quota === undefined) !== (target.quota === undefined)
     || (source.quota !== undefined
@@ -1267,26 +1275,82 @@ export function isPluginCollectionOptionalPrivateSchemaAdditionV1(input: Readonl
       && canonicalJson(source.quota) !== canonicalJson(target.quota))
   ) return false;
 
-  const sourceSchema = source.schema as Readonly<Record<string, unknown>>;
-  const targetSchema = target.schema as Readonly<Record<string, unknown>>;
-  const sourceProperties = sourceSchema.properties as Readonly<Record<string, unknown>>;
-  const targetProperties = targetSchema.properties as Readonly<Record<string, unknown>>;
-  const sourceRequired = sourceSchema.required as readonly string[];
-  const targetRequired = targetSchema.required as readonly string[];
-  if (canonicalJson(sourceRequired) !== canonicalJson(targetRequired)) return false;
-  const { properties: _sourceProperties, ...sourceRootWithoutProperties } = sourceSchema;
-  const { properties: _targetProperties, ...targetRootWithoutProperties } = targetSchema;
-  if (canonicalJson(sourceRootWithoutProperties) !== canonicalJson(targetRootWithoutProperties)) return false;
+  return isCollectionSchemaWidening(source.schema, target.schema);
+}
 
-  const addedFields = Object.keys(targetProperties).filter((field) => !(field in sourceProperties));
-  if (addedFields.length === 0) return false;
-  if (addedFields.some((field) => targetRequired.includes(field) || target.serverReadable.includes(field))) {
-    return false;
+/** Proves inclusion for the declared structural vocabulary; unproved changes stay conflicts. */
+function isCollectionSchemaWidening(source: PluginJsonSchemaV2, target: PluginJsonSchemaV2): boolean {
+  if (canonicalJson(source) === canonicalJson(target)) return true;
+  if (Object.keys(target).every(key => ['title', 'description', 'default', '$schema'].includes(key))) return true;
+  if (source.anyOf || target.anyOf) {
+    const { anyOf: sourceMembers, ...sourceRest } = source;
+    const { anyOf: targetMembers, ...targetRest } = target;
+    if (sourceMembers && targetMembers) {
+      return isCollectionSchemaWidening(sourceRest, targetRest)
+        && sourceMembers.every(member => targetMembers.some(candidate => isCollectionSchemaWidening(member, candidate)));
+    }
+    if (targetMembers) {
+      return isCollectionSchemaWidening(source, targetRest)
+        && targetMembers.some(member => isCollectionSchemaWidening(source, member));
+    }
+    // Either the shared constraints or every former arm must imply the target
+    // constraints when dropping the union restriction.
+    return isCollectionSchemaWidening(sourceRest, target)
+      || sourceMembers!.every(member => isCollectionSchemaWidening(member, target));
   }
-  return Object.entries(sourceProperties).every(([field, schema]) => (
-    Object.hasOwn(targetProperties, field)
-    && canonicalJson(schema) === canonicalJson(targetProperties[field])
-  ));
+  const handled = new Set<keyof PluginJsonSchemaV2>([
+    'type', 'enum', 'const', 'properties', 'required', 'additionalProperties', 'items',
+    'minItems', 'maxItems', 'uniqueItems', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum',
+    'minLength', 'maxLength', 'x-happier-max-utf8-bytes', 'x-happier-max-serialized-utf8-bytes',
+    'title', 'description', 'default',
+    'pattern', 'format', 'multipleOf',
+  ]);
+  // References/definitions, oneOf/allOf/not and property-name constraints
+  // are retained exactly rather than guessed.
+  const remainder = (schema: PluginJsonSchemaV2) => Object.fromEntries(Object.entries(schema)
+    .filter(([key]) => !handled.has(key as keyof PluginJsonSchemaV2)));
+  if (canonicalJson(remainder(source)) !== canonicalJson(remainder(target))) return false;
+  for (const key of ['pattern', 'format', 'multipleOf'] as const) {
+    if (target[key] !== undefined && target[key] !== source[key]) return false;
+  }
+  if (target.type !== undefined && source.type !== target.type
+    && !(source.type === 'integer' && target.type === 'number')) return false;
+  if (Object.hasOwn(target, 'const') && (!Object.hasOwn(source, 'const')
+    || canonicalJson(source.const) !== canonicalJson(target.const))) return false;
+  if (target.enum) {
+    const values = Object.hasOwn(source, 'const') ? [source.const] : source.enum;
+    if (!values || !values.every(value => target.enum!.some(candidate => canonicalJson(value) === canonicalJson(candidate)))) return false;
+  }
+  for (const key of ['minItems', 'minimum', 'exclusiveMinimum', 'minLength'] as const) {
+    if (target[key] !== undefined && (source[key] === undefined || target[key] > source[key])) return false;
+  }
+  for (const key of ['maxItems', 'maximum', 'exclusiveMaximum', 'maxLength',
+    'x-happier-max-utf8-bytes', 'x-happier-max-serialized-utf8-bytes'] as const) {
+    if (target[key] !== undefined && (source[key] === undefined || target[key] < source[key])) return false;
+  }
+  if (target.uniqueItems && !source.uniqueItems) return false;
+  if (target.items && (!source.items || !isCollectionSchemaWidening(source.items, target.items))) return false;
+  if ((target.required ?? []).some(field => !(source.required ?? []).includes(field))) return false;
+  for (const [field, schema] of Object.entries(source.properties ?? {})) {
+    const candidate = Object.hasOwn(target.properties ?? {}, field) ? target.properties![field]
+      : target.additionalProperties === false ? null
+        : typeof target.additionalProperties === 'object' ? target.additionalProperties : {};
+    if (!candidate || !isCollectionSchemaWidening(schema, candidate)) return false;
+  }
+  for (const [field, schema] of Object.entries(target.properties ?? {})) {
+    if (Object.hasOwn(source.properties ?? {}, field)) continue;
+    // An optional field is new only in a closed object. In a map, its values
+    // already existed and the new declaration must not narrow that catchall.
+    if (source.additionalProperties === false) continue;
+    const previous = typeof source.additionalProperties === 'object' ? source.additionalProperties : {};
+    if (!isCollectionSchemaWidening(previous, schema)) return false;
+  }
+  if (target.additionalProperties === false && source.additionalProperties !== false) return false;
+  if (typeof target.additionalProperties === 'object' && source.additionalProperties !== false) {
+    const previous = typeof source.additionalProperties === 'object' ? source.additionalProperties : {};
+    if (!isCollectionSchemaWidening(previous, target.additionalProperties)) return false;
+  }
+  return true;
 }
 
 function normalizeSchema(value: PluginJsonSchemaV2): PluginJsonSchemaV2 {

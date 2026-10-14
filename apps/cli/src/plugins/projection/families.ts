@@ -1,6 +1,6 @@
 import { assertPluginProjectionFamilyIdsV2, listPluginProjectionFamilyIdsV2 } from '@happier-dev/protocol/plugins/contributions/catalog';
 import { PluginProjectedFamilyV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import type { PluginContributionCatalogEntryV2, PluginMachineMaterializationExecutionOriginV1, PluginProjectedFamilyEntryV2, PluginProjectedFamilyV2 } from '@happier-dev/protocol';
+import type { PluginContributionCatalogEntryV2, PluginMachineExecutionOriginV1, PluginProjectedFamilyEntryV2, PluginProjectedFamilyV2 } from '@happier-dev/protocol';
 
 import type { PluginCompatibilityDiagnostic } from '@/plugins/validation/diagnostics/types';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
@@ -18,11 +18,11 @@ export type PluginProjectionFamilyContextV2 = Readonly<{
      */
     pluginDiagnosticsByPluginId?: Readonly<Record<string, readonly PluginCompatibilityDiagnostic[]>>;
     /**
-     * Exact per-plugin source materializations for this projection lease. The
+     * Exact per-plugin execution origins for this projection lease. The
      * UI family consumes these verbatim; absent facts deliberately stay absent
      * rather than becoming a machine-level fallback.
      */
-    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineMaterializationExecutionOriginV1>>;
+    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>;
     pluginUiHostRuntime?: unknown;
     /**
      * The requesting client's display locale, when it named one. Only the

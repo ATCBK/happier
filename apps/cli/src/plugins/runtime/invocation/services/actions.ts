@@ -300,10 +300,7 @@ function readExpectedExecutionOrigin(expectedExecutionOrigin: unknown): PluginMa
             message: 'Expected target execution origin is invalid',
         });
     }
-    return Object.freeze({
-        serverIdentityId: parsed.data.serverIdentityId,
-        materializationRef: Object.freeze({ ...parsed.data.materializationRef }),
-    });
+    return Object.freeze(parsed.data);
 }
 
 function throwIfInactive(

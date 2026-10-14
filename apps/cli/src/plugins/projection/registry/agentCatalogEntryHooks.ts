@@ -158,6 +158,7 @@ export function projectAgentConnectedAccountLaunchCatalogEntry(params: Readonly<
     | 'connectedAccountEnvironmentUses'
     | 'connectedAccountEnvironmentUnsetUses'
     | 'connectedAccountSwitchContinuity'
+    | 'connectedAccountNativeHome'
     | 'getConnectedServiceStateSharingDescriptor'
     | 'getConnectedServiceSharedStateFileMerge'
     | 'getConnectedServiceRuntimeAuthAdapter'
@@ -402,6 +403,10 @@ export function projectAgentConnectedAccountLaunchCatalogEntry(params: Readonly<
         ...(descriptor === undefined
             ? {}
             : { getConnectedServiceStateSharingDescriptor: async () => descriptor }),
+        get connectedAccountNativeHome() {
+            return params.isCurrent() && descriptor?.providerSupportStatus === 'supported'
+                ? descriptor.nativeHome : undefined;
+        },
         ...(continuity?.mergeSharedStateFile === undefined
             ? {}
             : { getConnectedServiceSharedStateFileMerge: async () => (input: Parameters<AgentConnectedAccountSharedStateFileMergeV1>[0]) => {

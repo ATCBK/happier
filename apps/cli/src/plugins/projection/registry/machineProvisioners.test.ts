@@ -61,12 +61,12 @@ describe('machine provisioner projection', () => {
         const family = projection.familiesById.machineProvisioners;
         expect(Object.keys(family?.entriesById ?? {})).toEqual(keys);
         const entry = family?.entriesById[keys[0]!];
-        expect(entry).toMatchObject({ ...origin, occurrenceId: registry.occurrenceIdsByPluginId?.[ids[0]!] });
+        expect(entry).toMatchObject({ executionOrigin: origin, occurrenceId: registry.occurrenceIdsByPluginId?.[ids[0]!] });
         for (const invalidEntry of [
             { ...entry, privateCredential: 'forbidden' },
             { ...entry, id: `${ids[1]}/guest` },
-            { ...entry, materializationRef: { ...origin.materializationRef, pluginId: ids[1] } },
-            { ...entry, serverIdentityId: undefined },
+            { ...entry, executionOrigin: { ...origin, materializationRef: { ...origin.materializationRef, pluginId: ids[1] } } },
+            { ...entry, executionOrigin: { ...origin, serverIdentityId: undefined } },
         ]) {
             expect(PluginProjectionV2Schema.safeParse({ ...projection, familiesById: { ...projection.familiesById,
                 machineProvisioners: { ...family, entriesById: { [keys[0]!]: invalidEntry } },

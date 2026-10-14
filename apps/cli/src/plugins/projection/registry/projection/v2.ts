@@ -5,13 +5,13 @@ import type {
     PluginProjectionBrandAssetV2,
     PluginProjectionInstalledPackageV2,
     PluginProjectionV2,
-    PluginMachineMaterializationExecutionOriginV1,
+    PluginMachineExecutionOriginV1,
 } from '@happier-dev/protocol';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { isDynamicPluginResourceContributionV2, PluginAgentCapabilitiesV2Schema, PluginResourceKindV2Schema, PluginDynamicResourceScopeV1Schema } from '@happier-dev/protocol/plugins/contributions/v2';
 import { PluginActionDeclaredExecutionV2Schema, PluginActionScopeV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
-import { PluginMachineMaterializationExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { getPluginMachineExecutionOriginRef, PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginSettingsProjectionError, projectPluginSettingsContributionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 import type { PluginCatalogEntry } from '@/plugins/projection/catalog/installed';
@@ -533,6 +533,7 @@ function buildInstalledPackagesById(params: Readonly<{
     pluginDiagnosticsByPluginId: Readonly<Record<string, readonly PluginCompatibilityDiagnostic[]>>;
     brandAssetsByPluginId?: Readonly<Record<string, PluginProjectionBrandAssetV2>>;
     pluginFinalPolicyCurrentRuntimesById?: ReadonlyMap<string, PluginFinalPolicyCurrentRuntime>;
+    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>;
 }>): PluginProjectionV2['installedPackagesById'] {
     const installedPackagesById: PluginProjectionV2['installedPackagesById'] = {};
     const metadataByPluginId = collectPluginContributionMetadata(params.registry);
@@ -546,11 +547,18 @@ function buildInstalledPackagesById(params: Readonly<{
     const readOccurrenceFacts = (
         pluginId: string,
         occurrenceId: string | undefined,
-    ): Pick<PluginProjectionInstalledPackageV2, 'sourceCustody' | 'declaresContributionPoints'> => {
+    ): Pick<PluginProjectionInstalledPackageV2, 'sourceCustody' | 'declaresContributionPoints' | 'executionOrigin'> => {
+        if (!occurrenceId) return {};
         const current = params.pluginFinalPolicyCurrentRuntimesById?.get(pluginId);
-        return occurrenceId && current?.occurrenceId === occurrenceId
-            ? { sourceCustody: current.sourceCustody, declaresContributionPoints: pointPluginIds.has(pluginId) }
-            : {};
+        const parsedOrigin = PluginMachineExecutionOriginV1Schema.safeParse(params.pluginExecutionOriginsByPluginId?.[pluginId]);
+        const executionOrigin = parsedOrigin.success && getPluginMachineExecutionOriginRef(parsedOrigin.data).pluginId === pluginId
+            ? Object.freeze(parsedOrigin.data) : undefined;
+        return {
+            ...(current?.occurrenceId === occurrenceId
+                ? { sourceCustody: current.sourceCustody, declaresContributionPoints: pointPluginIds.has(pluginId) }
+                : {}),
+            ...(executionOrigin ? { executionOrigin } : {}),
+        };
     };
 
     for (const entry of params.installedPackages) {
@@ -670,7 +678,7 @@ export function buildAgentsById(
 
 function buildActionsById(
     registry: ResolvedContributionRegistry,
-    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineMaterializationExecutionOriginV1>>,
+    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>,
     resolveActionPresentUserGatePolicy?: (
         pluginId: string,
         localId: string,
@@ -693,11 +701,11 @@ function buildActionsById(
                 `Action '${action.pluginId}/${action.definition.id}' declares an unresolvable execution target`,
             );
         }
-        const parsedOrigin = PluginMachineMaterializationExecutionOriginV1Schema.safeParse(
+        const parsedOrigin = PluginMachineExecutionOriginV1Schema.safeParse(
             pluginExecutionOriginsByPluginId?.[action.pluginId],
         );
         const executionOrigin = parsedOrigin.success
-            && parsedOrigin.data.materializationRef.pluginId === action.pluginId
+            && getPluginMachineExecutionOriginRef(parsedOrigin.data).pluginId === action.pluginId
             ? parsedOrigin.data
             : undefined;
         const localizedPresentation = action.localizedPresentation;
@@ -741,12 +749,7 @@ function buildActionsById(
             ...(action.definition.operation
                 ? { operation: action.definition.operation }
                 : {}),
-            ...(executionOrigin
-                ? {
-                    serverIdentityId: executionOrigin.serverIdentityId,
-                    materializationRef: Object.freeze({ ...executionOrigin.materializationRef }),
-                }
-                : {}),
+            ...(executionOrigin ? { executionOrigin: Object.freeze(executionOrigin) } : {}),
             ...(action.definition.placementBindings
                 ? { placementBindings: [...action.definition.placementBindings] }
                 : {}),
@@ -805,7 +808,7 @@ function buildCommandsById(
 
 function buildResourcesById(
     registry: ResolvedContributionRegistry,
-    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineMaterializationExecutionOriginV1>>,
+    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>,
 ): PluginProjectionV2['resourcesById'] {
     const resourcesById: PluginProjectionV2['resourcesById'] = {};
     const purposeScopes = deriveRegistryConnectedAccountPurposeAuthorizations(registry);
@@ -824,15 +827,14 @@ function buildResourcesById(
         }
         const key = qualifiedProjectionKey(resource.pluginId, resource.definition.id);
         const occurrenceId = registry.occurrenceIdsByPluginId?.[resource.pluginId];
-        const parsedOrigin = PluginMachineMaterializationExecutionOriginV1Schema.safeParse(pluginExecutionOriginsByPluginId?.[resource.pluginId]);
+        const parsedOrigin = PluginMachineExecutionOriginV1Schema.safeParse(pluginExecutionOriginsByPluginId?.[resource.pluginId]);
         const executionOrigin = occurrenceId && parsedOrigin.success
-            && parsedOrigin.data.materializationRef.pluginId === resource.pluginId ? parsedOrigin.data : undefined;
+            && getPluginMachineExecutionOriginRef(parsedOrigin.data).pluginId === resource.pluginId ? parsedOrigin.data : undefined;
         resourcesById[key] = {
             id: resource.definition.id,
             pluginId: resource.pluginId,
             ...(occurrenceId ? { occurrenceId } : {}),
-            ...(executionOrigin ? { serverIdentityId: executionOrigin.serverIdentityId,
-                materializationRef: Object.freeze({ ...executionOrigin.materializationRef }) } : {}),
+            ...(executionOrigin ? { executionOrigin: Object.freeze(executionOrigin) } : {}),
             resourceKind: resourceKind.data,
             ...(!dynamic && resource.definition.path ? { path: resource.definition.path } : {}),
             scope: dynamic ? PluginDynamicResourceScopeV1Schema.parse(resource.definition.scope) : 'global',
@@ -911,7 +913,7 @@ export function buildPluginProjectionV2(params: Readonly<{
     brandAssetsByPluginId?: Readonly<Record<string, PluginProjectionBrandAssetV2>>;
     pluginUiHostRuntime?: PluginUiProjectionHostRuntimeContext;
     /** Exact machine materialization facts for the same registry lease. */
-    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineMaterializationExecutionOriginV1>>;
+    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>;
     /** Read-only current manifest Action policy owner for the same runtime lease. */
     resolveActionPresentUserGatePolicy?: (
         pluginId: string,
@@ -1015,6 +1017,9 @@ export function buildPluginProjectionV2(params: Readonly<{
             registry: params.registry,
             installedPackages,
             pluginDiagnosticsByPluginId,
+            ...(params.pluginExecutionOriginsByPluginId
+                ? { pluginExecutionOriginsByPluginId: params.pluginExecutionOriginsByPluginId }
+                : {}),
             ...(params.brandAssetsByPluginId
                 ? { brandAssetsByPluginId: params.brandAssetsByPluginId }
                 : {}),

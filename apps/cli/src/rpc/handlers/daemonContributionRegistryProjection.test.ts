@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonPluginActionSchemasReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { createPluginActionInvocation } from '@happier-dev/protocol/plugins/actions/invocation';
 import { createPluginEventAutomationSetupResultV1JsonSchema } from '@happier-dev/protocol/automations/event-setup-result';
 import {
     PluginEventAutomationHistoryGapResetActionInputV1JsonSchema,
@@ -871,11 +873,13 @@ describe('daemon contribution registry projection rpc handler', () => {
                     pluginUi: {
                         entriesById: {
                             'surfacePlacement:acme.materialized:overview': {
-                                serverIdentityId: 'srv_projection_fixture',
-                                materializationRef: {
-                                    machineId: 'machine_projection_fixture',
-                                    materializationId: 'materialization-b',
-                                    pluginId: 'acme.materialized',
+                                executionOrigin: {
+                                    serverIdentityId: 'srv_projection_fixture',
+                                    materializationRef: {
+                                        machineId: 'machine_projection_fixture',
+                                        materializationId: 'materialization-b',
+                                        pluginId: 'acme.materialized',
+                                    },
                                 },
                             },
                         },
@@ -1777,6 +1781,54 @@ describe('daemon contribution registry projection rpc handler', () => {
             ok: false,
             code: 'plugin_action_schemas_request_invalid',
         });
+    });
+
+    it('preserves absent versus declared input schemas from manifest through RPC and client invocation', async () => {
+        for (const inputSchema of [undefined, {}]) {
+            const pluginId = 'acme.inputless';
+            const manifest = readCanonicalPluginManifest(createPluginManifestV2Fixture({
+                id: pluginId,
+                contributes: { actions: [{
+                    id: 'check', title: 'Check', scopes: ['global'], surfaces: ['plugin'],
+                    dangerLevel: 'safe', execution: { target: 'daemon' },
+                    ...(inputSchema === undefined ? {} : { inputSchema }),
+                }] },
+            }));
+            if (!manifest) throw new Error('Expected inputless manifest');
+            const [action] = buildPluginContributionRegistry({ loadedPlugins: [{
+                pluginId, pluginRootPath: '/plugins/inputless',
+                manifestPath: '/plugins/inputless/.happier-plugin/plugin.json',
+                daemonEntryPath: '/plugins/inputless/daemon.mjs', devDaemonEntryPath: null,
+                sourceSpec: { kind: 'path', locator: '/plugins/inputless', trustPolicy: 'local_trusted', installPolicy: 'link' },
+                manifest,
+            }] }).actions;
+            if (!action) throw new Error('Expected normalized Action');
+            const registry = createResolvedContributionRegistry({
+                agents: [], actions: [{ ...action, provenance: 'external', source: { kind: 'path' } }],
+                occurrenceIdsByPluginId: { [pluginId]: '7' as PluginRuntimeOccurrenceId },
+            });
+            const { handlers, registrar } = createRegistrar();
+            const projectionModule = await import('./daemonContributionRegistryProjection');
+            projectionModule.registerDaemonContributionRegistryProjectionHandler(registrar as never, {
+                resolveRuntimeRegistry: async () => createRuntimeRegistry(registry),
+                resolveGeneration: async () => 7, resolveInstalledPackages: async () => [],
+            });
+            const read = handlers.get(RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ);
+            if (!read) throw new Error('Expected registered schema reader');
+            const schemas = DaemonPluginActionSchemasReadResponseSchema.parse(await read({
+                machineId: 'machine-1', expectedOccurrenceId: '7', qualifiedActionId: `${pluginId}/check`,
+            }));
+            if (!schemas.ok) throw new Error('Expected current Action schemas');
+            expect(schemas.inputSchema).toEqual(inputSchema);
+            const invocation = createPluginActionInvocation({
+                pluginId, localId: 'check', inputSchema: schemas.inputSchema,
+                occurrenceSignal: new AbortController().signal, isCurrent: () => true,
+            });
+            const outcome = await invocation.invoke(undefined, { handler: ({ input }) => ({ received: input }) });
+            expect(outcome).toEqual(inputSchema === undefined
+                ? { status: 'executed', value: { received: null } }
+                : { status: 'invalid', code: 'plugin_action_input_schema_invalid', message: expect.any(String) });
+        }
     });
 
     it('projects only canonical PluginError recovery facts across structured Action RPC', async () => {

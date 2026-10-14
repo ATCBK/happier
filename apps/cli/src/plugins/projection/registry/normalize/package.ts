@@ -278,7 +278,7 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
       plugin: definition.surfaces.includes('plugin'),
     },
     inputHints: normalizePluginActionInputHintsV2(definition.inputHints) ?? null,
-    inputSchema: definition.inputSchema ?? {},
+    ...(definition.inputSchema === undefined ? {} : { inputSchema: definition.inputSchema }),
     ...(definition.contextualDefaults ? { contextualDefaults: definition.contextualDefaults } : {}),
     ...(definition.resultSchema ? { outputSchema: definition.resultSchema } : {}),
     ...(definition.operation ? { operation: definition.operation } : {}),
@@ -288,7 +288,8 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
     availability: definition.availability,
     hostAccess: definition.hostAccess,
     priority: definition.priority,
-  } satisfies Omit<ActionDefinitionV1, 'execution'> & Readonly<{
+  } satisfies Omit<ActionDefinitionV1, 'execution' | 'inputSchema'> & Readonly<{
+    inputSchema?: PluginActionContributionV2['inputSchema'];
     execution: PluginActionContributionV2['execution'];
   }>;
   if (definition.dangerLevel === 'safe') {

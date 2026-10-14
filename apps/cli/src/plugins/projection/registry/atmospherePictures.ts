@@ -10,7 +10,7 @@ export const atmospherePicturesProjectionFamily = definePluginProjectionFamilyV2
             const id = buildQualifiedPluginContributionKey(entry.identity);
             const origin = pluginExecutionOriginsByPluginId?.[entry.pluginId];
             return [[id, Object.freeze({ id, pluginId: entry.pluginId, pluginVersion: entry.pluginVersion,
-                definition: entry.definition, ...(origin ? { serverIdentityId: origin.serverIdentityId, materializationRef: origin.materializationRef } : {}) })]];
+                definition: entry.definition, ...(origin ? { executionOrigin: origin } : {}) })]];
         }))),
     }),
 });

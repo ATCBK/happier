@@ -594,7 +594,7 @@ describe('buildPluginProjectionV2', () => {
             execution,
             dangerLevel: 'safe',
             available: true,
-            ...origin,
+            executionOrigin: origin,
         });
         expect(projected?.execution).toEqual(execution);
         // Action schemas are read per Action on demand, never in the bulk projection.
@@ -752,8 +752,7 @@ describe('buildPluginProjectionV2', () => {
         }).actionsById[`${pluginId}/refresh`];
 
         expect(projected).toMatchObject({ execution });
-        expect(projected).not.toHaveProperty('serverIdentityId');
-        expect(projected).not.toHaveProperty('materializationRef');
+        expect(projected).not.toHaveProperty('executionOrigin');
     });
 
     it('does not stamp an Action with an origin whose materialization belongs to another plugin', () => {
@@ -800,8 +799,7 @@ describe('buildPluginProjectionV2', () => {
         }).actionsById[`${pluginId}/refresh`];
 
         expect(projected).toMatchObject({ execution });
-        expect(projected).not.toHaveProperty('serverIdentityId');
-        expect(projected).not.toHaveProperty('materializationRef');
+        expect(projected).not.toHaveProperty('executionOrigin');
     });
 
     it('projects Action icon, priority, and every declared placement binding', () => {
@@ -955,12 +953,12 @@ describe('buildPluginProjectionV2', () => {
         });
         const projection = project(origin);
         expect(projection.resourcesById[`${pluginId}/report`]).toMatchObject({
-            occurrenceId: registry.occurrenceIdsByPluginId![pluginId], ...origin,
+            occurrenceId: registry.occurrenceIdsByPluginId![pluginId], executionOrigin: origin,
         });
         expect(PluginProjectionV2Schema.safeParse(projection).success).toBe(true);
-        expect(project(undefined).resourcesById[`${pluginId}/report`]).not.toHaveProperty('materializationRef');
+        expect(project(undefined).resourcesById[`${pluginId}/report`]).not.toHaveProperty('executionOrigin');
         expect(project({ ...origin, materializationRef: { ...origin.materializationRef, pluginId: 'acme.other' } })
-            .resourcesById[`${pluginId}/report`]).not.toHaveProperty('materializationRef');
+            .resourcesById[`${pluginId}/report`]).not.toHaveProperty('executionOrigin');
     });
 
     it('fails closed instead of relabeling an invalid resource kind as an asset', () => {

@@ -30,7 +30,9 @@ function projectDefinition(definition: ResolvedActionDefinition, identity: NonNu
     examples: definition.examples,
     surfaces: definition.surfaces,
     inputHints: definition.inputHints,
-    inputSchema: definition.inputSchema,
+    // The legacy discovery catalog describes canonical JSON values and requires
+    // a schema. Keep its unconstrained descriptor here, not in the author ABI.
+    inputSchema: definition.inputSchema ?? {},
     ...(definition.contextualDefaults === undefined ? {} : { contextualDefaults: definition.contextualDefaults }),
     ...(definition.approval === undefined ? {} : { approval: definition.approval }),
     ...(definition.toolExposure === undefined ? {} : { toolExposure: definition.toolExposure }),

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
-import { createCanonicalJsonSigningInput } from '@happier-dev/protocol';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui';
 
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityCollectionWritersClaimActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
@@ -867,14 +867,26 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             credentials: StoredCredentials;
             operationSignal?: AbortSignal;
         }>): Promise<unknown> => {
-            await ensureWriterClaim(input.credentials, input.operationSignal);
+            let writerRefusal: PluginError | null = null;
+            try {
+                await ensureWriterClaim(input.credentials, input.operationSignal);
+            } catch (error) {
+                if (input.kind !== 'read' || !isPluginError(error) || error.code !== 'plugin_collection_contract_conflict') throw error;
+                // A retained exact ref may still be readable. Data's server
+                // resolver, not the writer claim or this adapter, admits it.
+                writerRefusal = error;
+            }
             return await post({
             path: input.path,
             body: input.body,
             kind: input.kind,
             credentials: input.credentials,
             ...(input.operationSignal ? { operationSignal: input.operationSignal } : {}),
-                parseError: (value) => parseCollectionError(value, input.kind),
+                parseError: (value, status) => {
+                    const error = parseCollectionError(value, input.kind);
+                    return writerRefusal && status === 404 && error?.code === 'collection_unavailable'
+                        ? writerRefusal : error;
+                },
                 unavailableMessage: 'Account Collection transport is unavailable',
             });
         };

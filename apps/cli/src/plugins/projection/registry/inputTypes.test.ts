@@ -34,7 +34,7 @@ describe('plugin input type projection', () => {
     if (!family) throw new Error('Expected input type family');
     const entry = family.entriesById[`${ids[0]}/repository`];
     expect(entry?.occurrenceId).toBe(registry.occurrenceIdsByPluginId?.[ids[0]!]);
-    expect(entry).toMatchObject(origin);
+    expect(entry).toMatchObject({ executionOrigin: origin });
     expect(PluginProjectionV2Schema.safeParse({ ...projection, familiesById: { ...projection.familiesById,
       inputTypes: { ...family, entriesById: { invalid: { ...entry, id: 'invalid id/repository', pluginId: 'invalid id' } } },
     } }).success).toBe(false);

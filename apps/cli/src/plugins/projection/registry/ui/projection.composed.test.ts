@@ -363,25 +363,29 @@ describe('plugin UI projection family', () => {
                 .familiesById.pluginUi?.entriesById[entryId]
         );
 
-        expect(project(undefined)).not.toHaveProperty('materializationRef');
+        expect(project(undefined)).not.toHaveProperty('executionOrigin');
         expect(project('materialization-a')).toMatchObject({
             occurrenceId: 'materialized-occurrence-a',
-            serverIdentityId: 'srv_projection_fixture',
-            materializationRef: {
-                machineId: 'machine_projection_fixture',
-                materializationId: 'materialization-a',
-                pluginId: 'acme.materialized',
+            executionOrigin: {
+                serverIdentityId: 'srv_projection_fixture',
+                materializationRef: {
+                    machineId: 'machine_projection_fixture',
+                    materializationId: 'materialization-a',
+                    pluginId: 'acme.materialized',
+                },
             },
         });
         expect(project('materialization-b')).toMatchObject({
-            materializationRef: {
-                machineId: 'machine_projection_fixture',
-                materializationId: 'materialization-b',
-                pluginId: 'acme.materialized',
+            executionOrigin: {
+                materializationRef: {
+                    machineId: 'machine_projection_fixture',
+                    materializationId: 'materialization-b',
+                    pluginId: 'acme.materialized',
+                },
             },
         });
         expect(project('materialization-b')).not.toMatchObject({
-            materializationRef: { materializationId: 'materialization-a' },
+            executionOrigin: { materializationRef: { materializationId: 'materialization-a' } },
         });
 
         expect(buildPluginProjectionV2({
@@ -463,7 +467,7 @@ describe('plugin UI projection family', () => {
                 extensions: ['.md'],
             },
             destination: { pluginId: 'acme.viewer', localId: 'file-details' },
-            ...origin,
+            executionOrigin: origin,
         });
         expect(projected[viewerEntryId]).not.toHaveProperty('path');
         expect(projected[viewerEntryId]).not.toHaveProperty('launchInput');
@@ -2045,11 +2049,13 @@ describe('plugin UI projection family', () => {
                     artifactDigest: actionArtifact.digest,
                 },
             },
-            serverIdentityId: 'srv_client_action',
-            materializationRef: {
-                machineId: 'machine_client_action',
-                materializationId: 'client-action-materialization',
-                pluginId,
+            executionOrigin: {
+                serverIdentityId: 'srv_client_action',
+                materializationRef: {
+                    machineId: 'machine_client_action',
+                    materializationId: 'client-action-materialization',
+                    pluginId,
+                },
             },
         });
         expect(actionEntry).not.toMatchObject({

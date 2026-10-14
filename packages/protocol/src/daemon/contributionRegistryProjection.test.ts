@@ -24,6 +24,7 @@ import {
   DaemonPluginUiArtifactBytesReadResponseSchema,
   PluginProjectedActionV2Schema,
   PluginProjectedAgentV2Schema,
+  PluginProjectedResourceV2Schema,
   PluginProjectedSettingsFieldV2Schema,
   PluginProjectionInstalledPackageV2Schema,
   PluginProjectionV2Schema,
@@ -226,9 +227,9 @@ describe('daemon contribution registry projection (wire)', () => {
       },
       executionOrigin: {
         serverIdentityId: 'srv_composer',
-        materializationRef: {
+        sourceRef: {
           machineId: 'machine-composer',
-          materializationId: 'review-materialization',
+          sourceCustody: CONTRIBUTOR_SOURCE_CUSTODY,
           pluginId: 'acme.review',
         },
       },
@@ -244,6 +245,13 @@ describe('daemon contribution registry projection (wire)', () => {
     } as const;
 
     expect(DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse(entry)).toEqual(entry);
+    expect(DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.safeParse({
+      ...entry,
+      executionOrigin: {
+        ...entry.executionOrigin,
+        sourceRef: { ...entry.executionOrigin.sourceRef, sourceCustody: TARGET_SOURCE_CUSTODY },
+      },
+    }).success).toBe(false);
     const response = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
       protocolVersion: 1,
       projection: { v: 2, generation: 1, familiesById: {} },
@@ -479,9 +487,9 @@ describe('daemon contribution registry projection (wire)', () => {
       },
       executionOrigin: {
         serverIdentityId: 'srv_targeted',
-        materializationRef: {
+        sourceRef: {
           machineId: 'machine-targeted',
-          materializationId: 'contributor-materialization',
+          sourceCustody: CONTRIBUTOR_SOURCE_CUSTODY,
           pluginId: 'acme.contributor',
         },
       },
@@ -497,6 +505,13 @@ describe('daemon contribution registry projection (wire)', () => {
     } as const;
 
     expect(DaemonPluginUiTargetedSurfaceMountV1Schema.parse(mount)).toEqual(mount);
+    expect(DaemonPluginUiTargetedSurfaceMountV1Schema.safeParse({
+      ...mount,
+      executionOrigin: {
+        ...mount.executionOrigin,
+        sourceRef: { ...mount.executionOrigin.sourceRef, sourceCustody: TARGET_SOURCE_CUSTODY },
+      },
+    }).success).toBe(false);
     const surface = {
       point: mount.point,
       contributor: mount.contributor,
@@ -630,17 +645,19 @@ describe('daemon contribution registry projection (wire)', () => {
     }).success).toBe(false);
   });
 
-  it('carries an exact paired execution origin on each projected plugin UI entry', () => {
+  it('carries an exact execution origin envelope on each projected plugin UI entry', () => {
     const entry = {
       id: 'surfacePlacement:acme.preview:overview',
       pluginId: 'acme.preview',
       occurrenceId: 'preview-occurrence-a',
       contributionKind: 'surfacePlacement',
-      serverIdentityId: 'srv_projection_fixture',
-      materializationRef: {
-        machineId: 'machine_projection_fixture',
-        materializationId: 'materialization-current',
-        pluginId: 'acme.preview',
+      executionOrigin: {
+        serverIdentityId: 'srv_projection_fixture',
+        sourceRef: {
+          machineId: 'machine_projection_fixture',
+          sourceCustody: TARGET_SOURCE_CUSTODY,
+          pluginId: 'acme.preview',
+        },
       },
     } as const;
     const projection = {
@@ -677,7 +694,7 @@ describe('daemon contribution registry projection (wire)', () => {
         pluginUi: {
           ...projection.familiesById.pluginUi,
           entriesById: {
-            [entry.id]: { ...entry, materializationRef: undefined },
+            [entry.id]: { ...entry, executionOrigin: { sourceRef: entry.executionOrigin.sourceRef } },
           },
         },
       },
@@ -690,7 +707,10 @@ describe('daemon contribution registry projection (wire)', () => {
           entriesById: {
             [entry.id]: {
               ...entry,
-              materializationRef: { ...entry.materializationRef, pluginId: 'acme.other' },
+              executionOrigin: {
+                ...entry.executionOrigin,
+                sourceRef: { ...entry.executionOrigin.sourceRef, pluginId: 'acme.other' },
+              },
             },
           },
         },
@@ -954,19 +974,20 @@ describe('daemon contribution registry projection (wire)', () => {
         },
         platforms: ['web'],
       },
-      serverIdentityId: 'srv_preview',
-      materializationRef: {
-        machineId: 'machine-preview',
-        materializationId: 'materialization-preview',
-        pluginId: 'acme.preview',
+      executionOrigin: {
+        serverIdentityId: 'srv_preview',
+        sourceRef: {
+          machineId: 'machine-preview',
+          sourceCustody: TARGET_SOURCE_CUSTODY,
+          pluginId: 'acme.preview',
+        },
       },
       dangerLevel: 'safe',
     } as const;
 
     expect(PluginProjectedActionV2Schema.parse(projectedAction)).toMatchObject({
       execution: projectedAction.execution,
-      serverIdentityId: 'srv_preview',
-      materializationRef: projectedAction.materializationRef,
+      executionOrigin: projectedAction.executionOrigin,
     });
     // Action schemas are read per Action on demand, never projected in bulk.
     expect(PluginProjectedActionV2Schema.safeParse({
@@ -989,15 +1010,28 @@ describe('daemon contribution registry projection (wire)', () => {
     }).success).toBe(true);
     expect(PluginProjectedActionV2Schema.safeParse({
       ...projectedAction,
-      materializationRef: {
-        ...projectedAction.materializationRef,
-        pluginId: 'acme.other',
+      executionOrigin: {
+        ...projectedAction.executionOrigin,
+        sourceRef: { ...projectedAction.executionOrigin.sourceRef, pluginId: 'acme.other' },
       },
     }).success).toBe(false);
     expect(PluginProjectedActionV2Schema.safeParse({
       ...projectedAction,
-      serverIdentityId: undefined,
+      executionOrigin: { sourceRef: projectedAction.executionOrigin.sourceRef },
     }).success).toBe(false);
+    expect(PluginProjectedActionV2Schema.safeParse({
+      ...projectedAction,
+      executionOrigin: undefined,
+      serverIdentityId: 'srv_preview',
+      materializationRef: { machineId: 'machine-preview', materializationId: 'current', pluginId: 'acme.preview' },
+    }).success).toBe(false);
+    expect(PluginProjectedActionV2Schema.parse({
+      ...projectedAction,
+      executionOrigin: {
+        serverIdentityId: 'srv_preview',
+        materializationRef: { machineId: 'machine-preview', materializationId: 'current', pluginId: 'acme.preview' },
+      },
+    })).toMatchObject({ executionOrigin: { materializationRef: { materializationId: 'current' } } });
   });
 
   it('accepts only the normalized present-user authorization projection for an Action', () => {
@@ -2082,6 +2116,82 @@ describe('daemon contribution registry projection (wire)', () => {
       },
       digest: 'sha256:manifest',
     }).success).toBe(false);
+  });
+
+  it('binds installed package and Resource origins to their actual producer identity', () => {
+    const executionOrigin = {
+      serverIdentityId: 'srv_projection_fixture',
+      sourceRef: {
+        machineId: 'machine_projection_fixture',
+        pluginId: 'acme.plugin',
+        sourceCustody: TARGET_SOURCE_CUSTODY,
+      },
+    } as const;
+    const installedPackage = {
+      id: 'acme.plugin', displayName: 'Acme Plugin', enabled: true,
+      source: { kind: 'path', locator: '/tmp/acme' },
+      sourceCustody: TARGET_SOURCE_CUSTODY,
+      executionOrigin,
+    } as const;
+    expect(PluginProjectionInstalledPackageV2Schema.parse(installedPackage)).toMatchObject({ executionOrigin });
+    expect(PluginProjectionInstalledPackageV2Schema.safeParse({
+      ...installedPackage, sourceCustody: CONTRIBUTOR_SOURCE_CUSTODY,
+    }).success).toBe(false);
+    const resource = {
+      id: 'acme.plugin/entries', pluginId: 'acme.plugin', occurrenceId: 'plugin-occurrence',
+      resourceKind: 'config', scope: 'global', executionOrigin,
+    } as const;
+    expect(PluginProjectedResourceV2Schema.parse(resource)).toMatchObject({ executionOrigin });
+    expect(PluginProjectedResourceV2Schema.safeParse({ ...resource, occurrenceId: undefined }).success).toBe(false);
+    for (const schemaAndRow of [
+      { schema: PluginProjectionInstalledPackageV2Schema, row: installedPackage },
+      { schema: PluginProjectedResourceV2Schema, row: resource },
+    ]) {
+      expect(schemaAndRow.schema.safeParse({
+        ...schemaAndRow.row,
+        executionOrigin: { ...executionOrigin, sourceRef: { ...executionOrigin.sourceRef, pluginId: 'acme.other' } },
+      }).success).toBe(false);
+    }
+  });
+
+  it.each([
+    ['registrySources', {
+      id: 'catalog', title: 'Catalog', format: 'happier-catalog', kinds: ['plugin'], url: 'https://catalog.example.org',
+    }],
+    ['inputTypes', { id: 'catalog', title: 'Catalog', semantic: 'catalog', valueSchema: { type: 'string' } }],
+    ['atmospherePictures', {
+      id: 'catalog', title: 'Catalog', kind: 'photo',
+      credit: { author: 'Acme', source: 'Acme', url: 'https://catalog.example.org', licence: 'CC0' },
+      src: { full: 'https://catalog.example.org/full.jpg', thumb: 'https://catalog.example.org/thumb.jpg' },
+      horizon: {}, focus: {}, hour: 12, grades: { light: 1, dusk: 1, night: 1 }, dark: 'night', look: {},
+    }],
+    ['machineProvisioners', {
+      id: 'catalog', title: 'Catalog', icon: 'server', resourceKind: 'machine',
+      launchSchema: { type: 'object', additionalProperties: false },
+      resourceSchema: { type: 'object', additionalProperties: false },
+      schemaVersion: 1, platforms: ['linux'], prerequisites: [],
+      billing: { location: 'cloud', stoppedBilling: 'not-billed' }, retention: { supportedIntents: ['delete'] },
+      actions: { check: 'check', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect', destroy: 'destroy' },
+    }],
+  ] as const)('keeps %s origin envelopes closed and bound to their serving occurrence', (family, definition) => {
+    const executionOrigin = {
+      serverIdentityId: 'srv_projection_fixture',
+      sourceRef: { machineId: 'machine_projection_fixture', pluginId: 'acme.plugin', sourceCustody: TARGET_SOURCE_CUSTODY },
+    } as const;
+    const entry = { id: 'acme.plugin/catalog', pluginId: 'acme.plugin', pluginVersion: '1', occurrenceId: 'plugin-occurrence', definition, executionOrigin };
+    const projectionFor = (row: unknown) => ({
+      v: 2, generation: 1, familiesById: { [family]: { family, entriesById: { [entry.id]: row } } },
+    });
+    expect(PluginProjectionV2Schema.parse(projectionFor(entry))).toMatchObject({
+      familiesById: { [family]: { entriesById: { [entry.id]: { executionOrigin } } } },
+    });
+    expect(PluginProjectionV2Schema.safeParse(projectionFor({ ...entry, occurrenceId: undefined })).success).toBe(false);
+    expect(PluginProjectionV2Schema.safeParse(projectionFor({
+      ...entry, executionOrigin: { ...executionOrigin, sourceRef: { ...executionOrigin.sourceRef, pluginId: 'acme.other' } },
+    })).success).toBe(false);
+    expect(PluginProjectionV2Schema.safeParse(projectionFor({
+      ...entry, executionOrigin: { sourceRef: executionOrigin.sourceRef },
+    })).success).toBe(false);
   });
 
   it('carries only a committed immutable generation on installed-package projections', () => {

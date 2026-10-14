@@ -10,7 +10,12 @@ import {
   PluginSourceCustodyV1Schema,
   pluginSourceCustodyV1Equal,
 } from '../plugins/runtime/sourceCustody.js';
-import { PluginMachineMaterializationExecutionOriginV1Schema } from '../machines/administration/pluginMachineExecutionOriginV1.js';
+import {
+  PluginMachineExecutionOriginV1Schema,
+  PluginMachineMaterializationExecutionOriginV1Schema,
+  getPluginMachineExecutionOriginRef,
+  type PluginMachineExecutionOriginV1,
+} from '../machines/administration/pluginMachineExecutionOriginV1.js';
 import { PluginExecutionTargetV2Schema } from '../plugins/manifest/v2.js';
 
 import {
@@ -175,6 +180,30 @@ const PluginUiQualifiedActionReferenceV1Schema = lazyZodSchema(() => asProtocolZ
 const PluginUiRuntimeOccurrenceIdV1Schema = lazyZodSchema(() => asProtocolZod(
   CanonicalPluginUiRuntimeOccurrenceIdV1Schema,
 ));
+
+function validateProjectedExecutionOrigin(
+  executionOrigin: PluginMachineExecutionOriginV1 | undefined,
+  producer: Readonly<{ pluginId: string; sourceCustody?: z.infer<typeof PluginSourceCustodyV1Schema> }>,
+  context: z.RefinementCtx,
+): void {
+  if (!executionOrigin) return;
+  const refKind = 'sourceRef' in executionOrigin ? 'sourceRef' : 'materializationRef';
+  if (getPluginMachineExecutionOriginRef(executionOrigin).pluginId !== producer.pluginId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['executionOrigin', refKind, 'pluginId'],
+      message: 'Projected execution origin must match its producer pluginId.',
+    });
+  }
+  if ('sourceRef' in executionOrigin && producer.sourceCustody
+    && !pluginSourceCustodyV1Equal(executionOrigin.sourceRef.sourceCustody, producer.sourceCustody)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['executionOrigin', 'sourceRef', 'sourceCustody'],
+      message: 'Projected source execution origin must match its producer source custody.',
+    });
+  }
+}
 
 const DaemonReactNativeHostRuntimeIdentityStringV1Schema = lazyZodSchema(() => z.string().trim().min(1));
 
@@ -596,7 +625,7 @@ export type DaemonPluginActionSchemasReadRequest = z.infer<
 export const DaemonPluginActionSchemasReadResponseSchema = lazyZodSchema(() => z.union([
   z.object({
     ok: z.literal(true),
-    inputSchema: PluginJsonSchemaV2Schema,
+    inputSchema: PluginJsonSchemaV2Schema.optional(),
     outputSchema: PluginJsonSchemaV2Schema.optional(),
   }).strict(),
   z.object({
@@ -1053,10 +1082,13 @@ export const PluginProjectionInstalledPackageV2Schema = lazyZodSchema(() => z.ob
    * targeted read: its targeted-contribution snapshot is empty by definition.
    */
   sourceCustody: PluginSourceCustodyV1Schema.optional(),
+  executionOrigin: PluginMachineExecutionOriginV1Schema.optional(),
   declaresContributionPoints: z.boolean().optional(),
   executionTarget: PluginExecutionTargetV2Schema.optional(),
   brand: PluginProjectionBrandAssetV2Schema.optional(),
-}).strict());
+}).strict().superRefine((entry, context) => {
+  validateProjectedExecutionOrigin(entry.executionOrigin, { pluginId: entry.id, sourceCustody: entry.sourceCustody }, context);
+}));
 export type PluginProjectionInstalledPackageV2 = z.infer<typeof PluginProjectionInstalledPackageV2Schema>;
 
 export const PluginProjectedContributionBaseV2Schema = lazyZodSchema(() => z.object({
@@ -1186,8 +1218,7 @@ export const PluginProjectedActionV2Schema = lazyZodSchema(() => PluginProjected
   // The Action projection retains the producer-owned exact origin used by
   // client projection admission. Consumers must not derive this from a
   // package/member identity or replace it with a coarser machine fact.
-  serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
-  materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
+  executionOrigin: PluginMachineExecutionOriginV1Schema.optional(),
   placementBindings: PluginActionPlacementBindingsV2Schema.optional(),
   slash: PluginActionSlashV2Schema.optional(),
   // Input/output schemas are not projected: they are most of the describe
@@ -1204,24 +1235,7 @@ export const PluginProjectedActionV2Schema = lazyZodSchema(() => PluginProjected
    */
   authorization: PluginActionPresentUserAuthorizationFactsSchema.optional(),
 }).strict().superRefine((value, context) => {
-  const hasServerIdentity = value.serverIdentityId !== undefined;
-  const hasMaterializationRef = value.materializationRef !== undefined;
-  if (hasServerIdentity !== hasMaterializationRef) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: hasServerIdentity ? ['materializationRef'] : ['serverIdentityId'],
-      message: 'Projected Action execution origin must include both serverIdentityId and materializationRef.',
-    });
-  } else if (
-    hasMaterializationRef
-    && value.materializationRef!.pluginId !== value.pluginId
-  ) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['materializationRef', 'pluginId'],
-      message: 'Projected Action execution origin must match the Action pluginId.',
-    });
-  }
+  validateProjectedExecutionOrigin(value.executionOrigin, value, context);
   if (value.operation && value.execution.target !== 'daemon') {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -1277,8 +1291,7 @@ export const PluginProjectedResourceV2Schema = lazyZodSchema(() => z.object({
   /** Actual serving runtime slot; absent on earlier projection writers. */
   occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema.optional(),
   /** Producer-owned origin, consumed by the same Administration selection as Views. */
-  serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
-  materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
+  executionOrigin: PluginMachineExecutionOriginV1Schema.optional(),
   resourceKind: PluginResourceKindV2Schema,
   /** Dynamic Resources have no packaged file path. */
   path: z.string().trim().min(1).optional(),
@@ -1292,13 +1305,10 @@ export const PluginProjectedResourceV2Schema = lazyZodSchema(() => z.object({
   if (resource.path === undefined && resource.scope === undefined) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'A pathless Resource must carry its declared scope.' });
   }
-  const hasOrigin = resource.serverIdentityId !== undefined || resource.materializationRef !== undefined;
-  if (hasOrigin && (resource.serverIdentityId === undefined || resource.materializationRef === undefined || resource.occurrenceId === undefined)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Projected Resource origin requires both exact origin fields and its serving occurrence.' });
+  if (resource.executionOrigin && resource.occurrenceId === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['occurrenceId'], message: 'Projected Resource origin requires its serving occurrence.' });
   }
-  if (resource.materializationRef && resource.materializationRef.pluginId !== resource.pluginId) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['materializationRef', 'pluginId'], message: 'Projected Resource origin must match its pluginId.' });
-  }
+  validateProjectedExecutionOrigin(resource.executionOrigin, resource, context);
 }));
 export type PluginProjectedResourceV2 = z.infer<typeof PluginProjectedResourceV2Schema>;
 
@@ -1861,8 +1871,7 @@ const PROJECTED_OPENABLE_CONTENT_VIEWER_FIELDS = new Set([
   'identity',
   'viewer',
   'destination',
-  'serverIdentityId',
-  'materializationRef',
+  'executionOrigin',
 ]);
 
 const PluginProjectedSearchProviderEntryV1Schema = lazyZodSchema(() => z.object({
@@ -2001,12 +2010,9 @@ const PluginProjectedUiGenericEntryShapeV2Schema = lazyZodSchema(() => strictPro
   // the declarative model through one strict Protocol-owned contract instead
   // of opaque records.
   renderer: z.lazy(() => DaemonPluginUiTargetedSurfaceRendererRefV1Schema).optional(),
-  // F7: a projection producer may stamp a per-plugin UI entry with the exact
-  // machine materialization which produced it.  Older producers legitimately
-  // omit both fields; consumers then fail closed rather than deriving a coarse
-  // machine-level replacement.
-  serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
-  materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
+  // A producer stamps the exact source or installed materialization which
+  // supplied this entry. An absent origin grants no execution authority.
+  executionOrigin: PluginMachineExecutionOriginV1Schema.optional(),
 }).strict());
 
 function refineProjectedUiEntry(
@@ -2052,25 +2058,8 @@ function refineProjectedUiEntry(
     });
     return;
   }
-  const hasServerIdentity = value.serverIdentityId !== undefined;
-  const hasMaterializationRef = value.materializationRef !== undefined;
-  if (hasServerIdentity !== hasMaterializationRef) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: hasServerIdentity ? ['materializationRef'] : ['serverIdentityId'],
-      message: 'Projected plugin UI execution origin must include both serverIdentityId and materializationRef.',
-    });
-    return;
-  }
   const pluginId = typeof value.pluginId === 'string' ? value.pluginId : '';
-  if (hasMaterializationRef && (!pluginId || value.materializationRef!.pluginId !== pluginId)) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['materializationRef', 'pluginId'],
-      message: 'Projected plugin UI execution origin must match the entry pluginId.',
-    });
-  }
-
+  validateProjectedExecutionOrigin(value.executionOrigin, { pluginId }, context);
   const contributionKind = value.contributionKind;
   const hasViewerFields = value.identity !== undefined
     || value.viewer !== undefined
@@ -2138,8 +2127,7 @@ const PluginProjectedUiGenericEntryV2Schema = lazyZodSchema(() => PluginProjecte
 /** Installed presentation declarations carry no process or execution authority. */
 export const PluginDeclaredUiEntryV1Schema = lazyZodSchema(() => PluginProjectedUiGenericEntryShapeV2Schema.omit({
   occurrenceId: true,
-  serverIdentityId: true,
-  materializationRef: true,
+  executionOrigin: true,
 }).superRefine(refineProjectedUiEntry));
 export type PluginDeclaredUiEntryV1 = z.infer<typeof PluginDeclaredUiEntryV1Schema>;
 export const PluginDeclaredUiEntriesV1Schema = lazyZodSchema(() => z.record(z.string(), PluginDeclaredUiEntryV1Schema));
@@ -2229,10 +2217,15 @@ export const DaemonPluginUiEmbeddedSurfaceV1Schema = lazyZodSchema(() => z.objec
   projectionGeneration: z.number().int().nonnegative(),
   rendererChain: z.array(PluginContributionIdentityV1Schema).min(1).max(8),
   selectedRenderer: DaemonPluginUiTargetedSurfaceSelectedRendererV1Schema,
-  executionOrigin: PluginMachineMaterializationExecutionOriginV1Schema,
+  executionOrigin: PluginMachineExecutionOriginV1Schema,
   resourceCapability: PluginUiResourceBindingCapabilityV1Schema,
   contributorTargetedContributions: PluginUiTargetedContributionsV1Schema,
-}).strict());
+}).strict().superRefine((entry, context) => {
+  validateProjectedExecutionOrigin(entry.executionOrigin, {
+    pluginId: entry.contribution.pluginId,
+    sourceCustody: entry.contributorTargetedContributions.target.sourceCustody,
+  }, context);
+}));
 export const DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1Schema = DaemonPluginUiEmbeddedSurfaceV1Schema;
 export type DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1 = z.infer<
   typeof DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1Schema
@@ -2251,18 +2244,15 @@ export const DaemonPluginUiComposerSurfaceCatalogEntryV1Schema = lazyZodSchema((
   role: ComposerSurfaceRoleV1Schema,
   rendererChain: z.array(PluginContributionIdentityV1Schema).min(1).max(8),
   selectedRenderer: DaemonPluginUiTargetedSurfaceSelectedRendererV1Schema,
-  executionOrigin: PluginMachineMaterializationExecutionOriginV1Schema,
+  executionOrigin: PluginMachineExecutionOriginV1Schema,
   resourceCapability: PluginUiResourceBindingCapabilityV1Schema,
   /** The contributor's own current cold snapshot, never a target-owned substitute. */
   contributorTargetedContributions: PluginUiTargetedContributionsV1Schema,
 }).strict().superRefine((entry, context) => {
-  if (entry.executionOrigin.materializationRef.pluginId !== entry.contribution.pluginId) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['executionOrigin', 'materializationRef', 'pluginId'],
-      message: 'Composer catalog execution origin must belong to its admitted contributor.',
-    });
-  }
+  validateProjectedExecutionOrigin(entry.executionOrigin, {
+    pluginId: entry.contribution.pluginId,
+    sourceCustody: entry.contributorTargetedContributions.target.sourceCustody,
+  }, context);
   if (
     entry.contributorTargetedContributions.target.pluginId !== entry.contribution.pluginId
     || entry.contributorTargetedContributions.target.occurrenceId !== entry.occurrenceId
@@ -2310,18 +2300,12 @@ export const DaemonPluginUiTargetedSurfaceMountV1Schema =
     /** Declaration-order provenance; consumers use selectedRenderer only. */
     rendererChain: z.array(PluginContributionIdentityV1Schema).min(1).max(8),
     selectedRenderer: DaemonPluginUiTargetedSurfaceSelectedRendererV1Schema,
-    executionOrigin: PluginMachineMaterializationExecutionOriginV1Schema,
+    executionOrigin: PluginMachineExecutionOriginV1Schema,
     resourceCapability: PluginUiResourceBindingCapabilityV1Schema,
     /** The contributor's own current cold snapshot, never inherited from its target. */
     contributorTargetedContributions: PluginUiTargetedContributionsV1Schema,
   }).strict().superRefine((mount, context) => {
-    if (mount.executionOrigin.materializationRef.pluginId !== mount.contributor.pluginId) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['executionOrigin', 'materializationRef', 'pluginId'],
-        message: 'Targeted Surface execution origin must belong to its admitted contributor.',
-      });
-    }
+    validateProjectedExecutionOrigin(mount.executionOrigin, mount.contributor, context);
     if (
       mount.contributorTargetedContributions.target.pluginId !== mount.contributor.pluginId
       || mount.contributorTargetedContributions.target.occurrenceId
@@ -2455,46 +2439,38 @@ export function readDaemonPluginUiTargetedSurfaceMountV1<
 
 export const PluginProjectedRegistrySourceEntryV1Schema = lazyZodSchema(() => z.object({
   id: z.string().min(1), pluginId: PluginIdSchema, pluginVersion: z.string().min(1), occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema.optional(),
-  serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
-  materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
+  executionOrigin: PluginMachineExecutionOriginV1Schema.optional(),
   definition: PluginRegistrySourceContributionV1Schema,
 }).strict().superRefine((entry, context) => {
   if (entry.id !== `${entry.pluginId}/${entry.definition.id}`) context.addIssue({ code: 'custom', path: ['id'], message: 'Registry source identity must match its descriptor' });
-  const hasOrigin = entry.serverIdentityId !== undefined || entry.materializationRef !== undefined;
-  if (hasOrigin && (!entry.serverIdentityId || !entry.materializationRef || !entry.occurrenceId)) context.addIssue({ code: 'custom', message: 'Registry source origin requires both exact origin fields and its serving occurrence' });
-  if (entry.materializationRef && entry.materializationRef.pluginId !== entry.pluginId) context.addIssue({ code: 'custom', path: ['materializationRef', 'pluginId'], message: 'Registry source origin must match its pluginId' });
+  if (entry.executionOrigin && !entry.occurrenceId) context.addIssue({ code: 'custom', path: ['occurrenceId'], message: 'Registry source origin requires its serving occurrence' });
+  validateProjectedExecutionOrigin(entry.executionOrigin, entry, context);
 }));
 export type PluginProjectedRegistrySourceEntryV1 = z.infer<typeof PluginProjectedRegistrySourceEntryV1Schema>;
 
 const PluginProjectedAtmospherePictureEntryV1Schema = lazyZodSchema(() => z.object({
   id: z.string().min(1), pluginId: PluginIdSchema, pluginVersion: z.string().min(1), occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema.optional(),
-  serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
-  materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
+  executionOrigin: PluginMachineExecutionOriginV1Schema.optional(),
   definition: PluginAtmospherePictureContributionV1Schema,
 }).strict().superRefine((entry, context) => {
   if (entry.id !== `${entry.pluginId}/${entry.definition.id}`) context.addIssue({ code: 'custom', path: ['id'], message: 'Picture identity must match its descriptor' });
-  const hasOrigin = entry.serverIdentityId !== undefined || entry.materializationRef !== undefined;
-  if (hasOrigin && (!entry.serverIdentityId || !entry.materializationRef || !entry.occurrenceId)) context.addIssue({ code: 'custom', message: 'Picture origin requires both exact origin fields and its serving occurrence' });
-  if (entry.materializationRef && entry.materializationRef.pluginId !== entry.pluginId) context.addIssue({ code: 'custom', path: ['materializationRef', 'pluginId'], message: 'Picture origin must match its pluginId' });
+  if (entry.executionOrigin && !entry.occurrenceId) context.addIssue({ code: 'custom', path: ['occurrenceId'], message: 'Picture origin requires its serving occurrence' });
+  validateProjectedExecutionOrigin(entry.executionOrigin, entry, context);
 }));
 
 const PluginProjectedInputTypeEntryV1Schema = lazyZodSchema(() => z.object({
   id: z.string().min(1), pluginId: PluginIdSchema, pluginVersion: z.string().min(1), occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema.optional(),
-  serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
-  materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
+  executionOrigin: PluginMachineExecutionOriginV1Schema.optional(),
   definition: PluginInputTypeContributionV1Schema,
   pickerSurface: DaemonPluginUiEmbeddedSurfaceV1Schema.optional(),
 }).strict().superRefine((entry, context) => {
   if (entry.id !== `${entry.pluginId}/${entry.definition.id}`) {
     context.addIssue({ code: 'custom', path: ['id'], message: 'Input type identity must match its descriptor' });
   }
-  const hasOrigin = entry.serverIdentityId !== undefined || entry.materializationRef !== undefined;
-  if (hasOrigin && (!entry.serverIdentityId || !entry.materializationRef || !entry.occurrenceId)) {
-    context.addIssue({ code: 'custom', message: 'Projected input type origin requires both exact origin fields and its serving occurrence' });
+  if (entry.executionOrigin && !entry.occurrenceId) {
+    context.addIssue({ code: 'custom', path: ['occurrenceId'], message: 'Projected input type origin requires its serving occurrence' });
   }
-  if (entry.materializationRef && entry.materializationRef.pluginId !== entry.pluginId) {
-    context.addIssue({ code: 'custom', path: ['materializationRef', 'pluginId'], message: 'Projected input type origin must match its pluginId' });
-  }
+  validateProjectedExecutionOrigin(entry.executionOrigin, entry, context);
   const mount = entry.pickerSurface;
   const declaredPicker = entry.definition.picker
     ? qualifyPluginContributionReferenceV1(entry.definition.picker, entry.pluginId)
@@ -2505,7 +2481,7 @@ const PluginProjectedInputTypeEntryV1Schema = lazyZodSchema(() => z.object({
     || mount.contributorTargetedContributions.target.pluginId !== entry.pluginId
     || mount.contributorTargetedContributions.target.occurrenceId !== entry.occurrenceId
     || !mount.contributorTargetedContributions.target.sourceCustody
-    || mount.executionOrigin.materializationRef.pluginId !== entry.pluginId
+    || getPluginMachineExecutionOriginRef(mount.executionOrigin).pluginId !== entry.pluginId
     || mount.rendererChain[0]?.pluginId !== declaredPicker?.pluginId
     || mount.rendererChain[0]?.localId !== declaredPicker?.localId
     || mount.rendererChain.some(renderer => renderer.pluginId !== entry.pluginId)
@@ -2520,8 +2496,7 @@ export const PluginProjectedMachineProvisionerEntryV1Schema = lazyZodSchema(() =
   pluginId: PluginIdSchema,
   pluginVersion: z.string().min(1),
   occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema.optional(),
-  serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
-  materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
+  executionOrigin: PluginMachineExecutionOriginV1Schema.optional(),
   definition: MachineProvisionerContributionV1Schema,
   /** Credential-use declarations of the acquire Action, qualified to this consumer. */
   connectedAccountPurposes: z.array(PluginProjectedConnectedAccountPurposeDeclarationV1Schema).optional(),
@@ -2529,13 +2504,10 @@ export const PluginProjectedMachineProvisionerEntryV1Schema = lazyZodSchema(() =
   if (entry.id !== `${entry.pluginId}/${entry.definition.id}`) {
     context.addIssue({ code: 'custom', path: ['id'], message: 'Machine provisioner identity must match its descriptor' });
   }
-  const hasOrigin = entry.serverIdentityId !== undefined || entry.materializationRef !== undefined;
-  if (hasOrigin && (!entry.serverIdentityId || !entry.materializationRef || !entry.occurrenceId)) {
-    context.addIssue({ code: 'custom', message: 'Projected machine provisioner origin requires both exact origin fields and its serving occurrence' });
+  if (entry.executionOrigin && !entry.occurrenceId) {
+    context.addIssue({ code: 'custom', path: ['occurrenceId'], message: 'Projected machine provisioner origin requires its serving occurrence' });
   }
-  if (entry.materializationRef && entry.materializationRef.pluginId !== entry.pluginId) {
-    context.addIssue({ code: 'custom', path: ['materializationRef', 'pluginId'], message: 'Projected machine provisioner origin must match its pluginId' });
-  }
+  validateProjectedExecutionOrigin(entry.executionOrigin, entry, context);
 }));
 export type PluginProjectedMachineProvisionerEntryV1 = z.infer<typeof PluginProjectedMachineProvisionerEntryV1Schema>;
 
