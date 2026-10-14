@@ -17,16 +17,8 @@ import {
     createServerFeatureGatedRouteApp,
     isServerFeatureEnabledForRequest,
 } from "@/app/features/catalog/serverFeatureGate";
-import {
-    UserProfileSchema,
-    UserRecipientEnvelopeResponseSchema,
-    UsersSearchQueryV1Schema,
-    UsersSearchResponseSchema,
-    decodeKeysetCursorV1,
-    encodeKeysetCursorV1,
-    readKeysetCursorIdV1,
-    readKeysetCursorTextV1,
-} from "@happier-dev/protocol";
+import { UserProfileSchema, UserRecipientEnvelopeResponseSchema, UsersSearchQueryV1Schema, UsersSearchResponseSchema } from '@happier-dev/protocol/social/friends';
+import { decodeKeysetCursorV1, encodeKeysetCursorV1, readKeysetCursorIdV1, readKeysetCursorTextV1 } from '@happier-dev/protocol/pagination/keysetCursorV1';
 import { NotFoundSchema } from "../../schemas/notFoundSchema";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import { buildAccountTextPrefixFilter } from "@/app/account/accountTextPrefixFilter";
@@ -126,31 +118,35 @@ export async function userRoutes(app: Fastify) {
         const serverFlavorRaw = (process.env.HAPPIER_SERVER_FLAVOR ?? process.env.HAPPY_SERVER_FLAVOR)?.trim();
         const fallbackProvider = serverFlavorRaw === "light" ? "sqlite" : "postgres";
         const dbProvider = getDbProviderFromEnv(requestHomeEnv, fallbackProvider);
-        const username = buildAccountTextPrefixFilter(query, dbProvider);
+        const textPrefix = buildAccountTextPrefixFilter(query, dbProvider);
+        const collaboration = purpose === "collaboration";
 
-        const queryKey = `v1:user-search:${query}:${searchIdentityProviderId ?? "username"}:${purpose ?? "social"}`;
-        let after: Readonly<{ username: string; id: string }> | null = null;
+        const queryKey = `v1:user-search:${query}:${searchIdentityProviderId ?? "username"}:${purpose ?? "social"}${collaboration ? ":id" : ""}`;
+        let after: Readonly<{ kind: "id"; id: string } | { kind: "username"; username: string; id: string }> | null = null;
         if (cursor) {
             const decoded = decodeKeysetCursorV1(cursor, queryKey);
             const afterUsername = decoded.status === "ok" ? readKeysetCursorTextV1(decoded.parts[0]) : null;
-            const afterId = decoded.status === "ok" ? readKeysetCursorIdV1(decoded.parts[1]) : null;
-            if (afterUsername === null || afterId === null) {
+            const afterId = decoded.status === "ok" ? readKeysetCursorIdV1(decoded.parts[collaboration ? 0 : 1]) : null;
+            if (afterId === null || (!collaboration && afterUsername === null)) {
                 return reply.code(400).send({ error: "invalid_cursor" });
             }
-            after = { username: afterUsername, id: afterId };
+            after = collaboration ? { kind: "id", id: afterId } : { kind: "username", username: afterUsername!, id: afterId };
         }
 
         // Keep the released ten-row page while making the rest of the
         // directory reachable through the same query-bound keyset owner.
         const rows = await db.account.findMany({
             where: {
-                username,
+                // Account.name is the current display identity; legacy first/last fields can be stale.
+                ...(collaboration
+                    ? { OR: [{ name: textPrefix }, { username: textPrefix }] }
+                    : { username: textPrefix }),
                 AND: [
                     ...(purpose === "collaboration"
                         ? [buildSessionAccessCollaborationAccountWhere(request.userId)]
                         : []),
                     ...(after
-                        ? [{ OR: [
+                        ? after.kind === "id" ? [{ id: { gt: after.id } }] : [{ OR: [
                             { username: { gt: after.username } },
                             { username: after.username, id: { gt: after.id } },
                         ] }]
@@ -171,7 +167,8 @@ export async function userRoutes(app: Fastify) {
                 },
             },
             take: 11,
-            orderBy: [{ username: 'asc' }, { id: 'asc' }],
+            // Username-less colleagues must remain pageable, including equal display names.
+            orderBy: collaboration ? [{ id: 'asc' }] : [{ username: 'asc' }, { id: 'asc' }],
         });
         const users = rows.slice(0, 10);
         const last = rows.length > 10 ? users[users.length - 1] : undefined;
@@ -196,8 +193,8 @@ export async function userRoutes(app: Fastify) {
 
         return reply.send({
             users: userProfiles,
-            nextCursor: last && last.username !== null
-                ? encodeKeysetCursorV1({ queryKey, parts: [last.username, last.id] })
+            nextCursor: last && (collaboration || last.username !== null)
+                ? encodeKeysetCursorV1({ queryKey, parts: collaboration ? [last.id] : [last.username!, last.id] })
                 : null,
         });
     });
