@@ -5,6 +5,7 @@ import {
     ProjectSourcesCreateInputV1Schema, ProjectSourcesCreateOutputV1Schema,
     ProjectSourcesUpdateInputV1Schema, ProjectSourcesUpdateOutputV1Schema,
     ProjectSourcesDeleteInputV1Schema, ProjectSourcesDeleteOutputV1Schema,
+    ProjectSourcesFailureV1Schema,
 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 import { inTx } from '@/storage/inTx';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
@@ -20,10 +21,10 @@ const resultStatus = (result: { ok: boolean; error?: string }) => result.ok ? 20
 
 /** Metadata-only front doors share one admission, membership and CAS owner. */
 export function projectSourceRoutes(app: Fastify): void {
-    const readResponse = { 200: ProjectSourcesReadOutputV1Schema, 400: ProjectSourcesReadOutputV1Schema, 403: ProjectSourcesReadOutputV1Schema, 404: ProjectSourcesReadOutputV1Schema };
+    const readResponse = { 200: ProjectSourcesReadOutputV1Schema, 400: ProjectSourcesReadOutputV1Schema, 403: ProjectSourcesReadOutputV1Schema, 404: ProjectSourcesReadOutputV1Schema, 409: ProjectSourcesFailureV1Schema, 503: ProjectSourcesFailureV1Schema };
     app.get('/v1/projects/sources', { preHandler: app.authenticate, config: { allowApiToken: true }, attachValidation: true, schema: {
         querystring: ProjectSourcesListInputV1Schema.omit({ audience: true, limit: true }).extend({ audience: z.string().optional(), limit: z.coerce.number().int().positive().optional() }),
-        response: { 200: ProjectSourcesListOutputV1Schema, 400: ProjectSourcesListOutputV1Schema, 403: ProjectSourcesListOutputV1Schema, 404: ProjectSourcesListOutputV1Schema },
+        response: { 200: ProjectSourcesListOutputV1Schema, 400: ProjectSourcesListOutputV1Schema, 403: ProjectSourcesListOutputV1Schema, 404: ProjectSourcesListOutputV1Schema, 409: ProjectSourcesFailureV1Schema, 503: ProjectSourcesFailureV1Schema },
     } }, async (request, reply) => {
         if (request.validationError) return reply.code(400).send({ ok: false, error: 'source_invalid' });
         let audience: unknown;
@@ -58,6 +59,7 @@ export function projectSourceRoutes(app: Fastify): void {
         params, body: ProjectSourcesDeleteInputV1Schema, response: {
             200: ProjectSourcesDeleteOutputV1Schema, 400: ProjectSourcesDeleteOutputV1Schema,
             403: ProjectSourcesDeleteOutputV1Schema, 404: ProjectSourcesDeleteOutputV1Schema, 409: ProjectSourcesDeleteOutputV1Schema,
+            503: ProjectSourcesFailureV1Schema,
         },
     } }, async (request, reply) => {
         if (request.validationError) return reply.code(400).send({ ok: false, error: 'source_invalid' });
