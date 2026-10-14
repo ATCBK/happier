@@ -22,6 +22,7 @@ import { readInputPath } from '../inputs/inputPredicates.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { getArtifactUseTargetV1 } from '../artifacts/artifactSharingV1.js';
 import { buildWidgetDefinitionArtifactHeaderV1 } from './widgetDefinitionArtifactV1.js';
+import { readUsagePeriodOptions } from '../inputs/usageQuery.js';
 
 describe('shared widget publication purpose admission', () => {
     it('promotes Session declarative, installed, HTML and builtin content then adds independent copies with captured policy', async () => {
@@ -59,7 +60,9 @@ describe('shared widget publication purpose admission', () => {
                 readDescriptor: async request => request.instance.definition.kind === 'artifact'
                     ? widgetDefinitionArtifacts.get(request.instance.definition.artifactId) : null,
                 readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
-                validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
+                validateValue: async () => ({ status: 'valid' }),
+                // The Period's choices are protocol-local, as the real options resolver answers them.
+                resolveOptions: async (field, input) => field.optionsSourceId === 'usage.query.period' ? readUsagePeriodOptions(input.period) : [],
             }),
         });
         const draft = { v: 1, name: 'Library copy', inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false },

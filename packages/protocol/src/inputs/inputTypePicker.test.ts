@@ -69,7 +69,8 @@ describe('host-admitted input type picker', () => {
     answer = { metric: 'cost' };
     expect(await invokeInputTypePicker(request)).toMatchObject({ status: 'selected', value: { metric: 'cost' } });
   });
-  it('selects independently declared Usage period and Session values through the same typed picker owner', async () => {
+  // The Period is offered in place from its own few choices (`usage.query.period`); the Session keeps its picker.
+  it('selects independently declared Usage Session values through the same typed picker owner', async () => {
     let answer: unknown;
     const host: InputTypePickerHostV1 = {
       resolveType: async () => { throw new Error('Usage fields are host inputs'); },
@@ -78,7 +79,6 @@ describe('host-admitted input type picker', () => {
       openHostPicker: async () => answer,
     };
     for (const [path, value, expected] of [
-      ['period', { startMs: 100, endMs: 200 }, { startMs: 100, endMs: 200 }],
       ['session', ['two', 'one', 'two'], ['one', 'two']],
       ['session', null, null],
     ] satisfies [string, JsonValue, JsonValue][]) {

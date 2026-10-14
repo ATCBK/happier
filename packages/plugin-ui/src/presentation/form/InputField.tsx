@@ -93,8 +93,13 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
   const localization = useOptionalHappierUiLocalization();
   // A picker-only type has no list to show: its field box is the picker's trigger.
   const pickerOnly = presentation.kind === 'select' && (props.options ?? []).length === 0 && picker.affordance !== null;
+  // Nothing to choose from: the field box stays and reads its value; there is no blank list to open.
+  const noChoices = presentation.kind === 'select' && optionsSettled && props.options?.length === 0 && !pickerOnly;
+  // An optional field that declares what its empty answer means ("All agents") is still answered when
+  // there is nothing to narrow by; only a choice the form still needs says that none is available.
+  const answeredWithoutChoices = field.required !== true && field.placeholder !== undefined;
   const optionsNotice = props.optionsStatus === 'failed' ? props.optionsNotice
-    : presentation.kind === 'select' && optionsSettled && props.options?.length === 0 && !pickerOnly
+    : noChoices && !answeredWithoutChoices
       ? <HappierStatus label={localization?.translate('happier.plugin-ui.select.empty', 'No options available') ?? 'No options available'}
           tone="neutral" indicator={false} theme={theme} />
       : null;
@@ -175,7 +180,7 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
         placeholder={field.placeholder}
         {...(props.testID === undefined ? {} : { testID: props.testID })}
         {...(props.openRequest === undefined ? {} : { openRequest: props.openRequest })}
-        disabled={disabled || !optionsSettled}
+        disabled={disabled || !optionsSettled || noChoices}
         theme={theme}
         {...(props.isEqual === undefined ? {} : { isEqual: props.isEqual })}
         {...(props.keyForOption === undefined ? {} : { keyForOption: props.keyForOption })}

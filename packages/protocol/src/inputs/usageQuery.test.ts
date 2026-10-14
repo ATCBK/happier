@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getUsageQueryKey, normalizeUsageQuery, usageAnalyticsRequestToQuery, usageQueryToAnalyticsRequest, UsageQuerySchema, USAGE_QUERY_INPUT_FIELDS } from './usageQuery.js';
+import { getUsageQueryKey, normalizeUsageQuery, usageAnalyticsRequestToQuery, usageQueryToAnalyticsRequest, UsageQuerySchema, USAGE_QUERY_INPUT_FIELDS, readUsagePeriodOptions } from './usageQuery.js';
 import { UsageAnalyticsQueryRequestSchema } from '../usage/usageAnalyticsContracts.js';
 import { InputFieldHintSchema } from './inputFields.js';
 import { resolveEffectiveInputFields } from './inputFieldRuntime.js';
@@ -83,6 +83,18 @@ describe('shared UsageQuery', () => {
     // A standalone query form has no surface contract and can still choose any query scope.
     expect(resolveEffectiveInputFields(spec, input).map(field => field.path)).toContain('session');
     expect(usageQueryToAnalyticsRequest(input).filters?.sessionIds).toEqual(['retained-pin']);
+  });
+  it('offers the Period as its few named choices in place, keeping a stored custom range nameable (final-acceptance 4)', () => {
+    const field = USAGE_QUERY_INPUT_FIELDS.find(field => field.path === 'period')!;
+    expect(field.optionsSourceId).toBe('usage.query.period');
+    expect(readUsagePeriodOptions(undefined).map(option => option.value)).toEqual(
+      ['today', '7days', '30days', '90days', 'year', 'all'].map(relative => ({ relative })));
+    const custom = { startMs: 100, endMs: 200 };
+    expect(readUsagePeriodOptions(custom).at(-1)?.value).toEqual(custom);
+    expect(readUsagePeriodOptions({ relative: '7days' })).toHaveLength(6);
+    // The Usage page's unbounded All time is the All time choice, not a second one.
+    expect(readUsagePeriodOptions({})).toHaveLength(6);
+    expect(readUsagePeriodOptions({}).at(-1)?.value).toEqual({});
   });
   it('offers the user-facing breakdown dimensions without narrowing admitted advanced queries', () => {
     const field = USAGE_QUERY_INPUT_FIELDS.find(field => field.path === 'breakdown')!;

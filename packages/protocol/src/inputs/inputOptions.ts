@@ -23,7 +23,7 @@ import { isSessionAwarenessContentReadableV1 } from '../sessions/awareness/avail
 import { readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1 } from '../sessions/awareness/presentationV1.js';
 import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
 import { MachineVitalsSnapshotV1Schema } from '../machines/vitals/machineVitalsRpcV1.js';
-import { normalizeUsageQuery, readUsageGroupByOptions } from './usageQuery.js';
+import { normalizeUsageQuery, readUsageGroupByOptions, readUsagePeriodOptions } from './usageQuery.js';
 import { executeUsageAction } from '../actions/executor/usageActions.js';
 import { UsageQueryBatchResultSchema } from '../usage/resolveUsagePageAggregation.js';
 import { readUsageScopeOptions } from '../usage/usageFilterOptions.js';
@@ -234,6 +234,11 @@ export async function resolveInputOptions(params: Readonly<{
     : readNonEmptyString(ctx.serverId);
   const modelId = readDynamicOptionModelId(input, actionId);
   const directory = readDynamicOptionDirectory(input, actionId);
+
+  if (optionsSourceId === 'usage.query.period') {
+    const draft = isRecord(params.input.query) ? params.input.query : params.input;
+    return { ok: true, result: readUsagePeriodOptions(draft.period) };
+  }
 
   if (optionsSourceId === 'usage.query.breakdown') {
     const draft = isRecord(params.input.query) ? params.input.query : params.input;

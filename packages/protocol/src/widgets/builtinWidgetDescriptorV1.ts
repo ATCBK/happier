@@ -147,8 +147,10 @@ function machineWidgetContract(id: MachineBuiltinWidgetIdV1): WidgetInputDescrip
         fields.push({ path: 'metric', title: 'Metric', widget: 'select', contextMode: 'own', options: choices(['cpu', 'memory', 'disk_free', 'network']) },
             { path: 'range', title: 'Range', widget: 'select', contextMode: 'own', options: choices(['1h', '24h', '7d']) },
             { ...volumeField, visibleWhen: disk }, { path: 'warnAbove', title: 'Warn above', widget: 'number', contextMode: 'own' });
-        schema = z.object({ machine: MachineTargetV1Schema, metric: z.enum(['cpu', 'memory', 'disk_free', 'network']).optional(),
-            range: z.enum(['1h', '24h', '7d']).optional(), volume: z.string().min(1).optional(), warnAbove: z.number().nonnegative().optional() }).strict();
+        // The body reads an unset metric as CPU over the last hour; the declaration says so, so setup
+        // starts on those choices instead of showing none selected.
+        schema = z.object({ machine: MachineTargetV1Schema, metric: z.enum(['cpu', 'memory', 'disk_free', 'network']).default('cpu'),
+            range: z.enum(['1h', '24h', '7d']).default('1h'), volume: z.string().min(1).optional(), warnAbove: z.number().nonnegative().optional() }).strict();
     } else if (id === 'machine_storage') {
         fields.push(volumeField);
         schema = z.object({ machine: MachineTargetV1Schema, volume: z.string().min(1).optional() }).strict();
@@ -156,7 +158,7 @@ function machineWidgetContract(id: MachineBuiltinWidgetIdV1): WidgetInputDescrip
         const session = { op: 'eq' as const, path: 'scope', value: 'session' };
         fields.push({ path: 'scope', title: 'Scope', widget: 'select', contextMode: 'own', options: choices(['machine', 'session']) },
             { path: 'session', title: 'Session', widget: 'json', contextMode: 'follow', visibleWhen: session, requiredWhen: session });
-        schema = z.object({ machine: MachineTargetV1Schema, scope: z.enum(['machine', 'session']).optional(),
+        schema = z.object({ machine: MachineTargetV1Schema, scope: z.enum(['machine', 'session']).default('machine'),
             session: VoiceTrackedSessionAddressV1Schema.optional() }).strict();
     } else if (id === 'machine_worktrees') {
         fields.push({ path: 'project', title: 'Project', widget: 'text', contextMode: 'follow' });

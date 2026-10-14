@@ -12,20 +12,6 @@ function request(field: 'period' | 'session', value: Parameters<NonNullable<Inpu
 }
 
 describe('host input type picker forms', () => {
-    it('offers relative period choices and retains a saved absolute range unchanged until selection', async () => {
-        const saved = { startMs: 100, endMs: 200 };
-        const picker = createHostInputTypePickerForm({ request: request('period', saved), serverId: 'home',
-            draftInput: { timeZoneOffsetMinutes: 120, metric: 'cost' }, nowMs });
-        expect(picker.form.getInput()).toEqual({ value: saved });
-        const field = picker.form.getFields()[0]!;
-        expect(field.widget).toBe('select');
-        const today = field.options!.find(option => option.label === 'usage.today')!;
-        expect(today.value).toEqual({ relative: 'today' });
-        picker.form.replaceInput({ value: today.value });
-        expect(await picker.form.submit()).toMatchObject({ kind: 'settled', outcome: { ok: true } });
-        expect(await picker.result).toEqual({ kind: 'completed', input: today.value });
-    });
-
     it('labels a relative pin by its canonical period name without guessing an absolute range identity', () => {
         expect(describeHostInputTypePickerValue(request('period', undefined).reference, { relative: '7days' })).toBe('usage.last7Days');
         expect(describeHostInputTypePickerValue(request('period', undefined).reference, { startMs: 100, endMs: 200 })).not.toBe('usage.last7Days');
@@ -47,7 +33,7 @@ describe('host input type picker forms', () => {
 
     it('cancels without changing a retained field after caller cancellation or dismissal', async () => {
         const abort = new AbortController();
-        const picker = createHostInputTypePickerForm({ request: { ...request('period', { startMs: 100 }), signal: abort.signal },
+        const picker = createHostInputTypePickerForm({ request: { ...request('session', ['saved']), signal: abort.signal },
             serverId: 'home', nowMs });
         abort.abort();
         expect(await picker.result).toEqual({ kind: 'cancelled' });
