@@ -4,13 +4,11 @@ import type { ExtendedStackNavigationOptions } from 'expo-router/build/layouts/S
 import { getFocusedRouteNameFromRoute, type ParamListBase, type RouteProp } from '@react-navigation/native';
 import 'react-native-reanimated';
 import * as React from 'react';
-import { Platform, TouchableOpacity } from 'react-native';
+import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { getPreferredLanguage, t } from '@/text';
 import { createAppStackScreenOptions, useAppStackUsesCustomHeader } from '@/components/navigation/createAppStackScreenOptions';
 import { useAuth } from '@/auth/context/AuthContext';
-import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityReadiness';
-import { Text } from '@/components/ui/text/Text';
 import { isTerminalConnectWebPathname } from '@/utils/path/terminalConnectUrl';
 import { useRootStackRouteOptions } from '@/components/navigation/root/useRootStackRouteOptions';
 import { isDesktopOverlayWindowContext } from '@/desktop/window/isDesktopOverlayWindowContext';
@@ -117,8 +115,6 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
     const isAuthenticated = auth.isAuthenticated;
     const { theme } = useUnistyles();
     const preferredLanguage = getPreferredLanguage();
-    const friendsIdentityReadiness = useFriendsIdentityReadiness();
-    const friendsIdentityReady = friendsIdentityReadiness.isReady;
     const isDesktopOverlayWindow = isDesktopOverlayWindowContext();
     const isDesktopShell = isDesktopHost();
     const newSessionPresentationMode = useSetting('newSessionPresentationModeV1');
@@ -170,24 +166,6 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
         ),
         }),
     }), [appShellPresent, rootStackRouteOptions['workflows/[id]/index'], router]);
-    const friendsManageScreenOptions = React.useCallback((args: { navigation: { navigate: (route: never) => void } }) => ({
-        headerShown: true,
-        headerTitle: t('navigation.friends'),
-        headerBackTitle: t('common.back'),
-        headerRight: () =>
-            (
-                <TouchableOpacity
-                    onPress={() => args.navigation.navigate('friends/search' as never)}
-                    style={{ paddingHorizontal: 16, opacity: friendsIdentityReady ? 1 : 0.5 }}
-                    disabled={!friendsIdentityReady}
-                    accessibilityState={{ disabled: !friendsIdentityReady }}
-                >
-                    <Text style={{ color: theme.colors.button.primary.tint, fontSize: 16 }}>
-                        {t('friends.addFriend')}
-                    </Text>
-                </TouchableOpacity>
-            ),
-    }), [friendsIdentityReady, preferredLanguage, theme.colors.button.primary.tint]);
     const newSessionScreenOptions = React.useMemo<StackScreenOptions>(() => {
         const presentation = resolveNewSessionRoutePresentation({
             mode: newSessionPresentationMode,
@@ -536,7 +514,7 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                 />
                 <Stack.Screen
                     name="friends/manage"
-                    options={friendsManageScreenOptions}
+                    options={rootStackRouteOptions['friends/manage']}
                 />
                 <Stack.Screen
                     name="friends/search"

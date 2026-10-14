@@ -26,6 +26,12 @@ export function FriendsManageScreen() {
                 <PageHeader
                     title={t('navigation.friends')}
                     description={t('detailPages.friendsManage.description')}
+                    primaryAction={{
+                        title: t('friends.addFriend'),
+                        icon: 'plus',
+                        onPress: () => router.push('/friends/search'),
+                        testID: 'friends-add-friend',
+                    }}
                 />
 
                 {friendRequests.length > 0 && (

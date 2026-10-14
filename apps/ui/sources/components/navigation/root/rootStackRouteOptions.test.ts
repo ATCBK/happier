@@ -14,6 +14,13 @@ describe('root route identity ownership', () => {
     it('leaves the dev navigator to own its child chrome, without another outer bar', () => {
         expect(createRootStackRouteOptions('auto')['dev']).toMatchObject({ headerShown: false });
     });
+    it('inherits Friends management identity while Add friend stays in its page header', () => {
+        const options = createRootStackRouteOptions('auto');
+        expect(resolveRootStackRouteOptions(options, workspaceRouteFiles['friends/manage'])).toMatchObject({
+            headerShown: true, headerTitle: 'navigation.friends', headerBackTitle: 'common.back',
+        });
+        expect(options['friends/manage'].headerRight).toBeUndefined();
+    });
     it.each(['artifacts/index', 'boards/index'] as const)(
         'leaves %s identity with its always-visible PageHeader', name => {
             expect(createRootStackRouteOptions('auto')[name].headerShown).toBe(false);

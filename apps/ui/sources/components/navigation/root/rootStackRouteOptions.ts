@@ -180,6 +180,12 @@ export function createRootStackRouteOptions(newSessionPresentationMode: 'auto' |
                 headerTitle: t('artifacts.edit'),
                 headerBackTitle: cancel,
             },
+            // Add friend is the page's own PageHeader action, so every host shows it from one place.
+            friendsManage: {
+                headerShown: true,
+                headerTitle: t('navigation.friends'),
+                headerBackTitle: back,
+            },
             friendsSearch: {
                 headerShown: true,
                 headerTitle: t('friends.addFriend'),
@@ -266,6 +272,7 @@ export function createRootStackRouteOptions(newSessionPresentationMode: 'auto' |
         'artifacts/[id]': options.artifactsId,
         'artifacts/new': options.artifactsNew,
         'artifacts/edit/[id]': options.artifactsEdit,
+        'friends/manage': options.friendsManage,
         'friends/search': options.friendsSearch,
         'user/[id]': options.userId,
         'new/pick/machine': options.blankBack,
