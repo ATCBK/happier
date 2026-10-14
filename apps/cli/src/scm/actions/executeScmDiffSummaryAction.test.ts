@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, accountSettingsParse, type ScmComparisonSource } from '@happier-dev/protocol';
+import { ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, accountSettingsParse, buildBackendTargetKeyV2, type ScmComparisonSource } from '@happier-dev/protocol';
 import { getAgentStaticModels } from '@happier-dev/agents';
 
 import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
@@ -13,6 +13,7 @@ import { executeScmDiffSummaryAction } from './executeScmDiffSummaryAction';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { captureScmComparison } from '@/scm/comparisons/captureScmComparison';
 import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
 const BACKEND_TARGET = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
 
@@ -97,6 +98,66 @@ describe('executeScmDiffSummaryAction', () => {
             .toMatchObject({ success: true, result: { output: { inputId: generated.success ? generated.inputId : undefined } } });
     });
 
+    it('sends the configured automatic model as fallback input so attached admission can inherit the applied parent', async () => {
+        const fixture = await changedRepository();
+        let admitted: ReturnType<typeof ExecutionRunStartRequestSchema.parse> | undefined;
+        const generated = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, outputs: ['commitPlan'] }, sessionId: 'attached-summary',
+            backendTarget: BACKEND_TARGET, executeCanonicalAction: async (_actionId, input) => {
+                admitted = ExecutionRunStartRequestSchema.parse(input);
+                return { ok: true, result: { runId: 'attached-summary-run', callId: 'call', sidechainId: 'sidechain' } };
+            },
+        });
+        expect(generated).toMatchObject({ success: true, runId: 'attached-summary-run' });
+        expect(admitted?.modelId).toBeUndefined();
+        expect(admitted?.backendTarget).toEqual(BACKEND_TARGET);
+        const fallback = ExecutionRunScmDiffSummaryInputV1Schema.parse(admitted?.intentInput).modelSelector;
+        expect(fallback?.modelId).toEqual(expect.any(String));
+    });
+
+    it('delegates to the applied parent when its Agent has no inexpensive summary default', async () => {
+        const fixture = await changedRepository();
+        let admitted: ReturnType<typeof ExecutionRunStartRequestSchema.parse> | undefined;
+        const generated = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, outputs: ['commitPlan'],
+            modelSelector: { backendTargetKey: buildBackendTargetKeyV2(BACKEND_TARGET) } }, sessionId: 'parent-without-cost-tag',
+            backendTarget: BACKEND_TARGET, executeCanonicalAction: async (_actionId, input) => {
+                admitted = ExecutionRunStartRequestSchema.parse(input);
+                return { ok: true, result: { runId: 'inherited-parent-run', callId: 'call', sidechainId: 'sidechain' } };
+            },
+        });
+        expect(generated).toMatchObject({ success: true, runId: 'inherited-parent-run' });
+        expect(admitted?.modelId).toBeUndefined();
+        expect(admitted?.backendTarget).toEqual(BACKEND_TARGET);
+    });
+
+    it.each(['noRunCreated', 'outcomeUnknown'] as const)('uses a different configured default Agent only after %s admission evidence', async runCreation => {
+        const fixture = await changedRepository();
+        const inputs: ReturnType<typeof ExecutionRunStartRequestSchema.parse>[] = [];
+        const generated = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, outputs: ['commitPlan'] }, sessionId: 'summary-default-admission',
+            backendTarget: BACKEND_TARGET, executeCanonicalAction: async (_actionId, input) => {
+                inputs.push(ExecutionRunStartRequestSchema.parse(input));
+                return inputs.length === 1 ? { ok: false, errorCode: 'execution_run_parent_selection_unavailable',
+                    error: 'Parent unavailable', details: withExecutionRunStartFailureDetails(undefined, runCreation) }
+                    : { ok: true, result: { runId: 'configured-default-run', callId: 'call', sidechainId: 'sidechain' } };
+            },
+        });
+        if (runCreation === 'outcomeUnknown') {
+            expect(inputs).toHaveLength(1);
+            expect(generated).toMatchObject({ outputs: { commitPlan: { state: 'failed' } } });
+            expect(generated.runId).toBeUndefined();
+        } else {
+            expect(generated).toMatchObject({ success: true, runId: 'configured-default-run' });
+            expect(inputs).toHaveLength(2);
+            expect(inputs[0]?.backendTarget).toEqual(BACKEND_TARGET);
+            const selector = ExecutionRunScmDiffSummaryInputV1Schema.parse(inputs[0]?.intentInput).modelSelector;
+            expect(buildBackendTargetKeyV2(inputs[1]!.backendTarget!)).toBe(selector?.backendTargetKey);
+            expect(inputs[1]?.modelSelection).toMatchObject({ modelId: selector?.modelId, providerConnectionId: null });
+            expect(inputs[1]?.localInputId).toBe(inputs[0]?.localInputId);
+        }
+    });
+
     it.each(['branch', 'commit', 'pullRequest'] as const)('generates the first walkthrough from retained %s endpoints after the source moves', async (kind) => {
         const fixture = await changedRepository();
         const git = (...args: string[]) => execFileSync('git', args, { cwd: fixture.rootPath, encoding: 'utf8' }).trim();
@@ -172,12 +233,12 @@ describe('executeScmDiffSummaryAction', () => {
         expect(executeCanonicalAction).not.toHaveBeenCalled();
     });
 
-    it('refuses an explicit route without an admitted low-cost model while retaining its captured inventory', async () => {
+    it('refuses detached generation without an admitted low-cost model while retaining its captured inventory', async () => {
         const fixture = await changedRepository();
         const executeCanonicalAction = vi.fn();
         const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath, source: { kind: 'workingTree' },
             modelSelector: { backendTargetKey: 'agent:happier.agent.codex/codex' } },
-            sessionId: 'session-low-tier-unavailable', backendTarget: BACKEND_TARGET, executeCanonicalAction });
+            machineId: 'machine-low-tier-unavailable', backendTarget: BACKEND_TARGET, executeCanonicalAction });
         expect(output).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE',
             comparison: { inventory: { files: [expect.objectContaining({ path: fixture.trackedPath })] } } });
         expect(executeCanonicalAction).not.toHaveBeenCalled();
