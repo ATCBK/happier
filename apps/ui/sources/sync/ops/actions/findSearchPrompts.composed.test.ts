@@ -4,13 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
+import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus';
+import { MemorySearchResultV1Schema } from '@happier-dev/protocol/memory/memorySearch';
 import { DaemonWorkspaceFileSearchRequestSchema, DaemonWorkspaceFileSearchResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 import { ExternalSessionCandidateMatchV1Schema, ExternalSessionsCandidatesListRequestSchema,
     ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import { createDeferred, standardCleanup } from '@/dev/testkit';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
@@ -24,12 +26,17 @@ await loadSyncSingletonForTests();
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
 const { searchConversations } = await import('@/sync/domains/search/searchConversations');
+const { storage } = await import('@/sync/domains/state/storage');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { recordMachineRequestFailed, isMachineReachable, clearMachineRequestReachabilityForTest } =
+    await import('@/sync/domains/machines/reachability/machineReachability');
 const { listClaudeExternalSessionCandidates } = await import('../../../../../../packages/plugins/claude/src/agent/surfaces/sessions/external/candidates');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let serverId: string;
 let corpusRoot: string | undefined;
 
 beforeEach(async () => {
+    clearMachineRequestReachabilityForTest();
     await homes.reset();
     requests.length = 0;
     serverId = await homes.addHome({ name: 'FSP Action Home', serverUrl: 'https://fsp-actions.test', accountId: 'fsp-account' });
@@ -48,6 +55,56 @@ afterEach(async () => {
 });
 
 describe('FSP search production composition', () => {
+    it('keeps picker MCP admission unavailable without a mounted composer', async () => {
+        const executor = createDefaultActionExecutor();
+        const result = await executor.execute('ui.prompts.picker.open', {}, {
+            surface: 'mcp', serverId, expectedAccountId: 'fsp-account',
+        });
+        expect(result).toEqual({ ok: true, result: { status: 'noEligibleComposer' } });
+        if (!result.ok) throw new Error('Picker Action unavailable');
+        expect(getActionSpec('ui.prompts.picker.open').outputSchema!.parse(result.result))
+            .toEqual({ status: 'noEligibleComposer' });
+    });
+    it('recovers an unreachable Machine only on explicit retry through the registered search Action', async () => {
+        const machine = { ...createPlainMachineRowFixture({ id: 'fsp-machine', accountId: 'fsp-account' }),
+            active: false, activeAt: 1 };
+        homes.answer(serverId, '/v1/machines', { body: [machine] });
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+            featureToggles: { 'memory.search': true },
+        } }, version: 1 } });
+        installSessionActionFixture({ homes, storage, serverId,
+            session: { id: 'recovered-session', encryptionMode: 'plain', seq: 7 } });
+        answerRpc = request => {
+            if (request.method === `fsp-machine:${RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET}`) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true };
+            if (request.method === `fsp-machine:${RPC_METHODS.DAEMON_MEMORY_STATUS}`) return MemoryStatusV1Schema.parse({
+                v: 1, enabled: true, indexMode: 'deep', hintsIndexReady: true, deepIndexReady: true,
+                activeIndexReady: true, activeIndexSearchable: true, embeddingsEnabled: false,
+                embeddingsMode: 'disabled', embeddingsPresetId: null, embeddingsProviderKind: null,
+                embeddingsModelId: null, embeddingsRuntimeState: 'unavailable', embeddingsUsingFallback: false,
+                tier1DbPath: null, deepDbPath: null, tier1DbBytes: null, deepDbBytes: null,
+            });
+            expect(request.method).toBe(`fsp-machine:${RPC_METHODS.DAEMON_MEMORY_SEARCH}`);
+            return MemorySearchResultV1Schema.parse({ v: 1, ok: true, hits: [{ sessionId: 'recovered-session',
+                seqFrom: 7, seqTo: 7, createdAtFromMs: 1, createdAtToMs: 1, summary: 'needle', score: 1 }] });
+        };
+        const executor = createDefaultActionExecutor();
+        const input = { machineIds: ['fsp-machine'], mode: 'indexed', query: {
+            v: 1, query: 'needle', scope: { type: 'global' }, mode: 'auto', corpora: ['sessions'],
+        } };
+        const context = { surface: 'ui' as const, serverId, expectedAccountId: 'fsp-account' };
+        const scope = captureActiveServerAccountScopeLifetime()!.scope;
+        // A previous target-unavailable reply remains authoritative until an explicit probe succeeds.
+        recordMachineRequestFailed({ ...scope, machineId: machine.id });
+        expect(isMachineReachable(scope, machine)).toBe(false);
+        expect(await executor.execute('search.conversations', input, context)).toMatchObject({ ok: true,
+            result: { machines: [{ machineId: 'fsp-machine', status: 'offline', standardSearchEnabled: false }] } });
+        const retried = await executor.execute('search.conversations', { ...input, retryUnreachableMachines: true }, context);
+        expect(retried).toMatchObject({ ok: true,
+            result: { machines: [{ machineId: 'fsp-machine', status: 'ok', standardSearchEnabled: true }],
+                hits: [{ machineId: 'fsp-machine', hit: { sessionId: 'recovered-session', summary: 'needle' } }] } });
+        if (!retried.ok) throw new Error('Explicit search retry unavailable');
+        expect(getActionSpec('search.conversations').outputSchema!.parse(retried.result)).toEqual(retried.result);
+    });
     it('executes text-in-files through the registered app Action and strict daemon transport', async () => {
         const page = DaemonWorkspaceFileSearchResponseSchema.parse({ ok: true, hasMore: true, coverage: 'partial',
             files: [{ path: 'src/emoji.ts', matches: [{ line: 7, column16: 3, length16: 6,

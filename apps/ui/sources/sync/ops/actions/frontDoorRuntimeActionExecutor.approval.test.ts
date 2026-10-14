@@ -31,9 +31,9 @@ import { getVoiceSessionEndedAttempt, resetVoiceSessionStoreForTests, setVoiceSe
  * Phase 3.2 (now landed) flipped `RUNTIME_ACTION_DISABLED_SURFACES` per-family for the real
  * executors, so the agent-initiated dangerous subset (e.g. `localServices.publicPreview.create`)
  * now passes the ENABLEMENT gate on `agent` and REACHES the surface-keyed approval floor
- * (finding #31 fixed). The tests below pin the activated end-to-end behavior: user-initiated runs
- * with no prompt; agent-initiated is gated behind approval (rejected → leaf never runs; approved →
- * leaf runs).
+ * (finding #31 fixed). Dangerous user invocations default to confirmation; an exact completed
+ * host confirmation suppresses the duplicate policy prompt. Agent invocations stay gated behind
+ * approval (rejected → leaf never runs; approved → leaf runs).
  */
 
 const EMPTY_SETTINGS: ActionsSettingsV1 = DEFAULT_ACTIONS_SETTINGS_V1;
@@ -158,7 +158,7 @@ describe('front door approval default (agent vs ui)', () => {
             resetVoiceSessionStoreForTests();
         }
     });
-    it('classifies the agent-initiated dangerous subset as approval-required and user forms as not (policy contract)', () => {
+    it('requires default approval for danger on both agent and present-user UI surfaces', () => {
         // The surface-keyed default that the front door consults. This is the contract Phase 3.2
         // activates end-to-end once the runtime family is surfaced-on for `agent`.
         expect(
@@ -169,10 +169,10 @@ describe('front door approval default (agent vs ui)', () => {
                 surface: 'ui',
                 authority: 'present_user',
             }),
-        ).toBe(false);
+        ).toBe(true);
     });
 
-    it('executes a user-initiated (ui) dispatch directly through the front door — no approval prompt', async () => {
+    it('executes an exactly confirmed UI dispatch through the front door without duplicate approval', async () => {
         const runtimeLeaf = vi.fn<RuntimeActionExecute>(async () => VALID_OUTPUT);
         const approvalsCreate = vi.fn(async () => ({ artifactId: 'approval_unused' }));
         const executor = createTestExecutor({
@@ -184,11 +184,12 @@ describe('front door approval default (agent vs ui)', () => {
         const result = await bridge({
             actionId: APPROVAL_ACTION_ID,
             input: VALID_INPUT,
-            context: { surface: 'ui', authority: 'present_user', ...EXECUTION_CONTEXT },
+            context: { surface: 'ui', authority: 'present_user', ...EXECUTION_CONTEXT,
+                presentUserConfirmation: { actionId: APPROVAL_ACTION_ID } },
         });
 
-        // OUTCOME: user-initiated invocation runs straight through to the runtime leaf, never the
-        // approvals store; the unwrapped runtime payload is returned to the caller.
+        // The host already confirmed this exact Action; its invocation reaches
+        // the leaf without creating another approval Artifact.
         expect(approvalsCreate).not.toHaveBeenCalled();
         expect(runtimeLeaf).toHaveBeenCalledTimes(1);
         expect(runtimeLeaf).toHaveBeenCalledWith(expect.objectContaining({

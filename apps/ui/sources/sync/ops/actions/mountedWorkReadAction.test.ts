@@ -15,6 +15,33 @@ import { workflowRunRowFromAutomationRun } from '@/sync/store/domains/workflowRu
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
+import { SessionReadStateSetResultV1Schema } from '@happier-dev/protocol/sessions/readState/actions';
+
+it('acknowledges an exact Inbox address from voice through the production bulk-read owner', async () => {
+    const writes: unknown[] = [];
+    const home = await serveSessionActionHome({
+        homes: [{ key: 'session', serverUrl: 'https://session-actions.test', accountId: 'session-account', currentAccount: true }],
+        route: request => {
+            if (request.method !== 'POST' || request.path !== '/v2/sessions/worker/read-state') return undefined;
+            writes.push({ accountId: request.accountId, body: request.body });
+            return Response.json({ success: true, ...SessionReadStateSetResultV1Schema.parse({
+                state: 'read', lastViewedSessionSeq: 12, didChange: true,
+            }) });
+        },
+    });
+    const { createFrontDoorActionExecute } = await import('./frontDoorRuntimeActionExecutor');
+    try {
+        const response = await createFrontDoorActionExecute()('inbox.mark_all_read', {
+            targets: [{ serverId: home.serverId, sessionId: 'worker' }],
+        }, { surface: 'voice', serverId: home.serverId, runtimeAccountId: 'session-account' });
+        expect(response).toEqual({ ok: true, result: {
+            results: [{ serverId: home.serverId, sessionId: 'worker', status: 'succeeded' }],
+        } });
+        if (!response.ok) throw new Error('Expected voice Inbox acknowledgement');
+        expect(AppShellActionOutputSchemas['inbox.mark_all_read'].parse(response.result)).toEqual(response.result);
+        expect(writes).toEqual([{ accountId: 'session-account', body: { state: 'read' } }]);
+    } finally { await home.dispose(); }
+});
 
 it('reads approval and Automation rows from the canonical Inbox grouping without disclosing their private content', async () => {
     const home = await serveSessionActionHome();
@@ -50,11 +77,12 @@ it('reads approval and Automation rows from the canonical Inbox grouping without
     let snapshot = model;
     const remove = registerMountedInboxReadOwner({ scope: { serverId, accountId: 'session-account' },
         isCurrent: () => current, read: () => snapshot });
-    const context = { surface: 'cli' as const, serverId, runtimeAccountId: 'session-account' };
+    const context = { surface: 'voice' as const, serverId, runtimeAccountId: 'session-account' };
     const { createFrontDoorActionExecute } = await import('./frontDoorRuntimeActionExecutor');
     const execute = createFrontDoorActionExecute();
     try {
         const response = await execute('inbox.get', {}, context);
+        expect(await execute('inbox.get', {}, { ...context, surface: 'cli' })).toEqual(response);
         expect(response.ok).toBe(true);
         if (!response.ok) throw new Error('Expected a readable mounted Inbox');
         const result = AppShellActionOutputSchemas['inbox.get'].parse(response.result);
@@ -69,7 +97,7 @@ it('reads approval and Automation rows from the canonical Inbox grouping without
             context: { ...context, runtimeAccountId: 'different-account' } })).toEqual({ status: 'unavailable' });
         snapshot = { ...model, workGroups: [{ ...groups[0]!, root: { kind: 'automation', serverId: 'home-b',
             automationId: run.automationId, runId: run.id } }] };
-        expect(await invokeMountedWorkRead({ actionId: 'inbox.get', input: {}, context })).toEqual({ status: 'unavailable' });
+        expect(await execute('inbox.get', {}, context)).toMatchObject({ ok: true, result: { status: 'unavailable' } });
         snapshot = model;
         current = false;
         expect(await invokeMountedWorkRead({ actionId: 'inbox.get', input: {}, context })).toEqual({ status: 'unavailable' });
@@ -80,7 +108,7 @@ it('reads approval and Automation rows from the canonical Inbox grouping without
 });
 
 describe('mounted canonical Work reads', () => {
-    it('serves UI and CLI reads through the production App shell binding and withdraws them on unmount', async () => {
+    it('serves UI, CLI and voice reads through the production App shell binding and withdraws them on unmount', async () => {
         const home = await serveSessionActionHome();
         const { createFrontDoorActionExecute } = await import('./frontDoorRuntimeActionExecutor');
         const execute = createFrontDoorActionExecute();
@@ -88,19 +116,32 @@ describe('mounted canonical Work reads', () => {
         const projection = projectWork({ sessionId: 'lead', reportSessions: [], agentEntries: [],
             workflowHeadlineRuns: [], managedRuns: [], ownTriggerRunIds: new Set(),
             describeAgentStatus: () => '', describeProgress: () => '' });
+        let reads = 0;
         const remove = registerMountedWorkReadOwner({ scope, sessionId: 'lead', isCurrent: () => true,
-            read: () => ({ projection, transcriptLoaded: true, managedRuns: { phase: 'loaded', refreshFailed: false } }) });
+            read: () => { reads += 1; return { projection, transcriptLoaded: true,
+                managedRuns: { phase: 'loaded', refreshFailed: false } }; } });
         try {
-            for (const surface of ['ui', 'cli'] as const) {
+            for (const surface of ['ui', 'cli', 'voice'] as const) {
                 const response = await execute('session.work.get', { sessionId: 'lead' },
                     { surface, serverId: scope.serverId, runtimeAccountId: scope.accountId });
                 expect(response).toMatchObject({ ok: true, result: { status: 'ready', items: [], summary: projection.summary } });
                 if (!response.ok) throw new Error('Expected production App shell Work binding');
                 expect(AppShellActionOutputSchemas['session.work.get'].parse(response.result)).toEqual(response.result);
             }
+            const approved = createActionExecutor(createActionExecutorBoundaryFixture({
+                appShellAction: invokeMountedWorkRead, isActionApprovalRequired: () => true,
+            }));
+            const beforeApproval = reads;
+            const voiceContext = { surface: 'voice' as const, authority: 'account_automation' as const,
+                serverId: scope.serverId, runtimeAccountId: scope.accountId };
+            expect(await approved.execute('session.work.get', { sessionId: 'lead' }, voiceContext))
+                .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            expect(reads).toBe(beforeApproval);
+            expect(await approved.execute('session.work.get', { sessionId: 'lead' }, { ...voiceContext, bypassApprovals: true }))
+                .toMatchObject({ ok: true, result: { status: 'ready', summary: projection.summary } });
             remove();
             expect(await execute('session.work.get', { sessionId: 'lead' },
-                { surface: 'ui', serverId: scope.serverId, runtimeAccountId: scope.accountId }))
+                { surface: 'voice', serverId: scope.serverId, runtimeAccountId: scope.accountId }))
                 .toMatchObject({ ok: true, result: { status: 'unavailable' } });
         } finally { remove(); await home.dispose(); }
     });

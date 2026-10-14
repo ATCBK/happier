@@ -14,7 +14,8 @@ import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
 import { HostPrivatePluginInstallDecisionV1Schema } from '@happier-dev/protocol/marketplace/internal';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1 } from '@happier-dev/protocol/marketplace/marketplaceSourceRegistryV1';
 
 // The native modal host is a presentation boundary; its review body and
 // controls remain the production component.
@@ -58,7 +59,26 @@ afterEach(async () => {
 });
 
 describe('plugin-management Actions in the UI host', () => {
-    it.each(['confirmed', 'account-retired', 'machine-retired', 'declined'] as const)('retains one exact human review until the present-user Action settles (%s)', async disposition => {
+    it('requires D22 approval for an Agent installing the same source-qualified Agent plugin', async () => {
+        const input = getActionSpec('plugins.install').inputSchema.parse({ machineId: 'admitted', source: {
+            kind: 'marketplace', sourceId: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1,
+            pluginId: 'acme.plugin', version: '1.0.0', packageName: '@acme/coding-agent',
+        } });
+        const result = await createDefaultActionExecutor().execute('plugins.install', input, {
+            serverId, expectedAccountId: 'owner', surface: 'agent', authority: 'account_automation',
+        });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+        if (!result.ok) throw new Error(JSON.stringify(result));
+        const approval = ActionApprovalRequestCreatedResultSchema.parse(result.result);
+        expect(JSON.parse(homes.artifacts(serverId).readPlainBody(approval.artifactId)!)).toMatchObject({
+            actionId: 'plugins.install', status: 'open', input,
+        });
+        expect(homes.requestsFor('/v1/actions/plugins.install')).toHaveLength(0);
+    });
+    it.each(['confirmed', 'account-retired', 'machine-retired', 'declined', 'registry-confirmed', 'registry-declined'] as const)('retains one exact human review until the present-user Action settles (%s)', async disposition => {
+        const registryEntry = disposition.startsWith('registry-');
+        const declined = disposition === 'declined' || disposition === 'registry-declined';
+        const committed = disposition === 'confirmed' || disposition === 'registry-confirmed';
         const home = homes.findByServerUrl('https://plugin-actions.test');
         if (!home?.token) throw new Error('Expected authenticated Home');
         const decisions: unknown[] = [];
@@ -91,12 +111,38 @@ describe('plugin-management Actions in the UI host', () => {
             } });
         serverId = connection.home.id;
         homes.answer(serverId, '/v1/machines/admitted', { body: { machine: createPlainMachineRowFixture({ id: 'admitted', accountId: 'owner' }) } });
+        const packageName = '@acme/coding-agent';
+        if (registryEntry) {
+            const { createRegistryNpmPackageFixture } = await import('@/dev/testkit/fixtures/registryPluginCatalog');
+            const metadata = createRegistryNpmPackageFixture({ packageName, pluginId: 'acme.plugin', title: 'Acme Coding Agent', version: '1.0.0',
+                contributes: { agents: [{ id: 'coding', title: 'Coding', primary: 'sessions', runtime: { kind: 'custom' },
+                    capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } }] } });
+            const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
+            const catalog = createPromptLibraryCatalogBoundary();
+            const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+            setRuntimeFetch(async (input, init) => {
+                const url = new URL(String(input));
+                if (url.origin === 'https://registry.npmjs.org') return Response.json(url.pathname === '/-/v1/search'
+                    ? { total: 1, objects: [{ package: { name: packageName, version: '1.0.0', publisher: { username: 'acme' } } }] }
+                    : { name: packageName, versions: { '1.0.0': metadata }, 'dist-tags': { latest: '2.0.0' } });
+                return await catalog.handle(url.pathname, init) ?? await homes.request(input, init);
+            });
+            const { storage } = await import('@/sync/domains/state/storageStore');
+            storage.getState().applyMachines([createMachineFixture({ id: 'admitted', activeAt: Date.now(),
+                metadata: { host: 'Development laptop', platform: 'linux', arch: 'x64', happyCliVersion: '0.0.0-test',
+                    happyHomeDir: '/home/dev/.happier', homeDir: '/home/dev' } })]);
+            storage.getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: {
+                agents: { serverIdentityId: 'srv_plugin_home', machineId: 'admitted' },
+            } });
+        }
         const pending = { kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'pending-confirmed-marketplace',
             reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
             review: createPluginInstallationReviewFixture({ pluginId: 'acme.plugin', version: '1.0.0' }) };
         homes.answer(serverId, '/v1/actions/plugins.install', { select: body => {
             const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
             expect(request.target).toEqual({ kind: 'machine', machineId: 'admitted' });
+            if (registryEntry) expect(request.input).toEqual({ machineId: 'admitted', source: { kind: 'marketplace',
+                sourceId: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1, pluginId: 'acme.plugin', version: '1.0.0', packageName } });
             return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'plugins.install', requestId: request.requestId,
                 execution: { ok: true, result: { ok: false, kind: 'plugins_install', outcome: 'reviewRequired', pendingReview: pending } } }) };
         } });
@@ -113,18 +159,38 @@ describe('plugin-management Actions in the UI host', () => {
             shown.resolve();
             return id;
         });
-        const screen = await renderScreen(React.createElement(ModalProvider));
+        const { AgentAddModal } = await import('@/components/settings/agents/add/agentAddModalConfig');
+        const onOpenDefinition = vi.fn();
+        const screen = await renderScreen(React.createElement(React.Fragment, null,
+            registryEntry ? React.createElement(AgentAddModal, { onClose: () => {}, onAddedStay: onOpenDefinition,
+                params: { onCommand: () => {}, onOpenDefinition, onOpenAgent: () => {}, sourceId: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1 } }) : null,
+            React.createElement(ModalProvider)));
         try {
             let settled = false;
             const selectedMachineLifetime = new AbortController();
-            const operation = createDefaultActionExecutor().execute('plugins.install', {
+            let registryOperation: Promise<unknown> | undefined;
+            if (registryEntry) {
+                await waitForHomeGovernance(() => expect(screen.findByTestId(`agents.add.row.${packageName}`)).not.toBeNull());
+                await screen.pressByTestIdAsync(`agents.add.row.${packageName}`);
+                const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
+                // Inspect the live shell config, then invoke its actual footer callback. No internal owner is replaced.
+                const readFooter = () => {
+                    const node = screen.findAll(candidate => candidate.type === CapabilityAddModalBody)[0];
+                    const config = node.props.config as import('@/components/capabilities/add/CapabilityAddModal').CapabilityAddModalConfig<import('@/components/settings/agents/add/agentAddRows').AgentAddRow>;
+                    const row = config.catalog.items.find(candidate => candidate.summary.itemId === packageName)!;
+                    return config.detailFooter(row).primary;
+                };
+                await waitForHomeGovernance(() => expect(readFooter().disabledReason).toBeUndefined());
+                registryOperation = readFooter().onPress();
+            }
+            const operation = registryOperation ?? createDefaultActionExecutor().execute('plugins.install', {
                 machineId: 'admitted', source: { kind: 'marketplace', sourceId: 'marketplace:curated',
                     pluginId: 'acme.plugin', version: '1.0.0' },
-            }, { serverId, expectedAccountId: 'owner', surface: 'ui', signal: selectedMachineLifetime.signal })
-                .then(result => { settled = true; return result; });
+            }, { serverId, expectedAccountId: 'owner', surface: 'ui', signal: selectedMachineLifetime.signal });
+            const completion = operation.then(result => { settled = true; return result; });
             const first = await Promise.race([
                 shown.promise.then(() => ({ kind: 'shown' as const })),
-                operation.then(result => ({ kind: 'settled' as const, result })),
+                completion.then(result => ({ kind: 'settled' as const, result })),
             ]);
             expect(first, JSON.stringify(first)).toEqual({ kind: 'shown' });
             await waitForHomeGovernance(() => {
@@ -135,10 +201,16 @@ describe('plugin-management Actions in the UI host', () => {
             if (disposition === 'account-retired') await homes.switchAccount(serverId, 'replacement');
             if (disposition === 'machine-retired') selectedMachineLifetime.abort();
             privateTransportReady = true;
-            await act(async () => screen.pressByTestId(disposition === 'declined'
+            await act(async () => screen.pressByTestId(declined
                 ? 'settings.plugins.installReview.cancel' : 'settings.plugins.installReview.confirm'));
-            if (disposition === 'confirmed') {
-                const result = await operation;
+            if (registryEntry) {
+                expect(await completion).toEqual(committed ? { itemId: 'acme.plugin', then: 'stay' } : null);
+                expect(onOpenDefinition).not.toHaveBeenCalled();
+                expect(homes.requestsFor('/v1/actions/agents.acp.backends.installFromRegistry')).toHaveLength(0);
+                expect(decisions).toEqual([{ v: 1, pendingChangeId: pending.pendingChangeId,
+                    decision: committed ? 'installAndTrust' : 'cancel', ...(committed ? { optionalSelections: [] } : {}) }]);
+            } else if (disposition === 'confirmed') {
+                const result = await completion as Awaited<ReturnType<ReturnType<typeof createDefaultActionExecutor>['execute']>>;
                 expect(result).toMatchObject({ ok: true, result: { ok: true, kind: 'plugins_install', outcome: 'applied',
                     change: { kind: 'committed', pluginId: 'acme.plugin', desiredGeneration: 'generation-1',
                         appliedGeneration: null, pendingSurfaces: ['ui'] },
@@ -147,12 +219,12 @@ describe('plugin-management Actions in the UI host', () => {
                 expect(decisions).toEqual([{ v: 1, pendingChangeId: pending.pendingChangeId,
                     decision: 'installAndTrust', optionalSelections: [] }]);
             } else if (disposition === 'declined') {
-                expect(await operation).toMatchObject({ ok: true, result: {
+                expect(await completion).toMatchObject({ ok: true, result: {
                     ok: false, kind: 'plugins_install', outcome: 'failed', change: { kind: 'cancelled' },
                 } });
                 expect(decisions).toEqual([{ v: 1, pendingChangeId: pending.pendingChangeId, decision: 'cancel' }]);
             } else {
-                expect(await operation).toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
+                expect(await completion).toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
                 expect(decisions).toEqual([]);
             }
             expect(Modal.show).toHaveBeenCalledTimes(1);

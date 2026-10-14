@@ -372,7 +372,7 @@ describe('default Action executor Session lifecycle contracts', () => {
   it.each([true, false])('includes the replay summary runner only while execution runs are enabled (%s)', async (enabled) => {
     installSession();
     answerFork();
-    const runner = { v: 1 as const, backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' }, modelId: 'default', permissionMode: 'no_tools' as const };
+    const runner = { v: 1 as const, modelSelection: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'default' }, permissionMode: 'no_tools' as const };
     setSettings({ sessionReplayStrategy: 'summary_plus_recent', sessionReplaySummaryRunnerV1: runner,
       sessionReplayMaxSeedChars: 54_321, experiments: true, featureToggles: { 'execution.runs': enabled } });
     expect(await executor().execute('session.fork', { sessionId: 'sess_parent' }, context())).toMatchObject({ ok: true });

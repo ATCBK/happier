@@ -88,6 +88,11 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExe
 import type { SettingsMutationServices } from '@/components/settings/catalog/settingDeclarations';
 import { createAtmosphereSettingServices } from './atmosphereSettingServices';
 import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { LlmTaskRunnerConfigV1WriteSchema } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
+import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
+import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 describe('exact Account Settings history purge declaration', () => {
     it('requires incumbent approval and refuses execution without an Account history transport', async () => {
@@ -773,6 +778,41 @@ describe('navigation placement Settings Actions', () => {
         expect(owner.account().sessionUseTmux).toBe(false);
         await owner.action({ actionId: 'settings.set', input: { anchor: 'connectedServicesAgentSignIn.sharingConfig', value: 'isolated' } });
         expect(owner.account().connectedServicesProviderStateSharingSettingsV1.defaults.stateMode).toBe('shared');
+    });
+    it('discovers and rebases Machine connection set/get through real Settings Action schemas', async () => {
+        const anchor = 'machines.connection.direct';
+        const baseline = settingsParse({ peerMediationPreferencesV1: {
+            v: 1, flows: { machine_rpc: { direct: 'disabled' } }, byMachineId: {},
+        }, actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['agent'] } } });
+        let current = true;
+        const owner = createOwner(undefined, true, true, baseline, undefined, settings => settingsParse({ ...settings,
+            peerMediationPreferencesV1: { ...settings.peerMediationPreferencesV1,
+                byMachineId: { ...settings.peerMediationPreferencesV1.byMachineId, sibling: { flows: { machine_rpc: { direct: 'enabled' } } } } },
+        }), undefined, { isCurrent: () => current });
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
+        const agent = { surface: 'agent', authority: 'account_automation' } as const;
+        expect(await executor.execute('settings.list', { pageId: 'machines' }, agent)).toMatchObject({ ok: true, result: {
+            items: expect.arrayContaining([expect.objectContaining({ anchor, allowedValues: ['default', 'direct', 'relay'] })]),
+        } });
+        for (const value of ['direct', 'relay', 'default'] as const) {
+            const set = await executor.execute('settings.set', { anchor, key: 'machine', value }, agent);
+            expect(set).toMatchObject({ ok: true, result: { anchor, value } });
+            if (set.ok) SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(set.result);
+            const get = await executor.execute('settings.get', { anchor, key: 'machine' }, agent);
+            expect(get).toMatchObject({ ok: true, result: { anchor, value } });
+            if (get.ok) SettingsDeclarationActionOutputSchemasV1['settings.get'].parse(get.result);
+            expect(owner.account().peerMediationPreferencesV1.flows).toEqual(baseline.peerMediationPreferencesV1.flows);
+            expect(owner.account().peerMediationPreferencesV1.byMachineId.sibling?.flows.machine_rpc?.direct).toBe('enabled');
+        }
+        expect(Object.hasOwn(owner.account().peerMediationPreferencesV1.byMachineId, 'machine')).toBe(false);
+        for (const input of [{ anchor, value: 'direct' }, { anchor, key: '__proto__', value: 'direct' },
+            { anchor, key: 'machine', value: { direct: true } }, { anchor, key: 'machine', value: 'direct', target: { kind: 'home', serverId: 'wrong' } }]) {
+            expect(await executor.execute('settings.set', input, agent)).toMatchObject({ ok: false });
+        }
+        current = false;
+        expect(await executor.execute('settings.set', { anchor, key: 'machine', value: 'direct' }, agent)).toMatchObject({ ok: false });
+        expect(await executor.execute('settings.get', { anchor, key: 'sibling' }, agent)).toMatchObject({ ok: false });
+        expect(Object.hasOwn(owner.account().peerMediationPreferencesV1.byMachineId, 'machine')).toBe(false);
     });
     it('changes one machine terminal host and tmux option through the keyed Account setting', async () => {
         const owner = createOwner(undefined, true, true, settingsParse({ ...settingsDefaults,
@@ -1498,6 +1538,29 @@ describe('declared settings owner', () => {
         expect(await rebased.action({ actionId: 'settings.set', input: { anchor: 'sourceControl.prepareAfterTurn', value: true } }))
             .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
         expect(rebased.account()['scm.diffSummary.prefetch']).toBe(false);
+    });
+    it.each(['agent', 'mcp'] as const)('round-trips both background model settings through the real declarations on %s', async surface => {
+        const value = await supportedSummaryPreference();
+        const modelSelection = ProviderBoundModelRefSchema.parse(JSON.parse(value.slice('model:'.length)));
+        const runner = LlmTaskRunnerConfigV1WriteSchema.parse({ v: 1, modelSelection, permissionMode: 'no_tools' });
+        const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'settings.set': { enabled: true } },
+            approvalWaivedSurfaces: { 'settings.set': ['agent', 'mcp'] } });
+        const owner = createOwner(undefined, true, true, applySettings(settingsDefaults, { actionsSettingsV1 }));
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
+        const context = { surface, authority: 'account_automation' as const };
+        for (const [anchor, selection] of [['sourceControl.summaryModel', value], ['session.resume.summaryModel', runner]] as const) {
+            expect(await executor.execute('settings.set', { anchor, value: selection }, context)).toEqual({ ok: true, result: { anchor, value: selection } });
+            expect(await executor.execute('settings.get', { anchor }, context)).toEqual({ ok: true, result: { anchor, value: selection } });
+        }
+        const persisted = settingsParse(owner.account());
+        expect(persisted.sessionReplaySummaryRunnerV1).toEqual(runner);
+        expect(JSON.parse(persisted['scm.diffSummary.modelProfileOverride'].slice('model:'.length))).toEqual(runner.modelSelection);
+        // Actual Settings producer -> exact Run-start consumer; routing and model identity cannot drift.
+        const request = ExecutionRunStartRequestSchema.parse({ intent: 'task',
+            backendTarget: readBackendTargetRefV2(parseBackendTargetKeyV2(runner.modelSelection.agentTargetKey)),
+            modelSelection: runner.modelSelection, permissionMode: runner.permissionMode,
+            retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response', instructions: 'Summarize the conversation' });
+        expect(request.modelSelection).toEqual(modelSelection);
     });
     it('changes material presets, surface modes, shared blur/tint and toolbar visibility through existing settings Actions', async () => {
         const owner = createOwner({ os: 'web', desktop: true });

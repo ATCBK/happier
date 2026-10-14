@@ -1,17 +1,63 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountSettingsV2UpdateRequestSchema, ApprovalRequestSchema, BUILT_IN_ROLES_V1 } from '@happier-dev/protocol';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema, ProjectTrustReadResponseV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderHook } from '@/dev/testkit';
 import { t } from '@/text';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { Modal } = await import('@/modal');
 
 describe('present-user UI approval origin at the Action host', () => {
-    beforeEach(() => harness.reset());
+    beforeEach(async () => {
+        await harness.reset();
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
+    });
     afterEach(() => standardCleanup());
+
+    it.each([
+        ['localServices.actions.stopManaged', 'stop_managed'],
+        ['localServices.actions.restartManaged', 'restart_managed'],
+        ['localServices.actions.terminateDetected', 'terminate_detected'],
+        ['projects.trust.revoke', null],
+    ] as const)('declining the default UI confirmation prevents %s effects', async (actionId, action) => {
+        const serverId = await harness.addHome({ name: 'Danger Home', serverUrl: 'https://danger-origin.test', accountId: 'alice' });
+        const input = getActionSpec(actionId).inputSchema.parse(action === null
+            ? { project: { serverId, projectId: 'project-a' }, expectedRevision: 1, expectedEffectDigest: 'effect-a' }
+            : { requestId: 'service-request', action, target: action === 'terminate_detected'
+                ? { kind: 'inventory_entry', inventoryEntryId: 'detected-a', machineId: 'machine-a' }
+                : { kind: 'managed_service', managedServiceId: 'managed-a', machineId: 'machine-a' } });
+        const result = await createDefaultActionExecutor().execute(actionId, input, { surface: 'ui', authority: 'present_user', serverId });
+        expect(result).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(harness.requests.filter(({ path }) => path.includes('/project-trust/') || path.includes('/actions/execute'))).toEqual([]);
+        expect(harness.artifacts(serverId).list()).toEqual([]);
+    });
+
+    it('executes the real Project trust mutation once after accepting its default confirmation', async () => {
+        const actionId = 'projects.trust.revoke' as const;
+        const serverId = await harness.addHome({ name: 'Trust Home', serverUrl: 'https://trust-origin.test', accountId: 'alice' });
+        const project = { serverId, projectId: 'project-a' };
+        const input = getActionSpec(actionId).inputSchema.parse({ project, expectedRevision: 1, expectedEffectDigest: 'effect-a' });
+        harness.answer(serverId, `${PROJECT_TRUST_ROUTE_V1}/read`, { body: ProjectTrustReadResponseV1Schema.parse({
+            status: 'present', revision: 1,
+            content: { t: 'plain', v: { project, reviewedEffectDigest: 'effect-a', approvedAtMs: 1 } },
+        }) });
+        harness.answer(serverId, `${PROJECT_TRUST_ROUTE_V1}/mutate`, { body: { status: 'updated', revision: 2, cursor: 1 } });
+        vi.mocked(Modal.confirm).mockResolvedValue(true);
+        const result = await createDefaultActionExecutor().execute(actionId, input, { surface: 'ui', authority: 'present_user', serverId });
+        expect(result).toMatchObject({ ok: true, result: { project, status: 'removed' } });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(harness.requestsFor(`${PROJECT_TRUST_ROUTE_V1}/mutate`).map(({ input: mutation }) => ProjectTrustMutationRequestV1Schema.parse(mutation)))
+            .toEqual([{ project, expectedRevision: 1, content: null }]);
+        expect(harness.artifacts(serverId).list()).toEqual([]);
+    });
 
     it.each([
         { actionId: 'roles.create', credential: 'account' },

@@ -53,6 +53,7 @@ import { MachineVitalsActionIdSchema, MACHINE_VITALS_ACTION_INPUT_SCHEMAS } from
 import { MachineResourcesActionIdSchema, MACHINE_RESOURCES_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineResources';
 import { MachineStorageActionIdSchema, MACHINE_STORAGE_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/storage';
 import { MachineGuardActionIdSchema, MACHINE_GUARD_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineGuard';
+import { resolveMachineGuardOperationTimeoutMs } from '@happier-dev/protocol/machines/guard/actionIdsV1';
 import { MachineProcessesActionIdSchema, MACHINE_PROCESSES_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineProcesses';
 import { machineResourcesPolicyGet } from '@/sync/ops/machineResourcesPolicy';
 import { listMachineVitalsSummariesV1, readMachineVitalsResourcesProjectionV1 } from '@happier-dev/protocol/machines/vitals/listMachineVitalsSummariesV1';
@@ -117,7 +118,6 @@ import { createUiAccountAction, resolveUiAccountActionFallbackMachineId } from '
 import { buildMachineAgentInventoryDescriptors } from '@/agents/machineAgents/machineAgentCatalog';
 import {
   readAgentInstallJobRpc,
-  cancelAgentInstallJobRpc,
 } from '@/agents/machineAgents/installJobs/api';
 import {
   SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1,
@@ -182,7 +182,7 @@ import { createBugReportSubmitAction } from './bugReportSubmitAction';
 import { executeAppUpdateAction } from '@/updates/appUpdateActionRuntime';
 import { createUpdatesAction, readCurrentMachineUpdateItem } from '@/updates/updatesActionRuntime';
 import { startMachineAgentItemUpdate } from '@/updates/machineUpdateRuns';
-import { startAgentInstallJob } from '@/agents/machineAgents/installJobs/installJobStore';
+import { cancelMachineAgentInstallJob, startAgentInstallJob } from '@/agents/machineAgents/installJobs/installJobStore';
 import { executeExternalSessionBrowseAction } from './externalSessionBrowseAction';
 import { createUiConnectedServiceAction } from './connectedServiceActionDeps';
 import { createUiUsageActionPorts } from './usageActionDeps';
@@ -2032,6 +2032,16 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       });
     },
 
+    presentUserActionConfirmation: accountContext ? async ({ actionId, input, context }) => {
+      accountContext.assertCurrent();
+      context.signal?.throwIfAborted();
+      const { Modal } = await import('@/modal');
+      const spec = getActionSpec(actionId);
+      const confirmed = await Modal.confirm(spec.title, buildApprovalPreviewSummary(spec, input));
+      accountContext.assertCurrent();
+      return confirmed;
+    } : undefined,
+
     approvalRequestApprovedReplay: async ({ artifactId, request, context, requestId, signal }) => {
       if (!requiresExactDaemonApprovalReplay(request)) {
         // Returning null resumes the single Protocol replay owner, including its
@@ -2451,8 +2461,12 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return await executeAgentSignInLifecycle({ machineId, serverId: accountContext.serverId, agentId: request.agentId,
         lifetime: accountContext.accountLifetime, signal }, 'start');
     },
-    machineAgentSignInStatus: async ({ machineId, serverId, signal, agentId }) =>
-      checkAgentSignInRpc({ machineId, serverId, signal }, agentId),
+    machineAgentSignInStatus: async ({ machineId, serverId, signal, agentId }) => {
+      if (!accountContext) return await checkAgentSignInRpc({ machineId, serverId, signal }, agentId);
+      const { executeAgentSignInLifecycle } = await import('@/agents/machineAgents/signIn/useAgentSignIn');
+      return await executeAgentSignInLifecycle({ machineId, serverId: accountContext.serverId, agentId,
+        lifetime: accountContext.accountLifetime, signal }, 'status');
+    },
     machineAgentSignInCancel: async ({ machineId, signal, agentId, terminalId }) => {
       if (!accountContext) return { ok: false, errorCode: 'sign_in_unavailable', error: 'An exact Home Account is required.' };
       const { executeAgentSignInLifecycle } = await import('@/agents/machineAgents/signIn/useAgentSignIn');
@@ -2482,8 +2496,12 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     },
     machineAgentInstallRead: async ({ machineId, serverId, signal, ...request }) =>
       await readAgentInstallJobRpc({ machineId, serverId, signal }, request),
-    machineAgentInstallCancel: async ({ machineId, serverId, signal, ...request }) =>
-      await cancelAgentInstallJobRpc({ machineId, serverId, signal }, request),
+    machineAgentInstallCancel: async ({ machineId, signal, jobId }) => {
+      if (!accountContext) throw new Error('not_authenticated');
+      accountContext.assertCurrent();
+      signal?.throwIfAborted();
+      return await cancelMachineAgentInstallJob({ ...accountContext.accountLifetime.scope, machineId }, jobId);
+    },
     agentsModelsList: async (args) => {
       if (args.probe) {
         const target = await resolveNativeInventoryProbeTarget(args);
@@ -3004,7 +3022,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     },
     teleportVoiceAgentToSessionRoot: async ({ sessionId }) => await teleportVoiceAgentToSessionRoot({ sessionId }),
 
-    searchConversations: async ({ input, context }) => {
+    searchConversations: async ({ input: { retryUnreachableMachines, ...input }, context }) => {
       if (!accountContext) throw new Error('Exact Account context is unavailable');
       accountContext.assertCurrent();
       const snapshot = await getServerFeaturesSnapshot({ serverId: accountContext.serverId });
@@ -3016,7 +3034,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         daemonEnabled: resolveRuntimeFeatureDecisionFromSnapshot({ featureId: 'memory.search', settings, snapshot })?.state === 'enabled',
       });
       const { searchConversationsForAccount } = await import('@/sync/ops/searchConversations');
-      return await searchConversationsForAccount({ ...input, providers,
+      return await searchConversationsForAccount({ ...input, providers, retryUnreachableMachines,
         accountLifetime: accountContext.accountLifetime, signal: context.signal });
     },
 
@@ -3523,7 +3541,8 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
     machineProcessesAction: ({ actionId, input, context, signal }) => machineActionRpc(actionId, input, signal, context.actionRequestId ?? undefined),
     // Guard reads, Activity, Undo and Keep running are the target daemon's: Undo re-runs the captured
     // original Action there, through its own approval, so the host only carries the request.
-    machineGuardAction: ({ actionId, input, context, signal }) => machineActionRpc(actionId, input, signal, context.actionRequestId ?? undefined),
+    machineGuardAction: ({ actionId, input, context, signal }) => machineActionRpc(actionId, input, signal, context.actionRequestId ?? undefined,
+      resolveMachineGuardOperationTimeoutMs(actionId)),
     // Preserve Storage's existing operation-owned read completion as well.
     machineStorageAction: ({ actionId, input, context, signal }) => machineActionRpc(actionId, input, signal, context.actionRequestId ?? undefined, null),
     machineResourcesPolicyAction: async ({ actionId, input, signal }) => {
@@ -3659,31 +3678,6 @@ async function readActionAdmissionSettings(account: LazyActionAccountContext) {
   }
 }
 
-/** Default UI confirmation consumes the same policy as admission; explicit Inbox requirements still win. */
-async function confirmPresentUserAction(
-  actionId: ActionId,
-  input: unknown,
-  context: UiActionExecutorContext,
-  settings: Awaited<ReturnType<typeof readActionAdmissionSettings>>,
-  opts?: DefaultActionExecutorOptions,
-): Promise<UiActionExecutorContext | null> {
-  if (context.surface !== 'ui' || context.authority !== 'present_user' || context.bypassApprovals
-    || context.presentUserConfirmation?.actionId === actionId
-    || (context.actionCaller && context.actionCaller.kind !== 'host')) return context;
-  const spec = getActionSpec(actionId);
-  if (spec.safety !== 'danger' && !spec.safetyForInput && spec.approvalPolicy?.uiConfirmation !== 'policy'
-    && !spec.approvalPolicy?.uiConfirmationForInput) return context;
-  const parsed = spec.inputSchema.safeParse(input);
-  if (!parsed.success || opts?.isActionEnabled?.(actionId, context) === false) return context;
-  const policy = normalizeActionsSettingsV1(settings.actionsSettingsV1);
-  if (!isActionEnabledByActionsSettings(actionId, policy, context)
-    || !isApprovalRequiredByActionsSettings(actionId, policy, context, undefined, undefined, parsed.data)) return context;
-  const confirmed = { ...context, presentUserConfirmation: { actionId } };
-  if (isApprovalRequiredByActionsSettings(actionId, policy, confirmed, undefined, undefined, parsed.data)) return context;
-  const { Modal } = await import('@/modal');
-  return await Modal.confirm(spec.title, buildApprovalPreviewSummary(spec, parsed.data)) ? confirmed : null;
-}
-
 export async function withDefaultActionExecuteContext<TResult>(
   opts: DefaultActionExecutorOptions,
   context: DefaultActionExecuteContext,
@@ -3732,16 +3726,15 @@ export async function executeDefaultActionInCapturedAccount(
     const settings = await readActionAdmissionSettings(account);
     account.assertCurrent();
     signal?.throwIfAborted();
-    const admittedContext = await confirmPresentUserAction(actionId, input, {
+    const admittedContext = {
       ...context,
       signal,
       serverId: account.serverId,
       ...(account.serverIdentityId ? { serverIdentityId: account.serverIdentityId } : {}),
       runtimeAccountId: account.accountId,
-    }, settings);
+    };
     account.assertCurrent();
     signal?.throwIfAborted();
-    if (!admittedContext) return { ok: false as const, errorCode: 'approval_canceled', error: 'approval_canceled' };
     const result = await buildDefaultActionExecutor(undefined, { ...account, settings }).execute(actionId, input, admittedContext);
     account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
     return result;
@@ -3879,17 +3872,16 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       if (!serverId) return await ordinary().execute(actionId, input, actionContext);
       try {
         const native = resolveNativeManagedAction(actionId, opts);
-        const execute = (signal?: AbortSignal) => withDefaultActionExecuteContext(opts, { ...actionContext, signal, openRoute, serverId }, async (executor, account, settings) => {
-          const capturedContext = await confirmPresentUserAction(actionId, input, {
+        const execute = (signal?: AbortSignal) => withDefaultActionExecuteContext(opts, { ...actionContext, signal, openRoute, serverId }, async (executor, account) => {
+          const capturedContext = {
             ...actionContext,
             signal,
             serverId,
             ...(account.serverIdentityId ? { serverIdentityId: account.serverIdentityId } : {}),
             runtimeAccountId: account.accountId,
-          }, settings, opts);
+          };
           account.assertCurrent();
           signal?.throwIfAborted();
-          if (!capturedContext) return { ok: false as const, errorCode: 'approval_canceled', error: 'approval_canceled' };
           return native ? await executor.executeNativeManagedAction(native, input, capturedContext)
             : await executor.execute(actionId, input, capturedContext);
         }, actionId);
