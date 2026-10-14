@@ -328,10 +328,12 @@ function VitalsPhrase(
 ) {
   const { theme } = useUnistyles();
   const working = useMachineWorkingCount(props.target);
-  const work =
+  // The attention sentences end in a full stop; the widget's headline and its sub-line are phrases (lab rw V).
+  const work = (
     working > 0
       ? t('machineAttention.machine.working', { count: working })
-      : t('machineAttention.machine.idle');
+      : t('machineAttention.machine.idle')
+  ).replace(/[.。]$/u, '');
   // Where the page above already names this machine's attention (and offers its one action), the widget keeps
   // the state on its Memory/CPU rows and says what the machine is doing instead of repeating the sentence.
   const statedAbove = useMachineAttentionStatedAbove(props.target);

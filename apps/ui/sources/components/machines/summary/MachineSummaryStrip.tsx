@@ -32,7 +32,9 @@ const LINE_WIDTH = { under: 44, inline: 28, cells: 56, tiles: 120, preview: 36, 
 const LINE_HEIGHT = { under: 12, inline: 10, cells: 14, tiles: 24, preview: 10, fact: 0 } as const;
 const RING_SIZE = { under: 16, inline: 14, cells: 16, tiles: 28, preview: 14, fact: 0 } as const;
 /** A card's rings stand as instruments (lab `rw` V): the ring, its figure, then its name, centred. */
-const RING_FIGURE_SIZE = 44;
+const RING_FIGURE_SIZE = 52;
+/** The lab's ring (`rw` V) draws its arc at about a tenth of its diameter, on a track one step up from a hairline. */
+const RING_FIGURE_STROKE = 5;
 /** The list column's name keeps its line: one instrument stands beside it (one in trouble first, else the first chosen). */
 const INLINE_CAPACITY = 1;
 
@@ -127,8 +129,8 @@ const MachineSummaryInstrumentView = React.memo(function MachineSummaryInstrumen
     if (layout === 'tiles' && props.style === 'rings' && props.metric !== 'network') {
         const ring = (
             <View style={styles.ringFigure}>
-                <CapacityRing ratio={instrument?.used ?? 0} color={inkColor} trackColor={theme.colors.border.subtle}
-                    size={RING_FIGURE_SIZE} strokeWidth={3} />
+                <CapacityRing ratio={instrument?.used ?? 0} color={inkColor} trackColor={theme.colors.border.default}
+                    size={RING_FIGURE_SIZE} strokeWidth={RING_FIGURE_STROKE} />
                 <MachineSummaryRingValue metric={props.metric} figure={figure} color={toneColor} />
                 <Text numberOfLines={1} style={styles.label}>{machineSummaryMetricTitle(props.metric)}</Text>
             </View>
