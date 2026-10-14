@@ -7,7 +7,7 @@ import { installCodeBlockCommonModuleMocks } from './codeBlockTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const setStringAsyncSpy = vi.fn<(text: string) => Promise<void>>(async (_text) => {});
+const setStringAsyncSpy = vi.fn<(text: string) => Promise<boolean>>(async (_text) => true);
 const alertSpy = vi.fn();
 
 installCodeBlockCommonModuleMocks({
@@ -25,10 +25,6 @@ vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 
 vi.mock('expo-clipboard', () => ({
     setStringAsync: (text: string) => setStringAsyncSpy(text),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
 }));
 
 function mockPlatform(os: 'android' | 'ios' | 'web') {
@@ -169,5 +165,27 @@ describe('CodeBlockViewFrame', () => {
 
         const iconAfter = tree.findByType('Icon') as any;
         expect(iconAfter.props.name).toBe('check');
+    });
+
+    it('keeps the copy affordance ready to retry when the platform refuses a write', async () => {
+        setStringAsyncSpy.mockResolvedValueOnce(false);
+        mockPlatform('web');
+        const { CodeBlockViewFrame } = await import('./CodeBlockViewFrame');
+        const screen = await renderScreen(
+            <CodeBlockViewFrame code="hello" wrap showCopyButton>
+                <React.Fragment>child</React.Fragment>
+            </CodeBlockViewFrame>,
+        );
+
+        const button = screen.tree.findByProps({ accessibilityLabel: 'common.copy' });
+        await pressTestInstanceAsync(button, 'common.copy');
+        expect(screen.tree.findByType('Icon').props.name).toBe('copy');
+
+        await pressTestInstanceAsync(button, 'common.copy');
+        expect(screen.tree.findByType('Icon').props.name).toBe('check');
+
+        setStringAsyncSpy.mockResolvedValueOnce(false);
+        await pressTestInstanceAsync(button, 'common.copy');
+        expect(screen.tree.findByType('Icon').props.name).toBe('copy');
     });
 });

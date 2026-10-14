@@ -18,15 +18,16 @@ export const CopyIconButton = React.memo<CopyIconButtonProps>(({ text, style, te
     const { theme } = useUnistyles();
     const isWeb = Platform.OS === 'web';
     const [isHovered, setIsHovered] = React.useState(false);
-    const { markCopied, isCopied } = useTemporaryCopyFeedback();
+    const { markCopied, isCopied, clearCopiedFeedback } = useTemporaryCopyFeedback();
     const copied = isCopied();
 
     const onCopy = React.useCallback(async () => {
-        // Silent failure: no modal/toast here by design (matches message copy UX).
         if (await setClipboardStringSafe(typeof text === 'function' ? text() : text)) {
             markCopied();
+        } else {
+            clearCopiedFeedback();
         }
-    }, [markCopied, text]);
+    }, [clearCopiedFeedback, markCopied, text]);
 
     return (
         <Pressable

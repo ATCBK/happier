@@ -14,7 +14,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 installMarkdownCommonModuleMocks();
 
-const setStringAsyncSpy = vi.fn<(text: string) => Promise<void>>(async (_text) => {});
+const setStringAsyncSpy = vi.fn<(text: string) => Promise<boolean>>(async (_text) => true);
 
 // expo-clipboard is a native module boundary; the spy records what reaches the system clipboard.
 vi.mock('expo-clipboard', () => ({
