@@ -10,7 +10,7 @@ import { isMachineSelectableForFleet } from '@/sync/domains/machines/administrat
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useProjectedConnectedServicesRegistry, useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { resolveConnectedServiceRegistryEntryDisplayName, resolveQualifiedConnectedServiceRegistryEntry } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
+import { resolveQualifiedConnectedServiceRegistryDisplayName, resolveQualifiedConnectedServiceRegistryEntry } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
 import { t } from '@/text';
 import {
   projectUsagePlans,
@@ -74,12 +74,9 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
       ),
     [summaries.accountIdentities],
   );
-  const serviceLabelOf = React.useCallback((account: UsagePlanAccount) => {
-    const summary = summaryByKey.get(account.key);
-    if (summary) return summary.serviceLabel;
-    const entry = serviceEntryOf(account);
-    return entry ? resolveConnectedServiceRegistryEntryDisplayName(entry, t, localizePluginText) : t('connectedServices.fallbackName');
-  }, [summaryByKey, serviceEntryOf, localizePluginText]);
+  const serviceLabelOf = React.useCallback((account: UsagePlanAccount) =>
+    resolveQualifiedConnectedServiceRegistryDisplayName(registry, account.service, t, localizePluginText),
+  [registry, localizePluginText]);
   const names = React.useMemo(
     () =>
       presentConnectedAccountNames(

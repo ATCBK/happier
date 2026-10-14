@@ -46,7 +46,7 @@ function planAccountReadKind(account: UsagePlanAccount): PlanAccountReadKind | n
   const status = account.state.status;
   if (status === 'error') return 'failed';
   if (status === 'pending') return 'pending';
-  if (account.read?.current && status !== 'stale') return null;
+  if (account.read?.current && account.observedAtMs !== null && status !== 'stale') return null;
   return 'partial';
 }
 

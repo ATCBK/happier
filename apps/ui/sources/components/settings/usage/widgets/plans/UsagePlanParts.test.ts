@@ -66,7 +66,7 @@ describe('formatPlanMoment', () => {
 describe('readPlanAccountsStatement', () => {
   const account = (id: string, status: UsagePlanAccount['state']['status'], current: boolean, asOfMs?: number) =>
     ({ key: id, accountId: id, state: { source: 'quota', status, ...(asOfMs ? { asOfMs } : {}) },
-      read: current ? { current: {} } : null, observedAtMs: null }) as unknown as UsagePlanAccount;
+      read: current ? { current: {} } : null, observedAtMs: current ? now : null }) as unknown as UsagePlanAccount;
   const nameOf = (entry: UsagePlanAccount) => ({ title: entry.accountId, qualifier: null }) as never;
 
   it('states one shared partial read once, for every account, with the oldest time', () => {

@@ -43,6 +43,7 @@ import type {
 import { normalizeConnectedServiceQuotaProfileRefs } from '@/sync/domains/connectedServices/connectedServiceQuotaProfileRefs';
 import {
     resolveConnectedServiceRegistryEntryDisplayName,
+    resolveQualifiedConnectedServiceRegistryDisplayName,
     resolveQualifiedConnectedServiceRegistryEntry,
 } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
 import {
@@ -121,9 +122,8 @@ function resolveQualifiedSummaryService(params: Readonly<{
     return {
         service: params.ref.service,
         legacyServiceId,
-        serviceLabel: entry
-            ? resolveConnectedServiceRegistryEntryDisplayName(entry, t, params.localizePluginText)
-            : t('connectedServices.fallbackName'),
+        serviceLabel: resolveQualifiedConnectedServiceRegistryDisplayName(
+            { entries: params.registryEntries }, params.ref.service, t, params.localizePluginText),
         profileId: params.ref.accountId,
         profileLabel: resolveQualifiedConnectedAccountLabel({
             labelsByKey: params.labelsByKey,
