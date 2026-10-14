@@ -37,6 +37,12 @@ export type HappierDataMetricProps = Readonly<{
   testID?: string;
 }>;
 
+const NO_BREAK_SPACE = '\u00a0';
+
+function bindNumbersToUnits(text: string): string {
+  return text.replace(/(\d) (?=[^\d\s])/gu, `$1${NO_BREAK_SPACE}`);
+}
+
 /**
  * One number, its unit and one comparison (lab DP "Metric"). Tabular figures so a refreshed value
  * never jitters; the comparison is coloured by meaning, never by sign.
@@ -77,7 +83,11 @@ export function HappierDataMetric(props: HappierDataMetricProps) {
           }
         : text.metric;
   const inlineUnit = size !== 'default' && props.unit;
-  const shown = props.unit && !inlineUnit ? `${value} ${props.unit}` : value;
+  // A number is bound to the unit that follows it, so a narrow cell wraps between "3 h" and
+  // "22 min" and never leaves "min" alone on a line.
+  const shown = bindNumbersToUnits(
+    props.unit && !inlineUnit ? `${value} ${props.unit}` : value,
+  );
   const comparison = props.comparison ? (
     size === 'hero' ? (
       <View

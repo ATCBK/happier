@@ -172,4 +172,18 @@ describe('public data nodes through React Native Web', () => {
       mount.unmount();
     }
   });
+
+  it('binds each number to its unit so a narrow cell wraps between "1 h" and "54 min", never before "min"', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <Metric testID="metric" label="Agent time" size="stat" value={6840000} valueFormatter={() => '1 h 54 min'} />
+      </PluginUiProvider>,
+    );
+    try {
+      expect(query(mount.container, 'metric-value')!.textContent).toBe('1\u00a0h 54\u00a0min');
+    } finally {
+      mount.unmount();
+    }
+  });
 });
