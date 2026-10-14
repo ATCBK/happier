@@ -151,6 +151,39 @@ async function writeFixtureEsbuildPackage(params: Readonly<{
 }
 
 describe('bundlePluginDaemonRuntime', () => {
+  it('configures a bundled Mini core before plugin module evaluation', async () => {
+    const parentRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-mini-locale-'));
+    const sourceRoot = join(parentRoot, 'plugin');
+    const stagedRoot = join(parentRoot, 'staged');
+    try {
+      await mkdir(join(sourceRoot, 'node_modules'), { recursive: true });
+      await mkdir(stagedRoot, { recursive: true });
+      await writeFile(join(sourceRoot, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
+      await writeFile(join(sourceRoot, 'index.ts'), [
+        "import { z } from 'zod/mini';",
+        "const parsed = z.string().check(z.minLength(3)).safeParse('ab');",
+        "export const observedMessage = parsed.success ? '' : parsed.error.issues[0].message;",
+      ].join('\n'), 'utf8');
+      const zodPackageRoot = join(createRequire(import.meta.url).resolve('zod/package.json'), '..');
+      await symlink(zodPackageRoot, join(sourceRoot, 'node_modules', 'zod'), process.platform === 'win32' ? 'junction' : 'dir');
+
+      await stagePluginDaemonRuntime({
+        sourceRootPath: sourceRoot,
+        sourceEntryPath: join(sourceRoot, 'index.ts'),
+        stagedRootPath: stagedRoot,
+        daemonEntrypoint: './dist/index.mjs',
+      });
+      const { stdout } = await execFileAsync(process.execPath, [
+        '--input-type=module',
+        '--eval',
+        `const plugin = await import(${JSON.stringify(pathToFileURL(join(stagedRoot, 'dist', 'index.mjs')).href)}); process.stdout.write(plugin.observedMessage);`,
+      ]);
+      expect(stdout).toBe('Too small: expected string to have >=3 characters');
+    } finally {
+      await rm(parentRoot, { recursive: true, force: true });
+    }
+  });
+
   it('pins the CLI esbuild dependency version', async () => {
     const packageJson = JSON.parse(
       await readFile(new URL('../../../package.json', import.meta.url), 'utf8'),

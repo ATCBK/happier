@@ -1,3 +1,4 @@
+import '../configureZodLocale';
 import { dirname, join } from 'node:path';
 
 import packageJson from '../../package.json';

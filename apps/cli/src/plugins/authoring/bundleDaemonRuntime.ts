@@ -850,6 +850,7 @@ export async function stagePluginDaemonRuntime(
   }
 
   const build = deps.build ?? loadPluginAuthorBundlerBuild();
+  const { createZodMiniEnglishLocaleCompilerPlugin } = await import('@happier-dev/plugin-sdk/ui/build');
   const firstPartyPackagedWorkspaceExternals = resolveFirstPartyPackagedWorkspaceExternals({
     sourceRoot,
     canonicalWorkspacePackageRoots: params.canonicalWorkspacePackageRoots,
@@ -896,6 +897,7 @@ export async function stagePluginDaemonRuntime(
       banner: { js: BUNDLED_PLUGIN_DAEMON_ESM_REQUIRE_BANNER },
       inject: [BUNDLED_PLUGIN_DAEMON_REQUIRE_INJECTION],
       plugins: [
+        createZodMiniEnglishLocaleCompilerPlugin(),
         bundledPluginDaemonRequirePlugin,
         ...(canonicalWorkspaceImportResolver ? [canonicalWorkspaceImportResolver.plugin] : []),
       ],

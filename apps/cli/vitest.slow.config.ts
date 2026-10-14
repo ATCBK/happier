@@ -16,6 +16,7 @@ export default defineConfig({
     environment: 'node',
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    setupFiles: ['./src/configureZodLocale.ts'],
     include: ['src/**/*.slow.test.ts'],
     exclude: [...configDefaults.exclude, ...resolveVitestFeatureTestExcludeGlobs({ ...process.env, ...testEnv })],
     globalSetup: ['./src/test-setup.slow.ts'],

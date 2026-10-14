@@ -10,6 +10,7 @@
  * SECURITY: never print secrets to stdout (stdout is reserved for MCP stdio).
  */
 
+import '../../configureZodLocale';
 import { readFile } from 'node:fs/promises';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';

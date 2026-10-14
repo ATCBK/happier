@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { z as mini } from 'zod/mini';
 import { RuntimeActionIdV1Schema } from '@happier-dev/protocol/actions/actionIds';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { createUnavailableRuntimeActionExecutor, resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
@@ -11,7 +12,7 @@ export const BROWSER_RUNTIME_ACTION_CONTROL_PATH = '/browser/runtime-actions/exe
 
 /** Private host placement after Action admission; no caller-supplied policy context crosses IPC. */
 export const BrowserRuntimeActionControlRequestSchema = z.object({
-  actionId: RuntimeActionIdV1Schema.refine((id) => ['browser', 'computer'].includes(resolveRuntimeActionExecutionFamily(id))),
+  actionId: RuntimeActionIdV1Schema.check(mini.refine((id) => ['browser', 'computer'].includes(resolveRuntimeActionExecutionFamily(id)))),
   input: StrictJsonValueSchema,
   sessionId: z.string().trim().min(1),
   /** Authenticated host IPC carries Action-policy admission (approval, waiver or bypass), not caller authority. */

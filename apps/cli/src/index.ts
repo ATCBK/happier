@@ -6,6 +6,7 @@
  * Simple argument parsing without any CLI framework dependencies
  */
 
+import './configureZodLocale';
 import { dispatchCli } from '@/cli/dispatch';
 import { readCliProcessArgs, parseCliArgs } from '@/cli/parseArgs';
 import { initToolTraceIfEnabled } from '@/agent/tools/trace/toolTrace';
