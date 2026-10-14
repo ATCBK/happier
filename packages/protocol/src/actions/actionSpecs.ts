@@ -8802,12 +8802,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'instructions', 'set'], positionals: ['sessionId'], visibility: 'canonical' }] },
   },
   {
-    id: 'session.view.toolCalls.set', approvalPolicy: { agentDefault: 'authority', requiredSurfaces: ['agent', 'mcp', 'plugin', 'api', 'cli'] }, approval: {result: 'required'}, title: 'Show or hide session tool calls',
-    description: 'Save a transcript view choice; null restores the session default. Automation asks first unless the user changes the Action policy.',
+    // Plan 60 §6: tool visibility belongs to the person reading the transcript;
+    // automation must not hide its activity, even with an Action approval waiver.
+    id: 'session.view.toolCalls.set', approval: {result: 'none'}, title: 'Show or hide session tool calls',
+    description: 'Save a human-owned transcript view choice; null restores the session default.',
     safety: 'safe', sideEffectClass: 'write', executionPlacement: 'account', placements: [],
-    requiredAuthority: 'account_automation',
-    bindings: { voiceClientToolName: 'setSessionToolCalls', mcpToolName: 'session_view_tool_calls_set' },
-    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    requiredAuthority: 'present_user',
+    bindings: { voiceClientToolName: 'setSessionToolCalls' },
+    surfaces: { ui: true, voice: true, agent: false, mcp: false, cli: true, rpc: false },
     inputHints: { description: 'Show or hide tool calls in a session\'s conversation.', title: 'Show tool calls', fields: [
       { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'showToolCalls', title: 'Show tool calls, or null to use the default', widget: 'json', required: true },
