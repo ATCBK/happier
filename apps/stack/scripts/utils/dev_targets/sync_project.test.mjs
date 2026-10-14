@@ -46,6 +46,60 @@ test('standby capture status reuses the configured SSH transport', async t => {
   assert.equal(result.agentSqliteCount, 2);
 });
 
+test('candidate producer creates and pauses only its own project in the shared repository runtime', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-candidate-shared-runtime-' });
+  const sourceDir = join(root, 'source');
+  const env = envFor(root);
+  const ownerId = 'execution-host-candidate-0.3';
+  const candidateTarget = { ...target, name: ownerId, repoDir: '/guest/candidate' };
+  const ordinary = runtimeFor(root, sourceDir);
+  await mkdir(dirname(ordinary.projectFile), { recursive: true });
+  const ordinaryProject = renderMutagenProject({ sourceDir, targets: [target], ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER });
+  await writeFile(ordinary.projectFile, ordinaryProject);
+  await writeFile(`${ordinary.projectFile}.lock`, 'ordinary-project');
+  const session = (entry, project) => ({ identifier: `sync-${entry.name}`, name: resolveMutagenSessionName(entry.name, sourceDir),
+    labels: { 'io.mutagen.project': project }, mode: 'one-way-replica',
+    alpha: { protocol: 'local', path: sourceDir, connected: true, scanned: true },
+    beta: { protocol: 'ssh', host: entry.ssh, path: entry.repoDir, connected: true, scanned: true },
+    paused: false, status: 'watching', successfulCycles: 1 });
+  const sessions = [session(target, 'ordinary-project')];
+  const calls = [];
+  const runProcess = async ({ args, env: controlEnv }) => {
+    assert.equal(controlEnv.MUTAGEN_DATA_DIRECTORY, ordinary.dataDir);
+    calls.push(args);
+    if (args[0] === 'sync' && args[1] === 'list') return { code: 0, out: JSON.stringify(sessions) };
+    if (args[0] === 'sync' && args[1] === 'terminate') {
+      const index = sessions.findIndex(entry => entry.identifier === args[2]);
+      assert.ok(index >= 0);
+      sessions.splice(index, 1);
+    }
+    if (args[0] === 'project' && args[1] === 'start') {
+      sessions.push(session(candidateTarget, 'candidate-project'));
+      await writeFile(`${args.at(-1)}.lock`, 'candidate-project');
+    }
+    if (args[0] === 'project' && args[1] === 'pause') {
+      assert.notEqual(args.at(-1), ordinary.projectFile, 'candidate retirement must not pause ordinary routing');
+      sessions.find(entry => entry.identifier === `sync-${ownerId}`).paused = true;
+    }
+    return { code: 0, out: '' };
+  };
+  const candidate = await ensureDevTargetSyncProject({ stackBaseDir: root, sourceDir,
+    targets: [candidateTarget], ownerId, env }, { runProcess });
+  assert.equal(candidate.ownership, 'owned');
+  assert.notEqual(candidate.projectFile, ordinary.projectFile);
+  assert.equal(candidate.dataDir, ordinary.dataDir);
+  assert.equal(candidate.opensshDir, ordinary.opensshDir);
+  assert.match(await readFile(candidate.projectFile, 'utf8'), /execution-host-candidate-0\.3/);
+  await ensureDevTargetSyncProject({ stackBaseDir: root, sourceDir,
+    targets: [target], ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER, env }, { runProcess });
+  assert.equal(sessions.length, 2, 'neither producer may retire the other project as an orphan');
+  assert.equal(await pauseOwnedDevTargetSyncProject({ stackBaseDir: root, sourceDir, ownerId, env }, { runProcess }), true);
+  assert.equal(sessions.find(entry => entry.identifier === 'sync-mac').paused, false);
+  assert.equal(sessions.find(entry => entry.identifier === `sync-${ownerId}`).paused, true);
+  assert.equal(await readFile(ordinary.projectFile, 'utf8'), ordinaryProject);
+  assert.equal(calls.some(args => args[0] === 'sync' && args[1] === 'terminate'), false);
+});
+
 test('project reconciliation removes orphan writers by identifier before resuming or rotating the repository project', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-sync-orphan-writers-' });
   const sourceDir = join(root, '0.2');
@@ -807,8 +861,9 @@ test('independent sync stop leaves ownership released when project pause is inte
 
 test('owned project pause preserves its owner marker for later resume', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-sync-project-owned-pause-'));
-  const projectFile = projectFor(root);
-  await mkdir(dirname(projectFor(root)), { recursive: true });
+  const projectFile = resolveDevTargetMutagenRuntime({ stackBaseDir: root,
+    ownerId: 'execution-host-candidate', env: envFor(root) }).projectFile;
+  await mkdir(dirname(projectFile), { recursive: true });
   await writeFile(projectFile, renderMutagenProject({
     sourceDir: DEV_TARGET_SYNC_EXECUTOR_REPO,
     targets: [target],

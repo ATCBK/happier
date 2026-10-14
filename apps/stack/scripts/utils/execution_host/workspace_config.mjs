@@ -1,5 +1,9 @@
 import { isAbsolute, join } from 'node:path';
 
+export function isExecutionHostWorkspaceId(id) {
+  return typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(id);
+}
+
 function workspaceValues(argv) {
   const values = [];
   for (let index = 0; index < argv.length; index += 1) {

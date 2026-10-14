@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { withJsonOwnerFileLock } from '../proc/jsonOwnerFileLock.mjs';
@@ -10,6 +10,7 @@ import { loadDevTargetsConfig } from './config.mjs';
 import {
   buildMutagenProjectArgs,
   isEquivalentMutagenProject,
+  isExecutionHostCandidateSyncOwner,
   isMutagenProjectOwnedBy,
   renderMutagenProject,
   resolveMutagenSessionName,
@@ -25,6 +26,53 @@ import {
 } from './mutagen_runtime.mjs';
 
 export const INDEPENDENT_DEV_TARGET_SYNC_OWNER = 'dev-target-sync-service';
+
+function projectSessionNames(contents) {
+  return [...String(contents ?? '').matchAll(/^  (happier-[A-Za-z0-9-]+):$/gm)].map(match => match[1]);
+}
+
+export async function resolveOwnedDevTargetSyncProjectSources({ stackBaseDir, ownerId, env = process.env }) {
+  if (!isExecutionHostCandidateSyncOwner(ownerId)) {
+    throw new Error('[dev-targets] candidate project recovery requires a candidate owner');
+  }
+  const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir, ownerId, env });
+  const projectName = basename(runtime.projectFile);
+  const repositoriesDir = join(runtime.mutagenDir, 'repositories');
+  const repositories = await readdir(repositoriesDir, { withFileTypes: true }).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const projectFiles = [join(runtime.mutagenDir, projectName), ...repositories
+    .filter(entry => entry.isDirectory()).map(entry => join(repositoriesDir, entry.name, projectName))];
+  const sources = [];
+  for (const projectFile of projectFiles) {
+    const contents = await readFile(projectFile, 'utf8').catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (contents === null) continue;
+    if (!isMutagenProjectOwnedBy(contents, ownerId)) throw new Error('[dev-targets] candidate project owner mismatch');
+    // The canonical generator writes local alpha paths as JSON strings. Read
+    // only that producer's evidence, rather than interpreting arbitrary YAML.
+    let sourceDir;
+    try {
+      const alpha = [...contents.matchAll(/^    alpha: (.+)$/gm)];
+      if (alpha.length !== 1) throw new Error('expected one source');
+      sourceDir = JSON.parse(alpha[0][1]);
+      if (typeof sourceDir !== 'string' || !isAbsolute(sourceDir) || /[\0\r\n]/.test(sourceDir)) throw new Error('invalid source');
+    } catch {
+      throw new Error('[dev-targets] invalid candidate project source evidence');
+    }
+    const expected = resolveDevTargetMutagenRuntime({ stackBaseDir, sourceDir, ownerId, env });
+    const names = projectSessionNames(contents);
+    if (resolve(expected.projectFile) !== resolve(projectFile) || names.length !== 1
+      || names[0] !== resolveMutagenSessionName(ownerId, sourceDir)) {
+      throw new Error('[dev-targets] candidate project does not match its source scope');
+    }
+    sources.push(sourceDir);
+  }
+  return [...new Set(sources)];
+}
 const DEV_TARGET_SYNC_PROJECT_LIFECYCLE_LOCK_STALE_AFTER_MS = 60_000;
 const DEV_TARGET_CONTROL_EXECUTABLE = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -206,10 +254,11 @@ async function ensureDevTargetSyncProjectUnlocked(
     HAPPIER_STACK_PROCESS_KIND: _stackProcessKind,
     ...mutagenControlEnv
   } = env;
-  const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir, sourceDir, env: mutagenControlEnv });
-  // Only the routing/sync owner creates sessions. Stack supervisors consume
-  // existing mirrors; their lifecycle must never own a daemon or project.
-  if (borrowOnly || allowIndependentBorrow || ownerId !== INDEPENDENT_DEV_TARGET_SYNC_OWNER) {
+  const candidateProducer = isExecutionHostCandidateSyncOwner(ownerId);
+  const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir, sourceDir, ownerId, env: mutagenControlEnv });
+  // Routing and candidate producers own distinct projects in the shared daemon.
+  // Ordinary Stack supervisors only borrow their existing producer mirrors.
+  if (borrowOnly || allowIndependentBorrow || (ownerId !== INDEPENDENT_DEV_TARGET_SYNC_OWNER && !candidateProducer)) {
     const project = await readFile(runtime.projectFile, 'utf8').catch(() => null);
     if (!project) throw new Error('[dev-targets] controlled runtime requires the producer synchronization; run hstack dev-targets sync-service start --detached');
     const unhealthyTargets = await inspectBorrowedIndependentDevTargetSyncProject({ requiredTargets, mutagenRuntime: runtime }, { runProcess });
@@ -224,6 +273,7 @@ async function ensureDevTargetSyncProjectUnlocked(
   const mutagenRuntime = resolveDevTargetMutagenRuntime({
     stackBaseDir,
     sourceDir,
+    ownerId,
     env: openSsh.mutagenEnv,
   });
   requireSuccessful(await runProcess({
@@ -237,7 +287,7 @@ async function ensureDevTargetSyncProjectUnlocked(
     sourceDir,
     targets,
     config: (await loadDevTargetsConfig({ path: join(stackBaseDir, 'dev-targets.json') })).config,
-    ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER,
+    ownerId: candidateProducer ? ownerId : INDEPENDENT_DEV_TARGET_SYNC_OWNER,
   });
 
   // Mutagen selects projects by the id in .lock, not by their session names.
@@ -253,10 +303,10 @@ async function ensureDevTargetSyncProjectUnlocked(
   requireSuccessful(listed, 'Mutagen repository session inventory');
   const sessions = JSON.parse(listed.out || '[]');
   if (!Array.isArray(sessions)) throw new Error('[dev-targets] invalid Mutagen repository session inventory');
-  const sessionPrefix = resolveMutagenSessionName('', sourceDir);
+  const projectNames = new Set([...projectSessionNames(existingProject), ...projectSessionNames(desiredProject)]);
   const terminated = new Set();
   for (const session of sessions) {
-    if (!session.name?.startsWith(sessionPrefix) || session.alpha?.protocol !== 'local'
+    if (!projectNames.has(session.name) || session.alpha?.protocol !== 'local'
       || resolve(session.alpha.path ?? '') !== resolve(sourceDir)
       || session.mode !== 'one-way-replica' || !session.labels?.['io.mutagen.project']
       || session.labels['io.mutagen.project'] === projectId) continue;
@@ -287,7 +337,7 @@ async function ensureDevTargetSyncProjectUnlocked(
     if (existingProject && !canResumeProject) {
       // Flush the old membership before replacing its project file. Otherwise
       // terminate would select the new names and strand the old sessions.
-      const names = [...existingProject.matchAll(/^  (happier-[A-Za-z0-9-]+):$/gm)].map(match => match[1]);
+      const names = projectSessionNames(existingProject);
       for (const name of names) {
         if (parseMutagenSyncList(currentSessions, name).state === 'missing') continue;
         requireSuccessful(await runProcess({ label: 'sync', command: 'mutagen',
@@ -324,7 +374,7 @@ async function ensureDevTargetSyncProjectUnlocked(
   return {
     ...mutagenRuntime,
     openSsh,
-    ownership: 'independent',
+    ownership: candidateProducer ? 'owned' : 'independent',
     projectCreated,
     release: async () => {},
   };
@@ -547,10 +597,10 @@ export async function releaseIndependentDevTargetSyncProject(input, dependencies
 }
 
 async function pauseOwnedDevTargetSyncProjectUnlocked(
-  { stackBaseDir, ownerId, env = process.env },
+  { stackBaseDir, sourceDir, ownerId, env = process.env },
   { runProcess = runDevTargetControlProcess } = {},
 ) {
-  const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir, env });
+  const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir, sourceDir, ownerId, env });
   const contents = await readFile(runtime.projectFile, 'utf8').catch(() => null);
   if (!isMutagenProjectOwnedBy(contents, ownerId)) return false;
   requireSuccessful(await runProcess({
@@ -567,6 +617,7 @@ export async function pauseOwnedDevTargetSyncProject(input, dependencies = {}) {
     ?? withDevTargetSyncProjectLifecycleLock;
   return await withProjectLifecycleLock({
     stackBaseDir: input.stackBaseDir,
+    sourceDir: input.sourceDir,
     env: input.env ?? process.env,
   }, async () => await pauseOwnedDevTargetSyncProjectUnlocked(input, dependencies));
 }

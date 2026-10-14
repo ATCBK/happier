@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 import { runCommandCapture, runNodeCapture } from './testkit/core/run_node_capture.mjs';
+import { resolveMutagenSessionName } from './utils/dev_targets/mutagen_project.mjs';
 
 const script = new URL('./host.mjs', import.meta.url).pathname;
 const launcher = new URL('../bin/hstack.mjs', import.meta.url).pathname;
@@ -1283,6 +1284,9 @@ test('host mirror status inspects continuous candidate sync without touching the
   const fixture = await createTempFixture(t, { prefix: 'hstack-host-mirror-status-' });
   const home = fixture.path('home');
   const bin = fixture.path('bin');
+  const sourceDir = '/Users/dev/happier/dev';
+  const sessionName = resolveMutagenSessionName('execution-host-candidate', sourceDir);
+  const vmLog = fixture.path('vm.log');
   await mkdir(fixture.path('home', 'execution-host-candidate'), { recursive: true });
   await mkdir(bin, { recursive: true });
   await writeFile(fixture.path('home', 'execution-host.json'), `${JSON.stringify({
@@ -1301,33 +1305,40 @@ test('host mirror status inspects continuous candidate sync without touching the
       version: 1,
       activation: 'candidate',
       authoritative: false,
-      sourceDir: '/Users/dev/happier/dev',
+      sourceDir,
       guestRepositoryDir: '/home/happier/workspace/dev',
       capture: { head: 'a'.repeat(40), refCount: 1, refsDigest: '0'.repeat(64), worktreeHeadCount: 1 },
     })}\n`,
   );
   await writeFile(fixture.path('bin', 'mutagen'), [
     '#!/bin/sh',
-    'if [ "$1 $2" = "sync list" ]; then',
-    '  echo \'[{"name":"happier-execution--host--candidate","paused":false,"status":"watching","successfulCycles":1,"alpha":{"connected":true,"scanned":true},"beta":{"connected":true,"scanned":true}}]\'',
+    `if [ "$1 $2" = "sync list" ] && [ "$3" = "${sessionName}" ]; then`,
+    `  echo '${JSON.stringify([{ name: sessionName, paused: false, status: 'watching', successfulCycles: 1,
+      alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true } }])}'`,
     '  exit 0',
     'fi',
     'exit 9',
     '',
   ].join('\n'));
   await chmod(fixture.path('bin', 'mutagen'), 0o755);
+  await writeFile(join(bin, 'limactl'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HSTACK_TEST_VM_LOG"\nexit 9\n');
+  await chmod(join(bin, 'limactl'), 0o755);
 
   const result = await runNodeCapture([script, 'mirror', 'status', '--json'], {
     env: {
       ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ''}`,
+      HSTACK_TEST_VM_LOG: vmLog,
       HAPPIER_STACK_HOME_DIR: home,
+      HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'),
       HAPPIER_STACK_DISABLE_STACK_ENV_AUTOLOAD: '1',
     },
   });
 
   assert.equal(result.code, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).status.state, 'ready');
+  assert.equal(JSON.parse(result.stdout).status.sessionName, sessionName);
+  await assert.rejects(readFile(vmLog), { code: 'ENOENT' });
 });
 
 test('active execution profile delegates an ordinary hstack command on macOS and remains local elsewhere', async (t) => {

@@ -140,7 +140,8 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     '.tsbuildinfo.build.*',
     '*.tsbuildinfo',
     '.cxx',
-    'apps/ui/ios/build',
+    // Expo owns the whole generated native tree, including Podfile.lock and Info.plist.
+    'apps/ui/ios',
     'apps/ui/src-tauri/binaries',
     'apps/ui/src-tauri/systemTasks',
     'apps/ui/src-tauri/ssh',

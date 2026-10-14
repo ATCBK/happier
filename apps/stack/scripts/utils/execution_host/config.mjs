@@ -12,6 +12,7 @@ import { normalizeManagedLimaCapacity } from '../managed_lima/capacity.mjs';
 import { resolveManagedLimaPressureProfile } from '../managed_lima/pressure_profiles.mjs';
 import { getHappyStacksHomeDir } from '../paths/paths.mjs';
 import { retireExecutionHostCandidateMirrors } from './candidate_repository.mjs';
+import { isExecutionHostWorkspaceId } from './workspace_config.mjs';
 
 const PROFILE_FILE = 'execution-host.json';
 const FIELDS = new Set([
@@ -33,7 +34,6 @@ const FIELDS = new Set([
   'sshPrimary',
 ]);
 const WORKSPACE_FIELDS = new Set(['id', 'stackName', 'hostSourceDir', 'hostMirrorDir', 'guestDir']);
-const WORKSPACE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const WORKSPACE_STACK_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function requireAbsolutePath(value, field) {
@@ -62,7 +62,7 @@ function normalizeNamedWorkspaces(raw, { guestWorkspaceDir, mirrorWorkspaceDir }
       if (!WORKSPACE_FIELDS.has(key)) throw new Error(`[execution-host] unknown workspace field: ${key}`);
     }
     const id = String(entry.id ?? '').trim();
-    if (!WORKSPACE_ID_RE.test(id)) throw new Error(`[execution-host] invalid workspace id: ${JSON.stringify(id)}`);
+    if (!isExecutionHostWorkspaceId(id)) throw new Error(`[execution-host] invalid workspace id: ${JSON.stringify(id)}`);
     if (ids.has(id)) throw new Error(`[execution-host] duplicate workspace id: ${id}`);
     ids.add(id);
     const workspace = {

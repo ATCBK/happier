@@ -2,6 +2,19 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDevTargetExecutionPolicy } from './config.mjs';
+import { isExecutionHostWorkspaceId } from '../execution_host/workspace_config.mjs';
+
+export const EXECUTION_HOST_CANDIDATE_SYNC_OWNER = 'execution-host-candidate';
+
+export function isExecutionHostCandidateSyncOwner(ownerId) {
+  if (ownerId === EXECUTION_HOST_CANDIDATE_SYNC_OWNER) return true;
+  const prefix = `${EXECUTION_HOST_CANDIDATE_SYNC_OWNER}-`;
+  if (typeof ownerId !== 'string' || !ownerId.startsWith(prefix)) return false;
+  if (!isExecutionHostWorkspaceId(ownerId.slice(prefix.length))) {
+    throw new Error('[dev-targets] invalid execution-host candidate sync owner');
+  }
+  return true;
+}
 
 export const DEV_TARGET_SYNC_EXECUTOR_REPO = fileURLToPath(new URL('../../../../../', import.meta.url));
 
@@ -111,7 +124,9 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   '.tsbuildinfo.build.*',
   '*.tsbuildinfo',
   '.cxx',
-  'apps/ui/ios/build',
+  // Expo prebuild owns native identity, pod locks and project files on each target.
+  // Source replication must preserve that complete generated tree during a native build.
+  'apps/ui/ios',
   // Desktop preparation owns these generated sidecars and their JS runtime companions.
   // Replicating a local build would replace the target-native executable after Cargo builds it.
   'apps/ui/src-tauri/binaries',
