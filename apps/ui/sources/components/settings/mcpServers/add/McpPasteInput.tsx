@@ -52,12 +52,6 @@ import type { McpAddPlaces } from './useMcpAddPlaces';
 
 type Execution = ReturnType<typeof useMountedActionExecution>;
 
-const NO_PROJECTS: readonly Readonly<{
-  projectKey: string;
-  name: string;
-  machineCount: number;
-}>[] = [];
-
 /** A config-document link is read by the host; everything else is the pasted text itself. */
 function importSource(text: string) {
   const trimmed = text.trim();
@@ -139,8 +133,10 @@ export function McpPasteInput(
       projectReachOnMachines(
         draftReach.rules,
         props.places.machines as readonly ReachMachine[],
+        undefined,
+        props.places.workspaceRefs,
       ),
-    [draftReach.rules, props.places.machines],
+    [draftReach.rules, props.places.machines, props.places.workspaceRefs],
   );
 
   const setRow = React.useCallback(
@@ -407,7 +403,7 @@ export function McpPasteInput(
             places={{
               agentIds: props.places.agentIds,
               machines: props.places.placeMachines,
-              projects: NO_PROJECTS,
+              projects: props.places.projects,
             }}
             agentTakes={props.places.agentTakes}
             onChange={draftReach.onChange}

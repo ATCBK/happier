@@ -53,6 +53,7 @@ describe('MCP directory browse tabs', () => {
                     selectedMachineId="machine-1"
                     selectedServerId="server-1"
                     canExecute
+                    canImport
           directory="/repo"
           onChangeDirectory={onChangeDirectory}
           loading={false}

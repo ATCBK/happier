@@ -32,8 +32,6 @@ type FoundOnMachine = Readonly<{
   machine: ReachMachine;
   server: DetectedMcpServerV1;
 }>;
-const NO_PROJECTS: readonly Readonly<{ projectKey: string; name: string }>[] =
-  [];
 
 /**
  * What the machines' agents already run that Happier does not hold yet, as last seen by the Found page
@@ -103,7 +101,6 @@ export const McpFoundBlock = React.memo(function McpFoundBlock(
   const { names } = useWhereItsOnNames({
     agentIds,
     machines: [],
-    projects: NO_PROJECTS,
   });
   const review = React.useCallback(() => {
     const result = runGuardedNavigation(() =>

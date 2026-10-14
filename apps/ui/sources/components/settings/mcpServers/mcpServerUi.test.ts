@@ -23,8 +23,8 @@ describe('resolveDetectedProviderName', () => {
     });
 
     it('resolves detected provider labels through the agent registry, including flavor aliases', () => {
-        expect(resolveDetectedProviderName('claude')).toBe(`tx:${getAgentCore('claude').displayNameKey}`);
-        expect(resolveDetectedProviderName('open-code')).toBe(`tx:${getAgentCore('opencode').displayNameKey}`);
+        expect(resolveDetectedProviderName('claude')).toBe(`tx:${getAgentCore('claude')?.displayNameKey}`);
+        expect(resolveDetectedProviderName('open-code')).toBe(`tx:${getAgentCore('opencode')?.displayNameKey}`);
     });
 
     it('falls back to the raw provider when no registered agent matches', () => {

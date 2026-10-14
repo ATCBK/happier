@@ -6,12 +6,6 @@ import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsO
 import { useReachMachines } from '@/sync/domains/capabilities/reach/useReachProjection';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 
-const NO_PROJECTS: readonly Readonly<{
-  projectKey: string;
-  name: string;
-  machineCount: number;
-}>[] = [];
-
 /** Machines, their names and which Agents take user MCP servers (IR-80): what Where it's on offers in the Add modal. */
 export function useMcpAddPlaces() {
   const scope = useAccountSettingsScope();
@@ -29,10 +23,9 @@ export function useMcpAddPlaces() {
     () => [...new Set(machines.flatMap((machine) => machine.agentIds))],
     [machines],
   );
-  const { names } = useWhereItsOnNames({
+  const { names, projects, workspaceRefs } = useWhereItsOnNames({
     agentIds,
     machines: placeMachines,
-    projects: NO_PROJECTS,
     serverId: scope?.serverId ?? null,
   });
   const agentTakes = React.useCallback(
@@ -43,8 +36,8 @@ export function useMcpAddPlaces() {
     [],
   );
   return React.useMemo(
-    () => ({ machines, placeMachines, agentIds, names, agentTakes }),
-    [machines, placeMachines, agentIds, names, agentTakes],
+    () => ({ machines, placeMachines, projects, workspaceRefs, agentIds, names, agentTakes }),
+    [machines, placeMachines, projects, workspaceRefs, agentIds, names, agentTakes],
   );
 }
 

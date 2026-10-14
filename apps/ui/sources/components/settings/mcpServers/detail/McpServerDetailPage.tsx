@@ -7,6 +7,10 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { t } from '@/text';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { Modal } from '@/modal';
+import { ValueRefEditorModal, getValueRefEditorModalTitle } from '@/components/ui/forms/valueRefs/ValueRefEditorModal';
+import { createMcpServerRecovery } from './mcpServerRecovery';
 
 import { McpServerConfigurationSection, type McpConfigurationSaveState } from '../McpServerConfigureForm';
 import { mcpServerMissingKeyNames, type McpSavedSecretAvailability } from '../status/mcpServerStatus';
@@ -45,10 +49,24 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
 ) {
   const { server } = props;
   const { secretAvailability } = props;
+  const router = useRouter();
+  const recovery = React.useMemo(() => createMcpServerRecovery({
+    server: props.draftServer,
+    missingKeys: mcpServerMissingKeyNames(props.draftServer, secretAvailability),
+    isMissingReference: ref => secretAvailability.resolveReference(ref).status !== 'ready',
+    scopeServerId: props.scope?.serverId,
+    onChangeServer: props.onChangeServer,
+    onCommit: props.onCommitConfiguration,
+    openRoute: route => router.push(route as never),
+    openEditor: editor => Modal.show({ component: ValueRefEditorModal,
+      props: { ...editor, lockKey: true, secrets: props.secrets, scope: props.scope },
+      chrome: { kind: 'card', title: getValueRefEditorModalTitle(editor.kind), dimensions: { size: 'lg' } }, closeOnBackdrop: true }),
+  }), [props.draftServer, props.onChangeServer, props.onCommitConfiguration, props.scope, props.secrets, router, secretAvailability]);
   const detail = useMcpServerDetail(
     server,
     props.catalogRevision,
     secretAvailability,
+    recovery,
   );
   const missingKeys = React.useMemo(
     () => mcpServerMissingKeyNames(server, secretAvailability),
@@ -106,7 +124,7 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
       {props.approvalNotice}
       <McpServerBanner detail={detail} name={name} toolCount={toolCount} />
       {detail.signIn.view ? (
-        <McpSignInSection name={name} signIn={{ ...detail.signIn, view: detail.signIn.view }} />
+        <McpSignInSection name={name} signIn={{ ...detail.signIn, view: detail.signIn.view }} onUseApiKey={recovery.useApiKey} />
       ) : null}
       <McpServerWhereAndTools detail={detail} />
       <McpServerConfigurationSection

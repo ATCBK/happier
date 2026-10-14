@@ -55,12 +55,6 @@ export type McpAddState =
   | Readonly<{ status: 'added'; serverId: string | null }>
   | Readonly<{ status: 'failed'; error: string }>;
 
-const NO_PROJECTS: readonly Readonly<{
-  projectKey: string;
-  name: string;
-  machineCount: number;
-}>[] = [];
-
 const entriesOf = (
   fields: readonly McpAddField[],
   values: McpAddValues,
@@ -138,8 +132,10 @@ export function McpAddDetail(
       projectReachOnMachines(
         draftReach.rules,
         props.places.machines as readonly ReachMachine[],
+        undefined,
+        props.places.workspaceRefs,
       ),
-    [draftReach.rules, props.places.machines],
+    [draftReach.rules, props.places.machines, props.places.workspaceRefs],
   );
 
   const setValue = React.useCallback(
@@ -368,7 +364,7 @@ export function McpAddDetail(
             places={{
               agentIds: props.places.agentIds,
               machines: props.places.placeMachines,
-              projects: NO_PROJECTS,
+              projects: props.places.projects,
             }}
             agentTakes={props.places.agentTakes}
             onChange={draftReach.onChange}

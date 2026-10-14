@@ -26,6 +26,7 @@ export const McpDetectedServersTab = React.memo(function McpDetectedServersTab(p
     selectedMachineId: string | null;
     selectedServerId: string | null;
     canExecute: boolean;
+    canImport: boolean;
     directory: string;
     onChangeDirectory: (value: string) => void;
     loading: boolean;
@@ -123,7 +124,7 @@ export const McpDetectedServersTab = React.memo(function McpDetectedServersTab(p
                                     size="small"
                                     display="secondary"
                                     title={t('settings.mcpServersImportAction')}
-                                    disabled={!props.canExecute}
+                                    disabled={!props.canImport}
                                     onPress={() => props.onImport(server)}
                                 />
                             )}

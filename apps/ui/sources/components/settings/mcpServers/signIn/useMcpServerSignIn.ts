@@ -4,17 +4,26 @@ import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import {
   MCP_OAUTH_CALLBACK_URL_V1,
-  MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1,
 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1';
+import type { ConnectedAccountRevokedResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
+import { CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/connect/configurationActionsV1';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { runConnectedAccountAuthenticationAction } from '@/sync/ops/connectedAccounts/connectedAccountDaemon';
 import { readMcpOAuthOpenerMessage } from '@/sync/ops/connectedAccounts/mcpOAuthCallback';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { normalizeInternalReturnPath } from '@/utils/path/routeUtils';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
 import type { McpServerSignInFact } from '../status/mcpServerStatus';
+import { findMcpSignInGrant, mcpSignInGrantView, mcpSignInFact, type McpSignInView } from './mcpSignInGrantView';
+import { useMcpSignInGrantDiagnostics } from './useMcpSignInGrantDiagnostics';
+export { findMcpSignInGrant, mcpSignInGrantIdentity, mcpSignInGrantView, mcpSignInFact, type McpSignInView } from './mcpSignInGrantView';
 
 /** A machine as the sign-in needs it: REACH's presence and a name to say where it finishes. */
 export type McpSignInMachine = Readonly<{
@@ -28,29 +37,6 @@ export type McpSignInCompletion = Readonly<{
   state: string;
   iss?: string;
 }>;
-
-/** What the Sign-in section draws (T2 states). `null`: the server does not sign in. */
-export type McpSignInView =
-  | Readonly<{ state: 'not_connected' }>
-  | Readonly<{ state: 'starting' }>
-  | Readonly<{
-      state: 'signing';
-      authorizationUrl: string;
-      expiresAtMs: number;
-    }>
-  | Readonly<{ state: 'finishing'; machineName: string }>
-  | Readonly<{
-      state: 'connected';
-      identity: string | null;
-      scopes: readonly string[];
-      lastUsedAt: number | null;
-    }>
-  | Readonly<{ state: 'needs_more_access'; tool?: string; scope?: string }>
-  | Readonly<{ state: 'expired'; reason: 'expired' | 'address_changed' }>
-  | Readonly<{ state: 'revoked' }>
-  | Readonly<{ state: 'did_not_finish' }>
-  | Readonly<{ state: 'no_machine_online' }>
-  | Readonly<{ state: 'client_refused' }>;
 
 export type McpServerSignIn = Readonly<{
   view: McpSignInView | null;
@@ -81,67 +67,12 @@ type Local =
 
 const IDLE: Local = { kind: 'idle' };
 
-function isSignInService(
-  service: Readonly<{ pluginId: string; localId: string }>,
-): boolean {
-  return (
-    service.pluginId === MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1.pluginId &&
-    service.localId === MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1.localId
-  );
-}
-
-type ConnectedAccountProfiles = NonNullable<
-  ReturnType<ReturnType<typeof getStorage>['getState']>['profile']['connectedAccountsV4']
->;
-
-/** The Account's sign-in grant for one MCP server (the connected-account row keyed by the server id). */
-export function findMcpSignInGrant(
-  profiles: ConnectedAccountProfiles | null | undefined,
-  serverId: string,
-): ConnectedAccountProfiles[number] | null {
-  return (
-    (profiles ?? []).find(
-      (profile) =>
-        isSignInService(profile.ref.service) &&
-        profile.ref.accountId === serverId,
-    ) ?? null
-  );
-}
-
-/** The identity a connected grant signed in as, for "as leeroy@acme.dev". */
-export function mcpSignInGrantIdentity(
-  grant: ConnectedAccountProfiles[number],
-): string | null {
-  return (
-    grant.providerIdentity?.email ??
-    grant.displayName ??
-    grant.providerIdentity?.accountId ??
-    null
-  );
-}
-
 function failureState(
   code: string | undefined,
 ): 'did_not_finish' | 'no_machine_online' | 'client_refused' {
   if (code === 'no_machine_online') return 'no_machine_online';
   if (code === 'client_refused') return 'client_refused';
   return 'did_not_finish';
-}
-
-function toFact(view: McpSignInView | null): McpServerSignInFact {
-  if (!view) return null;
-  switch (view.state) {
-    case 'starting':
-    case 'signing':
-    case 'finishing':
-      return { state: 'signing' };
-    case 'expired':
-      return { state: 'expired', reason: view.reason };
-    case 'needs_more_access':
-      return { state: 'needs_more_access' };
-    default:
-      return { state: view.state };
-  }
 }
 
 /**
@@ -151,12 +82,14 @@ function toFact(view: McpSignInView | null): McpServerSignInFact {
  * issuer checks. The grant is the truth: an attempt ends when the grant it was waiting for changes.
  */
 export function useMcpServerSignIn(
-  server: McpServerCatalogEntryV1,
+  server: McpServerCatalogEntryV1 | null,
   machines: readonly McpSignInMachine[],
+  options?: Readonly<{ returnTo?: string; scope?: AccountSettingsScope | null }>,
 ): McpServerSignIn {
   const signsIn =
-    server.transport !== 'stdio' && server.remote?.auth?.kind === 'oauth';
-  const settingsScope = useAccountSettingsScope();
+    server !== null && server.transport !== 'stdio' && server.remote?.auth?.kind === 'oauth';
+  const activeSettingsScope = useAccountSettingsScope();
+  const settingsScope = options?.scope === undefined ? activeSettingsScope : options.scope;
   const homeId = settingsScope?.serverId;
   const accountId = settingsScope?.accountId;
   const scope = React.useMemo(
@@ -165,14 +98,28 @@ export function useMcpServerSignIn(
   );
   const execution = useMountedActionExecution(scope);
   const execute = execution.execute;
-  const grant = getStorage()((state) =>
-    findMcpSignInGrant(state.profile.connectedAccountsV4, server.id),
-  );
+  const profiles = getStorage()((state) => areServerAccountScopesEqual(scope, state.profileScope) ? state.profile.connectedAccountsV4 : null);
+  const grant = server ? findMcpSignInGrant(profiles, server.id) : null;
+  const diagnostics = useMcpSignInGrantDiagnostics(profiles, scope, machines.find(machine => machine.online)?.machineId ?? machines[0]?.machineId ?? null);
   const fingerprint = grant
     ? `${grant.status}:${grant.credentialRevision ?? ''}:${grant.configurationRevision ?? ''}`
     : null;
-  const [local, setLocal] = React.useState<Local>(IDLE);
+  const targetKey = JSON.stringify([scope?.serverId, scope?.accountId, server?.id]);
+  const currentTarget = React.useRef(targetKey);
+  currentTarget.current = targetKey;
+  const [localState, setLocalState] = React.useState<Readonly<{ key: string; value: Local }>>({ key: targetKey, value: IDLE });
+  const local = localState.key === targetKey ? localState.value : IDLE;
+  const setLocal = React.useCallback((update: React.SetStateAction<Local>) => {
+    if (currentTarget.current !== targetKey) return;
+    setLocalState(current => ({ key: targetKey, value: typeof update === 'function'
+      ? update(current.key === targetKey ? current.value : IDLE) : update }));
+  }, [targetKey]);
   const [signingOut, setSigningOut] = React.useState(false);
+  const [revocation, setRevocation] = React.useState<Readonly<{
+    key: string;
+    receipt: ReturnType<typeof ConnectedAccountRevokedResponseV1Schema.parse>;
+    credentialRevision: NonNullable<typeof grant>['credentialRevision'];
+  }> | null>(null);
   const anyOnline = machines.some((machine) => machine.online);
 
   // An attempt ends when the grant it waited for lands (from this page, the callback page or another device).
@@ -261,12 +208,14 @@ export function useMcpServerSignIn(
   }, [listening]);
 
   const start = React.useCallback(
-    async (options?: Readonly<{ stepUp?: boolean }>) => {
+    async (startOptions?: Readonly<{ stepUp?: boolean }>) => {
+      if (!server || !scope) return;
       setLocal({ kind: 'starting' });
       const result = await execute('mcp.servers.signIn.start', {
         serverId: server.id,
-        ...(options?.stepUp ? { stepUp: true } : {}),
+        ...(startOptions?.stepUp ? { stepUp: true } : {}),
       });
+      if (currentTarget.current !== targetKey || !execution.isCurrent()) return;
       if (!result.ok) {
         setLocal({ kind: 'failed', state: failureState(result.errorCode) });
         return;
@@ -283,9 +232,16 @@ export function useMcpServerSignIn(
         attempt: parsed.data,
         baseline: fingerprint,
       });
+      const returnTo = normalizeInternalReturnPath(options?.returnTo);
+      if (returnTo) {
+        // Reuse the generic external-connect continuation; OAuth state remains daemon-owned.
+        const retained = await TokenStorage.setPendingExternalConnect({ provider: `mcp:${parsed.data.attemptId}`,
+          returnTo, serverId: scope.serverId, serverUrl: getServerProfileById(scope.serverId)?.serverUrl });
+        if (!retained) { setLocal({ kind: 'failed', state: 'did_not_finish' }); return; }
+      }
       await openExternalUrl(parsed.data.authorizationUrl).catch(() => false);
     },
-    [execute, fingerprint, server.id],
+    [execute, execution.isCurrent, fingerprint, server, scope, options?.returnTo, targetKey, setLocal],
   );
 
   const cancel = React.useCallback(async () => {
@@ -314,17 +270,18 @@ export function useMcpServerSignIn(
           ? { expectedCredentialRevision: grant.credentialRevision }
           : {}),
       }, { presentUserConfirmation: { actionId: 'connectedServices.accounts.revoke' } });
-      const status = result.ok
-        ? (result.result as { status?: string } | null)?.status
-        : undefined;
-      return status === 'revoked';
+      const revoked = result.ok ? CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1['connectedServices.accounts.revoke'].safeParse(result.result) : null;
+      if (!revoked?.success || revoked.data.status !== 'revoked' || revoked.data.account.accountId !== grant.ref.accountId
+        || revoked.data.account.service.pluginId !== grant.ref.service.pluginId || revoked.data.account.service.localId !== grant.ref.service.localId) return false;
+      setRevocation({ key: targetKey, receipt: revoked.data, credentialRevision: grant.credentialRevision });
+      return true;
     } finally {
       setSigningOut(false);
     }
-  }, [execute, grant, machines]);
+  }, [execute, grant, machines, targetKey]);
 
   const view = React.useMemo((): McpSignInView | null => {
-    if (!signsIn) return null;
+    if (!signsIn || !server) return null;
     switch (local.kind) {
       case 'starting':
         return { state: 'starting' };
@@ -347,22 +304,13 @@ export function useMcpServerSignIn(
       case 'idle':
         break;
     }
-    if (grant && grant.status !== 'needs_reauth') {
-      const identity = mcpSignInGrantIdentity(grant);
-      return {
-        state: 'connected',
-        identity,
-        scopes: grant.scopes ?? [],
-        lastUsedAt: grant.lastUsedAt ?? null,
-      };
-    }
-    if (!anyOnline) return { state: 'no_machine_online' };
-    return grant
-      ? { state: 'expired', reason: 'expired' }
-      : { state: 'not_connected' };
-  }, [anyOnline, grant, local, machines, signsIn]);
+    return mcpSignInGrantView(server, grant, anyOnline, {
+      ...diagnostics[server.id],
+      ...(revocation?.key === targetKey && (!grant || grant.credentialRevision === revocation.credentialRevision) ? { revoked: revocation.receipt } : {}),
+    });
+  }, [anyOnline, diagnostics, grant, local, machines, revocation, server, signsIn, targetKey]);
 
-  const fact = React.useMemo(() => toFact(view), [view]);
+  const fact = React.useMemo(() => mcpSignInFact(view), [view]);
   return {
     view,
     fact,

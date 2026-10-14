@@ -46,7 +46,6 @@ import { McpServersEmpty, McpServersHomeHero } from '../home/McpServersHome';
 
 /** The collection offers a search field only once it no longer fits at a glance. */
 const SEARCH_THRESHOLD = 8;
-const NO_PROJECTS: readonly Readonly<{ projectKey: string; name: string }>[] = [];
 
 /**
  * The MCP servers collection: what other agents run on your machines (Found) first, the Account's
@@ -69,7 +68,7 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
     const { machines: reachMachines } = useReachMachines();
     const placeMachines = React.useMemo(() => reachMachines.map((machine) => ({ machineId: machine.machineId, name: machine.name ?? machine.machineId })), [reachMachines]);
     const agentIds = React.useMemo(() => [...new Set(reachMachines.flatMap((machine) => machine.agentIds))], [reachMachines]);
-    const { names } = useWhereItsOnNames({ agentIds, machines: placeMachines, projects: NO_PROJECTS });
+    const { names } = useWhereItsOnNames({ agentIds, machines: placeMachines });
     const savedSecretCatalog = useSavedSecretCatalog({ scope });
     const pluginItems = usePluginMcpServerItems();
     const plugins = React.useMemo(() => {

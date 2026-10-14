@@ -3,6 +3,7 @@ import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRe
 import type { SavedSecretCatalogProjection } from '@/components/secrets/useSavedSecretCatalog';
 
 import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import type { SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
 /**
  * A server's sign-in as the status owner reads it (T2 states, U7.9's `useMcpServerSignIn`). `null`: the
@@ -29,7 +30,7 @@ export type McpServerStatusFixes = Readonly<{
     signIn: () => void;
     reconnect: () => void;
     grantAccess: () => void;
-    addKey: () => void;
+    addKey?: () => void;
     howToFix: (machineId: string) => void;
     tryAgain: (machineId: string) => void;
 }>;
@@ -41,6 +42,8 @@ export type McpServerStatusInput = Readonly<{
     machines: readonly McpServerMachineFact[];
     savedSecretCatalog: McpSavedSecretAvailability;
     fixes: McpServerStatusFixes;
+    /** Only the calling Session's transcript; Account settings pages omit this. */
+    sessionNotices?: readonly SessionCapabilityNoticeV1[];
 }>;
 
 /** The Saved Secret owner alone decides whether a reference is usable. */
@@ -95,9 +98,19 @@ export function mcpServerStatus(input: McpServerStatusInput): readonly Capabilit
         }
     }
     if (mcpServerNeedsKey(input.entry, input.savedSecretCatalog)) {
-        statuses.push({ kind: 'key', fix: { kind: 'add_key', onPress: fixes.addKey } });
+        statuses.push({ kind: 'key', ...(fixes.addKey ? { fix: { kind: 'add_key' as const, onPress: fixes.addKey } } : {}) });
     }
     statuses.push(...mcpServerMachineStatuses(input).values());
+    for (const notice of input.sessionNotices ?? []) for (const item of notice.items) {
+        if (item.kind !== 'mcp_server' || item.itemId !== input.entry.id) continue;
+        // The current grant/attempt owner supersedes this historical missing-auth condition.
+        if (item.code === 'mcp_sign_in_required' && input.signIn) continue;
+        const machine = input.machines[0];
+        statuses.push(item.code === 'mcp_sign_in_required'
+            ? { kind: 'signin', fix: { kind: 'sign_in', onPress: fixes.signIn } }
+            : { kind: 'error', ...(machine ? { machineName: machine.name } : {}), detail: item.detail ?? item.code,
+                ...(machine ? { fix: { kind: 'try_again' as const, onPress: () => fixes.tryAgain(machine.machineId) } } : {}) });
+    }
     return statuses;
 }
 

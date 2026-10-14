@@ -9,7 +9,10 @@ import { buildMcpServerCollection } from '../collection/mcpServerCollectionModel
 import {
   findMcpSignInGrant,
   mcpSignInGrantIdentity,
-} from '../signIn/useMcpServerSignIn';
+  mcpSignInGrantView,
+} from '../signIn/mcpSignInGrantView';
+import { useMcpSignInGrantDiagnostics } from '../signIn/useMcpSignInGrantDiagnostics';
+import { useReachMachines } from '@/sync/domains/capabilities/reach/useReachProjection';
 import { useMcpServersSettings } from '../useMcpServersSettings';
 import { buildMcpHome, type McpHomeGrant } from './mcpHomeModel';
 
@@ -24,6 +27,8 @@ export function useMcpHome() {
     [settings],
   );
   const grants = getStorage()((state) => state.profile.connectedAccountsV4);
+  const { machines } = useReachMachines();
+  const diagnostics = useMcpSignInGrantDiagnostics(grants, scope, machines.find(machine => !machine.offline)?.machineId ?? machines[0]?.machineId ?? null);
   const savedSecretCatalog = useSavedSecretCatalog({ scope });
   const { resolveReference } = savedSecretCatalog;
   const secretAvailability = React.useMemo(() => ({ resolveReference }), [resolveReference]);
@@ -46,9 +51,10 @@ export function useMcpHome() {
         rows,
         grantOf: (serverId): McpHomeGrant => {
           const grant = findMcpSignInGrant(grants, serverId);
+          const server = settings.servers.find(server => server.id === serverId);
           return grant
             ? {
-                connected: grant.status !== 'needs_reauth',
+                connected: server ? mcpSignInGrantView(server, grant, machines.some(machine => !machine.offline), diagnostics[serverId])?.state === 'connected' : false,
                 identity: mcpSignInGrantIdentity(grant),
               }
             : null;
@@ -57,7 +63,7 @@ export function useMcpHome() {
         firstVisitDismissed: dismissedAt !== null,
         suggestions,
       }),
-    [dismissedAt, grants, rows, secretAvailability, suggestions],
+    [diagnostics, dismissedAt, grants, machines, rows, secretAvailability, settings.servers, suggestions],
   );
   const dismissFirstVisit = React.useCallback(
     () => setDismissedAt(Date.now()),

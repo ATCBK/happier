@@ -24,6 +24,7 @@ vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
 const { default: LegacyMcpServerRoute } = await import('./mcp-server');
+const { Redirect } = await import('expo-router');
 
 afterEach(() => { routeState.params = {}; });
 
@@ -38,7 +39,7 @@ describe('the 0.2 MCP editor link', () => {
         const screen = await renderScreen(<LegacyMcpServerRoute />);
         try {
             // The OS router is the boundary; both route entry and destination adapter stay real.
-            const redirect = screen.tree.find(node => typeof node.type === 'string' && node.type === 'Redirect');
+            const redirect = screen.tree.findByType(Redirect);
             expect(redirect.props.href).toBe(href);
         } finally {
             await screen.unmount();

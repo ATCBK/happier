@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
@@ -148,6 +149,7 @@ const {
 } = await import('./mcpServersTestHelpers');
 
 const mcpServersCommonModuleMockOptions = {
+    realComponents: true,
     // The default text mock serializes parameters (`key(name=value)`), so copy can be checked for what it names.
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -236,42 +238,13 @@ const { resetMcpServerCatalogSnapshotsForTests } = await import('@/sync/store/se
 const { resetSavedSecretCatalogEngineForTests } = await import('@/sync/engine/settings/savedSecretCatalogEngine');
 const { resetSavedSecretCatalogSnapshotsForTests } = await import('@/sync/store/settings/savedSecretCatalogSnapshot');
 
-// These neighboring presentation hosts do not supply draft values, target
-// resolution, validation, policy or results. Configure/import/quick-install
-// forms and the Administration/Action/row/Artifact owners below stay real.
-// This suite makes no whole-widget or accessibility rendering claim.
-vi.mock('@/components/ui/forms/InlineAddExpander', () => ({
-    InlineAddExpander: (props: any) =>
-        React.createElement('InlineAddExpander', props, props.isOpen ? props.children : null),
-}));
-
-vi.mock('@/components/settings/mcpServers/McpServerTestPanel', () => ({
-    McpServerTestPanel: () => React.createElement('McpServerTestPanel'),
-}));
-
-vi.mock('@/components/settings/machines/MachineAdministrationTargetSelector', () => ({
-    MachineAdministrationTargetSelector: (props: any) => React.createElement('MachineAdministrationTargetSelector', props),
-}));
-
 vi.mock('@/platform/randomUUID', () => ({
     randomUUID: () => ++uuidBoundary.sequence === 1 ? 'uuid' : `uuid-${uuidBoundary.sequence}`,
 }));
 
-vi.mock('@/constants/Typography', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/constants/Typography')>();
-    return {
-        ...actual,
-        Typography: {
-            ...actual.Typography,
-            default: () => ({}),
-        },
-    };
-});
-
 /** The draft rule's target select (the page header also holds a `⋯` menu). */
 function findBindingTargetDropdown(screen: Awaited<ReturnType<typeof renderEditorScreen>>) {
-    return screen.findAllByType('DropdownMenu')
-        .find((dropdown) => dropdown.props.itemTrigger?.title === 'settings.mcpServersBindingTarget')!;
+    return screen.find((node) => node.props.itemTrigger?.title === 'settings.mcpServersBindingTarget');
 }
 
 async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; ask?: boolean;
@@ -820,10 +793,8 @@ describe('McpServerEditorScreen', () => {
             screen.changeTextByTestId('mcp.server.editor.name', 'qa_remote_http_20260306');
         });
 
-        const transportTabs = screen.findAllByType('SegmentedTabBar')[0];
-        expect(transportTabs).toBeTruthy();
         await act(async () => {
-            transportTabs?.props.onSelectTab?.('http');
+            screen.pressByTestId('mcp.server.transport:http');
         });
 
         await typeConfig(screen, 'mcp.server.editor.url', 'http://127.0.0.1:63254/mcp');
@@ -842,10 +813,11 @@ describe('McpServerEditorScreen', () => {
 
         expect(screen.findByTestId('mcp.server.editor.name')?.props.value).toBe('qa_remote_http_20260306');
         expect(configField(screen, 'mcp.server.editor.url').props.value).toBe('http://127.0.0.1:63254/mcp');
-        expect(screen.findAllByType('SegmentedTabBar')[0]?.props.activeTabId).toBe('http');
+        expect(screen.find((node) => node.props.testIDPrefix === 'mcp.server.transport'
+            && typeof node.props.onSelectTab === 'function').props.activeTabId).toBe('http');
     });
 
-    it('opens add binding as a draft expander instead of creating a binding immediately', async () => {
+    it('keeps a new machine rule local until the server is saved, then persists its selected scope', async () => {
         mcpServersModuleState.routerSearchParams = {};
         liveMcpSettings = {
             v: 1,
@@ -858,21 +830,40 @@ describe('McpServerEditorScreen', () => {
 
         expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
 
-        const addBindingExpander = screen.findByType('InlineAddExpander');
+        const addBindingExpander = screen.find((node) => node.props.title === 'settings.mcpServersAddApplyRule'
+            && typeof node.props.onOpenChange === 'function');
         expect(addBindingExpander).toBeTruthy();
-        expect(addBindingExpander.props.title).toBe('settings.mcpServersAddApplyRule');
         expect(addBindingExpander.props.isOpen).toBe(false);
 
         await act(async () => {
             addBindingExpander.props.onOpenChange?.(true);
         });
 
-        const addBindingExpanderAfterOpen = screen.findByType('InlineAddExpander');
+        const addBindingExpanderAfterOpen = screen.find((node) => node.props.title === 'settings.mcpServersAddApplyRule'
+            && typeof node.props.onOpenChange === 'function');
         expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
         expect(addBindingExpanderAfterOpen?.props.isOpen).toBe(true);
+        expect(rowMutationRequests).toHaveLength(0);
+        await act(async () => { findBindingTargetDropdown(screen).props.onSelect('machine'); });
+        await act(async () => {
+            screen.find(node => node.props.itemTrigger?.title === 'settings.mcpServersBindingMachine').props.onSelect('machine-1');
+        });
+        await act(async () => {
+            screen.find(node => node.props.title === 'settings.mcpServersAddApplyRule'
+                && typeof node.props.onSave === 'function').props.onSave();
+        });
+        expect(rowMutationRequests).toHaveLength(0);
+        await typeConfig(screen, 'mcp.server.editor.command', 'machine-server');
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await act(async () => { screen.pressByTestId('mcp.server.editor.save'); });
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: {
+            servers: [{ id: 'uuid', stdio: { command: 'machine-server' } }],
+            bindings: [{ serverId: 'uuid', enabled: true, target: { t: 'machine', machineId: 'machine-1' } }],
+        } });
     });
 
-    it('keeps a draft binding on all machines when no machine-scoped target can be selected', async () => {
+    it('refuses a machine rule without a machine and preserves the everywhere draft', async () => {
         mcpServersModuleState.routerSearchParams = {};
         liveMachines = [];
         liveMcpSettings = {
@@ -885,66 +876,21 @@ describe('McpServerEditorScreen', () => {
         const screen = await renderEditorScreen();
 
         await act(async () => {
-            screen.findByType('InlineAddExpander').props.onOpenChange?.(true);
+            screen.find((node) => node.props.title === 'settings.mcpServersAddApplyRule'
+                && typeof node.props.onOpenChange === 'function').props.onOpenChange(true);
         });
 
         expect(screen.findAllByProps({ title: 'settings.mcpServersBindingMachine' })).toHaveLength(0);
         expect(findTestInstanceByTypeContainingText(screen, 'Text', 'settings.mcpServersBindingTargetAllMachines')).toBeTruthy();
-
-        await act(async () => {
-            findBindingTargetDropdown(screen).props.onSelect?.('machine');
-        });
-
-        expect(screen.findAllByProps({ title: 'settings.mcpServersBindingMachine' })).toHaveLength(0);
-        expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
-    });
-
-    it('updates the binding target scope from the draft editor', async () => {
-        mcpServersModuleState.routerSearchParams = {};
-        liveMcpSettings = {
-            v: 1,
-            strictMode: false,
-            servers: [],
-            bindings: [],
-        };
-
-        const screen = await renderEditorScreen();
-
-        await act(async () => {
-            screen.findByType('InlineAddExpander').props.onOpenChange?.(true);
-        });
-        await act(async () => {
-            findBindingTargetDropdown(screen).props.onSelect?.('allMachines');
-        });
-
-        expect(findTestInstanceByTypeContainingText(screen, 'Text', 'settings.mcpServersBindingTargetAllMachines')).toBeTruthy();
-    });
-
-    it('shows a validation alert when no machine is selected for the add binding draft', async () => {
-        mcpServersModuleState.routerSearchParams = {};
-        liveMachines = [];
-        liveMcpSettings = {
-            v: 1,
-            strictMode: false,
-            servers: [],
-            bindings: [],
-        };
-
-        const screen = await renderEditorScreen();
-
-        await act(async () => {
-            screen.findByType('InlineAddExpander').props.onOpenChange?.(true);
-        });
-        await act(async () => {
-            findBindingTargetDropdown(screen).props.onSelect?.('allMachines');
-        });
 
         await act(async () => {
             findBindingTargetDropdown(screen).props.onSelect?.('machine');
         });
 
         expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'settings.mcpServersNoMachineSelected');
-        expect(findTestInstanceByTypeContainingText(screen, 'Text', 'settings.mcpServersBindingTargetAllMachines')).toBeTruthy();
+        expect(findBindingTargetDropdown(screen).props.selectedId).toBe('allMachines');
         expect(screen.findAllByProps({ title: 'settings.mcpServersBindingMachine' })).toHaveLength(0);
+        expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
+        expect(rowMutationRequests).toHaveLength(0);
     });
 });

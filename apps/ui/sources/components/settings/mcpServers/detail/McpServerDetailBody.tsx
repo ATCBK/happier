@@ -40,12 +40,12 @@ import { useMcpServerMachineTests } from '../status/useMcpServerMachineTests';
 import { McpServerToolsSection } from '../tools/McpServerToolsSection';
 import { useMcpServerTools } from '../tools/useMcpServerTools';
 import { useMcpServerSignIn } from '../signIn/useMcpServerSignIn';
-
-const NO_PROJECTS: readonly Readonly<{
-  projectKey: string;
-  name: string;
-  machineCount: number;
-}>[] = [];
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { machinePageHref } from '@/components/machines/page/machinePageHref';
+import type { McpServerRecovery } from './mcpServerRecovery';
+import { useMcpServerUpdate } from './useMcpServerUpdate';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { refreshMcpServerCatalog } from '@/sync/engine/settings/mcpServerCatalogEngine';
 
 function formatTime(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -69,12 +69,18 @@ export function useMcpServerDetail(
   server: McpServerCatalogEntryV1,
   catalogRevision: number | 'absent' | null,
   savedSecretCatalog: McpSavedSecretAvailability,
+  recovery?: McpServerRecovery,
 ) {
+  const router = useRouter();
   const serverId = server.id;
   const reach = useReachRules('mcp_server', serverId);
   const projection = useReachProjection('mcp_server', serverId);
   const { machines, scope } = useReachMachines();
-  const tests = useMcpServerMachineTests(serverId);
+  const tests = useMcpServerMachineTests(serverId, server);
+  const updateExecution = useMountedActionExecution(scope);
+  const reloadCatalog = React.useCallback(() => scope ? refreshMcpServerCatalog(scope) : Promise.resolve(), [scope]);
+  const update = useMcpServerUpdate({ server, catalogRevision, execution: updateExecution,
+    scopeKey: JSON.stringify(scope), reload: reloadCatalog });
 
   const placeMachines = React.useMemo(
     () =>
@@ -90,10 +96,9 @@ export function useMcpServerDetail(
     [machines],
   );
   const tools = useMcpServerTools(serverId, catalogRevision, agentIds);
-  const { names } = useWhereItsOnNames({
+  const { names, projects } = useWhereItsOnNames({
     agentIds,
     machines: placeMachines,
-    projects: NO_PROJECTS,
     machineId: tools.list?.perAgent.machineId ?? null,
     serverId: scope?.serverId ?? null,
   });
@@ -127,11 +132,11 @@ export function useMcpServerDetail(
       signIn: () => void startSignIn(),
       reconnect: () => void startSignIn(),
       grantAccess: () => void startSignIn({ stepUp: true }),
-      addKey: () => undefined,
-      howToFix: () => undefined,
+      addKey: recovery?.addKey,
+      howToFix: recovery?.howToFix ?? ((machineId: string) => router.push(machinePageHref({ door: 'rail', target: { machineId, serverId: scope?.serverId }, page: 'installables' }) as never)),
       tryAgain: (machineId: string) => runTest([machineId]),
     }),
-    [runTest, startSignIn],
+    [recovery, router, runTest, scope?.serverId, startSignIn],
   );
   const statusInput = React.useMemo(
     () => ({
@@ -166,11 +171,13 @@ export function useMcpServerDetail(
     reach,
     projection,
     placeMachines,
+    projects,
     agentIds,
     names,
     onMachines,
     tests,
     tools,
+    update,
     signIn,
     statuses,
     machineStatuses,
@@ -281,7 +288,7 @@ export function McpServerWhereAndTools(
         places={{
           agentIds: detail.agentIds,
           machines: detail.placeMachines,
-          projects: NO_PROJECTS,
+          projects: detail.projects,
         }}
         onChange={detail.reach.change}
         onUndo={async () => {

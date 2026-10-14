@@ -22,6 +22,7 @@ import { loadFoundWarmCacheEntry, saveFoundWarmCacheEntry, subscribeFoundWarmCac
 import { McpDetectedServersTab } from './McpDetectedServersTab';
 import { mcpServerRoute } from './collection/mcpServerCollectionModel';
 import { useMcpServersSettings, useMcpServerCatalogForServer } from './useMcpServersSettings';
+import { useMcpFoundAdoption } from './found/useMcpFoundAdoption';
 
 /**
  * `/settings/mcp/found`: the MCP servers other agents configure on the managed machine, with an
@@ -37,6 +38,17 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
     const executionTarget = resolveExactExecutionTarget(selectedTarget, { intent: 'retry' });
     const probeExecution = useMountedActionExecution(executionTarget?.serverId);
     const snapshot = useMcpServerCatalogForServer(executionTarget?.serverId);
+    const adoptionRevision = snapshot.status === 'ready' && snapshot.authority === 'active' && !snapshot.stale
+        && typeof snapshot.revision === 'number' ? snapshot.revision : null;
+    const adoptionTarget = resolveExactExecutionTarget(selectedTarget);
+    const adoptionExecution = React.useMemo(() => ({ execute: probeExecution.execute,
+        ready: Boolean(adoptionTarget && probeExecution.ready),
+        isCurrent: () => Boolean(adoptionTarget && probeExecution.isCurrent()
+            && isExecutionTargetCurrent(selectionKey, adoptionTarget)),
+    }), [adoptionTarget, probeExecution.execute, probeExecution.ready, probeExecution.isCurrent, isExecutionTargetCurrent, selectionKey]);
+    const adoption = useMcpFoundAdoption({ machineId: adoptionTarget?.machine.id ?? null,
+        scopeKey: JSON.stringify([selectionKey, probeExecution.binding?.scope]), catalog: snapshot.value,
+        catalogRevision: adoptionRevision, execution: adoptionExecution });
     const [directory, setDirectory] = React.useState('');
     const directoryRef = React.useRef(directory);
     directoryRef.current = directory;
@@ -98,31 +110,12 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
         void runDetect();
     }, [runDetect, selectionKey]);
 
-    const importServer = React.useCallback(async (server: DetectedMcpServerV1) => {
-        if (snapshot.status !== 'ready' || snapshot.authority !== 'active' || snapshot.stale) {
-            Modal.alert(t('common.error'), t('settings.mcpServersValidationFailed'));
-            return;
-        }
-        const requestedSelection = selectionKey;
-        const expectedTarget = selectedTarget;
-        if (!expectedTarget) return;
-        const executionTarget = resolveExactExecutionTarget(expectedTarget);
-        if (!executionTarget || !isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
-        try {
-            if (snapshot.revision === 'absent') throw new Error('authority-not-confirmed');
-            const receipt = await probeExecution.execute('mcp.found.adopt', { expectedRevision: snapshot.revision,
-                machineId: executionTarget.machine.id, items: [server] });
-            if (!receipt.ok) throw new Error(receipt.errorCode ?? receipt.error);
-            const imported = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.found.adopt'].parse(receipt.result);
-            if (!isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
-            const serverId = imported.serverIds[0] ?? imported.duplicates.find(item => item.serverId)?.serverId;
-            if (!serverId) return;
-            const result = runGuardedNavigation(() => router.replace(mcpServerRoute(serverId) as never));
-            if (result !== true) fireAndForget(result, { tag: 'McpDetectedServersScreen.import' });
-        } catch (error) {
-            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.unknownError'));
-        }
-    }, [isExecutionTargetCurrent, resolveExactExecutionTarget, router, selectedTarget, selectionKey, probeExecution.execute, snapshot]);
+    const adoptedServerId = adoption.state.status === 'adopted' ? adoption.state.serverId : null;
+    React.useEffect(() => {
+        if (!adoptedServerId) return;
+        const result = runGuardedNavigation(() => router.replace(mcpServerRoute(adoptedServerId) as never));
+        if (result !== true) fireAndForget(result, { tag: 'McpDetectedServersScreen.import' });
+    }, [adoptedServerId, router]);
 
     return (
         <ItemList keyboardShouldPersistTaps="handled">
@@ -150,13 +143,14 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
                 selectedMachineId={executionTarget?.machine.id ?? null}
                 selectedServerId={executionTarget?.serverId ?? null}
                 canExecute={executionTarget !== null && probeExecution.ready}
+                canImport={executionTarget !== null && probeExecution.ready && adoptionRevision !== null}
                 directory={directory}
                 onChangeDirectory={setDirectory}
                 loading={loading}
                 detected={detected}
                 warnings={warnings}
                 onRefresh={() => { void runDetect('retry'); }}
-                onImport={(server) => { void importServer(server); }}
+                onImport={(server) => { void adoption.begin(server); }}
             />
         </ItemList>
     );

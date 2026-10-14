@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 import type { ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowMutationV1Schema,
@@ -19,16 +20,18 @@ installDisconnectedServerSocketBoundary();
 const { fetchMcpServerCatalogRowV1, mutateMcpServerCatalogInContext, readMcpServerCatalogInContext } = await import('./apiMcpServerCatalog');
 
 describe('MCP row HTTP inventory boundary', () => {
-    it.each(['empty', 'literal'] as const)('activates %s MCP source without depending on an unrelated locked catalog', async sourceKind => {
+    it.each(['fresh', 'empty', 'literal'] as const)('activates %s MCP source without depending on an unrelated locked catalog', async sourceKind => {
         const home = await upsertServerProfileOnly({ serverUrl: `https://mcp-source-${sourceKind}.example.test`, name: sourceKind });
         const accountId = `mcp-source-${sourceKind}`;
         const token = `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
         await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, { token });
-        const catalog: McpServerCatalogV1 = { v: 1, servers: sourceKind === 'empty' ? [] : [{ id: 'literal-server', name: 'literal-server',
+        const catalog: McpServerCatalogV1 = { v: 1, servers: sourceKind === 'literal' ? [{ id: 'literal-server', name: 'literal-server',
             transport: 'stdio', stdio: { command: 'echo', args: [] }, env: { MESSAGE: { t: 'literal', v: 'no credential demand' } },
-            createdAt: 1, updatedAt: 1 }], bindings: [] };
+            createdAt: 1, updatedAt: 1 }] : [], bindings: [] };
         const unrelatedSource = { authored: 'must survive MCP-only admission' };
-        let raw: Record<string, unknown> = { mcpServersSettingsV1: { ...catalog, strictMode: true }, unrelatedSource };
+        let raw: Record<string, unknown> = {
+            ...(sourceKind === 'fresh' ? {} : { mcpServersSettingsV1: { ...catalog, strictMode: true } }), unrelatedSource,
+        };
         let version = 7;
         let row: unknown = { status: 'absent' };
         let initialized: ReturnType<typeof McpServerCatalogRowMutationV1Schema.parse> | null = null;
@@ -79,7 +82,7 @@ describe('MCP row HTTP inventory boundary', () => {
             expect(await readMcpServerCatalogInContext(context)).toMatchObject({ status: 'ready', authority: 'active', revision: 0, catalog });
             expect(initialized).toMatchObject({ content: { t: 'plain', v: catalog } });
             expect(raw.unrelatedSource).toEqual(unrelatedSource);
-            expect(raw.mcpServersStrictMode).toBe(true);
+            expect(raw.mcpServersStrictMode).toBe(sourceKind === 'fresh' ? undefined : true);
         } finally { context.dispose(); resetRuntimeFetch(); }
     });
 
@@ -118,7 +121,7 @@ describe('MCP row HTTP inventory boundary', () => {
             const execute = createMcpServerActionExecuteV1({ readCatalog: () => readMcpServerCatalogInContext(owner),
                 mutate: (change, expectedRevision) => mutateMcpServerCatalogInContext(owner, { change, expectedRevision }),
                 machine: async () => { throw new Error('Unexpected Machine effect'); } });
-            const context = { surface: 'ui_button', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+            const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } satisfies ActionExecutorContext;
             const previous: ReachRulesV1 = [{ id: 'binding', target: { t: 'allMachines' }, enabled: false, createdAt: 1, updatedAt: 1 }];
             expect(await execute({ actionId: 'mcp.rules.set', input: { items: [{ serverId: 'server' }],
                 change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } } }, context }))

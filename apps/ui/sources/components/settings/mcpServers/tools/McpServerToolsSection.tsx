@@ -5,6 +5,7 @@ import type {
   McpServerToolSettingsPatchV1,
   McpToolSettingV1,
 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { resolveMcpToolDecisionV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
@@ -37,16 +38,6 @@ type Filter = 'all' | 'read' | 'write' | 'destructive' | 'set';
 const COLLAPSED_ROWS = 9;
 /** A search field once the list no longer reads at a glance (the collections' rule). */
 const SEARCH_THRESHOLD = 8;
-
-/** The value a tool on the server default takes (the resolver's default-mode column, T4). */
-export function inheritedToolSetting(
-  serverDefault: ServerDefault,
-  effect: McpToolEffect,
-): McpToolSettingV1 {
-  if (serverDefault === 'allow_all') return 'allow';
-  if (serverDefault === 'allow_read_only' && effect === 'read') return 'allow';
-  return 'ask';
-}
 
 export type McpToolAgentNotes = Readonly<{
   /** Agents that load tools on demand (cost note). */
@@ -422,7 +413,13 @@ const McpToolRow = React.memo(function McpToolRow(props: Readonly<{
     const { tool } = props;
     const effect = mcpToolEffect(tool.annotations);
     const set = tool.source === 'tool' && tool.setting !== 'inherit';
-    const inherited = inheritedToolSetting(props.serverDefault, effect);
+    // Normal mode with no tool override can only inherit Ask or Allow.
+    const inherited = resolveMcpToolDecisionV1({
+        policy: { default: props.serverDefault, overrides: {} },
+        toolName: tool.name,
+        annotations: tool.annotations,
+        permissionMode: 'default',
+    }).approval as 'ask' | 'allow';
     const value: McpToolSettingV1 = set ? tool.setting as McpToolSettingV1 : inherited;
     const compact = resolveViewportClass(useWindowDimensions()) === 'compact';
     const title = tool.title ?? tool.name;
