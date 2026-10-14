@@ -328,6 +328,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                         : {}),
                                     permissionHandler: hostRuntimeParams.permissionHandler,
                                     readResolvedMcpServers: () => hostRuntimeParams.resolvedMcpServers ?? [],
+                                    resolveMcpToolNaming: hostRuntimeParams.resolveMcpToolNaming,
                                 },
                                 ...(hostRuntimeParams.currentTerminalMetadata
                                     ? { currentTerminalMetadata: hostRuntimeParams.currentTerminalMetadata }
@@ -674,6 +675,8 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 : {}),
                                             permissionHandler: executionPermissionHandler ?? host.permissionHandler,
                                             readResolvedMcpServers: () => runToolBinding?.resolvedMcpServers ?? [],
+                                            resolveMcpToolNaming: async (request, options) => runToolBinding?.resolveMcpToolNaming
+                                                ? await runToolBinding.resolveMcpToolNaming(request, options) : null,
                                         },
                                         sessionId,
                                         directory: options.cwd,

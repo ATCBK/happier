@@ -19,7 +19,7 @@ type DirectoryCapabilityParams = Readonly<{
 }>;
 type SessionProjectInput = Omit<SessionProjectPromptStackInput, 'machineId' | 'directory'>;
 export type DirectoryCapabilityResult = ResolveSessionCapabilitiesV1Result & ManagedMcpSelectionProjectionV1
-  & Readonly<{ projectKey?: string | null; mcpServerIdentities: Readonly<Record<string, McpServerIdentity>> }>;
+  & Readonly<{ context: ReachContextV1; projectKey?: string | null; mcpServerIdentities: Readonly<Record<string, McpServerIdentity>> }>;
 
 /** Real filesystem comparison and Account Project association at the machine boundary. */
 export function resolveSessionCapabilitiesForDirectory(params: DirectoryCapabilityParams & Readonly<{ sessionProject: SessionProjectInput }>): Promise<DirectoryCapabilityResult>;
@@ -73,6 +73,6 @@ function resolveForContext(params: DirectoryCapabilityParams): DirectoryCapabili
     const plugin = item.source === 'plugin' ? parseMcpPluginItemIdV1(item.id) : null;
     return { serverId: item.id, name: item.name, serverTitle: item.title ?? item.name, ...(plugin ? { plugin } : {}) };
   }) });
-  return { ...result, projectKey: params.projectKey, mcpServerIdentities: identities.mcpServerIdentities,
+  return { ...result, context, projectKey: params.projectKey, mcpServerIdentities: identities.mcpServerIdentities,
     ...projectManagedMcpSelectionV1(result, { settings, context, selection: params.selection?.mcp, wireNamesByServerId: identities.wireNamesByServerId }) };
 }

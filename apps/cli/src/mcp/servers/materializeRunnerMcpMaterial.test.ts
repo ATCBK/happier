@@ -27,7 +27,7 @@ describe('materializeRunnerMcpMaterial', () => {
       material: {
         v: 1,
         strictMode: true,
-        selection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+        capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
         servers: [{
           serverId: 'remote', serverRevision: 2, bindingId: 'all', bindingRevision: 4,
           savedSecretRevisions: [],

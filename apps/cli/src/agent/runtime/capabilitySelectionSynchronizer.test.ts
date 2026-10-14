@@ -15,7 +15,7 @@ import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, SessionOw
 import { readSessionCapabilityApplyChange, sessionCapabilityApplyNotice } from '../../../../ui/sources/components/sessions/capabilities/sessionCapabilityApplyNotice';
 
 function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 'restarted', sessionId: 'session' }],
-  options: Partial<Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'skillsTransports' | 'readSkillRules' | 'subscribeAccountSettings'>> = {}, initialMetadata = createTestMetadata()) {
+  options: Partial<Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'skillsTransports' | 'readSkillRules' | 'initialMcpRules' | 'readMcpRules' | 'subscribeAccountSettings'>> = {}, initialMetadata = createTestMetadata()) {
   let metadata = initialMetadata;
   let settled = false;
   let refusePublication = false;
@@ -45,6 +45,51 @@ function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 
 }
 
 describe('capability selection settled-turn apply', () => {
+  it.each(['retry', 'restore', 'include'] as const)('uses the captured MCP launch baseline through unavailable reads and busy settlement for %s', async scenario => {
+    const context = { machineId: 'machine', machinePlatform: 'posix' as const, directory: '/repo', projectKey: 'project', agentId: 'codex' };
+    const settings = (enabled: boolean) => ({ v: 1 as const, strictMode: false,
+      servers: [{ id: 'inherited', name: 'inherited', transport: 'http' as const, remote: { url: 'https://example.com/mcp', headers: {} }, env: {}, createdAt: 1, updatedAt: 1 }],
+      bindings: [{ id: 'rule', serverId: 'inherited', target: { t: 'project' as const, projectKey: 'project' }, enabled, createdAt: 1, updatedAt: 1 }] });
+    let available = true;
+    let current = settings(false); // Rule changed after launch, before loop construction.
+    let wake = () => {};
+    const f = fixture([{ ok: false, status: 'busy', sessionId: 'session', reasonCode: 'approval_pending' },
+      { ok: true, status: 'restarted', sessionId: 'session' }], {
+      initialMcpRules: { context, settings: settings(true), mcpPluginItems: [], selectedServerIds: ['inherited'] },
+      readMcpRules: () => available ? { context, settings: current, mcpPluginItems: [] } : null,
+      subscribeAccountSettings: listener => { wake = listener; return () => {}; },
+    }, createTestMetadata(scenario === 'include' ? { mcpSelectionV1: { v: 1, managedServersEnabled: true,
+      forceIncludeServerIds: ['inherited'], forceExcludeServerIds: [] } } : {}));
+    await f.sync.flushBeforeTurn();
+    if (scenario === 'include') {
+      expect(readPendingCapabilityApplyV1(f.metadata).mcp).toBe(false);
+      f.settle(); await f.sync.flushAfterSettledTurn();
+      expect(f.requests).toEqual([]);
+      await f.sync.dispose(); return;
+    }
+    expect(readPendingCapabilityApplyV1(f.metadata).mcp).toBe(true);
+    expect(f.metadata.capabilitySelectionApplyV1?.mcp).toMatchObject({ reason: 'next_turn', source: 'rules' });
+    expect(f.requests).toEqual([]);
+    available = false; wake(); await f.sync.flushBeforeTurn();
+    expect(readPendingCapabilityApplyV1(f.metadata).mcp).toBe(true);
+    available = true; wake(); f.settle(); await f.sync.flushAfterSettledTurn('one');
+    expect(f.requests).toHaveLength(1);
+    expect(f.metadata.capabilitySelectionApplyV1?.mcp).toMatchObject({ reason: 'next_turn', source: 'rules' });
+    if (scenario === 'restore') {
+      current = settings(true); wake();
+      await vi.waitFor(() => expect(readPendingCapabilityApplyV1(f.metadata).mcp).toBe(false));
+      expect(f.metadata.capabilitySelectionApplyV1).toBeUndefined();
+      expect(f.metadata.mcpSelectionV1).toBeUndefined();
+      expect(f.requests).toHaveLength(1);
+      await f.sync.dispose(); return;
+    }
+    wake(); await f.sync.flushBeforeTurn(); await f.sync.flushAfterSettledTurn('one');
+    expect(f.requests).toHaveLength(1);
+    await f.sync.flushAfterSettledTurn('two');
+    expect(f.requests).toHaveLength(2);
+    expect(f.requests[1]).toEqual({ sessionId: 'session', mode: 'force_current_cli', reason: 'capability_selection_change' });
+    await f.sync.dispose();
+  });
   it.each(['supported', 'unsupported'] as const)('publishes rule-only pending metadata through the strict notice consumer with %s reload', async skillsLiveReload => {
     let enabled = true;
     let wake = () => {};

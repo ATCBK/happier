@@ -1145,6 +1145,16 @@ export function createNativeAgentSessionHostServices(params: Readonly<{
         });
     };
     const mcp: AgentSessionHostServices['mcp'] = Object.freeze({
+        ...(params.owners.mcp.resolveToolNaming ? {
+            resolveToolNaming: async (request, options) => {
+                assertSessionScopeAvailable('mcp');
+                const signal = combineSessionOperationSignal(params.signal, options?.signal);
+                const result = await params.owners.mcp.resolveToolNaming!(request, { signal });
+                assertSessionScopeAvailable('mcp');
+                signal.throwIfAborted();
+                return result;
+            },
+        } satisfies Pick<AgentSessionHostServices['mcp'], 'resolveToolNaming'> : {}),
         async resolveServers(options?: Readonly<{ signal?: AbortSignal }>) {
             assertSessionScopeAvailable('mcp');
             const signal = combineSessionOperationSignal(params.signal, options?.signal);
@@ -3045,7 +3055,11 @@ export function createNativeAgentSessionOperations(
             dispose() {
                 current = false;
                 try {
-                    watch.dispose();
+                    // SDK cleanup may reject asynchronously; fence immediately
+                    // and contain that failure without delaying runtime retirement.
+                    void Promise.resolve(watch.dispose()).catch(() => {
+                        logger.debug('[NativeAgentSession] failed to dispose native event watch (non-fatal)');
+                    });
                 } catch {
                     logger.debug('[NativeAgentSession] failed to dispose native event watch (non-fatal)');
                 }

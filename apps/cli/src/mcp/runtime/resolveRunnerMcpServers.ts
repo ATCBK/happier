@@ -12,7 +12,8 @@ import { readLoadedMcpNativeServerNames, type McpServerIdentity } from './assign
 import { detectProviderMcpServers } from '../providerDetection/detectProviderMcpServers';
 import type { ResolvedSessionMcpServer } from '../runtimeTypes';
 import { projectResolvedMcpServers } from './projectResolvedMcpServers';
-import type { McpPluginItemV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import type { McpPluginItemV1, McpServersSettingsV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import type { ReachContextV1 } from '@happier-dev/protocol/reach/resolveReachV1';
 import type { DetectedMcpServerV1 } from '@happier-dev/protocol';
 import { projectMcpToolLaunchPolicies } from './projectMcpToolLaunchPolicy';
 import type { PluginAgentToolsCapabilityV2 } from '@happier-dev/protocol';
@@ -49,6 +50,7 @@ import { SessionAttestedContextV1Schema } from '@happier-dev/protocol/sessions/c
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { randomUUID } from 'node:crypto';
+import { createHappierMcpToolNamingResolver } from './projectMcpToolNames';
 import type { McpRequestAuthCapability } from './mcpRequestAuth';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
 
@@ -200,17 +202,27 @@ type RunnerMcpServersParams = Readonly<{
   savedSecretCatalogState?: import('@/settings/secrets/savedSecretCatalog').SavedSecretCatalogState;
 }>;
 
+export type RunnerMcpRuleObservation = Readonly<{
+  context: ReachContextV1;
+  settings: McpServersSettingsV1;
+  mcpPluginItems: readonly McpPluginItemV1[];
+}>;
+
 type RunnerMcpServersResult<Bridge extends { stop: () => void }> = Readonly<{
   happierMcpServer: Bridge;
   mcpServers: Record<string, McpServerConfig>;
   mcpServersStrictMode?: boolean;
   mcpServerIdentities?: Readonly<Record<string, McpServerIdentity>>;
   mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
+  resolveMcpToolNaming?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionMcpService['resolveToolNaming'];
   resolvedServers?: readonly ResolvedSessionMcpServer[];
+  /** Captured launch resolution; later Account hydration cannot replace its baseline. */
+  reach?: RunnerMcpRuleObservation & Readonly<{ selectedServerIds: readonly string[] }>;
 }>;
 type HappierMcpBridgeHandle = {
   url: string;
   supportedSessionReadActions: readonly SessionRunPromptReadActionIdV1[];
+  readToolNames: (signal?: AbortSignal) => Promise<readonly string[]>;
   stop: () => void;
 };
 
@@ -369,17 +381,21 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     requiredDirectActionIds: run ? SESSION_RUN_PROMPT_READ_ACTION_IDS_V1 : undefined,
   });
 
+  const naming = 'readToolNames' in builtIn.happierMcpServer && builtIn.mcpServers.happier
+    ? { resolveMcpToolNaming: createHappierMcpToolNamingResolver(builtIn.mcpServers.happier, builtIn.happierMcpServer.readToolNames) }
+    : {};
+
   if (operationContext && !await operationContext.isCurrent()) {
     builtIn.happierMcpServer.stop();
     throw new McpServerCatalogUnavailableError('scope-retired');
   }
 
   if (!accountSettings || !accountCredentials) {
-    return { happierMcpServer: builtIn.happierMcpServer, mcpServers: params.resolvedMcpServers ? mergeWithBuiltInHappierMcpServer({ builtIn: builtIn.mcpServers, extra: params.resolvedMcpServers }) : builtIn.mcpServers };
+    return { ...naming, happierMcpServer: builtIn.happierMcpServer, mcpServers: params.resolvedMcpServers ? mergeWithBuiltInHappierMcpServer({ builtIn: builtIn.mcpServers, extra: params.resolvedMcpServers }) : builtIn.mcpServers };
   }
 
   if (!mcpSettings || !resolvedSelection) {
-    return { happierMcpServer: builtIn.happierMcpServer, mcpServers: builtIn.mcpServers };
+    return { ...naming, happierMcpServer: builtIn.happierMcpServer, mcpServers: builtIn.mcpServers };
   }
 
   const settingsSecretsReadKeys = deriveSettingsSecretsReadKeysForCredentials(accountCredentials);
@@ -518,6 +534,7 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   const mcpToolPolicy = projectMcpToolLaunchPolicies({ catalog: { v: 1, servers: mcpSettings.servers, bindings: mcpSettings.bindings, ...(mcpSettings.pluginServers ? { pluginServers: mcpSettings.pluginServers } : {}) },
     mcpServerIdentities, control: params.mcpToolControl, permissionMode: parseAgentPermissionIntentV1Alias(String(scopedSession.getPermissionMode?.() ?? 'default')) ?? 'default' });
   return {
+    ...naming,
     happierMcpServer: {
       ...builtIn.happierMcpServer,
       stop: () => {
@@ -527,6 +544,8 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     mcpServers: merged,
     mcpServersStrictMode: mcpSettings.strictMode,
     mcpServerIdentities,
+    ...(!params.resolvedMcpServers ? { reach: { context: resolvedSelection.context, settings: mcpSettings, mcpPluginItems,
+      selectedServerIds: resolvedSelection.mcp.items.filter(item => item.selected).map(item => item.id) } } : {}),
     resolvedServers: projectResolvedMcpServers({ mcpServers: merged, identities: mcpServerIdentities,
       scope: { sessionId: params.session.sessionId, directory: params.directory } }),
     ...(mcpToolPolicy ? { mcpToolPolicy } : {}),

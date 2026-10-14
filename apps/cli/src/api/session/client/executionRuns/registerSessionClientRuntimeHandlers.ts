@@ -571,6 +571,7 @@ export function registerSessionClientRuntimeHandlers(
                         },
                     } : {}),
                     ...(skillIndex ? { skillIndex } : {}),
+                    resolveMcpToolNaming: resolved.resolveMcpToolNaming,
                     supportedSessionReadActions: resolved.happierMcpServer.supportedSessionReadActions,
                     dispose: () => resolved.happierMcpServer.stop(),
                 };

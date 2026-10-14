@@ -122,6 +122,7 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
+import { readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import { projectMcpToolLaunchPolicies } from '@/mcp/runtime/projectMcpToolLaunchPolicy';
 import type { McpServerIdentity } from '@/mcp/runtime/assignMcpWireNames';
 import type { McpToolPolicyContext } from '@/mcp/runtime/resolveMcpToolIdentity';
@@ -544,6 +545,7 @@ export type HostSessionRuntimeFactoryParams = Readonly<{
   messageQueue?: MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>;
   messageBuffer: MessageBuffer;
   mcpServers: Record<string, McpServerConfig>;
+  resolveMcpToolNaming?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionMcpService['resolveToolNaming'];
   mcpServersStrictMode?: boolean;
   mcpToolPolicy?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionOpenRequest['mcpToolPolicy'];
   mcpServerIdentities?: Readonly<Record<string, McpServerIdentity>>;
@@ -2497,14 +2499,11 @@ export async function runHostSessionRuntime(
     machineId,
     agentId: config.agentMessageType,
     notify: async event => {
-      const accountSnapshot = readRoleAccountSnapshot();
-      if (!accountSnapshot) throw new Error('Guard notification Account scope is unavailable');
-      const isCurrent = () => readRoleAccountSnapshot() === accountSnapshot;
+      const operationContext = readSessionOpenAccountOperation();
+      if (!operationContext || runtimeAuthority.scope !== 'account') throw new Error('Guard notification Account scope is unavailable');
       await dispatchActivityNotificationAsync({
-        settings: accountSnapshot.settings,
-        notificationChannelCatalog: accountSnapshot.notificationChannelCatalog,
-        savedSecretMaterializer: createSavedSecretMaterializerFromSnapshotV1(accountSnapshot, { isCurrent }),
-        isCurrent,
+        settings: undefined,
+        operationContext,
         expoPushSender: activityPushSender,
         event,
       });
@@ -2646,7 +2645,7 @@ export async function runHostSessionRuntime(
     });
   }
   currentLifecycleSession.bindMcpRequestAuthPort(daemonTurnContributionsBridge?.mcpRequestAuth);
-  const { happierMcpServer, mcpServers, mcpServersStrictMode, mcpServerIdentities, mcpToolPolicy, resolvedServers } = receivesUserMcpServers
+  const { happierMcpServer, mcpServers, mcpServersStrictMode, mcpServerIdentities, mcpToolPolicy, resolveMcpToolNaming, resolvedServers, reach: runnerMcpReach } = receivesUserMcpServers
     ? await runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl, () => resolveRunnerMcpServersFn({
       session: runnerMcpSession,
       credentials: runtimeAuthority.sessionCredentials,
@@ -2673,7 +2672,7 @@ export async function runHostSessionRuntime(
       sessionMetadata: runtimeSessionMetadataSnapshot ?? runtimeMetadata,
       ...(config.resolvedMcpServers ? { resolvedMcpServers: config.resolvedMcpServers } : {}),
     }))
-    : { happierMcpServer: { stop: () => undefined }, mcpServers: {}, mcpServersStrictMode: undefined, mcpServerIdentities: undefined, mcpToolPolicy: undefined, resolvedServers: undefined };
+    : { happierMcpServer: { stop: () => undefined }, mcpServers: {}, mcpServersStrictMode: undefined, mcpServerIdentities: undefined, mcpToolPolicy: undefined, resolveMcpToolNaming: undefined, resolvedServers: undefined, reach: undefined };
   readMcpToolContext = () => ({ mcpServerIdentities: mcpServerIdentities ?? {},
     catalog: mcpAccountScopeKey && getActiveAccountSettingsSnapshot()?.scopeKey === mcpAccountScopeKey
       && getActiveAccountSettingsSnapshotLifetimeToken() === mcpAccountLifetimeToken
@@ -2808,6 +2807,7 @@ export async function runHostSessionRuntime(
     messageQueue,
     messageBuffer,
     mcpServers,
+    resolveMcpToolNaming,
     mcpServerIdentities,
     ...(mcpServersStrictMode !== undefined ? { mcpServersStrictMode } : {}),
     resolvedMcpServers: resolvedServers,
@@ -3754,6 +3754,16 @@ export async function runHostSessionRuntime(
       capabilitySelection: {
         agent: capabilitySelectionAgentFacts,
         initialSkillRules: runnerSkills?.reach,
+        initialMcpRules: runnerMcpReach,
+        readMcpRules: () => {
+          if (!isSessionOpenAccountCurrent() || !runnerMcpReach) return null;
+          const snapshot = readSessionOpenAccountOperation()?.readSnapshot();
+          if (snapshot?.mcpServerCatalog?.status !== 'ready' || snapshot.mcpServerCatalog.authority !== 'active') return null;
+          const settings = readMcpServersSettingsFromAccountSettings(snapshot);
+          return { context: runnerMcpReach.context, settings,
+            mcpPluginItems: runnerMcpReach.mcpPluginItems.map(item => ({ ...item,
+              rules: settings.bindings.filter(rule => rule.serverId === item.itemId) })) };
+        },
         readSkillRules: () => {
           if (!isSessionOpenAccountCurrent() || !runnerSkills?.reach) return null;
           const snapshot = readSessionOpenAccountOperation()?.readSnapshot();

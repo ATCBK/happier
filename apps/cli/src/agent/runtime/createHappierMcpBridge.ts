@@ -87,6 +87,7 @@ export async function createHappierMcpBridge(
   happierMcpServer: {
     url: string
     supportedSessionReadActions: readonly SessionRunPromptReadActionIdV1[]
+    readToolNames: (signal?: AbortSignal) => Promise<readonly string[]>
     stop: () => void
   }
   mcpServers: Record<string, McpServerConfig>
@@ -112,6 +113,7 @@ export async function createHappierMcpBridgeWithOptions(
   happierMcpServer: {
     url: string
     supportedSessionReadActions: readonly SessionRunPromptReadActionIdV1[]
+    readToolNames: (signal?: AbortSignal) => Promise<readonly string[]>
     stop: () => void
   }
   mcpServers: Record<string, McpServerConfig>

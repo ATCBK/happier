@@ -1168,8 +1168,12 @@ describe('runHostSessionRuntime', () => {
   it.each([{ overridden: false, miswired: false, duringPreparation: false }, { overridden: true, miswired: false, duringPreparation: false },
     { overridden: false, miswired: true, duringPreparation: false }, { overridden: false, miswired: false, duringPreparation: true },
     { overridden: false, miswired: false, duringPreparation: true, startupMaintenance: true },
-    { overridden: false, miswired: false, duringPreparation: false, loadingAtAdmission: true }])(
-    'applies a recorded Account invalidation through Session-client hydration with unchanged Session selection %j', async ({ overridden, miswired, duringPreparation, startupMaintenance, loadingAtAdmission }) => {
+    { overridden: false, miswired: false, duringPreparation: false, loadingAtAdmission: true },
+    { overridden: false, miswired: false, duringPreparation: false, mcpRules: true },
+    { overridden: false, miswired: false, duringPreparation: false, mcpRules: true, startOff: true },
+    { overridden: true, miswired: false, duringPreparation: false, mcpRules: true },
+    { overridden: false, miswired: true, duringPreparation: false, mcpRules: true }])(
+    'applies a recorded Account invalidation through Session-client hydration with unchanged Session selection %j', async ({ overridden, miswired, duringPreparation, startupMaintenance, loadingAtAdmission, mcpRules, startOff }) => {
     const { createLightSqliteHarness } = await import('../../../../../../server/sources/testkit/lightSqliteHarness');
     const { createAuthenticatedTestApp } = await import('../../../../../../server/sources/app/api/testkit/sqliteFastify');
     const { accountRoutes } = await import('../../../../../../server/sources/app/api/routes/account/accountRoutes');
@@ -1186,7 +1190,10 @@ describe('runHostSessionRuntime', () => {
     const { createSessionScopedSocketConnection } = await import('@/api/session/sockets');
     const { refreshActiveMcpServerCatalog } = await import('@/settings/mcp/hydrateMcpServerCatalog');
     const { refreshActivePromptLibraryCatalog } = await import('@/settings/prompts/hydratePromptLibraryCatalog');
-    const { MCP_SERVER_CATALOG_ACCOUNT_KEY_V1, sealMcpServerCatalogContentV1 } = await import('@happier-dev/protocol/mcp/servers/serverRowsV1');
+    const { MCP_SERVER_CATALOG_ACCOUNT_KEY_V1, sealMcpServerCatalogContentV1, openMcpServerCatalogContentV1,
+      MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogV1Schema, McpServerCatalogRowReadResponseV1Schema,
+      McpServerCatalogRowMutationV1Schema, McpServerCatalogRowMutationResponseV1Schema } = await import('@happier-dev/protocol/mcp/servers/serverRowsV1');
+    const { applyMcpServerCatalogMutationV1 } = await import('@happier-dev/protocol/mcp/servers/serverCatalogV1');
     const { publishServerHttpRuntimeOrigin } = await import('@/api/client/serverHttpBaseUrl');
     const { buildPromptLibraryPhysicalKeyV1, PromptLibraryRowReadResponseV1Schema, PromptLibraryRowMutationV1Schema,
       PromptLibraryRowMutationResponseV1Schema, sealPromptLibraryContentV1, openPromptLibraryContentV1,
@@ -1292,12 +1299,24 @@ describe('runHostSessionRuntime', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const settleTurn = createDeferred<void>();
     const ensure = vi.spyOn(daemonControl, 'ensureSkillSessionDirHttp').mockImplementation(input => store.ensureSkillSessionDir(input));
+    const restart = vi.spyOn(daemonControl, 'requestDaemonSessionRunnerRestart').mockResolvedValue({
+      ok: false, status: 'busy', sessionId: harness.session.sessionId, reasonCode: 'turn_in_progress',
+    });
     try {
       const created = await executor.execute('skills.create', { name: 'rule-sample', files: [{ path: 'SKILL.md', contentKind: 'utf8',
         contentBase64: Buffer.from('---\nname: rule-sample\ndescription: Rule seam\n---\nSupporting instructions').toString('base64') }] }, actionContext);
       if (!created.ok) throw new Error(JSON.stringify(created));
       const item = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(created.result);
       if (!item.ok || item.incomplete) throw new Error('Skill creation was not fully acknowledged');
+      if (mcpRules) {
+        const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'rule-mcp', name: 'rule-mcp',
+          transport: 'http', remote: { url: 'https://example.com/mcp', headers: {} }, env: {}, createdAt: 1, updatedAt: 1 }],
+          bindings: [{ id: 'rule-mcp-machine', serverId: 'rule-mcp', target: { t: 'machine', machineId: harness.opts.machineId ?? 'machine-1' },
+            enabled: !startOff, createdAt: 1, updatedAt: 1 }] });
+        await db.userKVStore.create({ data: { accountId: account.id, key: MCP_SERVER_CATALOG_ACCOUNT_KEY_V1, version: 1,
+          value: new TextEncoder().encode(JSON.stringify(sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog }))) } });
+        delete harness.deps.resolveRunnerMcpServersFn;
+      }
       let startupDocumentId: string | undefined;
       if (duringPreparation) {
         const document = await executor.execute('prompt_doc.create', { title: 'Startup context', markdown: 'FIX20D_PREPARED_CONTEXT' }, actionContext);
@@ -1334,6 +1353,21 @@ describe('runHostSessionRuntime', () => {
         body: { t: 'account-change' as const }, createdAt: 1791960978451 };
       const headers = { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), authorization: `Bearer ${credentials.token}` };
       const writeRuleFromOtherClient = async (state: 'on' | 'off') => {
+        if (mcpRules) {
+          const row = McpServerCatalogRowReadResponseV1Schema.parse((await axios.get(`${url}${MCP_SERVER_CATALOG_ROWS_ROUTE_V1}`, { headers })).data);
+          if (row.status !== 'present') throw new Error('Missing MCP row');
+          const opened = openMcpServerCatalogContentV1({ content: row.content, mode: 'plain', material: null });
+          if (opened.status !== 'opened') throw new Error('Unreadable MCP row');
+          const catalog = applyMcpServerCatalogMutationV1(opened.catalog, { kind: 'rules-change', serverIds: ['rule-mcp'],
+            change: { kind: 'write', write: { place: { t: 'machine', machineId: harness.opts.machineId ?? 'machine-1' }, state } } },
+            { nowMs: Date.now(), newId: () => 'rule-mcp-machine' });
+          const mutation = McpServerCatalogRowMutationV1Schema.parse({ expectedRevision: row.revision,
+            content: sealMcpServerCatalogContentV1({ catalog, mode: 'plain', material: null }) });
+          expect(McpServerCatalogRowMutationResponseV1Schema.parse((await axios.post(`${url}${MCP_SERVER_CATALOG_ROWS_ROUTE_V1}`, mutation, { headers })).data))
+            .toMatchObject({ status: 'updated' });
+          sockets.to(getAccountStoredContentV3SocketRoom(account.id)).emit('update', recordedAccountChange);
+          return;
+        }
         const row = PromptLibraryRowReadResponseV1Schema.parse((await axios.get(`${url}${PROMPT_LIBRARY_ROWS_ROUTE_V1}/skill-rules`, { headers })).data);
         if (row.status !== 'present') throw new Error('Missing rules row');
         const opened = openPromptLibraryContentV1({ key: 'skill-rules', content: row.content, mode: 'plain', material: null });
@@ -1353,12 +1387,15 @@ describe('runHostSessionRuntime', () => {
       };
       if (loadingAtAdmission) await writeRuleFromOtherClient('off');
       if (overridden) await harness.session.updateMetadata((metadata: Metadata) => writeSessionCapabilitySelectionToMetadataV1(metadata,
-        { skills: { v: 1, forceIncludeSkillIds: [item.skillId], forceExcludeSkillIds: [], excludeNativeSkillNames: [] } }, { sessionActive: false }));
-      const selectionBefore = harness.session.getMetadataSnapshot()?.skillSelectionV1;
+        mcpRules ? { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['rule-mcp'], forceExcludeServerIds: [] } }
+          : { skills: { v: 1, forceIncludeSkillIds: [item.skillId], forceExcludeSkillIds: [], excludeNativeSkillNames: [] } }, { sessionActive: false }));
+      const selectionKey = mcpRules ? 'mcpSelectionV1' : 'skillSelectionV1';
+      const selectionBefore = harness.session.getMetadataSnapshot()?.[selectionKey];
       const agentId = 'acme-rule-reader';
       const fixture = createExternalContributionFixtures(agentId);
       if (!fixture.agent.richDefinition || !runtimeRegistryLease) throw new Error('Missing native Agent boundary');
       const definition = { ...fixture.agent.richDefinition.definition, capabilities: { ...fixture.agent.richDefinition.definition.capabilities,
+        ...(mcpRules ? { tools: { delivery: 'native_mcp' as const } } : {}),
         skills: { delivery: 'session_dir' as const, nativeDisable: 'unsupported' as const, liveReload: 'supported' as const } } };
       harness.config.policyAgentId = agentId;
       harness.config.pluginRuntimeRegistryLease = { ...runtimeRegistryLease, registry: { ...runtimeRegistryLease.registry,
@@ -1402,6 +1439,7 @@ describe('runHostSessionRuntime', () => {
       const startupPrepared = createDeferred<void>();
       setSessionRuntimeFactory(harness.config, async params => {
         root = params.skills?.skillsRoot ?? '';
+        if (mcpRules) expect(Object.keys(params.mcpServers ?? {}).filter(name => name !== 'happier')).toEqual(startOff ? [] : ['rule-mcp']);
         if (duringPreparation) {
           try {
             if (!params.resolveFreshSessionSystemPrompt) throw new Error('Missing production startup prompt binding');
@@ -1495,13 +1533,15 @@ describe('runHostSessionRuntime', () => {
         emitted: harness.runtime.emitRuntimeMessage.mock.calls.slice(-2),
       })).toHaveBeenCalledWith(expect.objectContaining({ action: 'begin', turnId: 'rules-turn' })));
       const beforeWake = wakes.length;
-      await writeRuleFromOtherClient(loadingAtAdmission ? 'on' : 'off');
+      await writeRuleFromOtherClient(loadingAtAdmission || startOff ? 'on' : 'off');
       await vi.waitFor(() => expect(wakes.slice(beforeWake)).toContainEqual(recordedAccountChange));
       if (!miswired) {
         await Promise.all(refreshAccount.mock.results.map(result => result.type === 'return' ? result.value : Promise.reject(result.value)));
+        if (mcpRules) expect(getActiveAccountSettingsSnapshot()?.mcpServerCatalog).toMatchObject({ status: 'ready', catalog: {
+          bindings: [expect.objectContaining({ serverId: 'rule-mcp', enabled: startOff === true })] } });
         const catalog = getActiveAccountSettingsSnapshot()?.promptLibraryCatalog;
         const read = catalog ? readPromptLibraryCatalogRecordV1({ catalog, key: 'skill-rules' }) : null;
-        expect(read).toMatchObject({ status: 'ready', record: { value: { rules: expect.arrayContaining([
+        if (!mcpRules) expect(read).toMatchObject({ status: 'ready', record: { value: { rules: expect.arrayContaining([
           expect.objectContaining({ skillId: item.skillId, enabled: loadingAtAdmission === true }),
         ]) } } });
       }
@@ -1523,15 +1563,34 @@ describe('runHostSessionRuntime', () => {
           catalog: getActiveAccountSettingsSnapshot()?.promptLibraryCatalog,
           status: harness.session.getMetadataSnapshot()?.capabilitySelectionApplyV1,
           errors: loggerDebugMock.mock.calls.filter(call => /catalog refresh|CapabilitySelection|Prompt library/.test(String(call[0]))).slice(-5),
-        })).toBe('appliedNow'));
+        })).toBe('pendingNextTurn'));
         if (miswired) await expect(requirePendingNotice()).rejects.toThrow();
         else await requirePendingNotice();
       }
       expect(refresh).not.toHaveBeenCalled();
+      expect(restart).not.toHaveBeenCalled();
       if (!loadingAtAdmission) expect(await readFile(join(root, 'rule-sample', 'SKILL.md'), 'utf8')).toContain('Supporting instructions');
       awaitingSettlementReady = true;
       settleTurn.resolve();
       await turnReady.promise;
+      if (mcpRules) {
+        if (overridden || miswired) expect(restart).not.toHaveBeenCalled();
+        else {
+          expect(restart).toHaveBeenCalledExactlyOnceWith({ sessionId: harness.session.sessionId,
+            mode: 'force_current_cli', reason: 'capability_selection_change' });
+          expect(readPendingCapabilityApplyV1(harness.session.getMetadataSnapshot()).mcp).toBe(true);
+          expect(applyNotice()?.text).toBe('Changes apply at the next turn');
+          // Restore the actual launch set before a busy refusal gets another
+          // settlement wake. An idle Account write must withdraw the notice.
+        }
+        await writeRuleFromOtherClient(startOff ? 'off' : 'on');
+        if (!miswired) await Promise.all(refreshAccount.mock.results.map(result => result.type === 'return' ? result.value : Promise.reject(result.value)));
+        await vi.waitFor(() => expect(applyNotice()).toBeNull());
+        if (!overridden && !miswired) expect(restart).toHaveBeenCalledTimes(1);
+        expect(refresh).not.toHaveBeenCalled();
+        expect(harness.session.getMetadataSnapshot()?.[selectionKey]).toEqual(selectionBefore);
+        return;
+      }
       if (overridden || miswired) {
         expect(refresh).not.toHaveBeenCalled();
         expect(await readFile(join(root, 'rule-sample', 'SKILL.md'), 'utf8')).toContain('Supporting instructions');
@@ -1563,7 +1622,7 @@ describe('runHostSessionRuntime', () => {
       await harness.metrics.killHandler(); await run; run = null;
       if (overridden) expect(refresh).not.toHaveBeenCalled();
       if (!loadingAtAdmission) expect(await readFile(join(root, 'rule-sample', 'SKILL.md'), 'utf8')).toContain('Supporting instructions');
-      expect(harness.session.getMetadataSnapshot()?.skillSelectionV1).toEqual(selectionBefore);
+      expect(harness.session.getMetadataSnapshot()?.[selectionKey]).toEqual(selectionBefore);
     } finally {
       releaseAdmissionCatalog.resolve();
       await admissionHydration;
@@ -1574,7 +1633,7 @@ describe('runHostSessionRuntime', () => {
         if (run) { await harness.metrics.killHandler?.(); harness.queue.close(); await run; }
       } finally {
         restoreAccountRefresh(); await networkClient?.close(); readCredentials.mockRestore();
-        ensure.mockRestore(); observer.close(); eventRouter.clearIo(); await new Promise<void>(resolve => sockets.close(() => resolve()));
+        ensure.mockRestore(); restart.mockRestore(); observer.close(); eventRouter.clearIo(); await new Promise<void>(resolve => sockets.close(() => resolve()));
         resetActiveAccountSettingsSnapshotForTests(); releaseHome(); await app.close();
         await store.releaseSkillSessionDirs('session-1'); await store.collectSkillCache({ libraryDigests: [] }); await sqlite.close();
         exitSpy.mockRestore(); rootScope.restore();

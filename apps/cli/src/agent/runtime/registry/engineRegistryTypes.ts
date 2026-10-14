@@ -65,6 +65,7 @@ export type NativeAgentSessionRunToolBindingRequest = Readonly<{
 export type NativeAgentSessionRunToolBinding = Readonly<{
     resolvedMcpServers?: readonly import('@/mcp/runtimeTypes').ResolvedSessionMcpServer[];
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    resolveMcpToolNaming?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionMcpService['resolveToolNaming'];
     mcpServersStrictMode?: AgentSessionOpenRequest['mcpServersStrictMode'];
     mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
     mcpServerIdentities?: Readonly<Record<string, import('@/mcp/runtime/assignMcpWireNames').McpServerIdentity>>;

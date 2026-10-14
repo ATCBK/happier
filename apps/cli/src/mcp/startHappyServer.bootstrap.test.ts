@@ -53,7 +53,9 @@ function bootstrap(accountSettings: AccountSettings | null = null, session = Obj
 it('exposes the Session Action inventory through the actual Agent stdio bridge', async () => {
     daemonCatalogBoundary.read.mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
     const runtime = await bootstrap();
-    const server = runtime.mcpServers.happier!;
+    const naming = await runtime.resolveMcpToolNaming!({ serverName: 'happier', toolNameMaxLength: 40 });
+    expect(naming).not.toBeNull();
+    const server = naming!.launchConfig;
     const transport = new StdioClientTransport({
         command: server.command,
         args: server.args,
@@ -96,7 +98,10 @@ it('reads the daemon catalog only on projection changes or a missed-signal recon
     try {
         expect(daemonCatalogBoundary.read).toHaveBeenCalledTimes(1);
         await client.connect(new StreamableHTTPClientTransport(new URL(runtime.happierMcpServer.url)));
-        expect((await client.listTools()).tools.some(entry => entry.name === 'acme_echo')).toBe(true);
+        const observed = await client.listTools();
+        expect(observed.tools.some(entry => entry.name === 'acme_echo')).toBe(true);
+        const naming = await runtime.resolveMcpToolNaming!({ serverName: 'happier', toolNameMaxLength: 40 });
+        expect(naming!.tools.map(entry => entry.originalName)).toEqual(observed.tools.map(entry => entry.name));
         const before = daemonCatalogBoundary.read.mock.calls.length;
         await client.listTools();
         await client.callTool({ name: 'change_title', arguments: { title: 'Unchanged catalog' } });
@@ -105,6 +110,8 @@ it('reads the daemon catalog only on projection changes or a missed-signal recon
         projection.contributionRegistryProjectionRevision += 1;
         await session.rpcHandlerManager.invokeLocal('session.pluginCatalog.invalidate.v1', projection);
         expect((await client.listTools()).tools.some(entry => entry.name === 'acme_echo')).toBe(false);
+        const removed = await runtime.resolveMcpToolNaming!({ serverName: 'happier', toolNameMaxLength: 40 });
+        expect(removed!.tools.some(entry => entry.originalName === 'acme_echo')).toBe(false);
         expect(daemonCatalogBoundary.read.mock.calls.length - before).toBe(1);
         await session.rpcHandlerManager.invokeLocal('session.pluginCatalog.invalidate.v1', projection);
         await client.listTools();
@@ -115,6 +122,8 @@ it('reads the daemon catalog only on projection changes or a missed-signal recon
         epoch += 1;
         const reconnected = await Promise.all([client.listTools(), client.listTools()]);
         expect(reconnected.every(list => list.tools.some(entry => entry.name === 'acme_echo'))).toBe(true);
+        const restored = await runtime.resolveMcpToolNaming!({ serverName: 'happier', toolNameMaxLength: 40 });
+        expect(restored!.tools.some(entry => entry.originalName === 'acme_echo')).toBe(true);
         await client.listTools();
         expect(daemonCatalogBoundary.read.mock.calls.length - before).toBe(2);
         console.log('MCP_CATALOG_SIGNAL_READS', JSON.stringify({ bootstrap: 1, unchangedPost: 0, change: 1, reconnect: 1 }));

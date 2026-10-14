@@ -410,6 +410,13 @@ export async function startHappyServer(
     return {
         url: baseUrl.toString(),
         toolNames: toolNamesSnapshot,
+        readToolNames: async (signal?: AbortSignal) => {
+            const operationSignal = readMcpToolExecutionSignal(client, signal);
+            operationSignal?.throwIfAborted();
+            const catalog = await readCurrentPluginToolCatalog(client, readToolInventory, operationSignal);
+            operationSignal?.throwIfAborted();
+            return readToolInventory(catalog).tools.map(tool => tool.name);
+        },
         supportedSessionReadActions,
         stop: () => {
             logger.debug('[happierMCP] Stopping server');

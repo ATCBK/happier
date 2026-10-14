@@ -381,6 +381,7 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
         resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => Promise<ActiveAccountSettingsSnapshot | null>;
         accountSettingsAuthority?: 'account' | 'session';
         readResolvedMcpServers?: () => readonly ResolvedSessionMcpServer[];
+        resolveMcpToolNaming?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionMcpService['resolveToolNaming'];
         permissionHandler: Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'>;
     }>;
     sessionId: string;
@@ -477,6 +478,7 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
     };
     const mcp: PluginMcpSessionResolver = Object.freeze({
         resolveForSession: resolveBaseMcpServers,
+        ...(params.hostSession.resolveMcpToolNaming ? { resolveToolNaming: params.hostSession.resolveMcpToolNaming } : {}),
     });
     const toolExecution = createNativeAgentToolExecutionOwner({
         runtimeRegistry: params.runtimeRegistry,

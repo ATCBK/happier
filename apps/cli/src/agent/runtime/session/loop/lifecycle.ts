@@ -220,7 +220,7 @@ export type SessionLoopLifecycleParams = Readonly<{
   sessionIsNew?: boolean;
   runtime: RuntimeTurnOperations;
   hookRuntime: HostSessionRuntimeHookRuntime;
-  capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'readSkillRules' | 'initialSkillRules' | 'subscribeAccountSettings'>;
+  capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'readSkillRules' | 'initialSkillRules' | 'readMcpRules' | 'initialMcpRules' | 'subscribeAccountSettings'>;
   registerProviderAcceptedEffect: (
     localId: string,
     onAccepted: (() => void) | null,
