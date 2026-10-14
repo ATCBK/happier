@@ -22,6 +22,7 @@ import { UsageRequestAttributionSchema } from '../usage/usageAnalyticsContracts.
 import { McpToolLaunchPoliciesV1Schema, type McpToolLaunchPolicyV1 } from '../mcp/servers/tools/resolveMcpToolDecisionV1.js';
 
 export { AGENT_SESSION_RUNTIME_EVENT_KINDS_V1 } from './eventKindsV1.js';
+export { AgentRuntimeDiagnosticDataV1Schema } from './agentRuntimeDiagnosticV1.js';
 
 const HOST_ID_MAX = LIMITS.hostIndexedIdMaxCodeUnits;
 const PROVIDER_ID_MAX = LIMITS.providerIdMaxCodeUnits;

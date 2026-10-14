@@ -17,6 +17,8 @@ import { hasConnectedServiceRuntimeAuthRecoveryContext } from './connectedServic
 import { AGENT_CLI_MISSING_PREVIEW } from '@/packagedRuntime/managedTools/agentCliNotFoundError';
 import { inspectOwnErrorCodeDataProperty } from '@/agent/runtime/session/process/agentRuntimeBridgeError';
 import { classifyProviderOutputFailure } from '@/agent/runtime/classifyProviderOutputFailure';
+import { AgentRuntimeDiagnosticDataV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 import {
   DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE,
   DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_PREVIEW,
@@ -432,6 +434,17 @@ function readTeamCredentialDenial(error: unknown): TeamCredentialDenial | null {
 export function classifyPrimarySessionRuntimeIssue(
   input: ClassifyPrimarySessionRuntimeIssueInput,
 ): SessionRuntimeIssueV1 {
+  const diagnostic = input.cause === 'session_error'
+    ? AgentRuntimeDiagnosticDataV1Schema.safeParse(input.error)
+    : null;
+  const typedDiagnostic = diagnostic?.success ? diagnostic.data : null;
+  const requestErrorCode = typedDiagnostic?.details && typeof typedDiagnostic.details === 'object'
+    && !Array.isArray(typedDiagnostic.details) && typeof typedDiagnostic.details.requestErrorCode === 'number'
+    && Number.isSafeInteger(typedDiagnostic.details.requestErrorCode) ? typedDiagnostic.details.requestErrorCode : null;
+  // Reuse SessionRuntimeIssueV1.sanitizedPreview's existing 2,000-code-unit boundary.
+  const diagnosticPreview = typedDiagnostic?.message?.trim()
+    ? redactBugReportSensitiveText(`${requestErrorCode === null ? '' : `ACP ${requestErrorCode}: `}${typedDiagnostic.message}`).slice(0, 2_000)
+    : null;
   const errorCode = inspectOwnErrorCodeDataProperty(input.error);
   const runtimeAuthClassification = readRuntimeAuthClassification(input.error);
   const runtimeAuthUsageLimit = buildUsageLimitDetailsFromRuntimeAuthClassification(
@@ -496,7 +509,8 @@ export function classifyPrimarySessionRuntimeIssue(
     status: 'failed',
     code: missingCli ? SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING
       : catalogUnavailable ? DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
-      : promptPreparationCode ?? startupFailureCode ?? (temporaryThrottle ? 'provider_temporary_throttle' : source),
+      : promptPreparationCode ?? startupFailureCode ?? (temporaryThrottle ? 'provider_temporary_throttle'
+        : source === 'agent_session_error' ? typedDiagnostic?.code ?? source : source),
     source,
     occurredAt,
     ...(sessionSeq === null ? {} : { sessionSeq }),
@@ -507,7 +521,8 @@ export function classifyPrimarySessionRuntimeIssue(
       ?? (promptPreparationCode ? 'Prompt context could not be prepared. Check the selected documents and Home connection, then retry the Session.' : null)
       ?? (startupFailureCode ? AGENT_STARTUP_FAILURE_PREVIEWS[startupFailureCode] : null)
       ?? buildSafeModelNotFoundPreview(input.error)
-      ?? (temporaryThrottle ? 'Provider is temporarily limiting requests' : sanitizedPreviewBySource[source]),
+      ?? (temporaryThrottle ? 'Provider is temporarily limiting requests'
+        : source === 'agent_session_error' ? diagnosticPreview ?? sanitizedPreviewBySource[source] : sanitizedPreviewBySource[source]),
     ...(usageLimit === null ? {} : { usageLimit }),
     ...(teamCredential === null ? {} : { teamCredential }),
     ...(temporaryThrottle === null ? {} : { temporaryThrottle }),

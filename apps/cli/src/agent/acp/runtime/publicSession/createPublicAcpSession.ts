@@ -45,6 +45,7 @@ import { extname, isAbsolute, relative, sep } from 'node:path';
 
 import { createAcpBackend, type CreateAcpBackendOptions } from '@/agent/acp/createAcpBackend';
 import { readAcpRequestErrorCode } from '@/agent/acp/withRetry';
+import { AGENT_SESSION_RUNTIME_LIMITS_CANDIDATE_V1 } from '@happier-dev/protocol/runtime/agentSessionLimitsV1';
 import type { AcpBackend, AcpBackendOptions } from '@/agent/acp/AcpBackend';
 import type {
   AcpPromptSubmissionResult,
@@ -334,7 +335,9 @@ function diagnostic(code: string, message?: string, error?: unknown) {
   return Object.freeze({
     code,
     severity: 'error' as const,
-    ...(message ? { message } : {}),
+    // AcpAgentPeer owns redaction and its transport byte budget. The strict
+    // runtime diagnostic has its own existing string bound; preserve its cause.
+    ...(message ? { message: message.slice(0, AGENT_SESSION_RUNTIME_LIMITS_CANDIDATE_V1.descriptionMaxCodeUnits) } : {}),
     ...(requestErrorCode !== null ? { details: { requestErrorCode } } : {}),
   });
 }

@@ -5,6 +5,21 @@ import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/libra
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
+  it('preserves typed ACP failure code and bounded redacted detail for the existing issue view', () => {
+    const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
+      code: 'acp_turn_failed', severity: 'error',
+      message: 'Cannot connect to API Authorization: Bearer private-api-token',
+      details: { requestErrorCode: -32603 },
+    } });
+    expect(issue.code).toBe('acp_turn_failed');
+    expect(issue.sanitizedPreview).toContain('Cannot connect to API');
+    expect(issue.sanitizedPreview).toContain('-32603');
+    expect(JSON.stringify(issue)).not.toContain('private-api-token');
+    const long = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
+      code: 'acp_turn_failed', severity: 'error', message: 'x'.repeat(8_000),
+    } });
+    expect(long.sanitizedPreview?.length).toBeLessThanOrEqual(2_000);
+  });
   it.each(['context_source_unavailable', 'role_overrides_unavailable', 'role_source_incomplete'])(
     'publishes %s as a private-safe preparation refusal', (code) => {
       const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error:

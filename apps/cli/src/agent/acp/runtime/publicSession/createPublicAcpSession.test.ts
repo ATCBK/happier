@@ -49,6 +49,9 @@ import { requestAcpHistoryExtension } from '@/agent/acp/history/acpHistoryExtens
 import { createAcpToolIdentity } from '@/agent/acp/toolCalls';
 import { createNativeAgentSessionPublications } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications';
 import { createAgentSessionTurnInvariant } from '@/agent/runtime/session/turn/agentSessionTurnInvariant';
+import { createRuntimeFailureTranscriptProjector } from '@/agent/runtime/session/transcripts/runtimeFailureTranscript';
+import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
+import { TranscriptRawAgentContentV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { waitForCondition } from '@/testkit/async/waitFor';
 import { withCursorEmptyResponseFailure } from '../../../../../../../packages/plugins/cursor/src/agent/runtime/emptyResponse';
@@ -684,11 +687,16 @@ function writePublicComposerAgent(dir: string): string {
               ok(request.id, { stopReason: 'end_turn' });
             } else if (scenario === 'refused') {
               ok(request.id, { stopReason: 'refusal' });
-            } else if (scenario === 'prompt-rejected-before-effect') {
+            } else if (scenario === 'prompt-rejected-before-effect' || scenario === 'prompt-connection-rejected' || scenario === 'prompt-long-rejected') {
               send({
                 jsonrpc: '2.0',
                 id: request.id,
-                error: { code: -32602, message: 'prompt rejected before effect' },
+                error: scenario !== 'prompt-rejected-before-effect'
+                  ? { code: -32603, message: scenario === 'prompt-long-rejected'
+                      ? 'Cannot connect to API ' + 'x'.repeat(9_000)
+                      : 'Cannot connect to API Authorization: Bearer private-api-token',
+                      data: { service: 'session', errorName: 'APIError', secret: 'private-error-data' } }
+                  : { code: -32602, message: 'prompt rejected before effect' },
               });
             } else if (scenario === 'prompt-rejected-after-update') {
               update(sessionId, 'provider output before rejected response');
@@ -3470,9 +3478,9 @@ describe('createPublicAcpSession', () => {
     });
   });
 
-  it('maps a request-scoped prompt rejection before provider effect to input-rejected', async () => {
+  it.each(['prompt-rejected-before-effect', 'prompt-connection-rejected', 'prompt-long-rejected'])('maps a request-scoped prompt rejection before provider effect to input-rejected (%s)', async scenario => {
     await withTempDir('happier-public-acp-prompt-rejected-', async (dir) => {
-      const fixture = createFixture(dir, 'prompt-rejected-before-effect');
+      const fixture = createFixture(dir, scenario);
       const session = await createPublicAcpSession({
         kind: 'create',
         sessionId: 'host-prompt-rejected',
@@ -3494,11 +3502,26 @@ describe('createPublicAcpSession', () => {
           retryable: true,
           diagnostic: expect.objectContaining({
             code: 'acp_input_rejected_before_effect',
-            message: 'prompt rejected before effect',
+            message: scenario !== 'prompt-rejected-before-effect'
+              ? expect.stringContaining('Cannot connect to API') : 'prompt rejected before effect',
           }),
         }));
         expect(events.some((event) => event.kind === 'input-accepted')).toBe(false);
         expect(events.some((event) => event.kind === 'turn-start')).toBe(false);
+        expect(JSON.stringify(events)).not.toMatch(/private-api-token|private-error-data/u);
+        const history: Array<{ body: ACPMessageData; meta?: Record<string, unknown> }> = [];
+        const project = createRuntimeFailureTranscriptProjector({ provider: 'test-agent', providerName: 'Test Agent', session: {
+          sessionId: 'host-prompt-rejected', enqueueAgentMessageCommitted: async (provider, body, options) => {
+            TranscriptRawAgentContentV1Schema.parse({ type: 'acp', agentId: provider, data: body });
+            history.push({ body, meta: options.meta });
+            return { persisted: true, delivered: false };
+          },
+        } });
+        for (const event of events) await project(event);
+        expect(history).toMatchObject([{ body: { type: 'message', message: expect.stringContaining(
+          scenario !== 'prompt-rejected-before-effect' ? 'Cannot connect to API' : 'prompt rejected before effect') },
+          meta: { runtimeIssueCode: 'acp_input_rejected_before_effect', runtimeIssueRequestErrorCode: scenario !== 'prompt-rejected-before-effect' ? -32603 : -32602 } }]);
+        expect(history.some(row => row.body.type === 'turn_failed')).toBe(false);
       } finally {
         subscription.dispose();
         await session.dispose();
@@ -3540,6 +3563,17 @@ describe('createPublicAcpSession', () => {
         const invariant = createAgentSessionTurnInvariant({ sessionId: 'host-prompt-ambiguous' });
         expect(events.map((event) => invariant.observe(event).status)).toEqual(events.map(() => 'accepted'));
         expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'provider' }));
+        const history: ACPMessageData[] = [];
+        const project = createRuntimeFailureTranscriptProjector({ provider: 'test-agent', providerName: 'Test Agent', session: {
+          sessionId: 'host-prompt-ambiguous', enqueueAgentMessageCommitted: async (provider, body) => {
+            TranscriptRawAgentContentV1Schema.parse({ type: 'acp', agentId: provider, data: body });
+            history.push(body);
+            return { persisted: true, delivered: false };
+          },
+        } });
+        for (const event of events) await project(event);
+        expect(history).toContainEqual({ type: 'message', message: expect.stringContaining('prompt response lost after output') });
+        expect(history).toContainEqual({ type: 'turn_failed', id: 'turn-prompt-ambiguous' });
       } finally {
         subscription.dispose();
         await session.dispose();
