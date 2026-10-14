@@ -572,12 +572,17 @@ test('each QA browser lifetime preserves canonical Home origins through its own 
   const chromePort = await fakeChromeCommandLine(t, join(binDir, 'chromium'));
   const instances = [];
   const closed = [];
+  const retiringSessions = new Set();
   // agent-browser is an external process boundary; profiles and lifecycle logic
   // remain real. Its DevToolsActivePort is the Chromium-owned wire contract.
   const capture = async (command, args) => {
     assert.equal(command, 'agent-browser');
     const session = args[args.indexOf('--session') + 1];
     if (args.at(-1) === 'about:blank') {
+      // agent-browser v0.34.0 daemon.rs acknowledges close before notifying
+      // daemon shutdown. A reopened session can reach that retiring daemon.
+      if (retiringSessions.has(session)) return { ok: false, exitCode: 1, out: '',
+        err: 'Could not configure browser: session daemon is still shutting down after acknowledged close' };
       const launchArgs = args[args.indexOf('--args') + 1].split(',');
       assert.ok(launchArgs.includes('--no-sandbox'),
         'the dedicated QA browser must launch without the Chromium sandbox');
@@ -597,6 +602,7 @@ test('each QA browser lifetime preserves canonical Home origins through its own 
       await writeFile(join(profile, 'DevToolsActivePort'), `${chromePort}\n/devtools/browser/fixture-browser\n`);
     } else {
       assert.equal(args.at(-1), 'close');
+      retiringSessions.add(session);
       closed.push(session);
     }
     return { ok: true, exitCode: 0, out: '', err: '' };
