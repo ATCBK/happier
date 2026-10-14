@@ -11,7 +11,7 @@ import { formatRecoveryKeyForDisplay, maskRecoveryKeyForDisplay } from '@/auth/r
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { Icon } from '@/components/ui/icons/Icon';
 import { downloadWebFile } from '@/sync/runtime/files/downloadWebFile';
@@ -78,7 +78,7 @@ export function SecretKeyBackupModal(props: Props) {
     const styles = stylesheet;
 
     const [revealed, setRevealed] = React.useState(false);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
 
     const formattedSecret = React.useMemo(() => formatRecoveryKeyForDisplay(props.secret), [props.secret]);
     const maskedSecret = React.useMemo(() => maskRecoveryKeyForDisplay(formattedSecret), [formattedSecret]);

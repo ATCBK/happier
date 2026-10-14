@@ -5,7 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -211,7 +211,7 @@ export function BrowserUrlField(props: BrowserUrlFieldProps): React.ReactElement
             inputRef.current?.focus();
         },
     }), [props.disabled]);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const [focused, setFocused] = React.useState(false);
     // The address bar's Copy waits in its trailing slot until the field is hovered or focused (lab
     // `browser` Q): at rest the field is only the trust glyph and the address. The slot keeps its

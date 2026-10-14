@@ -14,7 +14,7 @@ import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplay
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
@@ -419,7 +419,7 @@ function PairingSteps(props: Readonly<{ purpose: HomePairingPurpose }>) {
  */
 function CopyLinkButton(props: Readonly<{ testIDPrefix: string; link: string | null }>) {
     const { theme } = useUnistyles();
-    const feedback = useTemporaryCopyFeedback(4000);
+    const feedback = useHappierCopyFeedback(4000);
     const link = props.link;
     return (
         <View style={styles.copy}>

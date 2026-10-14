@@ -29,7 +29,7 @@ import { useWorkspaceScmCommitControls } from './useWorkspaceScmCommitControls';
 import { WorkspaceScmOutcomeLine } from './WorkspaceScmOutcomeLine';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Icon } from '@/components/ui/icons/Icon';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { activeReviewFileKeyForWorkspace, openChangedFileFromList, useActiveReviewFilePath } from '@/components/workspaces/scm/review/activeReviewFile';
@@ -64,7 +64,7 @@ function matchesQuery(filePath: string, query: string): boolean {
 
 export const WorkspaceSourceControlView = React.memo((props: WorkspaceSourceControlViewProps) => {
     const { theme } = useUnistyles();
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const [searchQuery, setSearchQuery] = React.useState('');
     const [requestedChangedFilesViewMode, setChangedFilesViewMode] = React.useState<ChangedFilesViewMode>('repository');
     const scope = React.useMemo(() => ({

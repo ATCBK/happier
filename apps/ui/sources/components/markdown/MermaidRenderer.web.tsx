@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
@@ -35,7 +35,7 @@ export const MermaidRenderer = React.memo((props: {
         status: 'pending',
         svg: null,
     }));
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const currentRenderState = renderState.content === props.content
         ? renderState
         : { content: props.content, status: 'pending' as const, svg: null };

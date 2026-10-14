@@ -4,7 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { CodeBlockViewFrame } from '@/components/ui/code/blocks/CodeBlockViewFrame';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -120,7 +120,7 @@ export type PlanChecklistRowDetailsProps = Readonly<{
 
 export const PlanChecklistRowDetails = React.memo(function PlanChecklistRowDetails(props: PlanChecklistRowDetailsProps) {
     const styles = stylesheet;
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const logText = React.useMemo(() => formatLogs(props.logs ?? []), [props.logs]);
     const hasLogs = Boolean(logText.trim().length > 0);
     const hasDetails = typeof props.renderDetails === 'function';

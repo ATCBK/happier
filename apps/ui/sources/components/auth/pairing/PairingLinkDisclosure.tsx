@@ -4,7 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
@@ -61,7 +61,7 @@ export const PairingLinkDisclosure = React.memo(function PairingLinkDisclosure(p
 }>) {
     const styles = stylesheet;
     const [expanded, setExpanded] = React.useState(false);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
 
     return (
         <View testID={`${props.testIDPrefix}-disclosure`} style={styles.disclosure}>

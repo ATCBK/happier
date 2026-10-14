@@ -5,7 +5,7 @@ import {
     type TeamCredentialExternalApiKeySummaryV1,
 } from '@happier-dev/protocol/teams';
 
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import {
     resolveApiTokenExpiryInstant,
     type ApiTokenExpiryPreset,
@@ -111,7 +111,7 @@ const ExternalApiContent = React.memo(function ExternalApiContent(props: Readonl
     const [replacing, setReplacing] = React.useState<TeamCredentialExternalApiKeySummaryV1 | null>(null);
     const [reveal, setReveal] = React.useState<Reveal | null>(null);
     const [secretCopied, setSecretCopied] = React.useState(false);
-    const copyFeedback = useTemporaryCopyFeedback(1_500);
+    const copyFeedback = useHappierCopyFeedback(1_500);
     const [notice, setNotice] = React.useState<string | null>(null);
     const navigation = useNavigation();
     const router = useRouter();

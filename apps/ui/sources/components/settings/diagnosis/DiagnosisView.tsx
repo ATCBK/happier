@@ -27,7 +27,7 @@ import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useMountedDiagnosticAction } from './useMountedDiagnosticAction';
 import type { DiagnosticInvocation } from './diagnosticsActionRuntime';
@@ -196,7 +196,7 @@ async function probeServerDiagnostics(request: ServerFetch, timeoutMs: number, s
 export const DiagnosisView = React.memo(function DiagnosisView() {
     const router = useRouter();
     const { theme } = useUnistyles();
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const styles = diagnosisStyles;
     const { fetchMachineDoctorSnapshot, readMachineDoctorSnapshot } = useMachineDoctorSnapshot();
 

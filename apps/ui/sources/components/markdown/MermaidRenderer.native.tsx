@@ -3,7 +3,7 @@ import { Pressable, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
@@ -53,7 +53,7 @@ export const MermaidRenderer = React.memo((props: {
 }) => {
     const { theme } = useUnistyles();
     const [dimensions, setDimensions] = React.useState({ width: 0, height: 200 });
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
 
     const copyMermaid = React.useCallback(async () => {
         const copied = await setClipboardStringSafe(props.content);

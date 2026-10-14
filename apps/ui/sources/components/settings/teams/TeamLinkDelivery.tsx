@@ -7,7 +7,7 @@ import { QRCode } from '@/components/qr';
 import { tryCreateQRMatrix } from '@/components/qr/qrMatrix';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
@@ -94,7 +94,7 @@ export const TeamLinkDelivery = React.memo(function TeamLinkDelivery(props: Read
      */
     open?: Readonly<{ label: string; onPress: () => void }>;
 }>) {
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const { url } = props;
     // Asked once per render rather than per press: a control that is offered and
     // then does nothing is worse than one that was never offered.

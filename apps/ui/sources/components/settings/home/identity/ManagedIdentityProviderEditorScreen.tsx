@@ -4,7 +4,7 @@ import { AppState } from 'react-native';
 import type { ManagedIdentityProviderOwnerV1, ManagedIdentityProviderV1 } from '@happier-dev/protocol';
 
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
@@ -83,7 +83,7 @@ export const ManagedOidcProviderEditorContent = React.memo(function ManagedOidcP
         [ownerTeamId],
     );
     const initialProvider = React.useRef(props.provider ?? null).current;
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const copyCallbackUrl = React.useCallback(async (url: string) => {
         if (!await setClipboardStringSafe(url)) {
             await Modal.alertAsync(t('common.error'), t('items.failedToCopyToClipboard'));

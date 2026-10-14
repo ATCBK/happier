@@ -45,7 +45,7 @@ import { Typography } from '@/constants/Typography';
 import { StyleSheet } from 'react-native-unistyles';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { useMountedDiagnosticAction } from '../diagnosis/useMountedDiagnosticAction';
@@ -92,7 +92,7 @@ function doServerUrlsMismatch(left: string, right: string): boolean {
 export const SystemStatusView = React.memo(function SystemStatusView() {
   const router = useRouter();
   const { theme } = useUnistyles();
-  const copyFeedback = useTemporaryCopyFeedback();
+  const copyFeedback = useHappierCopyFeedback();
 
   const activeServerSnapshot = useActiveServerSnapshot();
   const execution = useMountedActionExecution(activeServerSnapshot.serverId);

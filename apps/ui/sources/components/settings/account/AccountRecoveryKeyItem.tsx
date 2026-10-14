@@ -7,7 +7,7 @@ import { formatRecoveryKeyForDisplay, maskRecoveryKeyForDisplay } from '@/auth/r
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { Text } from '@/components/ui/text/Text';
@@ -49,7 +49,7 @@ export const AccountRecoveryKeyItem = React.memo(function AccountRecoveryKeyItem
     const triggerRef = React.useRef<FocusReturnTarget>(null);
     const { withRecoveryKey } = useRecoveryKeyDisclosure(props.recoveryEmail, triggerRef, props.source);
     const [revealed, setRevealed] = React.useState<string | null>(null);
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const prefix = props.testIDPrefix ?? 'settings-account-recovery-key';
 
     // A different Account (or none) never inherits a key revealed for the previous one.
