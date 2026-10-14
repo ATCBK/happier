@@ -153,6 +153,7 @@ export async function installOwnMachineApprovalReplayBoundary(input: Readonly<{
     serverId: string;
     accountId: string;
     machineId: string;
+    runtimeActionExecute?: import('@happier-dev/protocol/actions/executor/types').RuntimeActionExecute;
 }>) {
     const [{ ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema },
         { MACHINE_PLAIN_DATA_KEY_MARKER }, { getActionSpec }] = await Promise.all([
@@ -177,6 +178,7 @@ export async function installOwnMachineApprovalReplayBoundary(input: Readonly<{
             || typeof decision.artifactId !== 'string') throw new Error('Missing approval Artifact');
         const result = await replayApprovedAsDaemon({ serverId: input.serverId, machineId: input.machineId,
             artifactId: decision.artifactId, decision: 'approve', ...(request.signal ? { signal: request.signal } : {}),
+            ...(input.runtimeActionExecute ? { runtimeActionExecute: input.runtimeActionExecute } : {}),
         });
         return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide', requestId: envelope.requestId, execution: result }) };
     } });

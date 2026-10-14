@@ -31,6 +31,11 @@ Home and Provider harnesses are available from their owning `harness/homeGoverna
 hooks, or other runtime consumers, including layout components whose dependency graph reaches Sync.
 The Machine Administration selection fixture/mock also imports a runtime owner; use its own
 `mocks/machineAdministrationTargetSelection` module and load it after Home boundary installation.
+Registry UI mocks load the bundled plugin catalog and are available only from
+`mocks/registryUiBehavior`; unrelated root-testkit consumers do not load that catalog.
+Storage mocks and the ChatList harness load real Settings and the Agent/Voice catalogs;
+import them from `mocks/storage` and `harness/chatListHarness` only in suites that need them.
+Root-exported fixtures use the Protocol's narrow public subpaths rather than its complete barrel.
 Load those consumers with `await import(...)` after installation:
 
 ```ts

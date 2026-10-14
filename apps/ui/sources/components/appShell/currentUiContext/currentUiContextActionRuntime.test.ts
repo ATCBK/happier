@@ -9,6 +9,7 @@ import { createCurrentUiContextVoiceToolPort } from './currentUiContextVoiceTool
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import type { CurrentUiContextResolvedCommand } from './CurrentUiContextProvider';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 
 let unregister: (() => void) | null = null;
 
@@ -33,13 +34,13 @@ describe('current UI context Action adapter', () => {
                 resolveCurrentUiCommand: id => id === command.id ? command : null, subscribe: () => () => {} },
             readProjection: () => EMPTY_PLUGIN_UI_PROJECTION, readNavigationBinding: () => null,
         }));
-        const executor = createActionExecutor({
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
             uiCurrentContextAction: request => executeCurrentUiContextAction(request),
             voiceConversationAction: async request => {
                 const result = await executeCurrentUiContextAction(request);
                 return result.ok ? result.result : result;
             },
-        });
+        }));
         const context = { surface: 'plugin', authority: 'account_automation', serverId: account.serverId,
             expectedAccountId: account.accountId,
             actionCaller: { kind: 'plugin', pluginId: 'fixture.dictation', contributionLocalId: 'field',
@@ -67,13 +68,13 @@ describe('current UI context Action adapter', () => {
                 subscribe: () => () => {} },
             readProjection: () => EMPTY_PLUGIN_UI_PROJECTION, readNavigationBinding: () => null,
         }));
-        const executor = createActionExecutor({
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
             uiCurrentContextAction: request => executeCurrentUiContextAction(request, { execute: executor.execute, context: request.context }),
             voiceConversationAction: async request => {
                 const result = await executeCurrentUiContextAction(request);
                 return result.ok ? result.result : result;
             },
-        });
+        }));
         expect(await executor.execute('ui.current_context.command.invoke', { commandId: command.id },
             { surface: 'agent', authority: 'account_automation', ...scope, expectedAccountId: scope.accountId }))
             .toMatchObject({ ok: false });
@@ -114,10 +115,10 @@ describe('current UI context Action adapter', () => {
                 subscribe: () => () => {} },
             readProjection: () => EMPTY_PLUGIN_UI_PROJECTION, readNavigationBinding: () => null,
         }));
-        const executor = createActionExecutor({
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
             uiCurrentContextAction: request => executeCurrentUiContextAction(request, { execute: executor.execute, context: request.context }),
             accountHomeContinuationAction: request => executeCurrentUiContextAction(request),
-        });
+        }));
         const input = { commandId: command.id };
         const automated = await executor.execute('ui.current_context.command.invoke', input,
             { surface: 'agent', authority: 'account_automation', serverId: scope.serverId, expectedAccountId: scope.accountId });
@@ -146,6 +147,8 @@ describe('current UI context Action adapter', () => {
     it('preserves an issued mounted-command acknowledgement loss', async () => {
         const port = {
             readCurrentUiContext: () => null,
+            resolveCurrentUiCommand: () => null,
+            subscribe: () => () => {},
             invokeCurrentUiCommand: vi.fn(async () => ({ ok: false as const, code: 'outcome_unknown' as const })),
         } satisfies CurrentUiContextVoiceToolPort;
         unregister = registerCurrentUiContextActionPort((surface) => surface === 'agent' ? port : null);

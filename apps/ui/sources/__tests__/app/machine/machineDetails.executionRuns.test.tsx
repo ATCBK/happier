@@ -1,7 +1,8 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createUseSettingMock, flushHookEffects, renderScreen as renderTestScreen } from '@/dev/testkit';
+import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
+import { flushHookEffects, renderScreen as renderTestScreen } from '@/dev/testkit';
 import type { DaemonExecutionRunEntry } from '@happier-dev/protocol';
 import { installMachineDetailsCommonModuleMocks } from './machineDetailsTestHelpers';
 

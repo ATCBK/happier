@@ -33,7 +33,7 @@ export type ServedHomeRequest = Readonly<{
     signal: AbortSignal | null | undefined;
 }>;
 
-type HomeSpec = Readonly<{ key: string; serverUrl: string; accountId: string; settings?: Readonly<Record<string, unknown>>;
+type HomeSpec = Readonly<{ key: string; serverUrl: string; serverIdentityId?: string; accountId: string; settings?: Readonly<Record<string, unknown>>;
     accountMode?: 'plain' | 'e2ee'; credentials?: AuthCredentials; currentAccount?: boolean }>;
 
 function tokenFor(accountId: string, currentAccount = false): string {
@@ -203,6 +203,15 @@ export async function serveAccountHomes(params: Readonly<{
     setRuntimeFetch(homeFetch);
     for (const spec of params.homes) {
         const home = await upsertServerProfileOnly({ serverUrl: spec.serverUrl });
+        if (spec.serverIdentityId) {
+            // Establish the fixture's verified Home before taking credential
+            // rollback custody. A later identity-learning read can otherwise
+            // migrate those bytes outside the original rollback's exact keys.
+            const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+            if (!await setServerProfileIdentityForUrl(home.serverUrl, spec.serverIdentityId)) {
+                throw new Error(`Served Home identity could not be established: ${spec.key}`);
+            }
+        }
         homes[spec.key] = { id: home.id, serverUrl: home.serverUrl };
         accounts.set(spec.key, spec.accountId);
         byOrigin.set(new URL(home.serverUrl).origin, spec.key);

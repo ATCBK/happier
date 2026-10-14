@@ -5,6 +5,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionActionFixture } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -75,7 +76,7 @@ describe('Session draft append through the real Action executor', () => {
         try {
             await homes.switchAccount(serverId, 'bob');
             expect(account.accountOnlyLifetime.isCurrent()).toBe(false);
-            const result = await createActionExecutor({ appShellAction: createAppShellAction(account) }).execute(actionId,
+            const result = await createActionExecutor(createActionExecutorBoundaryFixture({ appShellAction: createAppShellAction(account) })).execute(actionId,
                 { sessionId: 'lead', text: 'Alice draft' },
                 { surface: 'ui', authority: 'present_user', serverId, runtimeAccountId: 'alice' });
             expect(result).toMatchObject({ ok: false });

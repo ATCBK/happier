@@ -4,15 +4,16 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { AgentNativeResumeIdentityV1Schema, buildQualifiedPluginContributionKey, computeWorkspaceSyncPolicyDigest, deriveSessionCreationTagV1, MACHINE_PLAIN_DATA_KEY_MARKER,
   PluginManifestV2Schema, PluginProjectionV2Schema, SessionCreationCorrespondenceV1Schema, SessionForkRpcParamsSchema,
-  type ActionExecutorContext, type SessionRollbackTarget } from '@happier-dev/protocol';
+  normalizeActionsSettingsV1, type ActionExecutorContext, type SessionRollbackTarget } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { parseSocketRpcAuthorizationContext, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
-import type { Session } from '@/sync/domains/state/storageTypes';
+import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import type { SettingsWriteDelta } from '@/sync/domains/settings/settings';
 import type { CurrentProjectedAgentCapabilities } from '@/agents/backendCatalog/currentAgentCapabilities';
 import { readCurrentProjectedAgentCapabilities } from '@/agents/backendCatalog/currentAgentCapabilities';
 import { createSessionFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -25,6 +26,8 @@ import { definePlugin } from '@happier-dev/plugin-sdk';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { readMachineDaemonCliVersionForServerScope } from '@/sync/domains/machines/readMachineDaemonCliVersionForServerScope';
+import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 
 let daemonAnswer: (request: SocketRpcRequestPayload) => unknown = () => { throw new Error('Unexpected daemon request'); };
 const outgoing = installSessionActionRpcBoundary(request => daemonAnswer(request));
@@ -65,19 +68,22 @@ const grok = currentCapabilities(grokManifest, 'grok');
 const originalState = storage.getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let serverId = '';
+let machineCensus: Machine[] = [];
 let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 const context = () => ({ surface: 'ui' as const, authority: 'present_user' as const, serverId });
 
 function installSession(overrides: Partial<Session> = {}) {
   return installSessionActionFixture({ homes, storage, serverId, session: { id: 'sess_parent', ...overrides } });
 }
-function installForkRequestIdentityMachine() {
-  const machine = storage.getState().machines.machine_1;
+async function installForkRequestIdentityMachine() {
+  const machine = machineCensus.find(row => row.id === 'machine_1');
   if (!machine) throw new Error('Expected installed machine');
-  const currentMachine = createMachineFixture({ ...machine, daemonState: { cliVersion: '0.3.0' } });
-  storage.setState({ machines: { ...storage.getState().machines, machine_1: currentMachine },
-    machineListByServerId: { ...storage.getState().machineListByServerId,
-      [serverId]: (storage.getState().machineListByServerId[serverId] ?? []).map(row => row.id === currentMachine.id ? currentMachine : row) } });
+  const currentMachine = createMachineFixture({ ...machine, daemonState: MachinePublishedDaemonStateV1Schema.parse({ status: 'running', cliVersion: '0.3.0' }),
+    daemonStateVersion: machine.daemonStateVersion + 1 });
+  machineCensus = machineCensus.map(row => row.id === currentMachine.id ? currentMachine : row);
+  await sync.refreshMachines({ serverId });
+  await vi.waitFor(() => expect(readMachineDaemonCliVersionForServerScope({ state: storage.getState(), machineId: currentMachine.id,
+    serverId, activeServerId: storage.getState().profileScope?.serverId })).toBe('0.3.0'));
 }
 function setSettings(delta: SettingsWriteDelta) {
   storage.getState().applySettingsLocal(delta);
@@ -129,8 +135,18 @@ describe('default Action executor Session lifecycle contracts', () => {
     const machines = [createMachineFixture({ id: 'machine_1' }), createMachineFixture({ id: 'machine_2', metadata: {
       host: 'target.local', platform: 'linux', happyCliVersion: '0.0.0-test', happyHomeDir: '/home/target/.happier', homeDir: '/home/target',
     } })];
+    machineCensus = machines;
     storage.setState({ machines: Object.fromEntries(machines.map((machine) => [machine.id, machine])),
       machineListByServerId: { [serverId]: machines } });
+    homes.answer(serverId, '/v1/machines?includeRevoked=true', { select: () => ({
+      body: machineCensus.map(machine => ({
+        ...createPlainMachineRowFixture({ id: machine.id, accountId: 'alice' }),
+        metadata: encodePlainMachineStoredContent(machine.metadata),
+        daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null,
+        daemonStateVersion: machine.daemonStateVersion,
+        active: machine.active, replacedByMachineId: machine.replacedByMachineId ?? null,
+      })),
+    }) });
     for (const machine of machines) homes.answer(serverId, `/v1/machines/${machine.id}`, {
       body: { machine: { id: machine.id, kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
     });
@@ -203,7 +219,7 @@ describe('default Action executor Session lifecycle contracts', () => {
 
   it('admits the chooser through Action policy before emitting a fork', async () => {
     installSession();
-    setSettings({ actionsSettingsV1: { v: 1, actions: { 'session.fork': { disabledSurfaces: ['ui'] } } } });
+    setSettings({ actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: { 'session.fork': { disabledSurfaces: ['ui'] } } }) });
     const { harness, navigate } = await mountForkFlow();
     await act(async () => { await harness.getCurrent().submit('replay'); });
     expect(harness.getCurrent().phase).toEqual({ type: 'choosing' });
@@ -268,7 +284,7 @@ describe('default Action executor Session lifecycle contracts', () => {
 
   it('keeps the daemon attempt identity stable for a safe retry and distinct for another route', async () => {
     installSession();
-    installForkRequestIdentityMachine();
+    await installForkRequestIdentityMachine();
     daemonAnswer = () => ({ ok: false, errorCode: 'SPAWN_FAILED', errorMessage: 'not created' });
     const { harness } = await mountForkFlow();
     await act(async () => { await harness.getCurrent().submit('native'); });
@@ -276,14 +292,17 @@ describe('default Action executor Session lifecycle contracts', () => {
     await act(async () => { await harness.getCurrent().submit('replay'); });
     const attempts = rpcRequests(RPC_METHODS.SESSION_FORK).map(request => SessionForkRpcParamsSchema.parse(request.params));
     expect(attempts).toHaveLength(3);
-    expect(attempts[0]).toHaveProperty('requestId', expect.any(String));
+    expect(attempts[0], JSON.stringify({ storedVersion: storage.getState().machines.machine_1?.daemonState?.cliVersion,
+      scopedVersion: storage.getState().machineListByServerId[serverId]?.find(machine => machine.id === 'machine_1')?.daemonState?.cliVersion,
+      profileScope: storage.getState().profileScope, serverId,
+    })).toHaveProperty('requestId', expect.any(String));
     expect(attempts[1]).toHaveProperty('requestId', attempts[0]?.requestId);
     expect(attempts[2]?.requestId).not.toBe(attempts[0]?.requestId);
   });
 
   it('keeps an ambiguous fork pending and adopts a subsequently visible child without reissuing the mutation', async () => {
     installSession();
-    installForkRequestIdentityMachine();
+    await installForkRequestIdentityMachine();
     daemonAnswer = () => ({ ok: false, errorCode: 'SESSION_WEBHOOK_TIMEOUT', errorMessage: 'pending' });
     const { harness, navigate } = await mountForkFlow();
     await act(async () => { await harness.getCurrent().submit('replay'); });
@@ -406,6 +425,7 @@ describe('default Action executor Session lifecycle contracts', () => {
 
   it.each(['session.fork', 'session.handoff'] as const)('uses the reachable machine when metadata names a replaced one (%s)', async (actionId) => {
     const stale = createMachineFixture({ id: 'machine_stale', active: false, replacedByMachineId: 'machine_1' });
+    machineCensus = [...machineCensus, stale];
     storage.setState({ machines: { ...storage.getState().machines, [stale.id]: stale },
       machineListByServerId: { [serverId]: [...storage.getState().machineListByServerId[serverId]!, stale] } });
     installSession({ metadata: { path: '/repo', host: 'tester.local', homeDir: '/Users/tester', machineId: 'machine_stale', flavor: 'claude' } });

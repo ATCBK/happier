@@ -63,6 +63,10 @@ import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/pro
 const browserAppState = createReactNativeAppStateEmitter('active');
 const restoreBrowserAppState = browserAppState.install(AppState);
 afterAll(restoreBrowserAppState);
+// Static Browser imports reach Socket consumers before the route harness loads.
+// Register the canonical network boundary hoisted, then let the harness configure it.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installTerminalRouteCommonModuleMocks();
 
 const actionModuleLoader = vi.hoisted(() => ({

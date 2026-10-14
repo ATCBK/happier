@@ -40,6 +40,9 @@ const clipboard = vi.hoisted(() => ({
 
 vi.mock('expo-clipboard', () => clipboard);
 
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 const CURRENT_ACCOUNT_LIFETIME = Object.freeze({
     scope: { serverId: 'server-1', accountId: 'account-a' },
     isCurrent: () => true,
@@ -340,6 +343,12 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
     });
 
     it('keeps raw daemon reachability factual when projection admission disables actions', async () => {
+        const { restoreServerAccountForTest, installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+        const { createHomeHubArtifactHttpBoundary } = await import('@/dev/testkit/harness/homeHubArtifactHttpBoundary');
+        installDisconnectedServerSocketBoundary();
+        const http = createHomeHubArtifactHttpBoundary('account-a');
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://bound-controller-home',
+            accountId: 'account-a', request: http.request });
         const previousState = storage.getState();
         try {
             await act(async () => {
@@ -355,6 +364,10 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                             daemonStateVersion: 13,
                         }),
                     },
+                    machineListByServerId: { ...state.machineListByServerId,
+                        [connection.home.id]: [createMachineFixture({ id: 'machine_1', active: true,
+                            activeAt: Date.now(), daemonStateVersion: 13 })] },
+                    machineListStatusByServerId: { ...state.machineListStatusByServerId, [connection.home.id]: 'idle' },
                 }));
             });
             const hook = await renderHook(() => usePluginSurfaceDaemonInteraction({
@@ -377,6 +390,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             await act(async () => {
                 storage.setState(previousState);
             });
+            await connection.dispose();
         }
     });
 

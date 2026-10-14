@@ -6,11 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     createMachineFixture,
     createSessionFixture,
-    createStorageStoreMock,
     flushHookEffects,
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
+import {
+    createStorageStoreMock } from '@/dev/testkit/mocks/storage';
 import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
 import type { StorageState } from '@/sync/store/types';

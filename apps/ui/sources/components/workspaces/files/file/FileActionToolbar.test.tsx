@@ -1,3 +1,4 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
@@ -31,11 +32,6 @@ vi.mock('@/components/ui/text/Text', () => ({
 vi.mock('@/components/ui/code/WrapLinesToggleButton', () => ({
     WrapLinesToggleButton: 'WrapLinesToggleButton',
 }));
-
-vi.mock('@/constants/Typography', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/constants/Typography')>();
-    return { ...actual, Typography: { ...actual.Typography, default: () => ({}), mono: () => ({}) } };
-});
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
@@ -87,7 +83,7 @@ function flattenToolbarStyle(style: any): Record<string, any> {
 }
 
 describe('FileActionToolbar', () => {
-    const theme = {
+    const theme = createThemeFixture({
         colors: {
             border: { default: '#ddd' },
             input: { background: '#f2f2f2' },
@@ -99,7 +95,7 @@ describe('FileActionToolbar', () => {
             surface: { base: '#fff', inset: '#f6f6f6' },
             text: { primary: '#111', secondary: '#666', link: '#007AFF' },
         },
-    };
+    });
 
     it('places the wrap control beside the contextual view actions', async () => {
         const { FileActionToolbar } = await import('./FileActionToolbar');

@@ -9,6 +9,15 @@ import { PluginSurfaceFallback } from '@/components/sessions/panes/PluginSurface
 import { WorkspaceRouteEntry } from './createWorkspaceRouteEntry';
 import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
 import { createWorkspaceState } from './workspaceState';
+import { NavigationTitleChromeProvider, PageHeader } from '@/components/ui/layout/PageHeader';
+
+const platform = vi.hoisted(() => ({ os: 'web' }));
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ Platform: { get OS() { return platform.os; }, select: (values: Record<string, unknown>) => values[platform.os] ?? values.default } });
+});
+// Expo's current native scene/module identity is an SDK boundary, independent of its global URL.
+vi.mock('expo-router/build/Route', () => ({ useRouteNode: () => ({ contextKey: './(app)/workflows/index.tsx' }) }));
 
 const windowTitle = vi.hoisted(() => ({ options: null as Readonly<Record<string, unknown>> | null }));
 vi.mock('expo-router', async () => {
@@ -32,6 +41,20 @@ function workspace(active: boolean): WorkspaceNavigationContextValue {
 }
 
 describe('WorkspaceRouteEntry', () => {
+    it('keeps native library identity and creation visible when the root declaration hides its header', async () => {
+        platform.os = 'ios';
+        function Body() {
+            return <PageHeader title="Workflows"
+                primaryAction={{ title: 'Create', onPress: () => {}, testID: 'workflow-create' }} />;
+        }
+        try {
+            const screen = await renderScreen(<WorkspaceNavigationContext.Provider value={{ ...workspace(false), ownsRoute: false }}>
+                <NavigationTitleChromeProvider showsTitle showsBack><WorkspaceRouteEntry Body={Body} /></NavigationTitleChromeProvider>
+            </WorkspaceNavigationContext.Provider>);
+            expect(screen.findByTestId('workflow-create')).not.toBeNull();
+            expect(screen.getTextContent()).toContain('Workflows');
+        } finally { platform.os = 'web'; }
+    });
     it('publishes the focused live destination title to the Expo window owner while the editable body stays in its retained host', async () => {
         const ref = { kind: 'workflow', params: { id: 'deploy' } };
         const base = { ...workspace(true), state: createWorkspaceState({ id: 'workflow-tab', target: ref, pinned: false, preview: false }) };
@@ -40,6 +63,7 @@ describe('WorkspaceRouteEntry', () => {
         }}><WorkspaceRouteEntry Body={() => { throw new Error('Expo must not mount the workspace body'); }} /></WorkspaceNavigationContext.Provider>;
         const screen = await renderScreen(element('Deploy Lumen'));
         expect(windowTitle.options?.title).toBe('Deploy Lumen');
+        expect(windowTitle.options?.headerShown).toBe(false);
         await screen.update(element('Deploy renamed'));
         expect(windowTitle.options?.title).toBe('Deploy renamed');
     });

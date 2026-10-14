@@ -15,6 +15,10 @@ import { useSessionRecap } from '@/components/sessions/companion/summary/useSess
 import { getAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { observeSessionSynopses } from './sessionSynopsis';
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+
 installDisconnectedServerSocketBoundary();
 
 afterEach(() => { standardCleanup(); resetServerFeaturesClientForTests(); });
@@ -30,6 +34,7 @@ describe('Recap synopsis Account lifetime', () => {
         const initial = storage.getState();
         onTestFinished(() => storage.setState(initial, true));
         let synopsis = { v: 1 as const, seqTo: 2, updatedAtMs: 2, synopsis: 'Alice private synopsis' };
+        let revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
         const connection = await restoreServerAccountForTest({
             serverUrl: 'https://synopsis-lifetime.example.test', accountId: 'alice',
             request: async (url) => {
@@ -38,9 +43,9 @@ describe('Recap synopsis Account lifetime', () => {
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
                 if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
                 if (path.endsWith('/system-records')) return Response.json({ records: hasSynopsis ? [{
-                    id: 'synopsis-record', address: { owner: 'host', namespace: SESSION_SYSTEM_RECORD_MEMORY_NAMESPACE,
+                    id: 'sysrec_1', address: { owner: 'host', namespace: SESSION_SYSTEM_RECORD_MEMORY_NAMESPACE,
                         kind: MEMORY_SESSION_SYSTEM_RECORD_KINDS[1], localId: 'latest' },
-                    content: { t: 'plain', v: synopsis }, revision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
+                    content: { t: 'plain', v: synopsis }, revision,
                     createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
                 }] : [], nextCursor: null, hasNext: false });
                 return new Response(null, { status: 404 });
@@ -65,6 +70,7 @@ describe('Recap synopsis Account lifetime', () => {
                 // The same Account stays applied: renewal must fetch fresh synopsis
                 // content, not relabel the retained transcript or replay old content.
                 synopsis = { v: 1, seqTo: 3, updatedAtMs: 3, synopsis: 'Renewed Alice synopsis' };
+                revision = 'ssr1.AAAACHN5c3JlY18xAAAAAg';
                 retireActiveServerAccountScopeLifetime();
             } else if (transition === 'runtime_retirement') publishAppliedActiveServerRuntimeAvailability(false);
             else storage.getState().activateProfileScope({ serverId: connection.home.id, accountId: 'bob' });
@@ -89,6 +95,7 @@ describe('Recap synopsis Account lifetime', () => {
         expect(hook.getCurrent()).toBeNull();
         if (transition === 'runtime_retirement') {
             synopsis = { v: 1, seqTo: 3, updatedAtMs: 3, synopsis: 'Recovered synopsis' };
+            revision = 'ssr1.AAAACHN5c3JlY18xAAAAAg';
             await act(async () => {
                 publishAppliedActiveServerRuntimeAvailability(true);
                 // Recovery hydrates transcript input in the newly established lifetime.

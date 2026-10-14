@@ -3,18 +3,13 @@ import {
     MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent,
     DirectRouteGrantRequestV2Schema, SignedDirectRouteGrantV2Schema, DIRECT_ROUTE_GRANT_AUDIENCE_V1,
     DIRECT_ROUTE_GRANT_TTL_MS, tryWriteServerEnabledBitInPlace,
-    type PromptAssetTypeDescriptorV1,
-    type PromptAssetWriteRequest, type PromptAssetExternalRefV1,
-    PromptAssetWriteRequestSchema,
-    PromptAssetWriteBundleRequestSchema,
-    PromptAssetWriteDocRequestSchema,
 } from '@happier-dev/protocol';
 import { RegistryFetchRequestV1Schema, RegistryFetchResponseV1Schema, RegistryItemV1Schema, RegistryDownloadRequestV1Schema,
     computeGitBlobShaV1, computeGitTreeShaV1, RegistrySkillFilesPayloadV1Schema, type RegistryItemV1,
     type RegistrySkillFileBytesV1 } from '@happier-dev/protocol/registries';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher';
-import { createEncryptedTransferChunkEnvelope, createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
+import { createEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from './homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';
 import { createMachineFixture } from '../fixtures/machineFixtures';
@@ -100,7 +95,6 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
     serverUrl: string;
     serverIdentityId: string;
     selectionKey: string;
-    types: readonly PromptAssetTypeDescriptorV1[];
     foundSkill?: ReturnType<typeof createFoundSkillTransferFixture>;
     registryItem?: RegistryItemV1;
     registryFiles?: ReturnType<typeof RegistrySkillFilesPayloadV1Schema.parse>;
@@ -180,10 +174,6 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
     serveMachineHome(serverId, 'account-a', options.serverIdentityId);
     if (libraryServerId && options.libraryHome) serveHome(libraryServerId, options.libraryHome.serverIdentityId);
     const daemonRequests: DaemonRequest[] = [];
-    const uploadedRequests: PromptAssetWriteRequest[] = [];
-    const recipient = createTransferRecipientKeyPair();
-    let uploadSize = 0;
-    const types = [...options.types];
     let foundList: SkillFoundListResultV1 | undefined = options.foundSkill?.list;
     let beforeFoundList: (() => Promise<void>) | undefined;
     let afterExport: (() => Promise<void>) | undefined;
@@ -191,7 +181,6 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
     receiveDaemonRequest = async request => {
         daemonRequests.push(request);
         const method = request.method.slice(request.method.indexOf(':') + 1);
-        if (method === 'daemon.promptAssets.listTypes') return { ok: true, types };
         if (method === 'skills.found.list') {
             if (!foundList) throw new Error('Found fixture is not installed');
             const result = SkillFoundListResultV1Schema.parse(foundList);
@@ -199,18 +188,6 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
             await callback?.();
             return result;
         }
-        if (method === 'daemon.promptAssets.delete') return { ok: true, externalRef: {}, preview: { operation: 'delete', targetPath: 'review', fileCount: 1 } };
-        if (method === 'daemon.directTransfer.import.prepare') {
-            if (!request.params || typeof request.params !== 'object' || !('sizeBytes' in request.params)
-                || typeof request.params.sizeBytes !== 'number') throw new Error('Missing direct import size');
-            uploadSize = request.params.sizeBytes;
-            return { success: true, uploadId: 'prompt-screen-import', destDisplayPath: 'review.md', expectedSizeBytes: uploadSize,
-                chunkSizeBytes: uploadSize, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
-                expiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.finiteTransferCarrier,
-                endpointCandidates: [{ kind: 'http', expiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.finiteTransferCarrier,
-                    url: 'http://127.0.0.1:48123/machine-transfers/direct/imports/prompt-screen-import' }] };
-        }
-        if (method === 'daemon.directTransfer.import.abort') return { success: true, aborted: true };
         if (method === 'daemon.registries.fetch') {
             const input = RegistryFetchRequestV1Schema.parse(request.params);
             if (input.op === 'detect') return RegistryFetchResponseV1Schema.parse({ op: 'detect', detected: {
@@ -264,31 +241,6 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
                 ? await options.handleHomeRequest(`${url.pathname}${url.search}`, init) : null;
             return owned ?? await homes.request(input, init);
         }
-        if (url.pathname.endsWith('/chunks/0') && init?.method === 'PUT') {
-            const envelope: unknown = JSON.parse(String(init.body));
-            if (!envelope || typeof envelope !== 'object' || !('payloadBase64' in envelope) || typeof envelope.payloadBase64 !== 'string'
-                || !('encryptedDataKeyEnvelopeBase64' in envelope) || typeof envelope.encryptedDataKeyEnvelopeBase64 !== 'string') {
-                throw new Error('Invalid native upload envelope');
-            }
-            const bytes = await decryptEncryptedTransferChunkEnvelope({ transferId: 'prompt-screen-import', sequence: 0,
-                payloadBase64: envelope.payloadBase64, encryptedDataKeyEnvelopeBase64: envelope.encryptedDataKeyEnvelopeBase64,
-                recipientSecretKeySeed: recipient.recipientSecretKeySeed });
-            uploadedRequests.push(PromptAssetWriteRequestSchema.parse(JSON.parse(new TextDecoder().decode(bytes))));
-            return Response.json({ success: true });
-        }
-        if (url.pathname.endsWith('/finalize')) {
-            const uploaded = uploadedRequests.at(-1);
-            if (!uploaded) throw new Error('Native finalize without a consumed upload');
-            const bundle = PromptAssetWriteBundleRequestSchema.safeParse(uploaded);
-            const externalRef: PromptAssetExternalRefV1 = uploaded.externalRef ?? (bundle.success
-                ? { skillName: bundle.data.targetName }
-                : { relativePath: PromptAssetWriteDocRequestSchema.parse(uploaded).targetPath });
-            const target = externalRef.relativePath ?? externalRef.skillName ?? externalRef.name;
-            if (typeof target !== 'string') throw new Error('Missing external upload target');
-            return Response.json({ success: true, finalized: { success: true, path: 'review.md', sizeBytes: uploadSize,
-                result: { ok: true, externalRef, digest: 'digest-1', preview: { operation: 'write', targetPath: target,
-                    fileCount: bundle.success ? bundle.data.bundleBody.entries.length : 1 } } }, sha256: 'digest-1' });
-        }
         const bytes = transferBytes(), hash = createTransferManifestHasher(); hash.update(bytes);
         if (url.pathname.endsWith('/open')) return Response.json({ transferId: 'prompt-screen-export', totalChunks: 1, sizeBytes: bytes.length, manifestHash: hash.digestManifestHash() });
         if (url.pathname.endsWith('/chunks/0')) {
@@ -322,18 +274,14 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
     const route = await resolveMachineCarrierRoute('machine-1', serverId);
     if (route.kind !== 'iroh_peer') throw new Error(`Prompt fixture carrier was not admitted: ${JSON.stringify({ route, serverId,
         machines: storage.getState().machines, machineListByServerId: storage.getState().machineListByServerId })}`);
-    const { machinePromptAssetsListTypes } = await import('@/sync/ops/machinePromptAssets');
-    const admittedTypes = await machinePromptAssetsListTypes('machine-1', { serverId });
-    if (!admittedTypes.ok) throw new Error(`Prompt fixture daemon refused admission: ${JSON.stringify(admittedTypes)}`);
     daemonRequests.length = 0;
     // Mirror a live screen's subscription before refresh: an observer gap
     // correctly makes a previously visited Account require revalidation.
     const { observePromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
     const stopCatalogObservation = observePromptLibraryCatalog(scope);
     let machineHomeStage = 'not-started';
-    return { homes, serverId, scope, libraryHome, daemonRequests, uploadedRequests, artifacts: homes.artifacts(serverId),
+    return { homes, serverId, scope, libraryHome, daemonRequests, artifacts: homes.artifacts(serverId),
         diagnostic() { return { machineHomeStage, scope, settingsScope: storage.getState().settingsScope,
-            advertisedTypes: types,
             selection: storage.getState().settings.machineAdministrationTargetsLocalV1,
             requests: homes.requests.map(({ serverId, path }) => ({ serverId, path })), daemonRequests }; },
         async addMachineHome(serverUrl: string, serverIdentityId: string) {
@@ -361,14 +309,6 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
             machineHomeStage = 'admit-independent-machine-carrier';
             const machineRoute = await resolveMachineCarrierRoute('machine-1', machineServerId);
             if (machineRoute.kind !== 'iroh_peer') throw new Error(`Independent Machine carrier unavailable: ${JSON.stringify(machineRoute)}`);
-            machineHomeStage = 'admit-independent-plain-machine-rpc';
-            try {
-                const listed = await machinePromptAssetsListTypes('machine-1', { serverId: machineServerId });
-                if (!listed.ok) throw new Error(JSON.stringify(listed));
-            } catch (error) {
-                throw new Error(`Independent Plain Machine RPC admission failed: ${error instanceof Error ? error.message : String(error)}; ${JSON.stringify(
-                    homes.requests.map(({ serverId, path }) => ({ serverId, path })))}`, { cause: error });
-            }
             if (storage.getState().settingsScope?.serverId !== scope.serverId || storage.getState().settingsScope?.accountId !== scope.accountId)
                 throw new Error('Independent Machine admission replaced the displayed library Account');
             machineHomeStage = 'ready';
@@ -377,7 +317,6 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
         setFoundList(next: SkillFoundListResultV1) { foundList = SkillFoundListResultV1Schema.parse(next); },
         beforeNextFoundList(callback: () => Promise<void>) { beforeFoundList = callback; },
         afterNextExport(callback: () => Promise<void>) { afterExport = callback; },
-        setTypes(next: readonly PromptAssetTypeDescriptorV1[]) { types.splice(0, types.length, ...next); },
         selectMachine(machineId: string | null) { storage.getState().applySettingsLocal({
             machineAdministrationTargetsLocalV1: machineId ? { [options.selectionKey]: { serverIdentityId: options.serverIdentityId, machineId } } : {},
         }); },

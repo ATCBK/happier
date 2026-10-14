@@ -4,7 +4,8 @@ import {
     PluginUiResourceSubscriptionEventV1,
     PluginUiSurfaceContextV1,
 } from '@happier-dev/protocol/plugins/ui';
-import type { ResourceSubscriptionEvent } from '@happier-dev/plugin-sdk/ui';
+import type { ResourceContent, ResourceSubscriptionEvent } from '@happier-dev/plugin-sdk/ui';
+import { createDeferred } from '@/dev/testkit';
 import { createElement } from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { useLivePluginResource, type PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
@@ -21,8 +22,10 @@ import type {
 
 import {
     createPluginContextualResourceWatchClient,
+    createPluginSurfaceResourceWatchHandlers,
     type PluginSurfaceResourceWatchTransport,
 } from './pluginSurfaceResourceWatch';
+import { createBoundPluginSurfaceController } from './boundPluginSurfaceController';
 
 // The real watch owner remains beneath this genuine daemon RPC boundary.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
@@ -148,7 +151,6 @@ async function createMountedSurface(
     daemon: FakeDaemon,
     resourceContext?: PluginResourceContextV1,
 ) {
-    const { createBoundPluginSurfaceController } = await import('./boundPluginSurfaceController');
     const facts = {
         pluginId: surfaceContext.pluginId,
         contributionId: surfaceContext.contributionId,
@@ -187,6 +189,58 @@ async function createMountedSurface(
 }
 
 describe('mounted plugin surface live resource invalidation (EU-4b)', () => {
+    it('invalidates a host Resource when admitted progress moves before its read settles', async () => {
+        const settled = createDeferred<ResourceContent>();
+        let progress: ((value: ResourceContent) => void) | undefined;
+        const content = (digest: string): ResourceContent => ({ contentType: 'application/json', digest, bytes: new TextEncoder().encode('1') });
+        const store = createPluginUiResourceStore({ client: {
+            readResource: async (_resource, options) => {
+                progress = options?.onProgress;
+                progress?.(content(DIGEST_A));
+                return settled.promise;
+            },
+        } });
+        const reference = { hostRead: 'usage.query' as const, input: { queries: [{}] } };
+        const events: PluginUiResourceSubscriptionEventV1[] = [];
+        const handlers = createPluginSurfaceResourceWatchHandlers({ pluginId: 'acme.preview', hostResourceStore: store,
+            deliver: event => { events.push(event); } });
+        try {
+            await expect(handlers.watchResource({ requestId: 'progress-watch', method: 'watchResource',
+                payload: { subscriptionId: 'progress-watch', resource: reference } })).resolves.toMatchObject({ digest: DIGEST_A });
+            expect(store.getEntry(reference).getSnapshot().pending).toBe('initial');
+            progress?.(content(DIGEST_B));
+            expect(events).toEqual([expect.objectContaining({ kind: 'invalidated', digest: DIGEST_B })]);
+        } finally { settled.resolve(content(DIGEST_B)); handlers.dispose(); store.dispose(); }
+    });
+
+    it('refuses an opaque host Resource digest and retires a host watch when its digest becomes invalid', async () => {
+        let digest = 'opaque-host-version';
+        const store = createPluginUiResourceStore({ pluginId: 'acme.preview', client: {
+            readResource: async () => ({ contentType: 'application/json', digest, bytes: new TextEncoder().encode('1') }),
+        } });
+        const reference = { hostRead: 'usage.query' as const, input: { queries: [{}] } };
+        const events: PluginUiResourceSubscriptionEventV1[] = [];
+        const handlers = createPluginSurfaceResourceWatchHandlers({ pluginId: 'acme.preview', hostResourceStore: store,
+            deliver: event => { events.push(event); } });
+        const request = { requestId: 'host-watch', method: 'watchResource', payload: { subscriptionId: 'host-watch', resource: reference } };
+        try {
+            await expect(handlers.watchResource(request)).resolves.toMatchObject({ code: 'unavailable', diagnostics: ['plugin_resource_digest_invalid'] });
+            const entry = store.getEntry(reference);
+            digest = DIGEST_A;
+            await entry.refresh();
+            await expect(handlers.watchResource(request)).resolves.toEqual({ subscriptionId: 'host-watch', digest: DIGEST_A });
+            digest = DIGEST_B;
+            await entry.refresh();
+            expect(events).toEqual([expect.objectContaining({ kind: 'invalidated', digest: DIGEST_B })]);
+            digest = 'opaque-next-version';
+            await entry.refresh();
+            expect(events[1]).toMatchObject({ kind: 'error', code: 'unavailable', diagnostics: ['plugin_resource_digest_invalid'] });
+            digest = DIGEST_A;
+            await entry.refresh();
+            expect(events).toHaveLength(2);
+        } finally { handlers.dispose(); store.dispose(); }
+    });
+
     it.each(['opaque', 'missing'] as const)('refuses a %s shared Resource digest at the strict watch crossing without narrowing the generic store', async (kind) => {
         let digest: string | undefined = kind === 'opaque' ? 'opaque-resource-version' : undefined;
         const externalWatches: { signal: AbortSignal; disposed: boolean }[] = [];

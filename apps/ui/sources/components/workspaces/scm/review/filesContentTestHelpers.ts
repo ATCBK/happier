@@ -1,5 +1,9 @@
 import { vi } from 'vitest';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
+// This owning fixture installs storage factories. Evaluate their Settings-backed
+// producer before registration; importing it inside a pending factory can cycle
+// through the real Action/input graph back to that same unresolved factory.
+import { createStorageModuleMock } from '@/dev/testkit/mocks/storage';
 
 installShippedNativeFrameScheduler();
 
@@ -105,7 +109,6 @@ export function installFilesContentCommonModuleMocks(
             return await activeOptions.storage(importOriginal);
         }
 
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleMock({
             importOriginal,
             overrides: {},

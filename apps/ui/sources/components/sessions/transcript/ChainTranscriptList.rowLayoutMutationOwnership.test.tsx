@@ -2,7 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createUseSettingMock, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
+import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createTestSessionTranscriptSource, wrapWithSessionTranscriptSource } from '@/dev/testkit/sessionTranscriptSource';
 import { installTranscriptCommonModuleMocks } from './transcriptTestHelpers';
 

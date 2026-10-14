@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen as renderPanelScreen, type RenderScreenResult } from '@/dev/testkit';
 import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { t } from '@/text';
 
 let initialTabId = 'git';
 
@@ -28,7 +30,7 @@ installSessionDetailsPanelCommonModuleMocks({
     },
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({ translate: (key) => key });
+        return createTextModuleMock();
     },
 });
 
@@ -60,6 +62,28 @@ describe('SessionRightPanel (core tabs)', () => {
     beforeEach(() => {
         initialTabId = 'git';
         vi.clearAllMocks();
+    });
+
+    it('keeps the Work rail badge without calling offline reports running', async () => {
+        const { SessionActionRail, SessionRightSidebarProvider } = await import('./SessionRightPanel');
+        const { SessionWorkSourcesProvider, useSessionWorkSourcesOwner } = await import('@/components/sessions/work/sessionWorkSources');
+        const { useSessionAgentActivity } = await import('@/hooks/session/useSessionAgentActivity');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const now = Date.now();
+        storage.getState().applySessions([createSessionFixture({ id: 'child', serverId: runtime.serverId,
+            reportsTo: { sessionId: 's1' }, active: false, activeAt: now, presence: 'offline',
+            latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now })]);
+        function WorkRail() {
+            const sources = useSessionWorkSourcesOwner({ sessionId: 's1', serverId: runtime.serverId,
+                ownerMetadata: null, agentActivity: useSessionAgentActivity({ sessionId: 's1', serverId: runtime.serverId }) });
+            return <SessionWorkSourcesProvider value={sources}>
+                <SessionRightSidebarProvider sessionId="s1" scopeId="session:s1"><SessionActionRail /></SessionRightSidebarProvider>
+            </SessionWorkSourcesProvider>;
+        }
+        const screen = await renderScreen(<WorkRail />);
+        const label = screen.findByTestId('session-action-rail:agents')?.props.accessibilityLabel;
+        expect(label).toBe(t('sessionWork.strip.a11y', { summary: `1 · ${t('status.offline')}` }));
+        expect(screen.getTextContent()).toContain('1');
     });
 
     it('renders git, files, navigation, agents, and services tabs and shows the git surface by default', async () => {

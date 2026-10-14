@@ -86,12 +86,13 @@ export class TestVoiceWebRtcPeer extends EventTarget {
     iceConnectionState: RTCIceConnectionState = 'new';
     readonly addTrack = vi.fn();
     readonly createDataChannel = vi.fn(() => this.channel as unknown as RTCDataChannel);
-    readonly createOffer = vi.fn(async () => ({
+    // Use the Promise API consumed by the host, not the deprecated callback overload.
+    readonly createOffer = vi.fn<(options?: RTCOfferOptions) => Promise<RTCSessionDescriptionInit>>(async () => ({
         type: 'offer' as const,
         sdp: 'v=0\r\na=test-offer\r\n',
     }));
-    readonly setLocalDescription = vi.fn(async () => undefined);
-    readonly setRemoteDescription = vi.fn(async () => undefined);
+    readonly setLocalDescription = vi.fn<RTCPeerConnection['setLocalDescription']>(async () => {});
+    readonly setRemoteDescription = vi.fn<RTCPeerConnection['setRemoteDescription']>(async () => {});
     readonly close = vi.fn(() => {
         this.connectionState = 'closed';
         this.iceConnectionState = 'closed';

@@ -1,3 +1,4 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
@@ -45,7 +46,7 @@ vi.mock('@legendapp/list/react-native', async () => {
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
-const searchResultsTheme = {
+const searchResultsTheme = createThemeFixture({
     colors: {
         border: { default: '#ddd' },
         surface: { inset: '#eee' },
@@ -55,7 +56,7 @@ const searchResultsTheme = {
             secondary: '#999',
         },
     },
-};
+});
 
 describe('SearchResultsList', () => {
     it('reports failed or incomplete searches instead of claiming there are no matches', async () => {

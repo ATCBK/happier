@@ -2,7 +2,8 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import {
-    createStorageStoreMock,
+    createStorageStoreMock } from '@/dev/testkit/mocks/storage';
+import {
     createThemeFixture,
     flushHookEffects,
     renderScreen,

@@ -15,7 +15,8 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 const daemonBoundary = vi.hoisted(() => ({ requests: [] as Array<{
     serverUrl: string; token: string | undefined; method: string; params: unknown;
@@ -41,6 +42,10 @@ vi.mock('socket.io-client', async (importOriginal) => {
         return socket;
     } };
 });
+
+// Publish the real Sync singleton before cases, as the UI source harness does;
+// cold module transformation is setup, not part of the daemon request lifetime.
+await loadSyncSingletonForTests();
 
 function createPreviewResource(overrides: Partial<LocalServicePreviewResourceV1> = {}): LocalServicePreviewResourceV1 {
     return {
@@ -121,20 +126,21 @@ describe('useLocalServicePreviewState', () => {
     });
 
     it('routes the default snapshot request through daemon machine rpc', async () => {
-        await loadSyncSingletonForTests();
         const home = await upsertServerProfile({ serverUrl: 'https://preview-background.example.test' });
-        const token = createAccountTokenForTests('preview-account');
+        const token = createAccountTokenForTests('preview-account', { currentAccount: true });
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (serverUrl) => (
             serverUrl === home.serverUrl ? { token } : null
         ));
         setRuntimeFetch(async (input) => {
             const url = new URL(String(input));
             if (url.origin !== home.serverUrl) throw new Error(`Unexpected preview Home: ${url.origin}`);
+            if (url.pathname === '/health') return Response.json({ status: 'ok' });
             if (url.pathname === '/v1/auth/ping') return Response.json({});
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
-            if (url.pathname === '/v1/machines/machine_1') return Response.json({ machine: {
-                id: 'machine_1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-            } });
+            if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            const machine = { ...createPlainMachineRowFixture({ id: 'machine_1', accountId: 'preview-account' }), runnerContentKeyBinding: null };
+            if (url.pathname === '/v1/machines') return Response.json([machine]);
+            if (url.pathname === '/v1/machines/machine_1') return Response.json({ machine });
             return Response.json({}, { status: 404 });
         });
         daemonBoundary.response = {

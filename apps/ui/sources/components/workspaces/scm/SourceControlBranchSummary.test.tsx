@@ -1,7 +1,9 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
+import { resolveThemeStyleScales } from '@/theme/themeStyleScales';
 
 import { installSessionFilesCommonModuleMocks } from '@/components/sessions/files/sessionFilesTestHelpers';
 
@@ -12,7 +14,7 @@ import { installSessionFilesCommonModuleMocks } from '@/components/sessions/file
 const octiconsRenderMock = vi.hoisted(() => vi.fn());
 
 function buildBranchSummaryTheme() {
-    return {
+    return createThemeFixture({
         colors: {
             border: { default: '#000' },
             input: { background: '#111' },
@@ -20,7 +22,7 @@ function buildBranchSummaryTheme() {
             text: { primary: '#fff', secondary: '#aaa' },
             textLink: '#0af',
         },
-    };
+    });
 }
 
 installSessionFilesCommonModuleMocks({
@@ -72,6 +74,18 @@ describe('SourceControlBranchSummary', () => {
         });
 
         expect(octiconsRenderMock).toHaveBeenCalledTimes(initialIconRenderCount);
+        // React's memo descriptor exposes the real admission owner; no test-only production export.
+        const descriptor = SourceControlBranchSummary as unknown as {
+            compare: (previous: React.ComponentProps<typeof SourceControlBranchSummary>, next: React.ComponentProps<typeof SourceControlBranchSummary>) => boolean;
+        };
+        expect(descriptor.compare).toBeTypeOf('function');
+        const theme = buildBranchSummaryTheme();
+        const baseProps = { theme, scmStatusFiles, variant: 'rail' as const };
+        expect(descriptor.compare(baseProps, { ...baseProps, theme: createThemeFixture({ ...theme, space: { ...theme.space } }) })).toBe(true);
+        expect(descriptor.compare(baseProps, {
+            ...baseProps,
+            theme: createThemeFixture({ ...theme, space: resolveThemeStyleScales({ density: 'compact' }).space }),
+        })).toBe(false);
     });
 
     it('renders a provided branch trigger in rail mode', async () => {

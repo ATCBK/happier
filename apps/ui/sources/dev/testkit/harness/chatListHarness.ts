@@ -4,7 +4,6 @@ import { act, type ReactTestInstance } from 'react-test-renderer';
 import { flushHookEffects, type FlushHookEffectsOptions } from '../hooks/flushHookEffects';
 import { createCapturingLegendListMock, type LegendListMockState } from '../mocks/legendList';
 import { createReactNativeWebMock } from '../mocks/reactNative';
-import { createLiveStorageStoreMock, createStorageModuleMock, createStorageStoreModuleMock } from '../mocks/storage';
 import { renderScreen, type RenderScreenResult } from '../render/renderScreen';
 import type { RenderWithAppProvidersOptions } from '../render/renderWithAppProviders';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -397,6 +396,9 @@ export async function createChatListHarnessStorageMock(
     importOriginal: <T>() => Promise<T>,
     overrides: Partial<typeof import('@/sync/domains/state/storage')> = {},
 ) {
+    // Native/Legend boundary factories import this harness while resolving their
+    // own mocks. Settings-backed storage must load only for the storage factory.
+    const { createLiveStorageStoreMock, createStorageModuleMock } = await import('../mocks/storage');
     const readMessages = () => chatListHarnessState.sessionMessagesState.messages ?? [];
     let cachedMessagesForIds: readonly any[] | null = null;
     let cachedMessageIds: string[] = [];
@@ -450,6 +452,7 @@ export async function createChatListHarnessStorageStoreMock(
     importOriginal: <T>() => Promise<T>,
     overrides: Partial<typeof import('@/sync/domains/state/storageStore')> = {},
 ) {
+    const { createLiveStorageStoreMock, createStorageStoreModuleMock } = await import('../mocks/storage');
     return createStorageStoreModuleMock({
         importOriginal,
         overrides: {

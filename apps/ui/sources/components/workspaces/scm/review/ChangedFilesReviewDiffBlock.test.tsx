@@ -1,3 +1,4 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -89,13 +90,13 @@ describe('ChangedFilesReviewDiffBlock', () => {
             updateDiffState: () => {},
         } as any;
 
-        const theme = {
+        const theme = createThemeFixture({
             colors: {
                 border: { default: '#333' },
                 surface: { base: '#000', inset: '#111' },
                 text: { secondary: '#999' },
             },
-        } as any;
+        }) as any;
 
         let tree: renderer.ReactTestRenderer;
         tree = (await renderScreen(<ChangedFilesReviewDiffBlock
@@ -131,13 +132,13 @@ describe('ChangedFilesReviewDiffBlock', () => {
             updateDiffState: () => {},
         } as any;
 
-        const theme = {
+        const theme = createThemeFixture({
             colors: {
                 border: { default: '#333' },
                 surface: { base: '#000', inset: '#111' },
                 text: { secondary: '#999' },
             },
-        } as any;
+        }) as any;
 
         const screen = await renderScreen(<ChangedFilesReviewDiffBlock
                     theme={theme}
@@ -173,13 +174,13 @@ describe('ChangedFilesReviewDiffBlock', () => {
             updateDiffState: () => {},
         } as any;
 
-        const theme = {
+        const theme = createThemeFixture({
             colors: {
                 border: { default: '#333' },
                 surface: { base: '#000', inset: '#111' },
                 text: { secondary: '#999' },
             },
-        } as any;
+        }) as any;
 
         let tree: renderer.ReactTestRenderer;
         tree = (await renderScreen(<ChangedFilesReviewDiffBlock
@@ -217,13 +218,13 @@ describe('ChangedFilesReviewDiffBlock', () => {
             updateDiffState: () => {},
         } as any;
 
-        const theme = {
+        const theme = createThemeFixture({
             colors: {
                 border: { default: '#333' },
                 surface: { base: '#000', inset: '#111' },
                 text: { secondary: '#999' },
             },
-        } as any;
+        }) as any;
 
         const unrelatedDraft: ReviewCommentDraft = {
             id: 'draft-1',
@@ -281,7 +282,7 @@ describe('ChangedFilesReviewDiffBlock', () => {
         const loadedState = { status: 'loaded', diff, error: null } as const;
         const diffStateSource = { getDiffState: () => loadedState, subscribe: () => () => {}, reset: () => {}, prune: () => {},
             setDiffState: () => {}, updateDiffState: () => {} } as any;
-        const theme = { colors: { border: { default: '#333' }, surface: { base: '#000', inset: '#111' }, text: { secondary: '#999' } } } as any;
+        const theme = createThemeFixture({ colors: { border: { default: '#333' }, surface: { base: '#000', inset: '#111' }, text: { secondary: '#999' } } }) as any;
         const render = vi.fn((_path: string, hunkIndex: number) => React.createElement('View', { testID: `note-${hunkIndex}` }));
         const screen = await renderScreen(<ChangedFilesReviewDiffBlock theme={theme} sessionId="s1" snapshotSignature="sig" filePath="src/a.ts"
             diffStateSource={diffStateSource} reviewCommentsEnabled={false} reviewCommentDrafts={[]}
@@ -309,7 +310,7 @@ describe('ChangedFilesReviewDiffBlock', () => {
         const state = { status: 'loaded', diff: '', error: null, emptyFile: true } as const;
         const diffStateSource = { getDiffState: () => state, subscribe: () => () => {}, reset: () => {}, prune: () => {},
             setDiffState: () => {}, updateDiffState: () => {} } as any;
-        const theme = { colors: { border: { default: '#333' }, surface: { base: '#000', inset: '#111' }, text: { secondary: '#999' } } } as any;
+        const theme = createThemeFixture({ colors: { border: { default: '#333' }, surface: { base: '#000', inset: '#111' }, text: { secondary: '#999' } } }) as any;
         const screen = await renderScreen(<ChangedFilesReviewDiffBlock theme={theme} sessionId="s1" snapshotSignature="sig"
             filePath="docs/getting-started.md" estimatedChangedLines={0} diffStateSource={diffStateSource}
             reviewCommentsEnabled={false} reviewCommentDrafts={[]} />);

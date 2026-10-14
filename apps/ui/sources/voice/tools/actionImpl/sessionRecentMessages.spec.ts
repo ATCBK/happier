@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol/actions';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
-import { createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
+import { createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createSessionViewerFixture } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
 
@@ -54,7 +54,7 @@ describe('getSessionRecentMessagesForVoiceTool', () => {
             sessions: { s1: createSessionFixture({
                 id: 's1',
                 serverId: getActiveServerSnapshot().serverId,
-                viewer: { follow: { follows: true, notificationLevel: 'important', includeInVoice: true } },
+                viewer: createSessionViewerFixture({ follow: { follows: true, notificationLevel: 'important', includeInVoice: true } }),
             }) },
             sessionMessages: {
                 s1: createTestSessionMessages([
@@ -267,7 +267,7 @@ describe('voice recent-message and transcript projection Home identity', () => {
     ];
 
     function seedFocusedHomeTranscript(
-        otherSessionsSnippetsMode: 'always' | 'never' | 'on_demand_only',
+        otherSessionsSnippetsMode: 'auto' | 'never' | 'on_demand_only',
     ): string {
         const activeServerId = getActiveServerSnapshot().serverId;
         storage.setState((current) => ({
@@ -326,7 +326,7 @@ describe('voice recent-message and transcript projection Home identity', () => {
     });
 
     it('never returns the focused Home transcript for a same-named Session on the requested Home', async () => {
-        const activeServerId = seedFocusedHomeTranscript('always');
+        const activeServerId = seedFocusedHomeTranscript('auto');
         const { getSessionRecentMessagesForVoiceTool } = await import('./sessionRecentMessages');
 
         await expect(
@@ -348,7 +348,7 @@ describe('voice recent-message and transcript projection Home identity', () => {
     });
 
     it('keeps the canonical transcript projection bound to the requested Home', async () => {
-        seedFocusedHomeTranscript('always');
+        seedFocusedHomeTranscript('auto');
         const { getSessionTranscriptForVoiceTool } = await import('./sessionRecentMessages');
 
         const result = await getSessionTranscriptForVoiceTool({ sessionId: 's1', serverId: 'home-b', limit: 10 });
@@ -366,7 +366,7 @@ describe('voice recent-message and transcript projection Home identity', () => {
     });
 
     it('refuses an unqualified invocation when the session id exists on more than one known Home', async () => {
-        seedFocusedHomeTranscript('always');
+        seedFocusedHomeTranscript('auto');
         storage.setState((current) => ({
             ...current,
             sessionListRowsByServerId: {
@@ -390,7 +390,7 @@ describe('voice recent-message and transcript projection Home identity', () => {
     it('refuses an unqualified invocation for a session id local state does not know', async () => {
         // The retained transcript survives, but nothing proves which Home owns it, so the
         // focused Home must not be substituted for the Home the Action host failed to bind.
-        seedFocusedHomeTranscript('always');
+        seedFocusedHomeTranscript('auto');
         storage.setState((current) => ({ ...current, sessions: {} }));
         const { getSessionRecentMessagesForVoiceTool } = await import('./sessionRecentMessages');
 
@@ -453,9 +453,9 @@ describe('voice recent-message live-context qualification', () => {
                 [activeServerId]: {
                     s1: createSessionListRenderableSessionFixture({
                         id: 's1',
-                        viewer: {
+                        viewer: createSessionViewerFixture({
                             follow: { follows: true, notificationLevel: 'important', includeInVoice: true },
-                        },
+                        }),
                     }),
                 },
             },
@@ -498,9 +498,9 @@ describe('voice recent-message live-context qualification', () => {
                 [activeServerId]: {
                     s1: createSessionListRenderableSessionFixture({
                         id: 's1',
-                        viewer: {
+                        viewer: createSessionViewerFixture({
                             follow: { follows: true, notificationLevel: 'important', includeInVoice: false },
-                        },
+                        }),
                     }),
                 },
             },

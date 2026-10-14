@@ -13,6 +13,11 @@
 // state owner, which reaches Home features/HTTP through display-name lookup.
 // Import it from `mocks/machineAdministrationTargetSelection` after transport
 // installation when the suite also uses Home boundaries.
+// Registry UI mocks derive ids from the real bundled plugin catalog. Their
+// consumers already use `mocks/registryUiBehavior`; keep that graph off this root.
+// Storage mocks parse real Settings, which loads the Agent/Voice catalogs.
+// Keep them and the specialized ChatList boundary behind `mocks/storage` and
+// `harness/chatListHarness` so unrelated render/hook tests stay light.
 //
 // Rule: re-export fixtures, mocks and render helpers here only when their
 // transitive value imports stay free of runtime singletons and transports.
@@ -35,7 +40,6 @@ export * from './fixtures/sessionWorkflowActivityFixtures';
 export * from './fixtures/themeFixtures';
 export * from './fixtures/transcriptFixtures';
 export * from './transcript/viewportTelemetryAssertions';
-export * from './harness/chatListHarness';
 export * from './harness/browserStorageLockBoundary';
 export * from './harness/sidechainTranscriptListHarness';
 export * from './harness/popoverHarness';
@@ -63,12 +67,10 @@ export * from './mocks/mainAppTabState';
 export * from './mocks/reactNative';
 export * from './mocks/router';
 export * from './mocks/reactNavigation';
-export * from './mocks/registryUiBehavior';
 export * from './mocks/serverProfiles';
 export * from './mocks/serverFetch';
 export * from './mocks/sessionMachineReachability';
 export * from './mocks/serverAccountRequestContext';
-export * from './mocks/storage';
 export * from './mocks/sync';
 export * from './mocks/persistence';
 export * from './mocks/popover';

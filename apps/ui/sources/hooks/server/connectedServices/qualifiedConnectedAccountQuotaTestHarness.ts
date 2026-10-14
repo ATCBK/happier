@@ -1,5 +1,6 @@
 import { vi } from 'vitest';
 import { createMachineFixture, createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -67,6 +68,7 @@ export async function createQualifiedQuotaTestHarness(options: Readonly<{
     /** A successful predecessor feature response has no qualified-accounts capability. */
     qualifiedAccountsProtocol?: 4 | null;
     request?: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['request']>;
+    configureSocket?: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['configureSocket']>;
 }> = {}) {
     const serverUrl = options.serverUrl ?? 'https://qualified-quota-fixture.test';
     const serverIdentityId = options.serverIdentityId ?? 'srv_qualified_quota_fixture';
@@ -91,6 +93,7 @@ export async function createQualifiedQuotaTestHarness(options: Readonly<{
         accounts: [], operationTransport: { kind: 'v4' },
     }));
     const account = await restoreServerAccountForTest({ serverUrl, serverIdentityId, accountId: 'quota-account', credentials: options.credentials,
+        configureSocket: options.configureSocket,
         request: async (input, init) => {
             const url = new URL(String(input));
             requests.push({ path: url.pathname, method: init?.method ?? 'GET' });
@@ -98,6 +101,11 @@ export async function createQualifiedQuotaTestHarness(options: Readonly<{
             const customResponse = await options.request?.(input, init);
             if (customResponse) return customResponse;
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: options.accountMode ?? 'plain', updatedAt: 0 });
+            // Real reconnect catch-up must see the same live census as initial fixture admission.
+            if (url.pathname === '/v1/machines') return Response.json([
+                createPlainMachineRowFixture({ id: 'machine-first', accountId: 'quota-account' }),
+                createPlainMachineRowFixture({ id: 'machine-selected', accountId: 'quota-account' }),
+            ]);
             if (url.pathname === '/v4/connect/qualified/provider-account-usage/record') return usageRead(url.searchParams.get('recordId')!);
             if (url.pathname === '/v4/connect/qualified/quotas' && (init?.method ?? 'GET') === 'GET') {
                 return read(parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountRefSchema, url.searchParams.get('ref')!));

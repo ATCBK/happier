@@ -19,7 +19,6 @@ export async function withGeneratedElevenLabsVoiceRuntime(
 ): Promise<void> {
     const { storage } = await import('@/sync/domains/state/storage');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-    const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
     const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
     const { PendingLocalIdSchema } = await import('@happier-dev/protocol/sessions/pending/pendingLocalId');
     const { PendingRequestedActionV1Schema } = await import('@happier-dev/protocol/sessions/pending/pendingRequestedActionV1');
@@ -32,7 +31,7 @@ export async function withGeneratedElevenLabsVoiceRuntime(
     const { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } = await import('../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index');
     const { getVoiceAdapterRegistry, registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
     const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-    const { buildVoiceTranscriptHistorySessionMetadata } = await import('@/voice/persistence/voiceTranscriptHistorySession');
+    const { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } = await import('@/voice/persistence/voiceTranscriptHistorySession');
     const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
     const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
     const { getVoiceSessionLifecycleController, setVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleControllerStore');
@@ -55,6 +54,9 @@ export async function withGeneratedElevenLabsVoiceRuntime(
             if (preparation) return preparation;
             if (request.path === '/v1/voice/token') return Response.json({ allowed: true, token: 'hosted-token', leaseId: 'qa-lease', bindingNonce: 'qa-nonce', expiresAtMs: Date.now() + 60_000 });
             if (request.path === '/v1/voice/session/complete' || request.path === '/v1/voice/session/release') return Response.json({ ok: true });
+            if (request.path === '/v1/sessions' && request.method === 'POST') {
+                return metadata.createSessionFromPost('qa-history', { method: request.method, body: JSON.stringify(request.body) });
+            }
             if (request.method === 'POST' && /\/pending$/.test(request.path)) {
                 const body = request.body;
                 if (!body || typeof body !== 'object' || !('localId' in body) || !('requestedAction' in body)
@@ -87,9 +89,11 @@ export async function withGeneratedElevenLabsVoiceRuntime(
         }
         const { sync } = await import('@/sync/sync');
         await sync.resumeSync('manual');
-        storage.setState({ sessions: { 'qa-history': createSessionFixture({ id: 'qa-history',
-            serverId: home.homes.qa!.id, active: false, metadata: { path: '/voice', host: 'qa',
-                ...buildVoiceTranscriptHistorySessionMetadata() } }) } });
+        storage.setState({ sessions: {} });
+        await sync.ensureHostedSystemSession({
+            tag: VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
+            metadata: buildVoiceTranscriptHistorySessionMetadata(),
+        });
         // This is an admitted fixture binding, not proof of actual binding publication.
         // Consumer tests observe SDK/context/custody; publication has its own real keeper.
         voiceSessionBindingStore.getState().bind({

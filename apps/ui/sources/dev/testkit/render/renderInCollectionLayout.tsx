@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { HappierListDetailLayout } from '@happier-dev/plugin-ui/presentation';
 
 import { renderScreen, type RenderScreenResult } from './renderScreen';
 
@@ -17,8 +16,13 @@ export type CollectionLayoutHarnessMode = 'split' | 'stacked' | 'measuring' | nu
 export async function renderInCollectionLayout(
     element: React.ReactElement,
     mode: CollectionLayoutHarnessMode,
+    /** The measured width of a `split` container (default: one where the detail pane clears a wide column). */
+    splitWidthPx = 1200,
 ): Promise<RenderScreenResult> {
     if (mode === null) return renderScreen(element);
+    // The presentation barrel includes Action fields and their SDK/catalog.
+    // Only suites actually mounting a Collection need to load that graph.
+    const { HappierListDetailLayout } = await import('@happier-dev/plugin-ui/presentation');
     const screen = await renderScreen(
         <HappierListDetailLayout
             testID={HARNESS_TEST_ID}
@@ -37,7 +41,7 @@ export async function renderInCollectionLayout(
     if (!container) throw new Error('renderInCollectionLayout: the split geometry did not mount its measured container.');
     await act(async () => {
         (container.props.onLayout as (event: unknown) => void)({
-            nativeEvent: { layout: { x: 0, y: 0, width: mode === 'split' ? 1200 : 390, height: 800 } },
+            nativeEvent: { layout: { x: 0, y: 0, width: mode === 'split' ? splitWidthPx : 390, height: 800 } },
         });
     });
     return screen;

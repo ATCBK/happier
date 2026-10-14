@@ -4,11 +4,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { getStorage } from '@/sync/domains/state/storage';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
-import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const boundary = vi.hoisted(() => ({
     request: vi.fn(),
@@ -33,27 +29,31 @@ vi.mock('socket.io-client', async (importOriginal) => {
     } };
 });
 
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
+const { getStorage } = await import('@/sync/domains/state/storage');
 beforeAll(async () => { await import('@/sync/domains/state/storageStore'); });
 
 describe('sessionScm (rpc timeouts)', () => {
     afterEach(() => {
         boundary.request.mockReset();
         boundary.timeout.mockReset();
-        resetRuntimeFetch();
         vi.restoreAllMocks();
     });
 
     it('uses an extended machine RPC timeout for commit diffs', async () => {
         const { sessionScmDiffCommit } = await import('./sessionScm');
 
-        const home = await upsertAndActivateServer({ serverUrl: 'https://scm-timeout.test', name: 'SCM Home' });
-        getStorage().getState().activateProfileScope({ serverId: home.id, accountId: 'scm-account' });
+        await harness.reset();
+        const serverId = await harness.addHome({ serverUrl: 'https://scm-timeout.test', name: 'SCM Home',
+            accountId: 'scm-account', currentAccount: true, active: false });
+        getStorage().getState().activateProfileScope({ serverId, accountId: 'scm-account' });
         const machine = createMachineFixture({ id: 'm1' });
         getStorage().setState({
             sessions: {
                 s1: createSessionFixture({
                     id: 's1',
-                    serverId: home.id,
+                    serverId,
                     active: true,
                     metadata: {
                         machineId: 'm1',
@@ -65,17 +65,12 @@ describe('sessionScm (rpc timeouts)', () => {
             machines: {
                 m1: machine,
             },
-            machineListByServerId: { [home.id]: [machine] },
+            machineListByServerId: { [serverId]: [machine] },
         });
 
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('scm-account') });
-        setRuntimeFetch(async (url) => {
-            const pathname = new URL(String(url)).pathname;
-            if (pathname === '/v1/auth/ping') return Response.json({ ok: true });
-            if (pathname === '/v1/machines/m1') {
-                return Response.json({ machine: { id: 'm1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
-            }
-            throw new Error(`Unexpected SCM transport request: ${pathname}`);
+        harness.answer(serverId, '/v1/auth/ping', { body: { ok: true } });
+        harness.answer(serverId, '/v1/machines/m1', {
+            body: { machine: { id: 'm1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
         });
         // Hold the clock boundary still so the remaining RPC budget is exact.
         vi.spyOn(Date, 'now').mockReturnValue(1_000);
@@ -84,7 +79,8 @@ describe('sessionScm (rpc timeouts)', () => {
             diff: 'diff --git a/a.txt b/a.txt',
         });
 
-        await expect(sessionScmDiffCommit('s1', { cwd: '.', commit: 'abc' }, home.id)).resolves.toMatchObject({ success: true });
+        const response = await sessionScmDiffCommit('s1', { cwd: '.', commit: 'abc' }, serverId);
+        expect(response, JSON.stringify(response)).toMatchObject({ success: true });
 
         expect(boundary.request).toHaveBeenCalledWith(expect.objectContaining({
             method: `m1:${RPC_METHODS.SCM_DIFF_COMMIT}`,

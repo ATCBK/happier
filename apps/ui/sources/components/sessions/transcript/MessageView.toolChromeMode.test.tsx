@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { createPartialStorageModuleMock, createTestSessionTranscriptSource, renderWithSessionTranscriptSource as renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPartialStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { createTestSessionTranscriptSource, renderWithSessionTranscriptSource as renderScreen, standardCleanup } from '@/dev/testkit';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createReducer } from "@happier-dev/session-core/reducer";
 import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';

@@ -9,6 +9,7 @@ import {
     standardCleanup,
 } from '@/dev/testkit';
 import { installFilesContentCommonModuleMocks } from './filesContentTestHelpers';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -734,6 +735,8 @@ vi.mock('@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting', () =
         ),
 }));
 
+// Boundaries are installed above; collect the real owner outside the interaction deadline.
+
 describe('ChangedFilesReview', () => {
     it('prefers a freshly resolved web scroll root over a retained root', async () => {
         const { resolveChangedFilesReviewCurrentWebScrollRoot } = await import('./ChangedFilesReview');
@@ -771,7 +774,7 @@ describe('ChangedFilesReview', () => {
         standardCleanup();
     });
 
-    const theme = {
+    const theme = createThemeFixture({
         colors: {
             surface: {
                 base: '#111',
@@ -793,7 +796,7 @@ describe('ChangedFilesReview', () => {
             textDestructive: '#f00',
         },
         dark: false,
-    } as any;
+    }) as any;
 
     const snapshot = {
         projectKey: 'p',
@@ -820,7 +823,7 @@ describe('ChangedFilesReview', () => {
     const fileC = { fileName: 'c.ts', filePath: 'src', fullPath: 'src/c.ts', status: 'modified', isIncluded: false, linesAdded: 1, linesRemoved: 1 } as any;
 
     function makeReviewTheme(overrides: Readonly<{ secondaryText?: string }> = {}) {
-        return {
+        return createThemeFixture({
             colors: {
                 surface: {
                     inset: '#181818',
@@ -832,7 +835,7 @@ describe('ChangedFilesReview', () => {
                     secondary: overrides.secondaryText ?? '#aaa',
                 },
             },
-        };
+        });
     }
 
     it('treats equivalent theme token objects as stable for memoized review props', async () => {

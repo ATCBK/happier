@@ -1,7 +1,8 @@
 import * as React from 'react';
 import renderer from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
-import { createPartialStorageModuleMock, createStorageStoreMock, renderScreen } from '@/dev/testkit';
+import { createPartialStorageModuleMock, createStorageStoreMock } from '@/dev/testkit/mocks/storage';
+import { renderScreen } from '@/dev/testkit';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTestHelpers';
 

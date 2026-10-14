@@ -10,6 +10,8 @@ import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/p
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { storage } from '@/sync/domains/state/storageStore';
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { isPluginSurfaceMachineBound, usePluginSurfaceExecutionOrigin } from './pluginSurfaceExecutionOrigin';
 import { createBoundPluginSurfaceController } from './boundPluginSurfaceController';
@@ -21,6 +23,7 @@ import { createPluginExecutionOriginActionDeps } from '@/sync/ops/actions/plugin
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -36,10 +39,14 @@ describe('plugin surface execution requirement', () => {
     afterEach(async () => { await standardCleanup(); });
 
     it('binds through real Account and machine owners and rejects a replaced occurrence before rerender', async () => {
+        const census = ['machine-source', 'machine-other-source'].map(id => createPlainMachineRowFixture({
+            id, accountId: 'account-surface-source',
+        }));
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://surface-source.example.test',
             serverIdentityId: 'srv_surface_source', accountId: 'account-surface-source', credentials: { token: `e30.${Buffer.from(JSON.stringify({
                 sub: 'account-surface-source', provenance: { v: 1, kind: 'account', authority: 'present_user' }, tokenEpoch: 0,
-            })).toString('base64url')}.signature` } });
+            })).toString('base64url')}.signature` }, request: async url => new URL(String(url)).pathname === '/v1/machines'
+                ? Response.json({ machines: census }) : null });
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime) throw new Error('Account restoration did not establish a lifetime');
         const scope = lifetime.scope;
@@ -57,15 +64,18 @@ describe('plugin surface execution requirement', () => {
             container: 'appPage', target: { kind: 'app' } });
         if (!binding) throw new Error('Source fixture must use an admitted destination');
         const sourceCustody = { kind: 'development' as const, registeredRootId: 'surface-source-root' };
+        const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_surface_source',
+            sourceRef: { machineId, pluginId, sourceCustody } });
         const project = (occurrenceId: string, generation: number) => {
             const model = normalizePluginUiProjection({ v: 2, generation, agentsById: {}, actionsById: {}, toolsById: {},
                 commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
                 installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Source surface', version: '1.0.0',
-                    enabled: true, source: { kind: 'localPath', locator: 'surface-source-root' }, occurrenceId, sourceCustody,
+                    enabled: true, source: { kind: 'localPath', locator: 'surface-source-root' }, occurrenceId, sourceCustody, executionOrigin,
+                    declaresContributionPoints: true,
                     executionTarget: { default: 'installation' } } },
                 familiesById: { pluginUi: { family: 'pluginUi', entriesById: { [entryId]: {
-                    id: entryId, pluginId, occurrenceId, contributionKind: 'surfacePlacement', descriptorId: 'home', binding: PluginUiDestinationBindingV1Schema.parse(binding), target: binding.target,
-                    renderer: { kind: 'hostedHtml', contributionId: 'home', source: artifactHtmlBundleFromBodyV1('<p>Source</p>'), requiredHostMethods: ['context'] },
+                    id: entryId, pluginId, occurrenceId, executionOrigin, contributionKind: 'surfacePlacement', descriptorId: 'home', binding: PluginUiDestinationBindingV1Schema.parse(binding), target: binding.target,
+                    renderer: { kind: 'hostedHtml', contributionId: 'home', source: artifactHtmlBundleFromBodyV1('<p>Source</p>'), requiredHostMethods: [] },
                     display: {}, headerActions: [], availability: { state: 'available', reason: 'available', diagnostics: [] },
                 } } } },
             });
@@ -95,14 +105,16 @@ describe('plugin surface execution requirement', () => {
             return null;
         }
         function ContextualWrapper({ children }: React.PropsWithChildren) {
-            return React.createElement(InjectedAuthProvider, { credentials }, React.createElement(Wrapper, null, React.createElement(MainAppTabStateProvider, null,
+            return React.createElement(InjectedAuthProvider, { credentials, children: React.createElement(Wrapper, null, React.createElement(MainAppTabStateProvider, null,
                 React.createElement(AppPaneProvider, null, React.createElement(CurrentUiContextProvider, null,
-                    React.createElement(ContextPort), children)))));
+                    React.createElement(ContextPort), children)))) });
         }
         try {
             let pageEntryForRender = initialProjection.surfacePlacementsById[entryId];
             const hook = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId, projection: initialProjection,
-                entry: pageEntryForRender, enabled: true }), { wrapper: Wrapper });
+                entry: pageEntryForRender, enabled: isPluginSurfaceMachineBound({
+                    pluginId, projection: initialProjection, renderer: pageEntryForRender!.renderer,
+                }) }), { wrapper: Wrapper });
             // The cold HTTP fixture finishes restoration with no machine
             // inventory. Publish this test's live observation after that turn.
             await act(async () => storage.setState({ machines: { [machineId]: machine },
@@ -165,7 +177,7 @@ describe('plugin surface execution requirement', () => {
             expect(contextual.getCurrent().isExecutionOriginCurrent()).toBe(true);
             const actionAccount = await captureLazyActionAccountContext(connection.home.id);
             const owner = createPluginExecutionOriginActionDeps(actionAccount).pluginExecutionOriginAction!;
-            const executor = createActionExecutor({ pluginExecutionOriginAction: owner });
+            const executor = createActionExecutor(createActionExecutorBoundaryFixture({ pluginExecutionOriginAction: owner }));
             const invoke = async (actionId: Parameters<typeof owner>[0]['actionId'], input: unknown) => {
                 const result = await executor.execute(actionId, input, { surface: 'agent', authority: 'account_automation' });
                 expect(result.ok).toBe(true);

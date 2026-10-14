@@ -29,6 +29,12 @@ vi.mock('@/sync/store/hooks', () => ({
     useLocalSetting: (key: string) => (key === 'uiItemDensity' ? 'cozy' : key === 'uiFontScale' ? 1 : null),
 }));
 
+// ItemGroup renders the real GlassSurface, whose Account preferences use this storage boundary.
+vi.mock('@/sync/domains/state/storage', async () => {
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleStub({});
+});
+
 afterEach(() => {
     standardCleanup();
     vi.resetModules();

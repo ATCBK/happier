@@ -5,9 +5,13 @@ import type {
     BrowserViewTargetV1,
 } from '@happier-dev/protocol';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { flushHookEffects, renderScreen } from '@/dev/testkit';
+import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { initializeAuthRouteRuntimeForTests } from '@/dev/testkit/harness/authRouteRuntimeHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { buildBrowserAdapterCapabilities } from '@/sync/domains/browser/adapters/capabilities';
 import {
     applyBrowserControlEvent,
@@ -21,9 +25,28 @@ import { BrowserSurfaceHost } from './BrowserSurfaceHost';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { uiBrowserAutomationDispatchMethod } from '@happier-dev/protocol';
 
-vi.mock('@/hooks/server/useFeatureDecision', () => ({
-    useFeatureDecision: () => ({ state: 'enabled' }),
-}));
+// Static browser imports reach Socket consumers; retain the canonical network boundary.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+await initializeAuthRouteRuntimeForTests();
+
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+beforeEach(async () => {
+    connection = await restoreServerAccountForTest({
+        serverUrl: 'https://browser-automation-home.example.test',
+        serverIdentityId: 'srv_browser_automation',
+        request: async (input) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({
+                features: { browser: { enabled: true, internal: { enabled: true }, automation: { enabled: true }, viewTargets: { enabled: true } } },
+            }));
+            return null;
+        },
+    });
+});
 
 vi.mock('@/components/browser/BrowserShell', async () => {
     const ReactModule = await import('react');
@@ -121,7 +144,9 @@ function renderHost(automationEnabled: boolean, machineId?: string) {
 }
 
 describe('BrowserSurfaceHost in-app automation control service wiring', () => {
-    afterEach(() => {
+    afterEach(async () => {
+        await standardCleanup();
+        await connection?.dispose();
         clearBrowserRuntimeControlRegistryForTests();
         vi.restoreAllMocks();
     });

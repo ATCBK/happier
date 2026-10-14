@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import * as React from 'react';
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -16,6 +17,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installBrowserStorageLockBoundary } from '@/dev/testkit/harness/browserStorageLockBoundary';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn(), cancel: vi.fn() }));
 const nativeBoundary = vi.hoisted(() => ({ context: undefined as RenderContext | undefined }));
@@ -24,14 +26,9 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 // Radix supplies the DOM portal primitives; modal custody and native plugin mounting stay real.
 vi.mock('@/utils/web/radixCjs', async () => {
-    const boundary = (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock();
-    // Match Node's stable SDK exports; a render must not manufacture a new
-    // Radix component type and remount the native picker's surrounding controls.
-    const dialog = boundary.requireRadixDialog();
-    const layers = boundary.requireRadixDismissableLayer();
-    const focus = boundary.requireRadixFocusScope();
-    return { requireRadixDialog: () => dialog, requireRadixDismissableLayer: () => layers, requireRadixFocusScope: () => focus };
+    return (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock();
 });
+vi.mock('@/utils/web/reactDomCjs', async () => (await import('@/dev/testkit/mocks/reactDomCjs')).createReactDomCjsRendererMock());
 // The platform executable-loader boundary supplies the real public author module.
 // Projection admission, the modal, native mount and Host API settlement remain real.
 vi.mock('@/components/plugins/reactNative/resolveDefaultReactNativeLoaderBackend', () => {
@@ -120,6 +117,7 @@ async function choose(control: Parameters<typeof pressTestInstanceAsync>[0]): Pr
 
 describe('Workflow inputs through real Action option resolution', () => {
     beforeEach(async () => {
+        onTestFinished(installBrowserStorageLockBoundary());
         await loadSyncSingletonForTests();
         await harness.reset(); rpc.machine.mockReset(); rpc.cancel.mockReset();
         // Account connection disposal restores its credential spy. Reinstall the
@@ -303,6 +301,17 @@ describe('Workflow inputs through real Action option resolution', () => {
         const machine = createMachineFixture({ id: 'input-relay', storageMode: 'plain', activeAt: Date.now() });
         publishMachine(serverId, machine);
         harness.answer(serverId, 'GET /v1/artifacts?limit=500&includeBody=true', { body: [] });
+        // The Home's plugin-tier kill switches are real admission prerequisites.
+        const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+        const { tryWriteServerEnabledBitInPlace } = await import('@happier-dev/protocol');
+        const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        const features = createRootLayoutFeaturesResponse();
+        for (const feature of ['plugins', 'plugins.ui', 'plugins.ui.reactNativeBundles'] as const) {
+            if (!tryWriteServerEnabledBitInPlace(features, feature, true)) throw new Error(`Undeclared plugin feature: ${feature}`);
+        }
+        harness.answer(serverId, 'GET /v1/features', { body: features });
+        harness.answer(serverId, 'GET /v1/features/authenticated', { body: features });
+        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
         const { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentsListActionOutputV1Schema } = await import('@happier-dev/protocol/plugins/availability');
         harness.answer(serverId, `POST ${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']}`,
             { body: { availabilityCursor: 1, snapshots: [] } });

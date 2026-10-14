@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createPartialStorageModuleMock, renderScreen } from '@/dev/testkit';
+import { createPartialStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { renderScreen } from '@/dev/testkit';
 
 let snapshot: unknown = null;
 

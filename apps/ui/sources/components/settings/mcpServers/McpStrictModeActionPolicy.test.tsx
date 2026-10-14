@@ -5,7 +5,6 @@ import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSet
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
@@ -28,8 +27,8 @@ afterEach(standardCleanup);
 
 describe('MCP strict mode declared settings admission', () => {
     it.each([
-        { entry: 'catalog', disabled: true }, { entry: 'preview', disabled: true },
-        { entry: 'catalog', disabled: false }, { entry: 'preview', disabled: false },
+        { entry: 'catalog', disabled: true },
+        { entry: 'catalog', disabled: false },
         { entry: 'owner', disabled: false },
     ] as const)('honors disabled settings Actions at the $entry ingress (disabled=$disabled)', async ({ entry, disabled }) => {
         const home = await harness.addHome({ name: 'Policy', serverUrl: 'https://mcp-strict.example', serverIdentityId: 'srv_mcp_strict', accountId: 'owner', currentAccount: true });
@@ -48,7 +47,7 @@ describe('MCP strict mode declared settings admission', () => {
         try {
             if (entry === 'owner') {
                 const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
-                const result = await createFrontDoorActionExecute()('settings.set', { anchor: 'mcp.preview.mcpServersStrictMode', value: true }, {
+                const result = await createFrontDoorActionExecute()('settings.set', { anchor: 'session.mcpServersStrictMode', value: true }, {
                     surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
                     serverId: home, expectedAccountId: 'owner',
                 });
@@ -61,13 +60,6 @@ describe('MCP strict mode declared settings admission', () => {
                 if (disabled) expect(storage.getState().settings.mcpServersStrictMode).toBe(false);
                 else await waitForHomeGovernance(() => expect(storage.getState().settings.mcpServersStrictMode).toBe(true));
                 await hook.unmount();
-            } else {
-                const { McpSessionPreviewScreen } = await import('./McpSessionPreviewScreen');
-                const screen = await renderScreen(<McpSessionPreviewScreen />);
-                await screen.pressByTestIdAsync('settings.mcpServers.strictMode:stop');
-                if (disabled) expect(storage.getState().settings.mcpServersStrictMode).toBe(false);
-                else await waitForHomeGovernance(() => expect(storage.getState().settings.mcpServersStrictMode).toBe(true));
-                await screen.unmount();
             }
             if (disabled) {
                 await waitForHomeGovernance(() => expect(alert).toHaveBeenCalledWith('Error', 'action_disabled'));

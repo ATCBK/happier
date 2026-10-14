@@ -75,13 +75,14 @@ export function installToolCallsGroupViewCommonModuleMocks(
         return createTextModuleMock();
     });
 
-    vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-        const activeOptions = toolCallsGroupViewCommonModuleState.options;
-        if (activeOptions.storage) {
-            return await activeOptions.storage(importOriginal);
-        }
-
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createPartialStorageModuleMock(importOriginal, {});
-    });
+    // The callers providing a storage override dynamically load their real
+    // component after this installer. Do not wrap the real store in an async
+    // importOriginal factory for other callers: its Action/input graph cycles
+    // back through storage and waits on that still-resolving factory.
+    const storageFactory = options.storage;
+    if (storageFactory) {
+        vi.doMock('@/sync/domains/state/storage', async (importOriginal) => (
+            storageFactory(importOriginal)
+        ));
+    }
 }

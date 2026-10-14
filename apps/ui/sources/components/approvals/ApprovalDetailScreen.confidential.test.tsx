@@ -10,13 +10,14 @@ import { PrivateSecretContinuationV1Schema } from '@happier-dev/protocol/approva
 import { BrowserAutomationSecretFillRequestV1Schema } from '@happier-dev/protocol/browser/automation/v1';
 import { ComputerSecretFillRequestV1Schema } from '@happier-dev/protocol/computer/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { AccessibleMachineAccessV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { createSessionListRenderableSessionFixture, createTestSessionTranscriptSource, renderScreen, standardCleanup } from '@/dev/testkit';
 import { SessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
 import { EMPTY_WORKFLOW_ATTENTION_SOURCE } from '@/hooks/inbox/useWorkflowAttentionSource';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -29,6 +30,8 @@ import { normalizeAccountSettingsForLocalStorage } from '@/sync/domains/settings
 import { applyAccountSettingsSavedSecretMutation } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -75,8 +78,14 @@ async function continueChoice(screen: Awaited<ReturnType<typeof renderScreen>>) 
 
 installDisconnectedServerSocketBoundary(socket => {
     socket.connected = true;
+    vi.mocked(socket.connect).mockImplementation(() => {
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
-    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (_event, payload: unknown) => {
+    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
         if (!payload || typeof payload !== 'object') throw new Error('invalid_network_request');
         const method = Reflect.get(payload, 'method');
         if (method !== `machine-1:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`) throw new Error('unexpected_network_method');
@@ -114,11 +123,13 @@ describe('confidential approval human continuation', () => {
                     return new Response('{}', { status: 503 });
                 }
                 if (path === '/health') return Response.json({ status: 'ok' });
-                if (path === '/v1/features') return Response.json(features);
+                if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+                if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'account-a' }));
                 if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-                if (path === '/v1/machines/machine-1') return Response.json({ machine: createMachineFixture({ storageMode: 'plain' }) });
+                if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' })]);
+                if (path === '/v1/machines/machine-1') return Response.json({ machine: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }) });
                 if (path === '/v1/artifacts/approval-1') {
                     const artifact = storage.getState().artifacts['approval-1'];
                     if (!artifact?.isDecrypted || typeof artifact.body !== 'string') return new Response('{}', { status: 404 });
@@ -139,6 +150,10 @@ describe('confidential approval human continuation', () => {
                 return new Response('{}', { status: 404 });
             } });
         const serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
+        await vi.waitFor(() => {
+            expect(storage.getState().profile.id).toBe('account-a');
+            expect(storage.getState().profileScope).toEqual({ serverId, accountId: 'account-a' });
+        });
         const keySet = await resolveSettingsSecretsKeySet({ credentials: connection.credentials,
             scope: { serverId, accountId: 'account-a' } });
         const local = normalizeAccountSettingsForLocalStorage({ raw: { secrets: personal }, mode: 'plain',
@@ -235,9 +250,12 @@ describe('confidential approval human continuation', () => {
             sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
             targetBySessionAddress: new Map(), actionOperationEntries: [], pendingReadKeys: new Set(),
             markAllPending: false, isLoading: false, hasPrimaryAttention: true, hasContent: true, showCaughtUp: false,
-            workGroups: [], spansHomes: false, workflowAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE,
+            workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [], automationRuns: [],
+                automationServerId: null, openApprovals: [artifact], stalledSessions: [], landings: [], snoozed: [],
+                resolveSession: () => null, resolveOriginRunId: () => null }),
+            spansHomes: false, workflowAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE,
             automationAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE, automationAttentionItems: [],
-            markRead: async () => {}, resolveActionOperation: () => {}, settle: async () => {}, setReminder: async () => {},
+            markRead: async () => {}, dismissUsageNotice: async () => {}, resolveActionOperation: () => {}, settle: async () => {}, setReminder: async () => {},
         };
         const destinations: string[] = [];
         function InboxApprovalHost() {
@@ -268,7 +286,8 @@ describe('confidential approval human continuation', () => {
         const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
         const screen = await renderScreen(<ApprovalDetailScreen artifactId="approval-1" />);
         await vi.waitFor(() => expect(screen.findByTestId('approvals.secret-source:saved')).toBeTruthy());
-        await act(async () => { screen.pressByTestId('approvals.secret-source:saved'); });
+        await vi.waitFor(() => expect(screen.findByTestId('approvals.secret-value')?.props.editable).toBe(true));
+        await screen.pressByTestIdAsync('approvals.secret-source:saved');
         await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${savedResourceRef}`)).toBeTruthy());
         await act(async () => { screen.pressByTestId(`saved-secret:${savedResourceRef}`); });
         await continueChoice(screen);
@@ -370,7 +389,7 @@ describe('confidential approval human continuation', () => {
                 if (path === '/v1/plugins/availability/materializations/read' || path === '/v1/plugins/availability/intents/list' || path === '/v1/account/project-rows/list') return new Response('{}', { status: 503 });
                 if (init?.method && init.method !== 'GET') { writes.push(path); return new Response('{}', { status: 503 }); }
                 if (path === '/health') return Response.json({ status: 'ok' });
-                if (path === '/v1/features') return Response.json(features);
+                if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
                 if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'e2ee', updatedAt: 1 });
                 if (path === '/v1/machines/machine-1') return Response.json({ machine: { ...createMachineFixture({ storageMode: 'plain' }), access } });

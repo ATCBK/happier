@@ -83,6 +83,9 @@ import { createCurrentUiContextVoiceToolPort } from './currentUiContextVoiceTool
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const daemonRpcBoundary = vi.hoisted(() => vi.fn<(method: string, payload: unknown) => Promise<unknown>>());
+// Static surface imports reach Sync, so install the external Socket boundary before that graph loads.
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 // Only the external Socket transport answers for the daemon. Projection reads,
@@ -282,14 +285,14 @@ if (destinationBinding === null) {
     throw new Error('Expected the app-page fixture binding to normalize.');
 }
 
-const CLIENT_ACTION_ORIGIN: PluginMachineExecutionOriginV1 = Object.freeze({
+const CLIENT_ACTION_ORIGIN = Object.freeze({
     serverIdentityId: 'srv_current_ui_context_client_action',
     materializationRef: Object.freeze({
         pluginId: destinationBinding.destination.pluginId,
         machineId: 'machine-current-ui-context-client-action',
         materializationId: 'materialization-current-ui-context-client-action',
     }),
-});
+}) satisfies PluginMachineExecutionOriginV1;
 const PLUGIN_OCCURRENCE_ID = 'current-ui-composition-occurrence-a';
 
 const placement = Object.freeze({
@@ -998,7 +1001,7 @@ describe('CurrentUiContextProvider + PluginSurfaceHost composition', () => {
             expect(currentReader.readCurrentUiContext()?.entity?.label).toBe('Issue A');
         });
         const commandId = currentReader.readCurrentUiContext()?.commands[0]?.id ?? '';
-        expect(commandId).toMatch(/^current-ui-command:\d+$/);
+        expect(commandId).toMatch(/^current-ui-command:.+$/);
         expect(currentReader.resolveCurrentUiCommand(commandId)?.retirementSignal.aborted).toBe(false);
 
         await screen.unmount();
@@ -1034,7 +1037,7 @@ describe('CurrentUiContextProvider + PluginSurfaceHost composition', () => {
         });
         const commandA = currentReader.readCurrentUiContext()?.commands[0]?.id ?? '';
         const signalA = currentReader.resolveCurrentUiCommand(commandA)?.retirementSignal;
-        expect(commandA).toMatch(/^current-ui-command:\d+$/);
+        expect(commandA).toMatch(/^current-ui-command:.+$/);
         expect(signalA?.aborted).toBe(false);
 
         await act(async () => {
@@ -1044,9 +1047,13 @@ describe('CurrentUiContextProvider + PluginSurfaceHost composition', () => {
         expect(currentReader.resolveCurrentUiCommand(commandA)).toBeNull();
         expect(signalA?.aborted).toBe(true);
 
-        // The same host-view transition changes provider visibility and
-        // surface eligibility in one React commit. A competing consumer
-        // replay would allocate another command id and fail the +1 assertion.
+        const republishedCommandIds = new Set<string>();
+        const stopObserving = currentReader.subscribe(() => {
+            const commandId = currentReader.readCurrentUiContext()?.commands[0]?.id;
+            if (commandId) republishedCommandIds.add(commandId);
+        });
+        // Observe opaque command identity through the real reader; UUID allocation
+        // is not the publication contract. Replayed active notifications retain it.
         await act(async () => {
             setNativeAppState('active');
         });
@@ -1054,12 +1061,16 @@ describe('CurrentUiContextProvider + PluginSurfaceHost composition', () => {
             expect(currentReader.readCurrentUiContext()?.entity?.label).toBe('Issue A');
         });
         const commandB = currentReader.readCurrentUiContext()?.commands[0]?.id ?? '';
-        const sequenceA = Number(commandA.split(':').at(-1));
-        const sequenceB = Number(commandB.split(':').at(-1));
-        expect(commandB).toMatch(/^current-ui-command:\d+$/);
-        expect(sequenceB).toBe(sequenceA + 1);
+        expect(commandB).toMatch(/^current-ui-command:.+$/);
+        expect(commandB).not.toBe(commandA);
+        expect([...republishedCommandIds]).toEqual([commandB]);
         expect(currentReader.resolveCurrentUiCommand(commandA)).toBeNull();
         expect(currentReader.resolveCurrentUiCommand(commandB)?.retirementSignal.aborted).toBe(false);
+
+        await act(async () => { setNativeAppState('active'); });
+        expect(currentReader.readCurrentUiContext()?.commands[0]?.id).toBe(commandB);
+        expect([...republishedCommandIds]).toEqual([commandB]);
+        stopObserving();
 
         await screen.unmount();
         expect(currentReader.resolveCurrentUiCommand(commandB)).toBeNull();

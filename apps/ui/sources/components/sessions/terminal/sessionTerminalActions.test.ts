@@ -14,6 +14,7 @@ import { buildProjectPaneScopeId } from '@/components/projects/detail/projectPan
 import { buildProjectTerminalKey } from '@/components/projects/detail/projectTerminalScope';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { createPlainMachineRowFixture } from '@/dev/testkit';
 
 // Machine transport is outside the deterministic pane/Action ownership boundary.
 const machineRpc = vi.hoisted(() => vi.fn());
@@ -45,7 +46,10 @@ describe('mounted terminal Actions', () => {
         } finally { retire(); machineRpc.mockReset(); }
     });
     it('opens and closes requester-owned Project members at their exact accepted roots without a Session', async () => {
-        const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-actions.test', accountId: 'bob' }], route: () => undefined });
+        const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-actions.test', accountId: 'bob',
+            settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.close': ['ui'] } } } }],
+            route: request => request.path === '/v1/machines'
+                ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })]) : undefined });
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const serverId = home.homes.project!.id;
         const first = { id: 'accepted', serverId, machineId: 'machine', rootPath: '/accepted', projectKey: 'project', createdAtMs: 1 };

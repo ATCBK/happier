@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 
 import type { HappierAudioStreamNativeEventMap, HappierAudioStreamNativeModule } from '../../../../../../packages/audio-stream-native/src/HappierAudioStreamNative.types';
-import { createVoiceAudioSessionCoordinator, type VoiceAudioSessionApplyRequest, type VoiceAudioSessionPlatformEvent } from '../../../../../../packages/audio-stream-native/src/voiceAudioSessionCoordinator';
+import { createVoiceAudioSessionCoordinator, type VoiceAudioSessionApplyRequest, type VoiceAudioSessionApplyResult, type VoiceAudioSessionPlatformEvent } from '../../../../../../packages/audio-stream-native/src/voiceAudioSessionCoordinator';
 import { createVoicePcmCapture } from '../../../../../../packages/audio-stream-native/src/voicePcmCapture';
 
 /** Real capture/coordinator logic with only the native audio system boundary replaced. */
@@ -12,7 +12,7 @@ export function createNativeVoicePcmCaptureHarness(aecAvailable = true) {
   };
   let sessionListener: ((event: VoiceAudioSessionPlatformEvent) => void) | null = null;
   let generation = 0;
-  const apply = vi.fn(async (request: VoiceAudioSessionApplyRequest) => {
+  const apply = vi.fn(async (request: VoiceAudioSessionApplyRequest): Promise<VoiceAudioSessionApplyResult> => {
     generation = request.generation;
     return { generation, aecAvailable, aecActive: false, route: 'speaker' };
   });
@@ -41,19 +41,21 @@ export function createNativeVoicePcmCaptureHarness(aecAvailable = true) {
     stopPlayback: vi.fn(async () => {}),
     setPlaybackGain: vi.fn(),
     getPlaybackCursorMs: vi.fn(() => 325),
-    addListener: vi.fn<HappierAudioStreamNativeModule['addListener']>((name, listener) => {
+    addListener: <Name extends keyof HappierAudioStreamNativeEventMap>(name: Name, listener: (event: HappierAudioStreamNativeEventMap[Name]) => void) => {
       let subscribers = listeners.get(name);
       if (!subscribers) {
         subscribers = new Set();
         listeners.set(name, subscribers);
       }
       // Native SDK event registration is keyed by its published event map.
-      const callback = listener as (event: never) => void;
+      const callback: (event: never) => void = listener;
       subscribers.add(callback);
       const registeredSubscribers = subscribers;
       return { remove: () => { registeredSubscribers.delete(callback); } };
-    }),
+    },
   } satisfies HappierAudioStreamNativeModule;
+  // Spy on the SDK boundary in place so its generic event correlation survives.
+  vi.spyOn(nativeModule, 'addListener');
   const capture = createVoicePcmCapture({ nativeModule, audioSessionCoordinator: coordinator });
   return {
     capture, coordinator, nativeModule, apply, restore,

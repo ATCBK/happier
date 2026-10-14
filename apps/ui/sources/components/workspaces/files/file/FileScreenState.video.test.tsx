@@ -1,3 +1,4 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,7 +51,7 @@ let currentScreen: Awaited<ReturnType<typeof renderScreen>> | null = null;
 async function waitForPlayer(screen: Awaited<ReturnType<typeof renderScreen>>) {
     await vi.waitFor(async () => { await flushHookEffects(); expect(screen.root.findAllByType('VideoView')).toHaveLength(1); });
 }
-const theme = { colors: { surface: { base: '#000', inset: '#000' }, border: { default: '#333' }, text: { secondary: '#ccc' } } };
+const theme = createThemeFixture({ colors: { surface: { base: '#000', inset: '#000' }, border: { default: '#333' }, text: { secondary: '#ccc' } } });
 function file(revision = '[12,123]', focused = true, isActive = true) {
     const props = { theme, filePath: 'clip.mp4', workspaceScope: harness.scope, videoMimeType: 'video/mp4', binaryPreviewRevision: revision, isActive };
     return <DestinationInstanceHost tabId="video" ref={{ kind: 'newTab', params: {} }} pathname="/" focused={focused} visible>

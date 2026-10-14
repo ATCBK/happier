@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createStorageModuleStub, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import {
     createSessionBoardActionsPort,
     projectSessionBoard,

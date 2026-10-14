@@ -40,12 +40,7 @@ type CapturedAgentInputProps = Readonly<{
     sessionId?: string;
 }>;
 
-installAgentInputCommonModuleMocks({
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({ translate: (key: string) => (key === 'session.collaboration.discussion.messagePlaceholder' ? 'Write a message…' : key) });
-    },
-});
+installAgentInputCommonModuleMocks();
 vi.mock('expo-image', () => ({ Image: (props: Record<string, unknown>) => React.createElement('Image', props, null) }));
 
 const mounted = vi.hoisted(() => ({ screen: null as null | { root: { findByType: (type: unknown) => { props: Record<string, unknown> } } } }));
@@ -66,7 +61,7 @@ vi.mock('@/sync/domains/session/humanPresence/sessionHumanPresenceRuntime', asyn
 
 const ALICE = {
     accountId: 'account-alice',
-    profile: { firstName: 'Alice', lastName: 'Ng', username: 'alice', avatarUrl: null },
+    profile: { name: 'Alice Ng', firstName: 'Alice', lastName: 'Ng', username: 'alice', avatarUrl: null },
     accessHint: 'view' as const,
 };
 
@@ -143,6 +138,27 @@ describe('SessionDiscussionComposer (the one composer with the discussion adapte
         expect(composer().inputAccessibilityLabel).toBeTruthy();
         expect(composer().inputAccessibilityLabel).toBe(composer().placeholder);
         expect(typeof composer().onSend).toBe('function');
+    });
+
+    it.each([undefined, 'discussion-1'])('names the real human submit action for discussion %s', async (discussionId) => {
+        const onSend = vi.fn();
+        const screen = await render(<SessionDiscussionComposer
+            scope={{ serverId: 'server-b', accountId: 'viewer-b' }}
+            address={{ serverId: 'server-b', sessionId: 'session-shared-id' }}
+            discussionId={discussionId}
+            availability="available"
+            value={{ text: 'Please review this', mentions: [] }}
+            onChange={() => {}}
+            disabled={false}
+            onSend={onSend}
+        />);
+        const submit = screen.root.findAll((node) => node.props.testID === 'new-session-composer-send'
+            && typeof node.type === 'string' && typeof node.props.onPress === 'function').at(-1)!;
+        // The canonical composer testkit translates to keys; assert the human-send identity
+        // at the real button, rather than the adapter prop or the unrelated new-session default.
+        expect(submit.props.accessibilityLabel).toBe('common.send');
+        await act(async () => { submit.props.onPress(); });
+        expect(onSend).toHaveBeenCalledWith({ v: 1, parts: [{ t: 'text', text: 'Please review this' }] });
     });
 
     it('types @Ali in the real composer, picks Alice and posts her as a mention part', async () => {

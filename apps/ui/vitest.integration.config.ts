@@ -60,7 +60,7 @@ export default defineConfig({
         // runner already does for cross-app source tests.
         tsconfigPaths({
             projects: [
-                resolve('./tsconfig.json'),
+                resolve('./tsconfig.vitest.json'),
                 resolve('../server/tsconfig.json'),
                 resolve('../cli/tsconfig.json'),
             ],

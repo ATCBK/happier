@@ -3,10 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     createRootLayoutFeaturesResponse,
-    createStorageStoreMock,
     flushHookEffects,
     renderScreen,
 } from '@/dev/testkit';
+import {
+    createStorageStoreMock } from '@/dev/testkit/mocks/storage';
 import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol';
 import { installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
 

@@ -1,11 +1,13 @@
-import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { accountSettingsParse, type AccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
 import { deriveAccountRemoteAlertPolicyV1 } from '@happier-dev/protocol/account/settings/accountRemoteAlertPolicy';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { NotificationChannelCatalogMutationV1Schema, NotificationChannelCatalogRecordV1Schema,
     NOTIFICATION_CHANNELS_ROUTE_V1, type NotificationChannelCatalogRecordV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { PushTokensRemoteAlertProjectionV2Schema } from '@happier-dev/protocol/push/pushTokenRegistration';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { storage as notificationStorage } from '@/sync/domains/state/storage';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -21,6 +23,26 @@ import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/c
 
 type CatalogFixture = Readonly<{ status: 'present'; record: NotificationChannelCatalogRecordV1 }>
     | Readonly<{ status: 'deleted' | 'absent' }>;
+
+export type NotificationsSettingsCatalogTestHarness = {
+    scope: ServerAccountScope;
+    storage: typeof notificationStorage;
+    policy: AccountSettings['attentionDeliveryPolicyV1'];
+    pairedWrites: unknown[];
+    settingsWrites: unknown[];
+    catalogWrites: ReturnType<typeof NotificationChannelCatalogMutationV1Schema.parse>[];
+    secretPromotions: ReturnType<typeof SharedSavedSecretPromoteInputV1Schema.parse>[];
+    requests: Readonly<{ path: string; method: string }>[];
+    artifacts: ArtifactStoreBoundary;
+    readRecord(): NotificationChannelCatalogRecordV1;
+    readRaw(): Record<string, unknown>;
+    refuseCatalogWrites(reason: 'conflict' | 'settings-conflict' | null): void;
+    deferNextSecretPromotion(): {
+        started: Promise<ReturnType<typeof SharedSavedSecretPromoteInputV1Schema.parse>>;
+        release(): void;
+    };
+    dispose(): Promise<void>;
+};
 
 /** Metro's deferred require consumes this same real Vitest executor namespace. */
 export async function loadNotificationsSettingsActionExecutorForTests() {
@@ -38,7 +60,7 @@ export async function restoreNotificationsSettingsCatalog(params: Readonly<{
     localSettings?: Readonly<Record<string, unknown>>;
     catalog: CatalogFixture;
     features?: ReturnType<typeof createRootLayoutFeaturesResponse>;
-}>) {
+}>): Promise<NotificationsSettingsCatalogTestHarness> {
     let raw = { ...params.rawSettings };
     let record = NotificationChannelCatalogRecordV1Schema.parse(params.catalog.status === 'present' ? params.catalog.record : { v: 1, channels: [] });
     let authority: 'present' | 'deleted' | 'absent' = params.catalog.status;
