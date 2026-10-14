@@ -1,11 +1,9 @@
-import {
-    MachineEnvironmentApplyInputV1Schema, MachineEnvironmentReportInputV1Schema,
-    MachineEnvironmentResolveResultV1Schema, ManagedMachineEnvironmentSetupV1Schema,
-    ManagedMutationInputV1Schema, createStoredReadSchema, parseSavedSecretRefV1,
-    type MachineEnvironmentApplyInputV1, type MachineEnvironmentReportInputV1,
-    type ManagedMachineActionInputV1, type ManagedMachineV1,
-} from '@happier-dev/protocol';
+import { MachineEnvironmentApplyInputV1Schema, MachineEnvironmentReportInputV1Schema, MachineEnvironmentResolveResultV1Schema, ManagedMutationInputV1Schema, type MachineEnvironmentApplyInputV1, type MachineEnvironmentReportInputV1, type ManagedMachineActionInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedMachineEnvironmentSetupV1Schema, type ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { inTx, type Tx } from '@/storage/inTx';
+import { normalizeStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { readCurrentServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { resolveEffectiveMachineRoleInTx } from '@/app/machines/machineAccess';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
@@ -108,7 +106,7 @@ export async function reportMachineEnvironment(params: Readonly<{
             operation: input.operation, ...(input.errorCode ? { errorCode: input.errorCode } : {}) });
         const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision,
             creationState: 'active', archivedAt: null, allocation: 'bound', desired: { not: 'delete' },
-            enrolledMachineId: input.machineId, environmentSetup: { equals: row.environmentSetup } }, data: { environmentSetup: next } });
+            enrolledMachineId: input.machineId, environmentSetup: { equals: normalizeStrictJsonValue(row.environmentSetup)! } }, data: { environmentSetup: next } });
         if (changed.count !== 1) throw new ManagedMachineError('intent_changed');
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, current);
@@ -133,7 +131,7 @@ export async function skipManagedMachineSetup(params: Readonly<{
         if (setup.state === 'skipped') return projectManagedMachineInTx(tx, row);
         if (setup.state === 'succeeded' || setup.state === 'running') throw new ManagedMachineError('intent_changed');
         const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision,
-            creationState: 'active', archivedAt: null, desired: { not: 'delete' }, environmentSetup: { equals: row.environmentSetup } },
+            creationState: 'active', archivedAt: null, desired: { not: 'delete' }, environmentSetup: { equals: normalizeStrictJsonValue(row.environmentSetup)! } },
             data: { environmentSetup: { environment: setup.environment, state: 'skipped', ...(setup.operation ? { operation: setup.operation } : {}) } } });
         if (changed.count !== 1) throw new ManagedMachineError('intent_changed');
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });

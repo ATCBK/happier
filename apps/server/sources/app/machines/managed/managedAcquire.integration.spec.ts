@@ -6,7 +6,7 @@ import { inTx } from "@/storage/inTx";
 import { requireCurrentManagedMachineInTx, readMachineDevcontainerChildInTx } from "./managedRows";
 import { qualifyManagedAcquisitionPolicy } from "./managedAcquire";
 import { admitManagedAcquire } from "./managedAcquire";
-import { buildManagedConfigurationFactsV1 } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
+import { buildManagedConfigurationFactsV1, ManagedConfigurationFactsV1Schema } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
 import { createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { ManagedAcquireInputV1Schema, PluginManifestV2Schema, signMachineInstallationProof, createManagedPolicyCensusProofV1, createManagedPolicyProofV1, encodeManagedPolicyProofV1, MANAGED_POLICY_PROOF_HEADER, ManagedWakeTargetV1Schema, type ManagedCommittedIdleEvidenceV1 } from "@happier-dev/protocol";
 import tweetnacl from 'tweetnacl';
@@ -154,10 +154,10 @@ describe("managed acquisition durable authority", () => {
     it('admits the selected finite variant policy and refuses a receipt for another launch', async () => {
         const { account, controller, input, request, launch } = await createManagedComputeFixture('selected-variant',
             { location: 'cloud', stoppedBilling: 'billed' });
-        const reviewedFacts = buildManagedConfigurationFactsV1({ choicesSchema: createPluginJsonSchemaZodValueAdapter(launch.jsonSchema),
+        const reviewedFacts = ManagedConfigurationFactsV1Schema.parse(buildManagedConfigurationFactsV1({ choicesSchema: createPluginJsonSchemaZodValueAdapter(launch.jsonSchema),
             launch: input.selection.launch, controller, optionStatus: 'current', prerequisites: [],
             billing: { location: 'cloud', stoppedBilling: 'billed' }, retentionCapabilities: { supportedIntents: ['delete'], finiteOnly: true },
-            machineOverride: { retention: input.selection.retention, wakeOnAcceptedMessage: input.selection.wakeOnAcceptedMessage } });
+            machineOverride: { retention: input.selection.retention, wakeOnAcceptedMessage: input.selection.wakeOnAcceptedMessage } }));
         const reviewedRequest = { ...request, input: { ...request.input, input: { ...input, reviewedFacts } } };
         await expect(admitManagedAcquire({ ...reviewedRequest, input: { ...reviewedRequest.input, requestId: 'other-variant-receipt',
             input: { ...input, reviewedFacts: { ...reviewedFacts, launch: { ...reviewedFacts.launch, choices: { image: 'another-image' } } } } } }))
@@ -1007,10 +1007,12 @@ describe("managed acquisition durable authority", () => {
             expect(await reportManagedIntent({ ...currentCleanup, result: { kind: 'unknown' } })).toMatchObject({
                 machine: { allocation: 'may-exist', nativeOperationRef, cleanup: { disposition: 'pending' }, submittedNativeEffect: { intent: 'delete' } },
             });
-            expect(await reportManagedIntent({ ...currentCleanup, result: { kind: 'confirmed' }, observation: {
+            const settledCleanup = await reportManagedIntent({ ...currentCleanup, result: { kind: 'confirmed' }, observation: {
                 observedAt: 900, availability: 'absent',
-            } })).toMatchObject({ machine: { allocation: 'confirmed-absent', nativeOperationRef } });
-            expect(await db.managedMachine.findUniqueOrThrow({ where: { id: partial.machine.id } })).toMatchObject({ cleanup: null });
+            } });
+            expect(settledCleanup).toMatchObject({ machine: { allocation: 'confirmed-absent' } });
+            expect(settledCleanup.machine.nativeOperationRef).toBeUndefined();
+            expect(await db.managedMachine.findUniqueOrThrow({ where: { id: partial.machine.id } })).toMatchObject({ cleanup: null, nativeOperationRef: null });
             await expect(submitManagedAcquire(original)).rejects.toMatchObject({ code: cancellation ? 'enrollment_retired' : 'intent_changed' });
         }
         for (const invalid of [

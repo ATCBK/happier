@@ -7,7 +7,7 @@ import {
     readMaterializedPluginCollectionContract,
 } from "./contracts";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx } from "@/storage/inTx";
 import {
     createLightSqliteHarness,
     type LightSqliteHarness,
@@ -421,7 +421,7 @@ describe("plugin collection writable-contract readiness", () => {
                 return await originalTransaction(...args);
             }
             return await originalTransaction(async (tx) => {
-                const censusTx = Object.create(tx) as Tx;
+                const censusTx: typeof tx = Object.create(tx);
                 const censusRows = Object.create(tx.pluginCollectionRow);
                 const originalFindMany = tx.pluginCollectionRow.findMany.bind(tx.pluginCollectionRow);
                 Object.defineProperty(censusRows, "findMany", {

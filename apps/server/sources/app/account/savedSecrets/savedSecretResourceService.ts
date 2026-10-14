@@ -1,19 +1,11 @@
-import {
-    type ManagedResourceDependencyV1, type ManagedResourceDispositionV1,
-    formatSharedSavedSecretRefV1,
-    SHARED_SAVED_SECRET_REF_V1_PREFIX,
-    isSessionEncryptionModeAllowedByStoragePolicy,
-    TeamRoleV1Schema,
-    parseEncryptedDataKeyEnvelopeV1,
-    SavedSecretCatalogEntryV1Schema,
-    SavedSecretResourceStoredContentV1Schema,
-    type SavedSecretCatalogEntryV1,
-    type SavedSecretCatalogCorruptEntryV1,
-    type SavedSecretCatalogResultV1,
-    type SavedSecretResourceEnvelopeCensusRecipientV1,
-    type SavedSecretResourceStoredContentV1,
-    type AccountSettingsStoredContentEnvelope,
-} from "@happier-dev/protocol";
+import { type ManagedResourceDependencyV1, type ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
+import { formatSharedSavedSecretRefV1, SHARED_SAVED_SECRET_REF_V1_PREFIX } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { isSessionEncryptionModeAllowedByStoragePolicy } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
+import { TeamRoleV1Schema } from '@happier-dev/protocol/teams';
+import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { SavedSecretCatalogEntryV1Schema, type SavedSecretCatalogEntryV1, type SavedSecretCatalogCorruptEntryV1, type SavedSecretCatalogResultV1, type SavedSecretResourceEnvelopeCensusRecipientV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+import { SavedSecretResourceStoredContentV1Schema, type SavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
+import { type AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from '@/app/machines/managed/managedRead';
 import { isTeamPrincipalRoleV1 } from "@happier-dev/protocol/teams";
 import { SavedSecretReferenceCensusV1Schema, SavedSecretPromoteReferenceCensusV1Schema, SavedSecretCatalogMutationsV1Schema, SavedSecretPersonalPromotionsV1Schema,
@@ -655,9 +647,9 @@ export type SavedSecretResourceServiceError =
     | "references_invalid"
     | "resource_in_use";
 
-export type SavedSecretResourceServiceResult<T> =
+export type SavedSecretResourceServiceResult<T, Error extends SavedSecretResourceServiceError = SavedSecretResourceServiceError> =
     | Readonly<{ ok: true; value: T }>
-    | Readonly<{ ok: false; error: SavedSecretResourceServiceError }>;
+    | Readonly<{ ok: false; error: Error }>;
 
 export type SavedSecretResourceDeleteResult =
     | SavedSecretResourceServiceResult<{ resourceId: string }>
@@ -914,7 +906,7 @@ export type SavedSecretResourceEnvelopeCensusProjection = Readonly<{
 export async function listSavedSecretResourceEnvelopeCensusInTx(
     tx: Tx,
     input: Readonly<{ accountId: string; resourceId: string; cursor?: string; limit: number }>,
-): Promise<SavedSecretResourceServiceResult<SavedSecretResourceEnvelopeCensusProjection>> {
+): Promise<SavedSecretResourceServiceResult<SavedSecretResourceEnvelopeCensusProjection, "resource_not_found" | "forbidden" | "invalid_resource">> {
     const resource = await tx.savedSecretResource.findUnique({
         where: { id: input.resourceId },
         select: { ownerAccountId: true, encryptionMode: true, revision: true },
@@ -2080,7 +2072,7 @@ async function promoteCatalogOnlySavedSecretResourcesInTx(tx: Tx, input: Promote
     return { ok: true, value: receiptValue(fence.account.settingsVersion) };
 }
 
-function isPromotedMachineEnvironmentRewritable(value: Prisma.JsonValue, sourceIds: readonly string[]): boolean {
+function isPromotedMachineEnvironmentRewritable(value: unknown, sourceIds: readonly string[]): boolean {
     const reached = sourceIds.filter(secretId => listSavedSecretReferenceCarrierPathsV1(value, { secretId }).length > 0);
     if (reached.length === 0) return true;
     const parsed = MachineEnvironmentV1ReadSchema.safeParse(value);
@@ -2088,7 +2080,7 @@ function isPromotedMachineEnvironmentRewritable(value: Prisma.JsonValue, sourceI
         listSavedSecretReferenceCarrierPathsV1(value, { secretId }).length === listSavedSecretReferenceCarrierPathsV1(parsed.data, { secretId }).length);
 }
 
-function rewritePromotedMachineEnvironment(value: Prisma.JsonValue, promotions: ReadonlyMap<string, Readonly<{ ref: string; revision: number }>>): Prisma.InputJsonObject | null {
+function rewritePromotedMachineEnvironment(value: unknown, promotions: ReadonlyMap<string, Readonly<{ ref: string; revision: number }>>): Prisma.InputJsonObject | null {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
     const source = value as Prisma.JsonObject;
     const reached = [...promotions.keys()].filter(secretId => listSavedSecretReferenceCarrierPathsV1(value, { secretId }).length > 0);
@@ -2123,7 +2115,7 @@ async function rewritePromotedMachineReferencesInTx(tx: Tx, accountId: string,
         const setup = machine.environmentSetup;
         if (setup === null || typeof setup !== 'object' || Array.isArray(setup)
             || !('environment' in setup) || setup.environment === undefined) continue;
-        const environment = rewritePromotedMachineEnvironment((setup as Prisma.JsonObject).environment, promotions);
+        const environment = rewritePromotedMachineEnvironment(setup.environment, promotions);
         if (!environment) continue;
         const changed = await tx.managedMachine.updateMany({ where: { id: machine.id, environmentSetup: { equals: setup } },
             data: { environmentSetup: { ...setup, environment } } });

@@ -1,19 +1,12 @@
-import {
-    ManagedControllerCurrentnessV1Schema, ManagedControllerReportV1Schema,
-    ManagedControllerSubmitInputV1Schema, type ManagedControllerSubmitInputV1,
-    ManagedEnrollmentCorrelationV1Schema, ManagedBootstrapCredentialCreateV1Schema,
-    ManagedMachineV1Schema,
-    type ManagedControllerCurrentnessV1, type ManagedControllerReportV1,
-    type ManagedEnrollmentCorrelationV1, type ManagedBootstrapCredentialCreateV1,
-    ManagedControlAdmissionInputV1Schema, ManagedControllerIntentReportV1Schema,
-    type ManagedControlAdmissionInputV1, type ManagedControllerIntentReportV1,
-    ProviderObservationV1Schema, createStoredReadSchema,
-    ManagedPolicyAdmissionInputV1Schema,
-    type ManagedPolicyAdmissionInputV1, type ManagedPolicyPurposeV1,
-    type ExternalActionExecutionAuthorizationV1,
-    MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, verifyMachineInstallationProof,
-    isMachineRetentionPolicySupportedV1,
-} from "@happier-dev/protocol";
+import { ManagedControllerCurrentnessV1Schema, ManagedControllerReportV1Schema, ManagedControllerSubmitInputV1Schema, type ManagedControllerSubmitInputV1, ManagedEnrollmentCorrelationV1Schema, ManagedBootstrapCredentialCreateV1Schema, type ManagedControllerCurrentnessV1, type ManagedControllerReportV1, type ManagedEnrollmentCorrelationV1, type ManagedBootstrapCredentialCreateV1, ManagedControlAdmissionInputV1Schema, ManagedControllerIntentReportV1Schema, type ManagedControlAdmissionInputV1, type ManagedControllerIntentReportV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { ProviderObservationV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { ManagedPolicyAdmissionInputV1Schema, type ManagedPolicyAdmissionInputV1, type ManagedPolicyPurposeV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
+import { type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { isMachineRetentionPolicySupportedV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
 import { validateManagedRecipeInTx } from "./machinePresetService";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
@@ -23,6 +16,7 @@ import * as privacyKit from "privacy-kit";
 import { inTx, type Tx } from "@/storage/inTx";
 import { getActivePrismaRuntime } from "@/storage/db";
 import { jsonPathEquals } from "@/storage/jsonPathFilter";
+import { normalizeStrictJsonValue } from "@happier-dev/protocol/json/strictJsonValue";
 import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { applyMachineReplacement } from "@/app/machines/applyMachineReplacement";
@@ -148,7 +142,7 @@ async function readOrAdmitManagedPolicy(params: Readonly<{ custodianAccountId: s
         if (!admit) return { machine: { ...machine, desired: intent, desiredWhen: 'now' as const, desiredAfterMs: undefined },
             requestId: input.requestId, replayed: false };
         const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: input.expectedIntentRevision,
-            controllerMachineId: input.controller.machineId, controllerInstallationId: input.controller.installationId, admittedInput: { equals: row.admittedInput } },
+            controllerMachineId: input.controller.machineId, controllerInstallationId: input.controller.installationId, admittedInput: { equals: normalizeStrictJsonValue(row.admittedInput)! } },
             data: { desired: intent, desiredWhen: 'now', desiredAfterMs: null, intentRevision: { increment: 1 },
                 admittedInput: { ...admitted, currentAdmission },
                 ...(intent === 'delete' ? { cleanup: { disposition: 'pending', reason: 'delete_requested' } } : {}) } });
@@ -227,7 +221,7 @@ export async function admitManagedControl(params: Readonly<{
             }
         }
         const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: expected,
-            controllerMachineId: controller.machineId, controllerInstallationId: controller.installationId, admittedInput: { equals: row.admittedInput } }, data });
+            controllerMachineId: controller.machineId, controllerInstallationId: controller.installationId, admittedInput: { equals: normalizeStrictJsonValue(row.admittedInput)! } }, data });
         if (changed.count !== 1) throw new ManagedMachineError("intent_changed");
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, row);
@@ -255,7 +249,7 @@ export async function submitManagedIntent(input: ManagedControllerCurrentnessV1)
         if (row.desired === 'rebuild' && admitted.currentAdmission?.kind === 'control' && admitted.currentAdmission.rebuildSettled) {
             return { machine: await projectManagedMachineInTx(tx, row), submitted: false };
         }
-        const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: canonical.expectedIntentRevision, admittedInput: { equals: row.admittedInput } },
+        const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: canonical.expectedIntentRevision, admittedInput: { equals: normalizeStrictJsonValue(row.admittedInput)! } },
             data: { admittedInput: { ...admitted, submittedEffect: { ...canonical, intent: row.desired,
                 ...(rebuild ? { reviewedEffectDigest: rebuild.reviewedEffectDigest } : {}) } } } });
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
@@ -277,7 +271,7 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
         if (!pending || pending.homeId !== canonical.homeId || pending.managedId !== canonical.managedId
                 || pending.expectedIntentRevision !== canonical.expectedIntentRevision || pending.requestId !== canonical.requestId
                 || !sameManagedInput(pending.controller, canonical.controller)) throw new ManagedMachineError("request_conflict");
-        const data: Prisma.ManagedMachineUpdateManyMutationInput = {};
+        const data: Prisma.ManagedMachineUncheckedUpdateManyInput = {};
         if (canonical.result.kind === 'accepted') {
             if (pending.intent !== 'delete') throw new ManagedMachineError('resource_mismatch');
             const launch = readManagedLaunchSnapshot(row.launch);
@@ -331,7 +325,7 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
                 ...(settlesCurrentRebuild ? { currentAdmission: { ...currentAdmission, rebuildSettled: true } } : {}),
                 ...(row.enrolledMachineId ? { replacementEnrollment: { machineId: row.enrolledMachineId } } : {}) };
             const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision,
-                admittedInput: { equals: row.admittedInput } }, data });
+                admittedInput: { equals: normalizeStrictJsonValue(row.admittedInput)! } }, data });
             if (changed.count !== 1) throw new ManagedMachineError('intent_changed');
             const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
             await invalidateManagedMachineInTx(tx, row);
@@ -366,7 +360,7 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
             else if (row.archivedAt === null) data.cleanup = canonical.result.kind === "refused"
                 ? { disposition: "unavailable", reason: canonical.result.code } : getActivePrismaRuntime().DbNull;
         }
-        const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision, admittedInput: { equals: row.admittedInput } }, data });
+        const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision, admittedInput: { equals: normalizeStrictJsonValue(row.admittedInput)! } }, data });
         if (changed.count !== 1) throw new ManagedMachineError("intent_changed");
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, row);
@@ -542,7 +536,7 @@ export async function linkManagedEnrollmentInTx(tx: Tx, input: ManagedEnrollment
             replacementMachineId: machineId, reason: 'managed_native_rebuild', source: 'automatic', actorUserId: null });
     }
     const updated = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: input.expectedIntentRevision, creationState: "active", enrolledMachineId: row.enrolledMachineId,
-        admittedInput: { equals: row.admittedInput } }, data: { enrolledMachineId: machineId, ...(replacementEnrollment ? { admittedInput: retainedAdmission } : {}) } });
+        admittedInput: { equals: normalizeStrictJsonValue(row.admittedInput)! } }, data: { enrolledMachineId: machineId, ...(replacementEnrollment ? { admittedInput: retainedAdmission } : {}) } });
     if (updated.count !== 1) throw new ManagedMachineError("enrollment_retired");
     await invalidateManagedMachineInTx(tx, row);
 }

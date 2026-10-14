@@ -86,7 +86,7 @@ export async function mutateAccountSettingsHistorySnapshotInTx(input: Readonly<{
     const profileRoots = new Set<string>(PROFILE_TRANSFERRED_SOURCE_ROOTS_V1);
     const promptKeys = operation.transferredPromptLibraryKeys ?? [];
     if (new Set(promptKeys).size !== promptKeys.length) return { status: "invalid_content" };
-    const promptRoots = new Set<string>(promptKeys.filter(key => key !== "coding" && key !== "voice")
+    const promptRoots = new Set<string | null>(promptKeys.filter(key => key !== "coding" && key !== "voice")
         .map(key => PROMPT_LIBRARY_RETAINED_ROOTS_V1[key]));
     const roleTransfers = operation.legacyRoleArtifactTransfers;
     const guidanceRoots = new Set<string>(roleTransfers === undefined ? [] : LEGACY_ROLE_GUIDANCE_HISTORY_ROOTS_V1);

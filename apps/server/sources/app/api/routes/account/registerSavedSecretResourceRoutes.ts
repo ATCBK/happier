@@ -1,24 +1,8 @@
 import { decodeBase64, encodeBase64 } from "privacy-kit";
 import { z } from "zod";
 
-import {
-    SavedSecretResourceActionErrorV1Schema,
-    SavedSecretResourceMaterialsResponseV1Schema,
-    SavedSecretResourceEnvelopeCensusRequestV1Schema,
-    SavedSecretResourceEnvelopeCensusResponseV1Schema,
-    SavedSecretResourceEnvelopeRepairInputV1Schema,
-    SavedSecretResourceEnvelopeRepairOutputV1Schema,
-    SavedSecretResourceRecipientEnvelopeInputV1Schema,
-    SharedSavedSecretCreateInputV1Schema,
-    SharedSavedSecretDeleteInputV1Schema,
-    SharedSavedSecretDeleteOutputV1Schema,
-    SharedSavedSecretGrantsSetInputV1Schema,
-    SharedSavedSecretListOutputV1Schema,
-    SharedSavedSecretMutationOutputV1Schema,
-    SharedSavedSecretPromoteInputV1Schema,
-    SharedSavedSecretPromoteOutputV1Schema,
-    SharedSavedSecretUpdateInputV1Schema,
-} from "@happier-dev/protocol";
+import { SavedSecretResourceActionErrorV1Schema, SavedSecretResourceEnvelopeRepairInputV1Schema, SavedSecretResourceEnvelopeRepairOutputV1Schema, SavedSecretResourceRecipientEnvelopeInputV1Schema, SharedSavedSecretCreateInputV1Schema, SharedSavedSecretDeleteInputV1Schema, SharedSavedSecretDeleteOutputV1Schema, SharedSavedSecretGrantsSetInputV1Schema, SharedSavedSecretListOutputV1Schema, SharedSavedSecretMutationOutputV1Schema, SharedSavedSecretPromoteInputV1Schema, SharedSavedSecretPromoteOutputV1Schema, SharedSavedSecretUpdateInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
+import { SavedSecretResourceMaterialsResponseV1Schema, SavedSecretResourceEnvelopeCensusRequestV1Schema, SavedSecretResourceEnvelopeCensusResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import { requirePresentUser, PresentUserRequiredResponseSchema } from "@/app/api/utils/requirePresentUser";
@@ -80,10 +64,18 @@ export { decodeEnvelopes as decodeSavedSecretResourceEnvelopes };
 
 // Composite mutations can return a rejection or throw it to roll back earlier
 // writes. Its public classification must be independent of that transaction path.
+function savedSecretResourceErrorHttpStatus<MissingResourceStatus extends 400 | 404>(
+    error: "resource_not_found" | "forbidden" | "invalid_resource",
+    missingResourceStatus: MissingResourceStatus,
+): 400 | 403 | MissingResourceStatus;
+function savedSecretResourceErrorHttpStatus<MissingResourceStatus extends 400 | 404>(
+    error: SavedSecretResourceServiceError,
+    missingResourceStatus: MissingResourceStatus,
+): 400 | 403 | 409 | MissingResourceStatus;
 function savedSecretResourceErrorHttpStatus(
     error: SavedSecretResourceServiceError,
     missingResourceStatus: 400 | 404,
-) {
+): 400 | 403 | 404 | 409 {
     if (error === "forbidden" || error === "recipient_mode_unsupported") return 403;
     if (error === "resource_not_found") return missingResourceStatus;
     if (error === "resource_changed" || error === "recipient_changed"
