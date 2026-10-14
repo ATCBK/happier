@@ -1,3 +1,4 @@
+import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { resolveExistingSessionAttachContext } from '../sessionEncryption/resolveExistingSessionAttachContext';
 import { createProcessOwnershipRuntime } from '../processes/ownership/processOwnershipRuntime';
 import { createEndOwnerRemainder } from '../processes/endOwnerRemainder';
@@ -7,6 +8,7 @@ import { createLeftBehindPass } from '../processes/leftBehind/leftBehindPass';
 import type { HappierProcessRoot } from '../processes/ownership/types';
 import { listHappierProcessRoots, readProcessOwnershipBootTimeMs, type HappierProcessRootSource } from '../processes/roots/listHappierProcessRoots';
 import { resolveProcessOwnerScopeKey } from '@/processes/ownerTag';
+import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import { getSharedTerminalProcessRegistry } from '../local/services/inventory/terminalRegistry';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { issueMcpRequestAuthCapability } from '@/mcp/runtime/issueMcpRequestAuthCapability';
@@ -87,7 +89,8 @@ import { createProviderManagedRuntimeBindingFingerprintV1 } from '@happier-dev/p
 import { SessionExecutionRunBrokerAuthorityRequestV1Schema, SessionExecutionRunBrokerAuthorityResponseV1Schema } from '@happier-dev/protocol/daemon/executionRuns';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { startManagedProviderConsumerApplication } from '@/providers/broker/managedProviderConsumerApplication';
-import type { AgentRuntimeDaemonServiceRequestV1, AgentRuntimeDaemonServiceResponseV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
+import type { AgentRuntimeDaemonServiceRequestV1, AgentRuntimeDaemonServiceResponseV1,
+  RunnerDaemonPluginServicesPreparationCauseV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { logger } from '@/ui/logger';
 import { createDaemonQualifiedRequestAuthCallbacks } from '../connectedServices/requestAuth/createDaemonQualifiedRequestAuthCallbacks';
 import { resolveRequesterSessionRuntimeDirectories } from '../sessionEncryption/createRequesterSessionRuntimeContext';
@@ -263,7 +266,7 @@ import {
   startDaemonControlServer,
   resolveTrackedAgentRuntimeDaemonServiceAuthority,
 } from '../controlServer';
-import { createDaemonSessionAccountActionExecutor } from '../agentRuntime/createDaemonSessionAccountActionExecutor';
+import { createDaemonSessionAccountActionExecutor, logDaemonSessionAccountActionRefusalV1 } from '../agentRuntime/createDaemonSessionAccountActionExecutor';
 import { createOnDaemonSessionStartupFailure } from '../sessions/onHappySessionWebhook';
 import {
   AgentRuntimeDaemonModelTransitionAuthorizationResultV1Schema,
@@ -271,6 +274,7 @@ import {
   COMPOSER_STAGED_MEDIA_ADMISSION_SETTLEMENT_FIELD,
 } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
 import { AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
+import { createRunnerExecutionRunSnapshots } from '../agentRuntime/runnerExecutionRunSnapshots';
 import { RunnerDaemonPluginServiceOperationV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonPluginServicesProtocol';
 import {
   RUNNER_MANAGED_SERVICES_CUSTODY_RPC_METHOD,
@@ -309,6 +313,7 @@ import { createAdoptedExecutionRunRootCleanup } from '../connectedServices/runs/
 import { resolveConnectedServiceMaterializedRootDir } from '../connectedServices/materialize/resolveConnectedServiceMaterializedRootDir';
 import {
   clearExecutionRunConnectedServicesCleanupReceipt,
+  readRetainedExecutionRunRecord,
   listExecutionRunMarkersForRehydration,
 } from '../executionRunRegistry';
 import { createComposedSimulatorPreviewAdapter } from '../devices/simulator/adapter';
@@ -423,6 +428,7 @@ export type ProviderManagedCatalogRuntimeOwner = Readonly<{
 import type {
   BrowserSidecarContextCaptureSurface,
   BrowserSidecarControlAdapterFactory,
+  BrowserSidecarControlAdapterFactoryInput,
   BrowserSidecarControlAdapterFactoryResult,
 } from '../browser/sidecar/controlAdapter';
 import { createProductBrowserSidecarControlAdapterFactory } from '../browser/sidecar/productSource';
@@ -488,7 +494,9 @@ import {
 import { resolveTrackedSessionTerminalPresentation } from '../sessions/resolveTrackedSessionTerminalPresentation';
 import { createDisconnectedTerminalHostResumeLifecycle } from './disconnectedTerminalHostResumeLifecycle';
 import { resolveTrackedSessionCatalogAgentId } from '../sessions/resolveTrackedSessionCatalogAgentId';
+import { findTrackedSessionByRunnerPid } from '../sessions/sessionReportCorrelation';
 import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
+import { processGenerationMatches } from '../processIdentity';
 import {
   clearSessionMarkerConnectedServiceRestartIntent,
   readSessionMarkerForPid,
@@ -512,6 +520,8 @@ import { authorizeRunnerAgentNewTurn } from '../agentRuntime/runnerAgentTurnAdmi
 import { createRunnerAgentDaemonFacetService } from '../agentRuntime/runnerAgentDaemonFacetService';
 import {
   createRunnerDaemonPluginServicesHost,
+  createRunnerDaemonPluginServicesPreparationError,
+  projectRunnerDaemonPluginServicesFailure,
   type RunnerDaemonCurrentGlobalActionExecutor,
   type RunnerDaemonCurrentGlobalExternalSessionsOwner,
   type RunnerDaemonCurrentGlobalMcpOwner,
@@ -791,7 +801,7 @@ import {
   resolveRunnerTerminalControlServiceabilityEvidence,
 } from './terminalControlServiceabilityProjection';
 import { publishReportedTerminalControlServiceability } from './publishReportedTerminalControlServiceability';
-import { retireExactTerminalControlServiceability } from '../sessions/retireTerminalControlServiceability';
+import { retireExactTerminalControlServiceability, type TerminalControlServiceabilityRetirementTarget } from '../sessions/retireTerminalControlServiceability';
 import { executeTerminalHostDisposition } from '@/terminal/attachment/terminalHostDisposition';
 import { recoverStrandedTerminalControlServiceability } from '../sessions/recoverStrandedTerminalControlServiceability';
 import { resolveSharedStateRequiredSwitchContinuity } from '../connectedServices/sessionAuthSwitch/sharedStateContinuity';
@@ -2404,6 +2414,8 @@ export async function startDaemonSessionControlRuntime(
       | undefined;
     externalSessionHostOperationOwner?: ExternalSessionHostOperationOwner;
     runtimeId?: string;
+    /** The daemon composition's canonical runtime controller; runner processes never adopt it. */
+    pluginRuntimeController?: import('@/plugins/runtime/reload/controller').PluginReloadController;
     readPluginCatalogProjection?: () => import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogProjection;
     credentials: NonNullable<
       Parameters<typeof executeSpawnSessionRequest>[0]['credentials']
@@ -2472,6 +2484,7 @@ export async function startDaemonSessionControlRuntime(
       typeof executeSpawnSessionRequest
     >[0]['persistedTakeoverAdmissionWaiter'];
     getApiMachineForSessions: () => ApiMachineClient | null;
+    onComputerRoutesReady?: (resolveComputer: () => ComputerRoutes | null) => void;
     onLocalServicesPreviewRoutesReady?: (
       routes: LocalServicePreviewRoutes,
     ) => void;
@@ -2592,6 +2605,7 @@ export async function startDaemonSessionControlRuntime(
     liveStreamCaptureRegistry?: MachineLiveStreamCaptureRegistry;
     simulatorInputLeaseManager?: SimulatorInputLeaseManager;
     browserSidecarControlAdapterFactory?: BrowserSidecarControlAdapterFactory;
+    readMachineMemory?: BrowserSidecarControlAdapterFactoryInput['readMachineMemory'];
     resolveServerFeaturesSnapshot?: () =>
       | Promise<CliServerFeaturesSnapshot | undefined>
       | CliServerFeaturesSnapshot
@@ -4108,6 +4122,8 @@ export async function startDaemonSessionControlRuntime(
       runnerIdentity: object;
     }>,
   ) => Promise<void> = async () => {};
+  const runnerExecutionRunSnapshots = createRunnerExecutionRunSnapshots({ machineId: params.machineId,
+    controller: params.pluginRuntimeController });
   let observeConnectedServiceRestartProcessMissing:
     | ((tracked: TrackedSession) => void)
     | null = null;
@@ -4352,6 +4368,7 @@ export async function startDaemonSessionControlRuntime(
               binding: retainedAuthority.retainedAgent,
               pluginHardRevocationRevision:
                 retainedAuthority.pluginHardRevocationRevision,
+              runnerSnapshotIdentity: retainedAuthority.runner.snapshotIdentity,
             });
           } catch {
             return null;
@@ -4690,10 +4707,11 @@ export async function startDaemonSessionControlRuntime(
   const retireTerminalControlServiceabilityForCurrentAccount = async (
     input: Omit<
       Parameters<typeof retireExactTerminalControlServiceability>[0],
-      'credentials'
-    >,
+      'credentials' | 'attachmentId' | 'expectedRunner' | 'terminalMode'
+    > & TerminalControlServiceabilityRetirementTarget,
+    retainedAttribution?: TrackedSession['requesterWorkAttributionV1'],
   ) => {
-    const context = await resolveSessionAccountContext(input.sessionId);
+    const context = await resolveSessionAccountContext(input.sessionId, retainedAttribution);
     await assertSessionAccountCurrent(input.sessionId, context);
     return await withSessionAccountHome(context, () =>
       retireExactTerminalControlServiceability({
@@ -4857,6 +4875,15 @@ export async function startDaemonSessionControlRuntime(
   const stopSessionCore = createStopSession({
     ownerRemainder,
     pidToTrackedSession: params.pidToTrackedSession,
+    retireAbsentTerminalControlServiceability: async ({ sessionId, trackedSession }) =>
+      await retireTerminalControlServiceabilityForCurrentAccount({
+        sessionId,
+        terminalMode: 'plain',
+        expectedRunner: {
+          pid: trackedSession.sessionRunnerPid ?? trackedSession.pid,
+          startTimeMs: trackedSession.runnerProcessIdentity?.processStartTimeMs ?? trackedSession.processStartTimeMs,
+        },
+      }, trackedSession.requesterWorkAttributionV1 ?? trackedSession.spawnOptions?.requesterWorkAttributionV1),
     retireUpstreamAuthorityBeforeProcessStop: async (pid) =>
       await retireUpstreamAuthorityBeforeProcessStop({
         pid,
@@ -7698,346 +7725,786 @@ export async function startDaemonSessionControlRuntime(
       sessionId,
       runner,
       retainedAgent,
+      executionRunSnapshotId,
+      runnerRetainedAgent,
       invocationId,
       witness,
       managedProviderRetention,
       signal,
     }) => {
-      const tracked = findTrackedSessionByHappySessionId(
-        params.pidToTrackedSession.values(),
-        sessionId,
-      );
-      if (
-        !tracked ||
-        !authorizeTrackedRunnerAgentDaemonServiceOperation({
-          tracked,
-          sessionId,
-          runner,
-          retainedAgent,
-          witness: undefined,
-          allowIdleCurrentGeneration: true,
-        })
-      ) {
-        throw new PluginError({
-          code: 'plugin_services_runner_authority_unavailable',
-          message:
-            'Runner PluginServices exact runner authority is unavailable',
-        });
-      }
-      const trackedInvocationContext = tracked.runnerAgentInvocationContext;
-      const invocationContext = trackedInvocationContext
-        ? Object.freeze({
-            cwd: trackedInvocationContext.cwd,
-            environment: Object.freeze({}),
-            ...(trackedInvocationContext.agentCliLaunch
-              ? {
-                  agentCliLaunch: trackedInvocationContext.agentCliLaunch,
-                }
-              : {}),
-            providerBindingActive:
-              trackedInvocationContext.providerBindingActive,
-          })
-        : null;
-      if (!invocationContext) {
-        throw new PluginError({
-          code: 'plugin_services_invocation_context_unavailable',
-          message: 'Runner PluginServices invocation context is unavailable',
-        });
-      }
-      const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
-        happyHomeDir: configuration.happyHomeDir,
-      });
-      let releaseLease = true;
-      const supervisionLaunchAuthorities = new Map<
-        string,
-        RunnerManagedProviderServerLaunchAuthority
-      >();
-      const readSupervisionLaunchAuthority = (
-        serverId: string,
-      ): RunnerManagedProviderServerLaunchAuthority | null =>
-        supervisionLaunchAuthorities.get(serverId) ?? null;
-      const stampSupervisionLaunchAuthority = (
-        spec: ManagedServiceSpec,
-      ): void => {
-        const expected =
-          projectRunnerManagedProviderServerLaunchAuthority(spec);
-        if (!expected) return;
-        const existing = supervisionLaunchAuthorities.get(expected.serverId);
-        if (existing) {
-          if (!isDeepStrictEqual(existing, expected)) {
-            throw new PluginError({
-              code: 'plugin_managed_service_spec_conflict',
-              message:
-                'A different managed-service specification already owns this exact lifecycle scope',
-            });
-          }
-          return;
-        }
-        supervisionLaunchAuthorities.set(expected.serverId, expected);
-      };
-      const managedProviderCleanup: {
-        current: (() => void | Promise<void>) | null;
-      } = { current: null };
-      const cleanupManagedProvider = async () => {
-        supervisionLaunchAuthorities.clear();
-        const cleanup = managedProviderCleanup.current;
-        managedProviderCleanup.current = null;
-        await cleanup?.();
-      };
-      let releaseManagedProviderInvocation = true;
+      let preparationStage: RunnerDaemonPluginServicesPreparationCauseV1['stage'] = 'runner_authority';
       try {
-        const registration = lease.registry.agentRuntimesByAgentId.get(
-          retainedAgent.agentId,
+        const tracked = findTrackedSessionByHappySessionId(
+          params.pidToTrackedSession.values(),
+          sessionId,
         );
-        let isCurrent = false;
-        try {
-          isCurrent = registration?.isCurrent() === true;
-        } catch {
-          isCurrent = false;
+        const runSnapshot = executionRunSnapshotId && runnerRetainedAgent
+          ? runnerExecutionRunSnapshots.read(executionRunSnapshotId, { sessionId, runner, retainedAgent: runnerRetainedAgent })
+          : null;
+        const admittedRunnerAgent = runSnapshot ? runnerRetainedAgent! : retainedAgent;
+        if (executionRunSnapshotId && (!runSnapshot || !isDeepStrictEqual(runSnapshot.projection.agent?.binding, retainedAgent))) {
+          throw new PluginError({ code: 'execution_run_contribution_snapshot_unavailable',
+            message: 'Execution Run executable snapshot is unavailable' });
         }
-        const binding =
-          registration?.hasPrimaryRuntime === true
-            ? registration.sessionRunnerFactoryBinding
-            : undefined;
-        const currentRegistrationIsExact = Boolean(
-          registration &&
-          registration.hasPrimaryRuntime &&
-          binding &&
-          isCurrent &&
-          registration.pluginId === retainedAgent.pluginId &&
-          registration.agentId === retainedAgent.agentId &&
-          registration.sourceCustody &&
-          pluginSourceCustodyV1Equal(
-            registration.sourceCustody,
-            binding.sourceCustody,
-          ) &&
-          currentAgentBindingMatchesRetainedRunner({
-            runnerSnapshotIdentity: runner.snapshotIdentity,
-            currentBinding: binding,
-            retainedBinding: retainedAgent,
-          }),
-        );
-        const capturedAgentRegistration = currentRegistrationIsExact
-          ? registration!
-          : null;
-        const capturedAgentProviderBinding = capturedAgentRegistration
-          ? readLeasedAgentProviderBindingAdapter({
-              lease,
-              agentId: capturedAgentRegistration.agentId,
-            })
-          : null;
-        const isCapturedAgentRegistrationPreOpen = (): boolean => {
-          if (
-            !capturedAgentRegistration ||
-            !capturedAgentProviderBinding ||
-            capturedAgentRegistration.providerBinding !==
-              capturedAgentProviderBinding.adapter ||
-            capturedAgentRegistration.pluginId !==
-              capturedAgentProviderBinding.pluginId ||
-            tracked.agentRuntimeDaemonServiceSessionOpenAttestation !==
-              undefined ||
-            tracked.agentRuntimeDaemonServiceAdmittedTurnId !== undefined
-          ) {
-            return false;
-          }
-          try {
-            return capturedAgentRegistration.isCurrent() === true;
-          } catch {
-            return false;
-          }
-        };
-        const authorizeOperation = (
-          operationWitness: typeof witness,
-          options?: Readonly<{
-            requireActiveTurn?: boolean;
-          }>,
-        ): boolean =>
-          authorizeTrackedRunnerAgentDaemonServiceOperation({
+        if (
+          !tracked ||
+          !authorizeTrackedRunnerAgentDaemonServiceOperation({
             tracked,
             sessionId,
             runner,
-            retainedAgent,
-            witness: operationWitness,
-            allowIdleCurrentGeneration: options?.requireActiveTurn !== true,
-          });
-        if (!authorizeOperation(witness)) {
+            retainedAgent: admittedRunnerAgent,
+            witness: undefined,
+            allowIdleCurrentGeneration: true,
+          })
+        ) {
           throw new PluginError({
-            code: 'plugin_services_turn_authority_unavailable',
-            message: 'Runner PluginServices turn authority is unavailable',
+            code: 'plugin_services_runner_authority_unavailable',
+            message:
+              'Runner PluginServices exact runner authority is unavailable',
           });
         }
-        const revalidateAdoptedManagedProviderPolicy = async (
-          runtimeBindingBasis: ProviderRuntimeBindingBasisV1,
-        ): Promise<boolean> => {
-          const trackedSelection =
-            tracked.spawnOptions?.modelSelection?.ref ?? null;
-          const trackedMetadata =
-            tracked.spawnOptions?.providerBindingMetadataV1 ?? null;
-          if (
-            !trackedSelection ||
-            trackedSelection.providerConnectionId === null ||
-            !trackedMetadata
-          )
-            return false;
+        preparationStage = 'invocation_context';
+        const trackedInvocationContext = tracked.runnerAgentInvocationContext;
+        const invocationContext = trackedInvocationContext
+          ? Object.freeze({
+              cwd: trackedInvocationContext.cwd,
+              environment: Object.freeze({}),
+              ...(!runSnapshot && trackedInvocationContext.agentCliLaunch
+                ? {
+                    agentCliLaunch: trackedInvocationContext.agentCliLaunch,
+                  }
+                : {}),
+              providerBindingActive:
+                runSnapshot ? false : trackedInvocationContext.providerBindingActive,
+            })
+          : null;
+        if (!invocationContext) {
+          throw new PluginError({
+            code: 'plugin_services_invocation_context_unavailable',
+            message: 'Runner PluginServices invocation context is unavailable',
+          });
+        }
+        preparationStage = 'registry_acquisition';
+        const lease = runSnapshot ? { ...runSnapshot.snapshot.runtimeRegistryLease, release: async () => {} }
+          : await acquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: configuration.happyHomeDir });
+        let releaseLease = true;
+        const supervisionLaunchAuthorities = new Map<
+          string,
+          RunnerManagedProviderServerLaunchAuthority
+        >();
+        const readSupervisionLaunchAuthority = (
+          serverId: string,
+        ): RunnerManagedProviderServerLaunchAuthority | null =>
+          supervisionLaunchAuthorities.get(serverId) ?? null;
+        const stampSupervisionLaunchAuthority = (
+          spec: ManagedServiceSpec,
+        ): void => {
+          const expected =
+            projectRunnerManagedProviderServerLaunchAuthority(spec);
+          if (!expected) return;
+          const existing = supervisionLaunchAuthorities.get(expected.serverId);
+          if (existing) {
+            if (!isDeepStrictEqual(existing, expected)) {
+              throw new PluginError({
+                code: 'plugin_managed_service_spec_conflict',
+                message:
+                  'A different managed-service specification already owns this exact lifecycle scope',
+              });
+            }
+            return;
+          }
+          supervisionLaunchAuthorities.set(expected.serverId, expected);
+        };
+        const managedProviderCleanup: {
+          current: (() => void | Promise<void>) | null;
+        } = { current: null };
+        const cleanupManagedProvider = async () => {
+          supervisionLaunchAuthorities.clear();
+          const cleanup = managedProviderCleanup.current;
+          managedProviderCleanup.current = null;
+          await cleanup?.();
+        };
+        let releaseManagedProviderInvocation = true;
+        try {
+          preparationStage = 'current_registration';
+          const registration = lease.registry.agentRuntimesByAgentId.get(
+            retainedAgent.agentId,
+          );
+          let isCurrent = false;
           try {
-            resolveDaemonSessionModelTransitionAuthority({
+            isCurrent = registration?.isCurrent() === true;
+          } catch {
+            isCurrent = false;
+          }
+          const binding =
+            registration?.hasPrimaryRuntime === true
+              ? registration.sessionRunnerFactoryBinding
+              : undefined;
+          const currentRegistrationIsExact = Boolean(
+            registration &&
+            registration.hasPrimaryRuntime &&
+            binding &&
+            isCurrent &&
+            registration.pluginId === retainedAgent.pluginId &&
+            registration.agentId === retainedAgent.agentId &&
+            registration.sourceCustody &&
+            pluginSourceCustodyV1Equal(
+              registration.sourceCustody,
+              binding.sourceCustody,
+            ) &&
+            currentAgentBindingMatchesRetainedRunner({
+              runnerSnapshotIdentity: runner.snapshotIdentity,
+              currentBinding: binding,
+              retainedBinding: retainedAgent,
+            }),
+          );
+          const capturedAgentRegistration = currentRegistrationIsExact
+            ? registration!
+            : null;
+          const capturedAgentProviderBinding = capturedAgentRegistration
+            ? readLeasedAgentProviderBindingAdapter({
+                lease,
+                agentId: capturedAgentRegistration.agentId,
+              })
+            : null;
+          const isCapturedAgentRegistrationPreOpen = (): boolean => {
+            if (
+              !capturedAgentRegistration ||
+              !capturedAgentProviderBinding ||
+              capturedAgentRegistration.providerBinding !==
+                capturedAgentProviderBinding.adapter ||
+              capturedAgentRegistration.pluginId !==
+                capturedAgentProviderBinding.pluginId ||
+              tracked.agentRuntimeDaemonServiceSessionOpenAttestation !==
+                undefined ||
+              tracked.agentRuntimeDaemonServiceAdmittedTurnId !== undefined
+            ) {
+              return false;
+            }
+            try {
+              return capturedAgentRegistration.isCurrent() === true;
+            } catch {
+              return false;
+            }
+          };
+          const authorizeOperation = (
+            operationWitness: typeof witness,
+            options?: Readonly<{
+              requireActiveTurn?: boolean;
+            }>,
+          ): boolean =>
+            (!runSnapshot || runnerExecutionRunSnapshots.read(executionRunSnapshotId!, {
+              sessionId, runner, retainedAgent: admittedRunnerAgent }) === runSnapshot)
+            && authorizeTrackedRunnerAgentDaemonServiceOperation({
+              tracked,
+              sessionId,
+              runner,
+              retainedAgent: admittedRunnerAgent,
+              witness: runSnapshot ? undefined : operationWitness,
+              allowIdleCurrentGeneration: runSnapshot ? true : options?.requireActiveTurn !== true,
+            });
+          preparationStage = 'turn_authority';
+          if (!authorizeOperation(witness)) {
+            throw new PluginError({
+              code: 'plugin_services_turn_authority_unavailable',
+              message: 'Runner PluginServices turn authority is unavailable',
+            });
+          }
+          preparationStage = 'managed_provider';
+          const revalidateAdoptedManagedProviderPolicy = async (
+            runtimeBindingBasis: ProviderRuntimeBindingBasisV1,
+          ): Promise<boolean> => {
+            const trackedSelection =
+              tracked.spawnOptions?.modelSelection?.ref ?? null;
+            const trackedMetadata =
+              tracked.spawnOptions?.providerBindingMetadataV1 ?? null;
+            if (
+              !trackedSelection ||
+              trackedSelection.providerConnectionId === null ||
+              !trackedMetadata
+            )
+              return false;
+            try {
+              resolveDaemonSessionModelTransitionAuthority({
+                trackedAgentId: resolveTrackedSessionCatalogAgentId(tracked),
+                authorizedAgentId: retainedAgent.agentId,
+                trackedSelection,
+                trackedSessionBindingMetadata: trackedMetadata,
+                requestAgentId: retainedAgent.agentId,
+                requestedSelection: {
+                  ...trackedSelection,
+                  providerConnectionId: trackedSelection.providerConnectionId,
+                },
+              });
+              const accountSnapshot = getActiveAccountSettingsSnapshot();
+              if (!accountSnapshot) return false;
+              const providerSettings = readProviderSettingsForCli(
+                accountSnapshot,
+              ).settings;
+              return isRetainedManagedProviderSettingsGrantCurrent({
+                machineId: params.machineId,
+                providerSettings,
+                runtimeBindingBasis,
+              });
+            } catch {
+              return false;
+            }
+          };
+          const resolveSharedGatewayBinding = async (
+            basis: ProviderRuntimeBindingBasisV1,
+          ) => {
+            const origin = await params.resolveCurrentMachineExecutionOriginContext?.(signal);
+            if (!origin || origin.machineId !== params.machineId || !params.externalActionAccountId) {
+              throw new PluginError({
+                code: 'plugin_services_managed_provider_authority_unavailable',
+                message: 'Managed gateway execution identity is unavailable',
+              });
+            }
+            return Object.freeze({
+              homeId: origin.serverIdentityId,
+              accountId: params.externalActionAccountId,
+              connectionId: basis.connectionId,
+              machineId: params.machineId,
+              consumerId: sessionId,
+            });
+          };
+          const createSharedManagedProjection = (
+            created: import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry').ResolvedManagedProviderRuntimeInvocationServices,
+            basis: ProviderRuntimeBindingBasisV1,
+            metadata: NonNullable<NonNullable<typeof tracked.spawnOptions>['providerBindingMetadataV1']>,
+            revalidate: () => Promise<boolean>,
+          ) => {
+            if (basis.deployment.kind !== 'managedLocal' || created.lifetime !== 'sharedConsumer') {
+              throw new PluginError({
+                code: 'plugin_services_managed_provider_authority_unavailable',
+                message: 'Managed gateway shared custody is unavailable',
+              });
+            }
+            const deployment = basis.deployment;
+            const launchScope = createProviderLaunchResourceScope();
+            launchScope.register(created.cleanup);
+            managedProviderCleanup.current = () => launchScope.release();
+            let captured: Pick<Parameters<NonNullable<typeof created.materializeManagedProviderAgentBinding>>[0], 'service' | 'projection'> | null = null;
+            let startPromise: Promise<void> | null = null;
+            const start = () => {
+              startPromise ??= (async () => {
+                const started = await startPublicManagedProviderRuntime({
+                  identity: created.bootstrap.identity,
+                  request: {
+                    reason: 'sessionDemand',
+                    connectionId: basis.connectionId,
+                    connectionRevision: metadata.connectionRevision,
+                    endpointTemplateIds: deployment.managedRuntime.endpointTemplateIds,
+                  },
+                  acquireRuntime: async identity => {
+                    const runtime = await lease.registry.acquireManagedProviderRuntime?.(identity);
+                    return runtime && runtime.activationOccurrenceId === created.bootstrap.occurrenceId
+                      && pluginSourceCustodyV1Equal(runtime.sourceCustody, created.bootstrap.sourceCustody)
+                      ? runtime : null;
+                  },
+                  connectedAccounts: created.connectedAccounts,
+                  custody: {
+                    ...created,
+                    async projectEndpointAccess(input) {
+                      const projection = await created.projectEndpointAccess(input);
+                      if (projection) captured = { service: input.service, projection };
+                      return projection;
+                    },
+                  },
+                  isAuthorizationCurrent: () => !signal.aborted && authorizeOperation(undefined),
+                  revalidateAuthorization: revalidate,
+                  signal,
+                  launchResourceScope: launchScope,
+                });
+                if (!started.ok) throw new PluginError({
+                  code: started.code,
+                  message: 'Managed gateway Session runtime start failed',
+                });
+              })();
+              return startPromise;
+            };
+            return Object.freeze({
+              start,
+              readSharedGatewayAccess: createSharedManagedProviderSessionAccess({
+                start,
+                readProjection: () => captured,
+                ...(created.materializeManagedProviderAgentBinding ? { materialize: created.materializeManagedProviderAgentBinding } : {}),
+                endpointTemplateId: basis.endpoint.endpointTemplateId,
+                revalidate,
+                cleanup: cleanupManagedProvider,
+              }),
+            });
+          };
+          const createRemoteManagedProjection = async (
+            basis: ProviderRuntimeBindingBasisV1,
+            metadata: NonNullable<NonNullable<typeof tracked.spawnOptions>['providerBindingMetadataV1']>,
+            hardRevocationRevision: number,
+            revalidate: () => Promise<boolean>,
+            retainedScope?: import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry').RetainedManagedProviderRuntimeInvocationScope,
+          ) => await createRemoteManagedProviderSessionProjection({
+            sessionId, machineId: params.machineId, basis, metadata, hardRevocationRevision,
+            registry: lease.registry, ...(retainedScope ? { retainedScope } : {}), signal,
+            isBootstrapCurrent: () => !signal.aborted && authorizeOperation(undefined),
+            isCurrent: async scope => !signal.aborted && authorizeOperation(undefined) && await revalidate()
+              && await readCurrentPluginHardRevocationRevision({
+                paths: resolvePluginStorePaths({ happyHomeDir: configuration.happyHomeDir }), pluginId: scope.pluginId,
+              }) === hardRevocationRevision
+              && (scope.sourceCustody.kind !== 'managed' || await readCurrentPluginImmutableGenerationIntegrityCurrentness({
+                paths: resolvePluginStorePaths({ happyHomeDir: configuration.happyHomeDir }),
+                pluginId: scope.pluginId, immutableGenerationId: scope.sourceCustody.immutableGenerationId,
+              })),
+            openBroker: params.openAccountConnectionProviderBrokerAccess,
+            installConsumerCleanup: cleanup => { managedProviderCleanup.current = cleanup; },
+            cleanup: cleanupManagedProvider, readSupervisionLaunchAuthority,
+            capturedAgentProviderBinding, isCapturedAgentRegistrationCurrent: isCapturedAgentRegistrationPreOpen,
+          });
+          let managedProvider = await (async () => {
+            if (managedProviderRetention) {
+              const retained = managedProviderRetention;
+              const scope = retained.scope;
+              if (scope.sessionId !== sessionId) {
+                throw new PluginError({
+                  code: 'plugin_services_managed_provider_retention_mismatch',
+                  message:
+                    'Retained managed Provider authority belongs to another Session',
+                });
+              }
+              const createRetainedInvocation =
+                lease.registry
+                  .createRetainedManagedProviderRuntimeInvocationServices;
+              if (!createRetainedInvocation) {
+                throw new PluginError({
+                  code: 'plugin_services_managed_provider_authority_unavailable',
+                  message:
+                    'Retained managed Provider invocation services are unavailable',
+                });
+              }
+              const storePaths = resolvePluginStorePaths({
+                happyHomeDir: configuration.happyHomeDir,
+              });
+              const readsRetainedAuthorityCurrent = (): boolean => {
+                const currentBasis =
+                  tracked.spawnOptions?.providerBindingMetadataV1
+                    ?.runtimeBindingBasis;
+                return (
+                  !signal.aborted &&
+                  authorizeTrackedRunnerAgentDaemonServiceOperation({
+                    tracked,
+                    sessionId,
+                    runner,
+                    retainedAgent,
+                    witness: undefined,
+                    allowIdleCurrentGeneration: true,
+                  }) &&
+                  currentBasis !== undefined &&
+                  sameProviderRuntimeBindingBasis(
+                    currentBasis,
+                    scope.runtimeBindingBasis,
+                  )
+                );
+              };
+              const retainedCustodyDispatch =
+                retained.custody === 'daemonShared' ? null
+                  : await createSessionManagedProviderCustodyDispatch(scope);
+              let retainedProviderPolicyFence: Promise<void> | null = null;
+              let retainedProviderPolicyFenced = false;
+              const fenceRetainedProviderPolicy = async () => {
+                if (!retainedCustodyDispatch) return await cleanupManagedProvider();
+                if (retainedProviderPolicyFenced) return;
+                if (!retainedProviderPolicyFence) {
+                  const fenceAttempt = (async () => {
+                    const result = await retainedCustodyDispatch({
+                      v: 1,
+                      kind: 'fenceRetainedProviderPolicy',
+                      claim: scope,
+                    });
+                    if (result.kind !== 'retainedProviderPolicyFenced') {
+                      throw new PluginError({
+                        code: 'plugin_services_managed_provider_custody_unavailable',
+                        message:
+                          'Runner returned an invalid retained Provider policy-fence result',
+                      });
+                    }
+                  })();
+                  retainedProviderPolicyFence = fenceAttempt;
+                  try {
+                    await fenceAttempt;
+                    retainedProviderPolicyFenced = true;
+                  } finally {
+                    if (retainedProviderPolicyFence === fenceAttempt) {
+                      retainedProviderPolicyFence = null;
+                    }
+                  }
+                  return;
+                }
+                await retainedProviderPolicyFence;
+              };
+              const revalidateRetainedProviderPolicy =
+                async (): Promise<boolean> =>
+                  await revalidateAdoptedManagedProviderPolicy(
+                    scope.runtimeBindingBasis,
+                  );
+              const readAdoptedPublicOutcome = async () => {
+                if (!retainedCustodyDispatch) return null;
+                const outcome = await retainedCustodyDispatch({
+                  v: 1,
+                  kind: 'readAdoptedPublicOutcome',
+                  claim: scope,
+                });
+                return outcome.kind === 'adoptedPublicOutcome'
+                  ? outcome.outcome
+                  : null;
+              };
+              const currentHardRevocationRevision =
+                await readCurrentPluginHardRevocationRevision({
+                  paths: storePaths,
+                  pluginId: scope.pluginId,
+                });
+              const retainedBasis = scope.runtimeBindingBasis;
+              if (retainedBasis.deployment.kind === 'managedLocal'
+                && retainedBasis.deployment.gatewayPlacement.kind === 'machine'
+                && retainedBasis.deployment.gatewayPlacement.machineId !== params.machineId) {
+                const metadata = tracked.spawnOptions?.providerBindingMetadataV1;
+                if (retained.custody !== 'daemonShared' || !metadata?.runtimeBindingBasis
+                  || !sameProviderRuntimeBindingBasis(metadata.runtimeBindingBasis, retainedBasis)
+                  || currentHardRevocationRevision !== retained.providerPluginHardRevocationRevisionAtAdmission) {
+                  throw new PluginError({ code: 'plugin_services_managed_provider_authority_unavailable',
+                    message: 'Retained remote managed gateway authority changed' });
+                }
+                return await createRemoteManagedProjection(retainedBasis, metadata, currentHardRevocationRevision,
+                  async () => readsRetainedAuthorityCurrent() && await revalidateRetainedProviderPolicy(), {
+                    sessionId: scope.sessionId, runtimeBindingBasis: retainedBasis,
+                    identity: { pluginId: scope.pluginId, localId: scope.providerLocalId }, occurrenceId: scope.occurrenceId,
+                    sourceCustody: scope.sourceCustody, manifestAuthority: scope.manifestAuthority, operationClaimId: scope.operationClaimId,
+                  });
+              }
+              if (
+                currentHardRevocationRevision !==
+                  retained.providerPluginHardRevocationRevisionAtAdmission ||
+                (scope.sourceCustody.kind === 'managed' &&
+                  !(await readCurrentPluginImmutableGenerationIntegrityCurrentness(
+                    {
+                      paths: storePaths,
+                      pluginId: scope.pluginId,
+                      immutableGenerationId:
+                        scope.sourceCustody.immutableGenerationId,
+                    },
+                  )))
+              ) {
+                throw new PluginError({
+                  code: 'plugin_services_managed_provider_authority_unavailable',
+                  message: 'Retained managed Provider authority was hard-revoked',
+                });
+              }
+              const created = await createRetainedInvocation({
+                ...(retained.custody === 'daemonShared'
+                  ? { sharedGateway: await resolveSharedGatewayBinding(scope.runtimeBindingBasis) }
+                  : {}),
+                scope: {
+                  sessionId: scope.sessionId,
+                  runtimeBindingBasis: scope.runtimeBindingBasis,
+                  identity: {
+                    pluginId: scope.pluginId,
+                    localId: scope.providerLocalId,
+                  },
+                  occurrenceId: scope.occurrenceId,
+                  sourceCustody: scope.sourceCustody,
+                  manifestAuthority: scope.manifestAuthority,
+                  operationClaimId: scope.operationClaimId,
+                },
+                signal,
+                isCurrent: readsRetainedAuthorityCurrent,
+                readAdoptedPublicOutcome,
+                revalidatePolicy: revalidateRetainedProviderPolicy,
+              });
+              if (!created || (retained.custody === 'daemonShared') !== (created.lifetime === 'sharedConsumer')) {
+                throw new PluginError({
+                  code: 'plugin_services_managed_provider_authority_unavailable',
+                  message:
+                    'Retained managed Provider authority could not be reauthorized',
+                });
+              }
+              managedProviderCleanup.current = () => created.cleanup();
+              const bootstrap = created.bootstrap;
+              if (
+                bootstrap.identity.pluginId !== scope.pluginId ||
+                bootstrap.identity.localId !== scope.providerLocalId ||
+                bootstrap.occurrenceId !== scope.occurrenceId ||
+                !pluginSourceCustodyV1Equal(
+                  bootstrap.sourceCustody,
+                  scope.sourceCustody,
+                ) ||
+                bootstrap.manifestAuthority !== scope.manifestAuthority ||
+                bootstrap.operationClaimId !== scope.operationClaimId ||
+                (await readCurrentPluginHardRevocationRevision({
+                  paths: storePaths,
+                  pluginId: scope.pluginId,
+                })) !== currentHardRevocationRevision ||
+                (scope.sourceCustody.kind === 'managed' &&
+                  !(await readCurrentPluginImmutableGenerationIntegrityCurrentness(
+                    {
+                      paths: storePaths,
+                      pluginId: scope.pluginId,
+                      immutableGenerationId:
+                        scope.sourceCustody.immutableGenerationId,
+                    },
+                  )))
+              ) {
+                throw new PluginError({
+                  code: 'plugin_services_managed_provider_retention_mismatch',
+                  message:
+                    'Replacement daemon reconstructed a different managed Provider authority',
+                });
+              }
+              const isRetainedProviderCurrent = async () =>
+                await isRetainedManagedProviderInvocationCurrent({
+                  readsRetainedAuthorityCurrent,
+                  revalidatePolicy: revalidateRetainedProviderPolicy,
+                  fenceRetainedPolicy: fenceRetainedProviderPolicy,
+                  readHardRevocationRevision: async () =>
+                    await readCurrentPluginHardRevocationRevision({
+                      paths: storePaths,
+                      pluginId: scope.pluginId,
+                    }),
+                  readGenerationIntegrityCurrentness: async () =>
+                    scope.sourceCustody.kind !== 'managed' ||
+                    (await readCurrentPluginImmutableGenerationIntegrityCurrentness(
+                      {
+                        paths: storePaths,
+                        pluginId: scope.pluginId,
+                        immutableGenerationId:
+                          scope.sourceCustody.immutableGenerationId,
+                      },
+                    )),
+                  hardRevocationRevisionAtAdmission:
+                    currentHardRevocationRevision,
+                });
+              const retainedSessionBindingMetadata =
+                tracked.spawnOptions?.providerBindingMetadataV1;
+              if (
+                !retainedSessionBindingMetadata ||
+                !retainedSessionBindingMetadata.runtimeBindingBasis ||
+                !sameProviderRuntimeBindingBasis(
+                  retainedSessionBindingMetadata.runtimeBindingBasis,
+                  scope.runtimeBindingBasis,
+                )
+              ) {
+                throw new PluginError({
+                  code: 'plugin_services_managed_provider_materialization_authority_changed',
+                  message:
+                    'Retained managed Provider binding metadata is unavailable',
+                });
+              }
+              const sharedProjection = created.lifetime === 'sharedConsumer'
+                ? createSharedManagedProjection(
+                    created,
+                    scope.runtimeBindingBasis,
+                    retainedSessionBindingMetadata,
+                    isRetainedProviderCurrent,
+                  )
+                : null;
+              return Object.freeze({
+                bootstrap: Object.freeze({
+                  v: 1 as const,
+                  ...(sharedProjection ? { custody: 'daemonShared' as const } : {}),
+                  scope,
+                  requestAuth: sharedProjection ? null : bootstrap.requestAuth,
+                  providerPluginHardRevocationRevisionAtAdmission:
+                    currentHardRevocationRevision,
+                  sessionBindingMetadata: retainedSessionBindingMetadata,
+                }),
+                connectedAccounts: created.connectedAccounts,
+                readSupervisionLaunchAuthority,
+                ...(sharedProjection ? {
+                  readSharedGatewayAccess: sharedProjection.readSharedGatewayAccess,
+                } : {}),
+                start: async () => {
+                  if (sharedProjection) return await sharedProjection.start();
+                  const outcome = await readAdoptedPublicOutcome();
+                  if (
+                    !outcome ||
+                    outcome.operationClaimId !== scope.operationClaimId ||
+                    !outcome.endpointTemplateIds.includes(
+                      scope.runtimeBindingBasis.endpoint.endpointTemplateId,
+                    ) ||
+                    !(await isRetainedProviderCurrent())
+                  ) {
+                    throw new PluginError({
+                      code: 'plugin_services_managed_provider_authority_unavailable',
+                      message:
+                        'Retained managed Provider public outcome is unavailable',
+                    });
+                  }
+                },
+                materializeAgentBinding: async ({
+                  endpointUrl,
+                  credentialPlaceholder,
+                }: Readonly<{
+                  endpointUrl: string;
+                  credentialPlaceholder: string | null;
+                }>) => {
+                  const basis = scope.runtimeBindingBasis;
+                  const metadata =
+                    tracked.spawnOptions?.providerBindingMetadataV1;
+                  const outcome = await readAdoptedPublicOutcome();
+                  const sharedEndpoint = sharedProjection
+                    ? await sharedProjection.readSharedGatewayAccess()
+                    : null;
+                  const endpoint = outcome?.endpoints.find(
+                    (entry) =>
+                      entry.endpointTemplateId ===
+                      basis.endpoint.endpointTemplateId,
+                  );
+                  let assessed: ReturnType<typeof assessProviderEndpoint> | null =
+                    null;
+                  try {
+                    assessed = assessProviderEndpoint(endpointUrl);
+                  } catch {
+                    assessed = null;
+                  }
+                  if (
+                    !capturedAgentProviderBinding ||
+                    (credentialPlaceholder === null) !==
+                      (basis.runtimeCredentialTransport === null) ||
+                    !metadata?.model ||
+                    !assessed ||
+                    (sharedEndpoint ? (
+                      assessed.locality !== 'loopback'
+                      || new URL(assessed.normalizedUrl).hostname !== '127.0.0.1'
+                      || new URL(assessed.normalizedUrl).protocol !== 'http:'
+                      || new URL(assessed.normalizedUrl).pathname
+                        !== new URL(sharedEndpoint.endpointUrl).pathname
+                    ) : (!endpoint || assessed.normalizedUrl !== endpoint.endpointUrl))
+                  ) {
+                    await cleanupManagedProvider().catch(() => undefined);
+                    throw new PluginError({
+                      code: 'plugin_services_managed_provider_materialization_authority_changed',
+                      message:
+                        'Retained managed Provider pre-open materialization authority is unavailable',
+                    });
+                  }
+                  return await materializeRunnerManagedProviderAgentBinding({
+                    capturedAgentBinding: capturedAgentProviderBinding,
+                    isCapturedAgentRegistrationCurrent:
+                      isCapturedAgentRegistrationPreOpen,
+                    isManagedProviderCurrent: isRetainedProviderCurrent,
+                    cleanup: cleanupManagedProvider,
+                    binding: {
+                      v: 1,
+                      agentTargetKey: basis.agentTargetKey,
+                      selection: {
+                        connectionId: basis.connectionId,
+                        model: metadata.model,
+                      },
+                      contributionKey: basis.contributionKey,
+                      endpoint: {
+                        endpointTemplateId: basis.endpoint.endpointTemplateId,
+                        normalizedUrl: assessed.normalizedUrl,
+                        protocol: basis.endpoint.protocol,
+                        publicHeaders: basis.endpoint.publicHeaders,
+                      },
+                      runtimeCredentialTransport:
+                        basis.runtimeCredentialTransport,
+                      compatibilityFingerprint: metadata.compatibilityFingerprint,
+                    },
+                    prepared: basis.prepared,
+                    credential:
+                      credentialPlaceholder === null
+                        ? { kind: 'none' }
+                        : {
+                            kind: 'apiKey',
+                            transport: basis.runtimeCredentialTransport!,
+                            value: credentialPlaceholder,
+                          },
+                  });
+                },
+                isCurrent: isRetainedProviderCurrent,
+              });
+            }
+            const trackedSelection =
+              tracked.spawnOptions?.modelSelection?.ref ?? null;
+            const trackedBindingMetadata =
+              tracked.spawnOptions?.providerBindingMetadataV1 ?? null;
+            const trackedRuntimeBindingBasis =
+              trackedBindingMetadata?.runtimeBindingBasis ?? null;
+            if (
+              !trackedSelection ||
+              trackedSelection.providerConnectionId === null ||
+              !trackedRuntimeBindingBasis ||
+              trackedRuntimeBindingBasis.deployment.kind !== 'managedLocal'
+            ) {
+              return null;
+            }
+            const authority = resolveDaemonSessionModelTransitionAuthority({
               trackedAgentId: resolveTrackedSessionCatalogAgentId(tracked),
               authorizedAgentId: retainedAgent.agentId,
               trackedSelection,
-              trackedSessionBindingMetadata: trackedMetadata,
+              trackedSessionBindingMetadata: trackedBindingMetadata,
               requestAgentId: retainedAgent.agentId,
               requestedSelection: {
                 ...trackedSelection,
                 providerConnectionId: trackedSelection.providerConnectionId,
               },
             });
-            const accountSnapshot = getActiveAccountSettingsSnapshot();
-            if (!accountSnapshot) return false;
-            const providerSettings = readProviderSettingsForCli(
-              accountSnapshot,
-            ).settings;
-            return isRetainedManagedProviderSettingsGrantCurrent({
-              machineId: params.machineId,
-              providerSettings,
-              runtimeBindingBasis,
-            });
-          } catch {
-            return false;
-          }
-        };
-        const resolveSharedGatewayBinding = async (
-          basis: ProviderRuntimeBindingBasisV1,
-        ) => {
-          const origin = await params.resolveCurrentMachineExecutionOriginContext?.(signal);
-          if (!origin || origin.machineId !== params.machineId || !params.externalActionAccountId) {
-            throw new PluginError({
-              code: 'plugin_services_managed_provider_authority_unavailable',
-              message: 'Managed gateway execution identity is unavailable',
-            });
-          }
-          return Object.freeze({
-            homeId: origin.serverIdentityId,
-            accountId: params.externalActionAccountId,
-            connectionId: basis.connectionId,
-            machineId: params.machineId,
-            consumerId: sessionId,
-          });
-        };
-        const createSharedManagedProjection = (
-          created: import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry').ResolvedManagedProviderRuntimeInvocationServices,
-          basis: ProviderRuntimeBindingBasisV1,
-          metadata: NonNullable<NonNullable<typeof tracked.spawnOptions>['providerBindingMetadataV1']>,
-          revalidate: () => Promise<boolean>,
-        ) => {
-          if (basis.deployment.kind !== 'managedLocal' || created.lifetime !== 'sharedConsumer') {
-            throw new PluginError({
-              code: 'plugin_services_managed_provider_authority_unavailable',
-              message: 'Managed gateway shared custody is unavailable',
-            });
-          }
-          const deployment = basis.deployment;
-          const launchScope = createProviderLaunchResourceScope();
-          launchScope.register(created.cleanup);
-          managedProviderCleanup.current = () => launchScope.release();
-          let captured: Pick<Parameters<NonNullable<typeof created.materializeManagedProviderAgentBinding>>[0], 'service' | 'projection'> | null = null;
-          let startPromise: Promise<void> | null = null;
-          const start = () => {
-            startPromise ??= (async () => {
-              const started = await startPublicManagedProviderRuntime({
-                identity: created.bootstrap.identity,
-                request: {
-                  reason: 'sessionDemand',
-                  connectionId: basis.connectionId,
-                  connectionRevision: metadata.connectionRevision,
-                  endpointTemplateIds: deployment.managedRuntime.endpointTemplateIds,
-                },
-                acquireRuntime: async identity => {
-                  const runtime = await lease.registry.acquireManagedProviderRuntime?.(identity);
-                  return runtime && runtime.activationOccurrenceId === created.bootstrap.occurrenceId
-                    && pluginSourceCustodyV1Equal(runtime.sourceCustody, created.bootstrap.sourceCustody)
-                    ? runtime : null;
-                },
-                connectedAccounts: created.connectedAccounts,
-                custody: {
-                  ...created,
-                  async projectEndpointAccess(input) {
-                    const projection = await created.projectEndpointAccess(input);
-                    if (projection) captured = { service: input.service, projection };
-                    return projection;
-                  },
-                },
-                isAuthorizationCurrent: () => !signal.aborted && authorizeOperation(undefined),
-                revalidateAuthorization: revalidate,
-                signal,
-                launchResourceScope: launchScope,
+            const authorization =
+              await authorizeSessionModelTransitionProviderTargetWithLease({
+                sessionId,
+                machineId: params.machineId,
+                agentId: authority.agentId,
+                agentTargetKey: authority.agentTargetKey,
+                lease,
+                input: authority.input,
               });
-              if (!started.ok) throw new PluginError({
-                code: started.code,
-                message: 'Managed gateway Session runtime start failed',
-              });
-            })();
-            return startPromise;
-          };
-          return Object.freeze({
-            start,
-            readSharedGatewayAccess: createSharedManagedProviderSessionAccess({
-              start,
-              readProjection: () => captured,
-              ...(created.materializeManagedProviderAgentBinding ? { materialize: created.materializeManagedProviderAgentBinding } : {}),
-              endpointTemplateId: basis.endpoint.endpointTemplateId,
-              revalidate,
-              cleanup: cleanupManagedProvider,
-            }),
-          });
-        };
-        const createRemoteManagedProjection = async (
-          basis: ProviderRuntimeBindingBasisV1,
-          metadata: NonNullable<NonNullable<typeof tracked.spawnOptions>['providerBindingMetadataV1']>,
-          hardRevocationRevision: number,
-          revalidate: () => Promise<boolean>,
-          retainedScope?: import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry').RetainedManagedProviderRuntimeInvocationScope,
-        ) => await createRemoteManagedProviderSessionProjection({
-          sessionId, machineId: params.machineId, basis, metadata, hardRevocationRevision,
-          registry: lease.registry, ...(retainedScope ? { retainedScope } : {}), signal,
-          isBootstrapCurrent: () => !signal.aborted && authorizeOperation(undefined),
-          isCurrent: async scope => !signal.aborted && authorizeOperation(undefined) && await revalidate()
-            && await readCurrentPluginHardRevocationRevision({
-              paths: resolvePluginStorePaths({ happyHomeDir: configuration.happyHomeDir }), pluginId: scope.pluginId,
-            }) === hardRevocationRevision
-            && (scope.sourceCustody.kind !== 'managed' || await readCurrentPluginImmutableGenerationIntegrityCurrentness({
-              paths: resolvePluginStorePaths({ happyHomeDir: configuration.happyHomeDir }),
-              pluginId: scope.pluginId, immutableGenerationId: scope.sourceCustody.immutableGenerationId,
-            })),
-          openBroker: params.openAccountConnectionProviderBrokerAccess,
-          installConsumerCleanup: cleanup => { managedProviderCleanup.current = cleanup; },
-          cleanup: cleanupManagedProvider, readSupervisionLaunchAuthority,
-          capturedAgentProviderBinding, isCapturedAgentRegistrationCurrent: isCapturedAgentRegistrationPreOpen,
-        });
-        let managedProvider = await (async () => {
-          if (managedProviderRetention) {
-            const retained = managedProviderRetention;
-            const scope = retained.scope;
-            if (scope.sessionId !== sessionId) {
-              throw new PluginError({
-                code: 'plugin_services_managed_provider_retention_mismatch',
-                message:
-                  'Retained managed Provider authority belongs to another Session',
-              });
-            }
-            const createRetainedInvocation =
-              lease.registry
-                .createRetainedManagedProviderRuntimeInvocationServices;
-            if (!createRetainedInvocation) {
+            const runtimeBindingBasis = authorization.runtimeBindingBasis;
+            if (runtimeBindingBasis.deployment.kind !== 'managedLocal') {
               throw new PluginError({
                 code: 'plugin_services_managed_provider_authority_unavailable',
                 message:
-                  'Retained managed Provider invocation services are unavailable',
+                  'Runner Provider authorization is not a managed-local binding',
+              });
+            }
+            if (
+              !sameProviderRuntimeBindingBasis(
+                trackedRuntimeBindingBasis,
+                runtimeBindingBasis,
+              )
+            ) {
+              throw new PluginError({
+                code: 'plugin_services_managed_provider_authority_unavailable',
+                message:
+                  'Runner managed Provider authorization is not current for this Session binding',
+              });
+            }
+            const identity =
+              runtimeBindingBasis.deployment.implementationIdentity;
+            const createInvocation =
+              lease.registry.createManagedProviderRuntimeInvocationServices;
+            if (!createInvocation) {
+              throw new PluginError({
+                code: 'plugin_services_managed_provider_authority_unavailable',
+                message:
+                  'Managed Provider runtime invocation services are unavailable',
               });
             }
             const storePaths = resolvePluginStorePaths({
               happyHomeDir: configuration.happyHomeDir,
             });
-            const readsRetainedAuthorityCurrent = (): boolean => {
+            const providerPluginHardRevocationRevisionAtAdmission =
+              await readCurrentPluginHardRevocationRevision({
+                paths: storePaths,
+                pluginId: identity.pluginId,
+              });
+            let readAdoptedPublicOutcome:
+              | ReturnType<
+                  typeof createRunnerManagedServicesClient
+                >['readAdoptedPublicOutcome']
+              | null = null;
+            let fenceRetainedProviderPolicy:
+              | ReturnType<
+                  typeof createRunnerManagedServicesClient
+                >['fenceRetainedProviderPolicy']
+              | null = null;
+            const readsSessionProviderAuthorityCurrent = (): boolean => {
               const currentBasis =
                 tracked.spawnOptions?.providerBindingMetadataV1
                   ?.runtimeBindingBasis;
@@ -8052,245 +8519,273 @@ export async function startDaemonSessionControlRuntime(
                   allowIdleCurrentGeneration: true,
                 }) &&
                 currentBasis !== undefined &&
-                sameProviderRuntimeBindingBasis(
-                  currentBasis,
-                  scope.runtimeBindingBasis,
-                )
+                sameProviderRuntimeBindingBasis(currentBasis, runtimeBindingBasis)
               );
             };
-            const retainedCustodyDispatch =
-              retained.custody === 'daemonShared' ? null
-                : await createSessionManagedProviderCustodyDispatch(scope);
-            let retainedProviderPolicyFence: Promise<void> | null = null;
-            let retainedProviderPolicyFenced = false;
-            const fenceRetainedProviderPolicy = async () => {
-              if (!retainedCustodyDispatch) return await cleanupManagedProvider();
-              if (retainedProviderPolicyFenced) return;
-              if (!retainedProviderPolicyFence) {
-                const fenceAttempt = (async () => {
-                  const result = await retainedCustodyDispatch({
-                    v: 1,
-                    kind: 'fenceRetainedProviderPolicy',
-                    claim: scope,
+            const revalidateSessionProviderAuthority =
+              async (): Promise<boolean> => {
+                if (!readsSessionProviderAuthorityCurrent()) {
+                  return false;
+                }
+                try {
+                  const refreshed =
+                    await authorizeSessionModelTransitionProviderTargetWithLease({
+                      sessionId: sessionId,
+                      machineId: params.machineId,
+                      agentId: authority.agentId,
+                      agentTargetKey: authority.agentTargetKey,
+                      lease,
+                      input: authority.input,
+                    });
+                  return (
+                    readsSessionProviderAuthorityCurrent() &&
+                    sameProviderRuntimeBindingBasis(
+                      refreshed.runtimeBindingBasis,
+                      runtimeBindingBasis,
+                    ) &&
+                    (await readCurrentPluginHardRevocationRevision({
+                      paths: storePaths,
+                      pluginId: identity.pluginId,
+                    })) === providerPluginHardRevocationRevisionAtAdmission
+                  );
+                } catch {
+                  return false;
+                }
+              };
+            if (runtimeBindingBasis.deployment.gatewayPlacement.kind === 'machine'
+              && runtimeBindingBasis.deployment.gatewayPlacement.machineId !== params.machineId) {
+              return await createRemoteManagedProjection(runtimeBindingBasis, authorization.sessionBindingMetadata,
+                providerPluginHardRevocationRevisionAtAdmission, revalidateSessionProviderAuthority);
+            }
+            const createdManagedProviderInvocation = await createInvocation({
+              identity,
+              purposeBindings: runtimeBindingBasis.deployment.purposeBindings,
+              ...(runtimeBindingBasis.deployment.managedRuntime.sharing === 'connectionMachine'
+                ? { sharedGateway: await resolveSharedGatewayBinding(runtimeBindingBasis) }
+                : {}),
+              operationClaim: {
+                kind: 'sessionDemand',
+                sessionId,
+                runtimeBindingBasis,
+                bindSessionCustody: async (custodyScope, dependencies) => {
+                  const runnerCustodyScope: RunnerManagedProviderCustodyScopeV1 =
+                    Object.freeze({
+                      v: 1,
+                      sessionId: custodyScope.sessionId,
+                      runtimeBindingBasis: custodyScope.runtimeBindingBasis,
+                      pluginId: custodyScope.identity.pluginId,
+                      providerLocalId: custodyScope.identity.localId,
+                      occurrenceId: custodyScope.occurrenceId,
+                      sourceCustody: custodyScope.sourceCustody,
+                      manifestAuthority: custodyScope.manifestAuthority,
+                      operationClaimId: custodyScope.operationClaimId,
+                    });
+                  const custodyClient =
+                    await createSessionManagedProviderCustodyClient(
+                      runnerCustodyScope,
+                      dependencies,
+                    );
+                  readAdoptedPublicOutcome =
+                    custodyClient.readAdoptedPublicOutcome;
+                  fenceRetainedProviderPolicy =
+                    custodyClient.fenceRetainedProviderPolicy;
+                  return Object.freeze({
+                    managedServices: Object.freeze({
+                      dependencies: custodyClient.services.dependencies,
+                      supervise(
+                        spec: Parameters<
+                          typeof custodyClient.services.supervise
+                        >[0],
+                        options?: Parameters<
+                          typeof custodyClient.services.supervise
+                        >[1],
+                      ) {
+                        stampSupervisionLaunchAuthority(spec);
+                        return custodyClient.services.supervise(spec, options);
+                      },
+                    }),
+                    projectEndpointAccess: custodyClient.projectEndpointAccess,
+                    adoptService: async (serviceId) => {
+                      await custodyClient.commitAdoption(serviceId);
+                    },
+                    readAdoptedPublicOutcome:
+                      custodyClient.readAdoptedPublicOutcome,
                   });
-                  if (result.kind !== 'retainedProviderPolicyFenced') {
+                },
+              },
+              signal,
+              isCurrent: readsSessionProviderAuthorityCurrent,
+            });
+            if (!createdManagedProviderInvocation) {
+              throw new PluginError({
+                code: 'plugin_services_managed_provider_authority_unavailable',
+                message:
+                  'Managed Provider runtime invocation authority could not be prepared',
+              });
+            }
+            managedProviderCleanup.current = () =>
+              createdManagedProviderInvocation.cleanup();
+            const bootstrap = createdManagedProviderInvocation.bootstrap;
+            if (
+              bootstrap.identity.pluginId !== identity.pluginId ||
+              bootstrap.identity.localId !== identity.localId ||
+              (await readCurrentPluginHardRevocationRevision({
+                paths: storePaths,
+                pluginId: identity.pluginId,
+              })) !== providerPluginHardRevocationRevisionAtAdmission ||
+              (bootstrap.sourceCustody.kind === 'managed' &&
+                !(await readCurrentPluginImmutableGenerationIntegrityCurrentness({
+                  paths: storePaths,
+                  pluginId: identity.pluginId,
+                  immutableGenerationId:
+                    bootstrap.sourceCustody.immutableGenerationId,
+                })))
+            ) {
+              throw new PluginError({
+                code: 'plugin_services_managed_provider_authority_unavailable',
+                message:
+                  'Managed Provider runtime authority changed while preparing the Runner invocation',
+              });
+            }
+            const managedRuntimeDeclaration =
+              lease.registry.contributes.providers?.find(
+                (provider) =>
+                  provider.identity.pluginId === identity.pluginId &&
+                  provider.identity.localId === identity.localId,
+              )?.definition.managedRuntime;
+            if (
+              managedRuntimeDeclaration?.kind !== 'managed' ||
+              !lease.registry.acquireManagedProviderRuntime
+            ) {
+              throw new PluginError({
+                code: 'plugin_services_managed_provider_authority_unavailable',
+                message:
+                  'Managed Provider public runtime declaration is unavailable',
+              });
+            }
+            const providerConnectionRevision =
+              authorization.sessionBindingMetadata.connectionRevision;
+            const sharedProjection = createdManagedProviderInvocation.lifetime === 'sharedConsumer'
+              ? createSharedManagedProjection(
+                  createdManagedProviderInvocation,
+                  runtimeBindingBasis,
+                  authorization.sessionBindingMetadata,
+                  revalidateSessionProviderAuthority,
+                )
+              : null;
+            let adoptionCommitted = false;
+            let startPromise: Promise<void> | null = null;
+            const start = (): Promise<void> => {
+              startPromise ??= (async () => {
+                if (sharedProjection) {
+                  await sharedProjection.start();
+                  adoptionCommitted = true;
+                  return;
+                }
+                const launchResourceScope = createProviderLaunchResourceScope();
+                const started = await startPublicManagedProviderRuntime({
+                  identity,
+                  request: Object.freeze({
+                    reason: 'sessionDemand' as const,
+                    connectionId: trackedSelection.providerConnectionId,
+                    connectionRevision: providerConnectionRevision,
+                    endpointTemplateIds: Object.freeze([
+                      ...managedRuntimeDeclaration.endpointTemplateIds,
+                    ]),
+                  }),
+                  acquireRuntime: async (requestedIdentity) =>
+                    await lease.registry.acquireManagedProviderRuntime!(
+                      requestedIdentity,
+                    ),
+                  connectedAccounts:
+                    createdManagedProviderInvocation.connectedAccounts,
+                  custody: createdManagedProviderInvocation,
+                  isAuthorizationCurrent: readsSessionProviderAuthorityCurrent,
+                  revalidateAuthorization: revalidateSessionProviderAuthority,
+                  signal,
+                  launchResourceScope,
+                });
+                if (!started.ok) {
+                  throw new PluginError({
+                    code: started.code,
+                    message: 'Managed Provider Session runtime start failed',
+                  });
+                }
+                adoptionCommitted = true;
+                const retire = launchResourceScope.transfer();
+                const cleanupInvocation = managedProviderCleanup.current;
+                managedProviderCleanup.current = async () => {
+                  await retire?.();
+                  await cleanupInvocation?.();
+                };
+              })();
+              return startPromise;
+            };
+            const isManagedProviderCurrent = async () =>
+              await isManagedProviderSessionInvocationCurrent({
+                adoptionCommitted: () => adoptionCommitted,
+                revalidateInitialPolicy: revalidateSessionProviderAuthority,
+                readsRetainedAuthorityCurrent:
+                  readsSessionProviderAuthorityCurrent,
+                revalidateRetainedPolicy: async () =>
+                  await revalidateAdoptedManagedProviderPolicy(
+                    runtimeBindingBasis,
+                  ),
+                fenceRetainedPolicy: async () => {
+                  if (sharedProjection) return await cleanupManagedProvider();
+                  if (!fenceRetainedProviderPolicy) {
                     throw new PluginError({
                       code: 'plugin_services_managed_provider_custody_unavailable',
                       message:
-                        'Runner returned an invalid retained Provider policy-fence result',
+                        'Runner retained Provider policy-fence authority is unavailable',
                     });
                   }
-                })();
-                retainedProviderPolicyFence = fenceAttempt;
-                try {
-                  await fenceAttempt;
-                  retainedProviderPolicyFenced = true;
-                } finally {
-                  if (retainedProviderPolicyFence === fenceAttempt) {
-                    retainedProviderPolicyFence = null;
-                  }
-                }
-                return;
-              }
-              await retainedProviderPolicyFence;
-            };
-            const revalidateRetainedProviderPolicy =
-              async (): Promise<boolean> =>
-                await revalidateAdoptedManagedProviderPolicy(
-                  scope.runtimeBindingBasis,
-                );
-            const readAdoptedPublicOutcome = async () => {
-              if (!retainedCustodyDispatch) return null;
-              const outcome = await retainedCustodyDispatch({
-                v: 1,
-                kind: 'readAdoptedPublicOutcome',
-                claim: scope,
-              });
-              return outcome.kind === 'adoptedPublicOutcome'
-                ? outcome.outcome
-                : null;
-            };
-            const currentHardRevocationRevision =
-              await readCurrentPluginHardRevocationRevision({
-                paths: storePaths,
-                pluginId: scope.pluginId,
-              });
-            const retainedBasis = scope.runtimeBindingBasis;
-            if (retainedBasis.deployment.kind === 'managedLocal'
-              && retainedBasis.deployment.gatewayPlacement.kind === 'machine'
-              && retainedBasis.deployment.gatewayPlacement.machineId !== params.machineId) {
-              const metadata = tracked.spawnOptions?.providerBindingMetadataV1;
-              if (retained.custody !== 'daemonShared' || !metadata?.runtimeBindingBasis
-                || !sameProviderRuntimeBindingBasis(metadata.runtimeBindingBasis, retainedBasis)
-                || currentHardRevocationRevision !== retained.providerPluginHardRevocationRevisionAtAdmission) {
-                throw new PluginError({ code: 'plugin_services_managed_provider_authority_unavailable',
-                  message: 'Retained remote managed gateway authority changed' });
-              }
-              return await createRemoteManagedProjection(retainedBasis, metadata, currentHardRevocationRevision,
-                async () => readsRetainedAuthorityCurrent() && await revalidateRetainedProviderPolicy(), {
-                  sessionId: scope.sessionId, runtimeBindingBasis: retainedBasis,
-                  identity: { pluginId: scope.pluginId, localId: scope.providerLocalId }, occurrenceId: scope.occurrenceId,
-                  sourceCustody: scope.sourceCustody, manifestAuthority: scope.manifestAuthority, operationClaimId: scope.operationClaimId,
-                });
-            }
-            if (
-              currentHardRevocationRevision !==
-                retained.providerPluginHardRevocationRevisionAtAdmission ||
-              (scope.sourceCustody.kind === 'managed' &&
-                !(await readCurrentPluginImmutableGenerationIntegrityCurrentness(
-                  {
-                    paths: storePaths,
-                    pluginId: scope.pluginId,
-                    immutableGenerationId:
-                      scope.sourceCustody.immutableGenerationId,
-                  },
-                )))
-            ) {
-              throw new PluginError({
-                code: 'plugin_services_managed_provider_authority_unavailable',
-                message: 'Retained managed Provider authority was hard-revoked',
-              });
-            }
-            const created = await createRetainedInvocation({
-              ...(retained.custody === 'daemonShared'
-                ? { sharedGateway: await resolveSharedGatewayBinding(scope.runtimeBindingBasis) }
-                : {}),
-              scope: {
-                sessionId: scope.sessionId,
-                runtimeBindingBasis: scope.runtimeBindingBasis,
-                identity: {
-                  pluginId: scope.pluginId,
-                  localId: scope.providerLocalId,
+                  await fenceRetainedProviderPolicy();
                 },
-                occurrenceId: scope.occurrenceId,
-                sourceCustody: scope.sourceCustody,
-                manifestAuthority: scope.manifestAuthority,
-                operationClaimId: scope.operationClaimId,
-              },
-              signal,
-              isCurrent: readsRetainedAuthorityCurrent,
-              readAdoptedPublicOutcome,
-              revalidatePolicy: revalidateRetainedProviderPolicy,
-            });
-            if (!created || (retained.custody === 'daemonShared') !== (created.lifetime === 'sharedConsumer')) {
-              throw new PluginError({
-                code: 'plugin_services_managed_provider_authority_unavailable',
-                message:
-                  'Retained managed Provider authority could not be reauthorized',
-              });
-            }
-            managedProviderCleanup.current = () => created.cleanup();
-            const bootstrap = created.bootstrap;
-            if (
-              bootstrap.identity.pluginId !== scope.pluginId ||
-              bootstrap.identity.localId !== scope.providerLocalId ||
-              bootstrap.occurrenceId !== scope.occurrenceId ||
-              !pluginSourceCustodyV1Equal(
-                bootstrap.sourceCustody,
-                scope.sourceCustody,
-              ) ||
-              bootstrap.manifestAuthority !== scope.manifestAuthority ||
-              bootstrap.operationClaimId !== scope.operationClaimId ||
-              (await readCurrentPluginHardRevocationRevision({
-                paths: storePaths,
-                pluginId: scope.pluginId,
-              })) !== currentHardRevocationRevision ||
-              (scope.sourceCustody.kind === 'managed' &&
-                !(await readCurrentPluginImmutableGenerationIntegrityCurrentness(
-                  {
-                    paths: storePaths,
-                    pluginId: scope.pluginId,
-                    immutableGenerationId:
-                      scope.sourceCustody.immutableGenerationId,
-                  },
-                )))
-            ) {
-              throw new PluginError({
-                code: 'plugin_services_managed_provider_retention_mismatch',
-                message:
-                  'Replacement daemon reconstructed a different managed Provider authority',
-              });
-            }
-            const isRetainedProviderCurrent = async () =>
-              await isRetainedManagedProviderInvocationCurrent({
-                readsRetainedAuthorityCurrent,
-                revalidatePolicy: revalidateRetainedProviderPolicy,
-                fenceRetainedPolicy: fenceRetainedProviderPolicy,
                 readHardRevocationRevision: async () =>
                   await readCurrentPluginHardRevocationRevision({
                     paths: storePaths,
-                    pluginId: scope.pluginId,
+                    pluginId: identity.pluginId,
                   }),
                 readGenerationIntegrityCurrentness: async () =>
-                  scope.sourceCustody.kind !== 'managed' ||
+                  bootstrap.sourceCustody.kind !== 'managed' ||
                   (await readCurrentPluginImmutableGenerationIntegrityCurrentness(
                     {
                       paths: storePaths,
-                      pluginId: scope.pluginId,
+                      pluginId: identity.pluginId,
                       immutableGenerationId:
-                        scope.sourceCustody.immutableGenerationId,
+                        bootstrap.sourceCustody.immutableGenerationId,
                     },
                   )),
                 hardRevocationRevisionAtAdmission:
-                  currentHardRevocationRevision,
+                  providerPluginHardRevocationRevisionAtAdmission,
               });
-            const retainedSessionBindingMetadata =
-              tracked.spawnOptions?.providerBindingMetadataV1;
-            if (
-              !retainedSessionBindingMetadata ||
-              !retainedSessionBindingMetadata.runtimeBindingBasis ||
-              !sameProviderRuntimeBindingBasis(
-                retainedSessionBindingMetadata.runtimeBindingBasis,
-                scope.runtimeBindingBasis,
-              )
-            ) {
-              throw new PluginError({
-                code: 'plugin_services_managed_provider_materialization_authority_changed',
-                message:
-                  'Retained managed Provider binding metadata is unavailable',
-              });
-            }
-            const sharedProjection = created.lifetime === 'sharedConsumer'
-              ? createSharedManagedProjection(
-                  created,
-                  scope.runtimeBindingBasis,
-                  retainedSessionBindingMetadata,
-                  isRetainedProviderCurrent,
-                )
-              : null;
             return Object.freeze({
               bootstrap: Object.freeze({
                 v: 1 as const,
                 ...(sharedProjection ? { custody: 'daemonShared' as const } : {}),
-                scope,
+                scope: Object.freeze({
+                  v: 1 as const,
+                  sessionId: sessionId,
+                  runtimeBindingBasis,
+                  pluginId: identity.pluginId,
+                  providerLocalId: identity.localId,
+                  occurrenceId: bootstrap.occurrenceId,
+                  sourceCustody: bootstrap.sourceCustody,
+                  manifestAuthority: bootstrap.manifestAuthority,
+                  operationClaimId: bootstrap.operationClaimId,
+                }),
                 requestAuth: sharedProjection ? null : bootstrap.requestAuth,
-                providerPluginHardRevocationRevisionAtAdmission:
-                  currentHardRevocationRevision,
-                sessionBindingMetadata: retainedSessionBindingMetadata,
+                providerPluginHardRevocationRevisionAtAdmission,
+                sessionBindingMetadata: authorization.sessionBindingMetadata,
               }),
-              connectedAccounts: created.connectedAccounts,
+              connectedAccounts:
+                createdManagedProviderInvocation.connectedAccounts,
               readSupervisionLaunchAuthority,
+              start,
               ...(sharedProjection ? {
                 readSharedGatewayAccess: sharedProjection.readSharedGatewayAccess,
               } : {}),
-              start: async () => {
-                if (sharedProjection) return await sharedProjection.start();
-                const outcome = await readAdoptedPublicOutcome();
-                if (
-                  !outcome ||
-                  outcome.operationClaimId !== scope.operationClaimId ||
-                  !outcome.endpointTemplateIds.includes(
-                    scope.runtimeBindingBasis.endpoint.endpointTemplateId,
-                  ) ||
-                  !(await isRetainedProviderCurrent())
-                ) {
-                  throw new PluginError({
-                    code: 'plugin_services_managed_provider_authority_unavailable',
-                    message:
-                      'Retained managed Provider public outcome is unavailable',
-                  });
-                }
-              },
               materializeAgentBinding: async ({
                 endpointUrl,
                 credentialPlaceholder,
@@ -8298,977 +8793,539 @@ export async function startDaemonSessionControlRuntime(
                 endpointUrl: string;
                 credentialPlaceholder: string | null;
               }>) => {
-                const basis = scope.runtimeBindingBasis;
-                const metadata =
-                  tracked.spawnOptions?.providerBindingMetadataV1;
-                const outcome = await readAdoptedPublicOutcome();
-                const sharedEndpoint = sharedProjection
-                  ? await sharedProjection.readSharedGatewayAccess()
-                  : null;
-                const endpoint = outcome?.endpoints.find(
-                  (entry) =>
-                    entry.endpointTemplateId ===
-                    basis.endpoint.endpointTemplateId,
-                );
-                let assessed: ReturnType<typeof assessProviderEndpoint> | null =
-                  null;
-                try {
-                  assessed = assessProviderEndpoint(endpointUrl);
-                } catch {
-                  assessed = null;
-                }
                 if (
+                  !startPromise ||
                   !capturedAgentProviderBinding ||
+                  (!sharedProjection && !readAdoptedPublicOutcome) ||
                   (credentialPlaceholder === null) !==
-                    (basis.runtimeCredentialTransport === null) ||
-                  !metadata?.model ||
-                  !assessed ||
-                  (sharedEndpoint ? (
-                    assessed.locality !== 'loopback'
-                    || new URL(assessed.normalizedUrl).hostname !== '127.0.0.1'
-                    || new URL(assessed.normalizedUrl).protocol !== 'http:'
-                    || new URL(assessed.normalizedUrl).pathname
-                      !== new URL(sharedEndpoint.endpointUrl).pathname
-                  ) : (!endpoint || assessed.normalizedUrl !== endpoint.endpointUrl))
+                    (runtimeBindingBasis.runtimeCredentialTransport === null)
                 ) {
                   await cleanupManagedProvider().catch(() => undefined);
                   throw new PluginError({
                     code: 'plugin_services_managed_provider_materialization_authority_changed',
                     message:
-                      'Retained managed Provider pre-open materialization authority is unavailable',
+                      'Managed Provider pre-open materialization authority is unavailable',
+                  });
+                }
+                await startPromise;
+                let assessed: ReturnType<typeof assessProviderEndpoint>;
+                try {
+                  assessed = assessProviderEndpoint(endpointUrl);
+                } catch {
+                  await cleanupManagedProvider().catch(() => undefined);
+                  throw new PluginError({
+                    code: 'plugin_services_managed_provider_materialization_authority_changed',
+                    message:
+                      'Managed Provider materialization endpoint is invalid',
+                  });
+                }
+                const adopted = await readAdoptedPublicOutcome?.();
+                const sharedEndpoint = sharedProjection
+                  ? await sharedProjection.readSharedGatewayAccess()
+                  : null;
+                const adoptedEndpoint = adopted?.endpoints.find(
+                  (entry) =>
+                    entry.endpointTemplateId ===
+                    runtimeBindingBasis.endpoint.endpointTemplateId,
+                );
+                if (
+                  assessed.locality !== 'loopback' ||
+                  (sharedEndpoint ? (
+                    new URL(assessed.normalizedUrl).hostname !== '127.0.0.1'
+                    || new URL(assessed.normalizedUrl).protocol !== 'http:'
+                    || new URL(assessed.normalizedUrl).pathname
+                      !== new URL(sharedEndpoint.endpointUrl).pathname
+                  ) : (!adopted ||
+                  adopted.operationClaimId !== bootstrap.operationClaimId ||
+                  !adoptedEndpoint ||
+                  assessed.normalizedUrl !== adoptedEndpoint.endpointUrl))
+                ) {
+                  await cleanupManagedProvider().catch(() => undefined);
+                  throw new PluginError({
+                    code: 'plugin_services_managed_provider_materialization_authority_changed',
+                    message:
+                      'Managed Provider adopted endpoint materialization facts are unavailable',
                   });
                 }
                 return await materializeRunnerManagedProviderAgentBinding({
                   capturedAgentBinding: capturedAgentProviderBinding,
                   isCapturedAgentRegistrationCurrent:
                     isCapturedAgentRegistrationPreOpen,
-                  isManagedProviderCurrent: isRetainedProviderCurrent,
+                  isManagedProviderCurrent,
                   cleanup: cleanupManagedProvider,
                   binding: {
                     v: 1,
-                    agentTargetKey: basis.agentTargetKey,
+                    agentTargetKey: runtimeBindingBasis.agentTargetKey,
                     selection: {
-                      connectionId: basis.connectionId,
-                      model: metadata.model,
+                      connectionId: runtimeBindingBasis.connectionId,
+                      model: authorization.model,
                     },
-                    contributionKey: basis.contributionKey,
+                    contributionKey: runtimeBindingBasis.contributionKey,
                     endpoint: {
-                      endpointTemplateId: basis.endpoint.endpointTemplateId,
+                      endpointTemplateId:
+                        runtimeBindingBasis.endpoint.endpointTemplateId,
                       normalizedUrl: assessed.normalizedUrl,
-                      protocol: basis.endpoint.protocol,
-                      publicHeaders: basis.endpoint.publicHeaders,
+                      protocol: runtimeBindingBasis.endpoint.protocol,
+                      publicHeaders: runtimeBindingBasis.endpoint.publicHeaders,
                     },
                     runtimeCredentialTransport:
-                      basis.runtimeCredentialTransport,
-                    compatibilityFingerprint: metadata.compatibilityFingerprint,
+                      runtimeBindingBasis.runtimeCredentialTransport,
+                    compatibilityFingerprint:
+                      authorization.sessionBindingMetadata
+                        .compatibilityFingerprint,
                   },
-                  prepared: basis.prepared,
+                  prepared: runtimeBindingBasis.prepared,
                   credential:
                     credentialPlaceholder === null
                       ? { kind: 'none' }
                       : {
                           kind: 'apiKey',
-                          transport: basis.runtimeCredentialTransport!,
+                          transport:
+                            runtimeBindingBasis.runtimeCredentialTransport!,
                           value: credentialPlaceholder,
                         },
                 });
               },
-              isCurrent: isRetainedProviderCurrent,
+              isCurrent: isManagedProviderCurrent,
             });
-          }
-          const trackedSelection =
-            tracked.spawnOptions?.modelSelection?.ref ?? null;
-          const trackedBindingMetadata =
-            tracked.spawnOptions?.providerBindingMetadataV1 ?? null;
-          const trackedRuntimeBindingBasis =
-            trackedBindingMetadata?.runtimeBindingBasis ?? null;
-          if (
-            !trackedSelection ||
-            trackedSelection.providerConnectionId === null ||
-            !trackedRuntimeBindingBasis ||
-            trackedRuntimeBindingBasis.deployment.kind !== 'managedLocal'
-          ) {
-            return null;
-          }
-          const authority = resolveDaemonSessionModelTransitionAuthority({
-            trackedAgentId: resolveTrackedSessionCatalogAgentId(tracked),
-            authorizedAgentId: retainedAgent.agentId,
-            trackedSelection,
-            trackedSessionBindingMetadata: trackedBindingMetadata,
-            requestAgentId: retainedAgent.agentId,
-            requestedSelection: {
-              ...trackedSelection,
-              providerConnectionId: trackedSelection.providerConnectionId,
-            },
+          })().catch(async (error: unknown) => {
+            if (
+              managedProviderRetention &&
+              isPluginError(error) &&
+              error.code ===
+                'plugin_services_managed_provider_authority_unavailable'
+            ) {
+              await cleanupManagedProvider().catch(() => undefined);
+              return null;
+            }
+            throw error;
           });
-          const authorization =
-            await authorizeSessionModelTransitionProviderTargetWithLease({
-              sessionId,
-              machineId: params.machineId,
-              agentId: authority.agentId,
-              agentTargetKey: authority.agentTargetKey,
-              lease,
-              input: authority.input,
-            });
-          const runtimeBindingBasis = authorization.runtimeBindingBasis;
-          if (runtimeBindingBasis.deployment.kind !== 'managedLocal') {
+          if (managedProviderRetention && managedProvider) {
+            let retainedProviderIsCurrent = false;
+            try {
+              retainedProviderIsCurrent = await managedProvider.isCurrent();
+            } catch {
+              retainedProviderIsCurrent = false;
+            }
+            if (!retainedProviderIsCurrent) {
+              await cleanupManagedProvider().catch(() => undefined);
+              managedProvider = null;
+            }
+          }
+          preparationStage = 'retained_agent_services';
+          const createRetained =
+            lease.registry.createRetainedRunnerAgentInvocationServices;
+          if (!createRetained) {
             throw new PluginError({
-              code: 'plugin_services_managed_provider_authority_unavailable',
-              message:
-                'Runner Provider authorization is not a managed-local binding',
+              code: 'plugin_services_retained_generation_unavailable',
+              message: 'Retained Runner Agent PluginServices are unavailable',
             });
           }
-          if (
-            !sameProviderRuntimeBindingBasis(
-              trackedRuntimeBindingBasis,
-              runtimeBindingBasis,
-            )
-          ) {
-            throw new PluginError({
-              code: 'plugin_services_managed_provider_authority_unavailable',
-              message:
-                'Runner managed Provider authorization is not current for this Session binding',
-            });
-          }
-          const identity =
-            runtimeBindingBasis.deployment.implementationIdentity;
-          const createInvocation =
-            lease.registry.createManagedProviderRuntimeInvocationServices;
-          if (!createInvocation) {
-            throw new PluginError({
-              code: 'plugin_services_managed_provider_authority_unavailable',
-              message:
-                'Managed Provider runtime invocation services are unavailable',
-            });
-          }
-          const storePaths = resolvePluginStorePaths({
-            happyHomeDir: configuration.happyHomeDir,
-          });
-          const providerPluginHardRevocationRevisionAtAdmission =
-            await readCurrentPluginHardRevocationRevision({
-              paths: storePaths,
-              pluginId: identity.pluginId,
-            });
-          let readAdoptedPublicOutcome:
-            | ReturnType<
-                typeof createRunnerManagedServicesClient
-              >['readAdoptedPublicOutcome']
-            | null = null;
-          let fenceRetainedProviderPolicy:
-            | ReturnType<
-                typeof createRunnerManagedServicesClient
-              >['fenceRetainedProviderPolicy']
-            | null = null;
-          const readsSessionProviderAuthorityCurrent = (): boolean => {
-            const currentBasis =
-              tracked.spawnOptions?.providerBindingMetadataV1
-                ?.runtimeBindingBasis;
-            return (
-              !signal.aborted &&
-              authorizeTrackedRunnerAgentDaemonServiceOperation({
-                tracked,
-                sessionId,
-                runner,
-                retainedAgent,
-                witness: undefined,
-                allowIdleCurrentGeneration: true,
-              }) &&
-              currentBasis !== undefined &&
-              sameProviderRuntimeBindingBasis(currentBasis, runtimeBindingBasis)
-            );
-          };
-          const revalidateSessionProviderAuthority =
-            async (): Promise<boolean> => {
-              if (!readsSessionProviderAuthorityCurrent()) {
-                return false;
-              }
-              try {
-                const refreshed =
-                  await authorizeSessionModelTransitionProviderTargetWithLease({
-                    sessionId: sessionId,
-                    machineId: params.machineId,
-                    agentId: authority.agentId,
-                    agentTargetKey: authority.agentTargetKey,
-                    lease,
-                    input: authority.input,
-                  });
-                return (
-                  readsSessionProviderAuthorityCurrent() &&
-                  sameProviderRuntimeBindingBasis(
-                    refreshed.runtimeBindingBasis,
-                    runtimeBindingBasis,
-                  ) &&
-                  (await readCurrentPluginHardRevocationRevision({
-                    paths: storePaths,
-                    pluginId: identity.pluginId,
-                  })) === providerPluginHardRevocationRevisionAtAdmission
-                );
-              } catch {
-                return false;
-              }
-            };
-          if (runtimeBindingBasis.deployment.gatewayPlacement.kind === 'machine'
-            && runtimeBindingBasis.deployment.gatewayPlacement.machineId !== params.machineId) {
-            return await createRemoteManagedProjection(runtimeBindingBasis, authorization.sessionBindingMetadata,
-              providerPluginHardRevocationRevisionAtAdmission, revalidateSessionProviderAuthority);
-          }
-          const createdManagedProviderInvocation = await createInvocation({
-            identity,
-            purposeBindings: runtimeBindingBasis.deployment.purposeBindings,
-            ...(runtimeBindingBasis.deployment.managedRuntime.sharing === 'connectionMachine'
-              ? { sharedGateway: await resolveSharedGatewayBinding(runtimeBindingBasis) }
-              : {}),
-            operationClaim: {
-              kind: 'sessionDemand',
-              sessionId,
-              runtimeBindingBasis,
-              bindSessionCustody: async (custodyScope, dependencies) => {
-                const runnerCustodyScope: RunnerManagedProviderCustodyScopeV1 =
-                  Object.freeze({
-                    v: 1,
-                    sessionId: custodyScope.sessionId,
-                    runtimeBindingBasis: custodyScope.runtimeBindingBasis,
-                    pluginId: custodyScope.identity.pluginId,
-                    providerLocalId: custodyScope.identity.localId,
-                    occurrenceId: custodyScope.occurrenceId,
-                    sourceCustody: custodyScope.sourceCustody,
-                    manifestAuthority: custodyScope.manifestAuthority,
-                    operationClaimId: custodyScope.operationClaimId,
-                  });
-                const custodyClient =
-                  await createSessionManagedProviderCustodyClient(
-                    runnerCustodyScope,
-                    dependencies,
-                  );
-                readAdoptedPublicOutcome =
-                  custodyClient.readAdoptedPublicOutcome;
-                fenceRetainedProviderPolicy =
-                  custodyClient.fenceRetainedProviderPolicy;
-                return Object.freeze({
-                  managedServices: Object.freeze({
-                    dependencies: custodyClient.services.dependencies,
-                    supervise(
-                      spec: Parameters<
-                        typeof custodyClient.services.supervise
-                      >[0],
-                      options?: Parameters<
-                        typeof custodyClient.services.supervise
-                      >[1],
-                    ) {
-                      stampSupervisionLaunchAuthority(spec);
-                      return custodyClient.services.supervise(spec, options);
-                    },
-                  }),
-                  projectEndpointAccess: custodyClient.projectEndpointAccess,
-                  adoptService: async (serviceId) => {
-                    await custodyClient.commitAdoption(serviceId);
-                  },
-                  readAdoptedPublicOutcome:
-                    custodyClient.readAdoptedPublicOutcome,
-                });
+          const invocationProjection = await createRetained({
+            binding: retainedAgent,
+            runnerSnapshotIdentity: runner.snapshotIdentity,
+            sessionId,
+            managedDependencyRetention:
+              tracked.runnerManagedDependencyRetentionV1 ?? {
+                v: 1 as const,
+                sourceCustodies: [],
+                qualifiedDependencyIds: [],
               },
-            },
+            correlationId: invocationId,
+            cwd: invocationContext.cwd,
+            environment: invocationContext.environment,
+            ...(invocationContext.agentCliLaunch
+              ? {
+                  agentCliLaunch: invocationContext.agentCliLaunch,
+                }
+              : {}),
+            providerBindingActive: invocationContext.providerBindingActive,
             signal,
-            isCurrent: readsSessionProviderAuthorityCurrent,
+            isOccurrenceCurrent: () => authorizeOperation(undefined),
           });
-          if (!createdManagedProviderInvocation) {
-            throw new PluginError({
-              code: 'plugin_services_managed_provider_authority_unavailable',
-              message:
-                'Managed Provider runtime invocation authority could not be prepared',
-            });
-          }
-          managedProviderCleanup.current = () =>
-            createdManagedProviderInvocation.cleanup();
-          const bootstrap = createdManagedProviderInvocation.bootstrap;
-          if (
-            bootstrap.identity.pluginId !== identity.pluginId ||
-            bootstrap.identity.localId !== identity.localId ||
-            (await readCurrentPluginHardRevocationRevision({
-              paths: storePaths,
-              pluginId: identity.pluginId,
-            })) !== providerPluginHardRevocationRevisionAtAdmission ||
-            (bootstrap.sourceCustody.kind === 'managed' &&
-              !(await readCurrentPluginImmutableGenerationIntegrityCurrentness({
-                paths: storePaths,
-                pluginId: identity.pluginId,
-                immutableGenerationId:
-                  bootstrap.sourceCustody.immutableGenerationId,
-              })))
-          ) {
-            throw new PluginError({
-              code: 'plugin_services_managed_provider_authority_unavailable',
-              message:
-                'Managed Provider runtime authority changed while preparing the Runner invocation',
-            });
-          }
-          const managedRuntimeDeclaration =
-            lease.registry.contributes.providers?.find(
-              (provider) =>
-                provider.identity.pluginId === identity.pluginId &&
-                provider.identity.localId === identity.localId,
-            )?.definition.managedRuntime;
-          if (
-            managedRuntimeDeclaration?.kind !== 'managed' ||
-            !lease.registry.acquireManagedProviderRuntime
-          ) {
-            throw new PluginError({
-              code: 'plugin_services_managed_provider_authority_unavailable',
-              message:
-                'Managed Provider public runtime declaration is unavailable',
-            });
-          }
-          const providerConnectionRevision =
-            authorization.sessionBindingMetadata.connectionRevision;
-          const sharedProjection = createdManagedProviderInvocation.lifetime === 'sharedConsumer'
-            ? createSharedManagedProjection(
-                createdManagedProviderInvocation,
-                runtimeBindingBasis,
-                authorization.sessionBindingMetadata,
-                revalidateSessionProviderAuthority,
-              )
-            : null;
-          let adoptionCommitted = false;
-          let startPromise: Promise<void> | null = null;
-          const start = (): Promise<void> => {
-            startPromise ??= (async () => {
-              if (sharedProjection) {
-                await sharedProjection.start();
-                adoptionCommitted = true;
-                return;
-              }
-              const launchResourceScope = createProviderLaunchResourceScope();
-              const started = await startPublicManagedProviderRuntime({
-                identity,
-                request: Object.freeze({
-                  reason: 'sessionDemand' as const,
-                  connectionId: trackedSelection.providerConnectionId,
-                  connectionRevision: providerConnectionRevision,
-                  endpointTemplateIds: Object.freeze([
-                    ...managedRuntimeDeclaration.endpointTemplateIds,
-                  ]),
-                }),
-                acquireRuntime: async (requestedIdentity) =>
-                  await lease.registry.acquireManagedProviderRuntime!(
-                    requestedIdentity,
-                  ),
-                connectedAccounts:
-                  createdManagedProviderInvocation.connectedAccounts,
-                custody: createdManagedProviderInvocation,
-                isAuthorizationCurrent: readsSessionProviderAuthorityCurrent,
-                revalidateAuthorization: revalidateSessionProviderAuthority,
-                signal,
-                launchResourceScope,
-              });
-              if (!started.ok) {
+          preparationStage = 'invocation_projection';
+          const executeCurrentGlobalAction: RunnerDaemonCurrentGlobalActionExecutor =
+            async (actionOrRef, actionInput, options, operationWitness) => {
+              if (typeof actionOrRef !== 'string') {
                 throw new PluginError({
-                  code: started.code,
-                  message: 'Managed Provider Session runtime start failed',
+                  code: 'plugin_action_generation_private_unavailable',
+                  message:
+                    'A retained Runner cannot substitute the current plugin generation for an exact generation-private action handler',
                 });
               }
-              adoptionCommitted = true;
-              const retire = launchResourceScope.transfer();
-              const cleanupInvocation = managedProviderCleanup.current;
-              managedProviderCleanup.current = async () => {
-                await retire?.();
-                await cleanupInvocation?.();
-              };
-            })();
-            return startPromise;
-          };
-          const isManagedProviderCurrent = async () =>
-            await isManagedProviderSessionInvocationCurrent({
-              adoptionCommitted: () => adoptionCommitted,
-              revalidateInitialPolicy: revalidateSessionProviderAuthority,
-              readsRetainedAuthorityCurrent:
-                readsSessionProviderAuthorityCurrent,
-              revalidateRetainedPolicy: async () =>
-                await revalidateAdoptedManagedProviderPolicy(
-                  runtimeBindingBasis,
-                ),
-              fenceRetainedPolicy: async () => {
-                if (sharedProjection) return await cleanupManagedProvider();
-                if (!fenceRetainedProviderPolicy) {
+              const currentLease =
+                await acquireAuthoritativePluginRuntimeRegistryLease({
+                  happyHomeDir: configuration.happyHomeDir,
+                });
+              try {
+                const createCurrentActions =
+                  currentLease.registry
+                    .createRetainedRunnerAgentCurrentGlobalActionsService;
+                if (!createCurrentActions) {
                   throw new PluginError({
-                    code: 'plugin_services_managed_provider_custody_unavailable',
+                    code: 'plugin_services_retained_generation_unavailable',
                     message:
-                      'Runner retained Provider policy-fence authority is unavailable',
+                      'Retained Runner current-global Actions are unavailable',
                   });
                 }
-                await fenceRetainedProviderPolicy();
+                const currentActions = await createCurrentActions({
+                  binding: retainedAgent,
+                  runnerSnapshotIdentity: runner.snapshotIdentity,
+                  sessionId,
+                  correlationId: invocationId,
+                  signal,
+                  readActiveTurnAdmissionWitness: () => operationWitness ?? null,
+                  isOccurrenceCurrent: () =>
+                    authorizeOperation(operationWitness, {
+                      requireActiveTurn: true,
+                    }),
+                });
+                if (
+                  !authorizeOperation(operationWitness, {
+                    requireActiveTurn: true,
+                  })
+                ) {
+                  throw new PluginError({
+                    code: 'plugin_services_turn_authority_unavailable',
+                    message:
+                      'Runner PluginServices Action lost its exact active-turn authority before execution',
+                  });
+                }
+                // This is the runtime parse boundary: the
+                // canonical ActionsService validates the
+                // action-specific input and output schemas.
+                const executeCurrentAction = currentActions.execute as (
+                  action: Parameters<RunnerDaemonCurrentGlobalActionExecutor>[0],
+                  actionInput: Parameters<RunnerDaemonCurrentGlobalActionExecutor>[1],
+                  actionOptions: Parameters<RunnerDaemonCurrentGlobalActionExecutor>[2],
+                ) => Promise<unknown>;
+                return await executeCurrentAction(
+                  actionOrRef,
+                  actionInput,
+                  options,
+                );
+              } finally {
+                await currentLease.release();
+              }
+            };
+          const currentGlobalMcp: RunnerDaemonCurrentGlobalMcpOwner =
+            Object.freeze({
+              async list(query) {
+                const currentLease =
+                  await acquireAuthoritativePluginRuntimeRegistryLease({
+                    happyHomeDir: configuration.happyHomeDir,
+                  });
+                try {
+                  const createCurrentMcp =
+                    currentLease.registry
+                      .createRetainedRunnerAgentCurrentGlobalMcpService;
+                  if (!createCurrentMcp) {
+                    throw new PluginError({
+                      code: 'plugin_services_retained_generation_unavailable',
+                      message:
+                        'Retained Runner current-global MCP is unavailable',
+                    });
+                  }
+                  return await (
+                    await createCurrentMcp({
+                      binding: retainedAgent,
+                      runnerSnapshotIdentity: runner.snapshotIdentity,
+                      sessionId,
+                      correlationId: invocationId,
+                      signal,
+                      isOccurrenceCurrent: () => authorizeOperation(undefined),
+                    })
+                  ).list(query);
+                } finally {
+                  await currentLease.release();
+                }
               },
-              readHardRevocationRevision: async () =>
-                await readCurrentPluginHardRevocationRevision({
-                  paths: storePaths,
-                  pluginId: identity.pluginId,
-                }),
-              readGenerationIntegrityCurrentness: async () =>
-                bootstrap.sourceCustody.kind !== 'managed' ||
-                (await readCurrentPluginImmutableGenerationIntegrityCurrentness(
-                  {
-                    paths: storePaths,
-                    pluginId: identity.pluginId,
-                    immutableGenerationId:
-                      bootstrap.sourceCustody.immutableGenerationId,
-                  },
-                )),
-              hardRevocationRevisionAtAdmission:
-                providerPluginHardRevocationRevisionAtAdmission,
+              async discover(provider, query, options) {
+                const currentLease =
+                  await acquireAuthoritativePluginRuntimeRegistryLease({
+                    happyHomeDir: configuration.happyHomeDir,
+                  });
+                try {
+                  const createCurrentMcp =
+                    currentLease.registry
+                      .createRetainedRunnerAgentCurrentGlobalMcpService;
+                  if (!createCurrentMcp) {
+                    throw new PluginError({
+                      code: 'plugin_services_retained_generation_unavailable',
+                      message:
+                        'Retained Runner current-global MCP is unavailable',
+                    });
+                  }
+                  return await (
+                    await createCurrentMcp({
+                      binding: retainedAgent,
+                      runnerSnapshotIdentity: runner.snapshotIdentity,
+                      sessionId,
+                      correlationId: invocationId,
+                      signal,
+                      isOccurrenceCurrent: () => authorizeOperation(undefined),
+                    })
+                  ).discover(provider, query, options);
+                } finally {
+                  await currentLease.release();
+                }
+              },
+              async connect(ref, options) {
+                const currentLease =
+                  await acquireAuthoritativePluginRuntimeRegistryLease({
+                    happyHomeDir: configuration.happyHomeDir,
+                  });
+                let releaseCurrentLease = true;
+                try {
+                  const createCurrentMcp =
+                    currentLease.registry
+                      .createRetainedRunnerAgentCurrentGlobalMcpService;
+                  if (!createCurrentMcp) {
+                    throw new PluginError({
+                      code: 'plugin_services_retained_generation_unavailable',
+                      message:
+                        'Retained Runner current-global MCP is unavailable',
+                    });
+                  }
+                  const selectedClient = await (
+                    await createCurrentMcp({
+                      binding: retainedAgent,
+                      runnerSnapshotIdentity: runner.snapshotIdentity,
+                      sessionId,
+                      correlationId: invocationId,
+                      signal,
+                      isOccurrenceCurrent: () => authorizeOperation(undefined),
+                    })
+                  ).connect(ref, options);
+                  let disposed = false;
+                  let disposal: Promise<void> | null = null;
+                  const dispose = () => {
+                    disposal ??= (async () => {
+                      if (disposed) return;
+                      disposed = true;
+                      signal.removeEventListener('abort', disposeOnAbort);
+                      const results = await Promise.allSettled([
+                        selectedClient.dispose(),
+                        currentLease.release(),
+                      ]);
+                      const failures = results.flatMap((result) =>
+                        result.status === 'rejected' ? [result.reason] : [],
+                      );
+                      if (failures.length === 1) {
+                        throw failures[0];
+                      }
+                      if (failures.length > 1) {
+                        throw new AggregateError(
+                          failures,
+                          'Retained Runner MCP client cleanup failed',
+                        );
+                      }
+                    })();
+                    return disposal;
+                  };
+                  const disposeOnAbort = () => {
+                    void dispose().catch(() => {});
+                  };
+                  if (signal.aborted) disposeOnAbort();
+                  else
+                    signal.addEventListener('abort', disposeOnAbort, {
+                      once: true,
+                    });
+                  releaseCurrentLease = false;
+                  return Object.freeze({
+                    listTools: selectedClient.listTools,
+                    callTool: selectedClient.callTool,
+                    listResources: selectedClient.listResources,
+                    listResourceTemplates: selectedClient.listResourceTemplates,
+                    readResource: selectedClient.readResource,
+                    subscribeResource: selectedClient.subscribeResource,
+                    listPrompts: selectedClient.listPrompts,
+                    getPrompt: selectedClient.getPrompt,
+                    dispose,
+                  });
+                } finally {
+                  if (releaseCurrentLease) {
+                    await currentLease.release();
+                  }
+                }
+              },
             });
-          return Object.freeze({
-            bootstrap: Object.freeze({
-              v: 1 as const,
-              ...(sharedProjection ? { custody: 'daemonShared' as const } : {}),
-              scope: Object.freeze({
-                v: 1 as const,
-                sessionId: sessionId,
-                runtimeBindingBasis,
-                pluginId: identity.pluginId,
-                providerLocalId: identity.localId,
-                occurrenceId: bootstrap.occurrenceId,
-                sourceCustody: bootstrap.sourceCustody,
-                manifestAuthority: bootstrap.manifestAuthority,
-                operationClaimId: bootstrap.operationClaimId,
-              }),
-              requestAuth: sharedProjection ? null : bootstrap.requestAuth,
-              providerPluginHardRevocationRevisionAtAdmission,
-              sessionBindingMetadata: authorization.sessionBindingMetadata,
-            }),
-            connectedAccounts:
-              createdManagedProviderInvocation.connectedAccounts,
-            readSupervisionLaunchAuthority,
-            start,
-            ...(sharedProjection ? {
-              readSharedGatewayAccess: sharedProjection.readSharedGatewayAccess,
-            } : {}),
-            materializeAgentBinding: async ({
-              endpointUrl,
-              credentialPlaceholder,
-            }: Readonly<{
-              endpointUrl: string;
-              credentialPlaceholder: string | null;
-            }>) => {
-              if (
-                !startPromise ||
-                !capturedAgentProviderBinding ||
-                (!sharedProjection && !readAdoptedPublicOutcome) ||
-                (credentialPlaceholder === null) !==
-                  (runtimeBindingBasis.runtimeCredentialTransport === null)
-              ) {
-                await cleanupManagedProvider().catch(() => undefined);
-                throw new PluginError({
-                  code: 'plugin_services_managed_provider_materialization_authority_changed',
-                  message:
-                    'Managed Provider pre-open materialization authority is unavailable',
-                });
-              }
-              await startPromise;
-              let assessed: ReturnType<typeof assessProviderEndpoint>;
-              try {
-                assessed = assessProviderEndpoint(endpointUrl);
-              } catch {
-                await cleanupManagedProvider().catch(() => undefined);
-                throw new PluginError({
-                  code: 'plugin_services_managed_provider_materialization_authority_changed',
-                  message:
-                    'Managed Provider materialization endpoint is invalid',
-                });
-              }
-              const adopted = await readAdoptedPublicOutcome?.();
-              const sharedEndpoint = sharedProjection
-                ? await sharedProjection.readSharedGatewayAccess()
-                : null;
-              const adoptedEndpoint = adopted?.endpoints.find(
-                (entry) =>
-                  entry.endpointTemplateId ===
-                  runtimeBindingBasis.endpoint.endpointTemplateId,
-              );
-              if (
-                assessed.locality !== 'loopback' ||
-                (sharedEndpoint ? (
-                  new URL(assessed.normalizedUrl).hostname !== '127.0.0.1'
-                  || new URL(assessed.normalizedUrl).protocol !== 'http:'
-                  || new URL(assessed.normalizedUrl).pathname
-                    !== new URL(sharedEndpoint.endpointUrl).pathname
-                ) : (!adopted ||
-                adopted.operationClaimId !== bootstrap.operationClaimId ||
-                !adoptedEndpoint ||
-                assessed.normalizedUrl !== adoptedEndpoint.endpointUrl))
-              ) {
-                await cleanupManagedProvider().catch(() => undefined);
-                throw new PluginError({
-                  code: 'plugin_services_managed_provider_materialization_authority_changed',
-                  message:
-                    'Managed Provider adopted endpoint materialization facts are unavailable',
-                });
-              }
-              return await materializeRunnerManagedProviderAgentBinding({
-                capturedAgentBinding: capturedAgentProviderBinding,
-                isCapturedAgentRegistrationCurrent:
-                  isCapturedAgentRegistrationPreOpen,
-                isManagedProviderCurrent,
-                cleanup: cleanupManagedProvider,
-                binding: {
-                  v: 1,
-                  agentTargetKey: runtimeBindingBasis.agentTargetKey,
-                  selection: {
-                    connectionId: runtimeBindingBasis.connectionId,
-                    model: authorization.model,
-                  },
-                  contributionKey: runtimeBindingBasis.contributionKey,
-                  endpoint: {
-                    endpointTemplateId:
-                      runtimeBindingBasis.endpoint.endpointTemplateId,
-                    normalizedUrl: assessed.normalizedUrl,
-                    protocol: runtimeBindingBasis.endpoint.protocol,
-                    publicHeaders: runtimeBindingBasis.endpoint.publicHeaders,
-                  },
-                  runtimeCredentialTransport:
-                    runtimeBindingBasis.runtimeCredentialTransport,
-                  compatibilityFingerprint:
-                    authorization.sessionBindingMetadata
-                      .compatibilityFingerprint,
-                },
-                prepared: runtimeBindingBasis.prepared,
-                credential:
-                  credentialPlaceholder === null
-                    ? { kind: 'none' }
-                    : {
-                        kind: 'apiKey',
-                        transport:
-                          runtimeBindingBasis.runtimeCredentialTransport!,
-                        value: credentialPlaceholder,
-                      },
-              });
-            },
-            isCurrent: isManagedProviderCurrent,
-          });
-        })().catch(async (error: unknown) => {
-          if (
-            managedProviderRetention &&
-            isPluginError(error) &&
-            error.code ===
-              'plugin_services_managed_provider_authority_unavailable'
-          ) {
-            await cleanupManagedProvider().catch(() => undefined);
-            return null;
-          }
-          throw error;
-        });
-        if (managedProviderRetention && managedProvider) {
-          let retainedProviderIsCurrent = false;
-          try {
-            retainedProviderIsCurrent = await managedProvider.isCurrent();
-          } catch {
-            retainedProviderIsCurrent = false;
-          }
-          if (!retainedProviderIsCurrent) {
-            await cleanupManagedProvider().catch(() => undefined);
-            managedProvider = null;
-          }
-        }
-        const createRetained =
-          lease.registry.createRetainedRunnerAgentInvocationServices;
-        if (!createRetained) {
-          throw new PluginError({
-            code: 'plugin_services_retained_generation_unavailable',
-            message: 'Retained Runner Agent PluginServices are unavailable',
-          });
-        }
-        const invocationProjection = await createRetained({
-          binding: retainedAgent,
-          sessionId,
-          managedDependencyRetention:
-            tracked.runnerManagedDependencyRetentionV1 ?? {
-              v: 1 as const,
-              sourceCustodies: [],
-              qualifiedDependencyIds: [],
-            },
-          correlationId: invocationId,
-          cwd: invocationContext.cwd,
-          environment: invocationContext.environment,
-          ...(invocationContext.agentCliLaunch
-            ? {
-                agentCliLaunch: invocationContext.agentCliLaunch,
-              }
-            : {}),
-          providerBindingActive: invocationContext.providerBindingActive,
-          signal,
-          isOccurrenceCurrent: () => authorizeOperation(undefined),
-        });
-        const executeCurrentGlobalAction: RunnerDaemonCurrentGlobalActionExecutor =
-          async (actionOrRef, actionInput, options, operationWitness) => {
-            if (typeof actionOrRef !== 'string') {
-              throw new PluginError({
-                code: 'plugin_action_generation_private_unavailable',
-                message:
-                  'A retained Runner cannot substitute the current plugin generation for an exact generation-private action handler',
-              });
-            }
+          const withCurrentGlobalExternalSessions = async <T>(
+            operation: (
+              service: RunnerDaemonCurrentGlobalExternalSessionsOwner,
+            ) => Promise<T>,
+          ): Promise<T> => {
             const currentLease =
               await acquireAuthoritativePluginRuntimeRegistryLease({
                 happyHomeDir: configuration.happyHomeDir,
               });
             try {
-              const createCurrentActions =
+              const createCurrentExternalSessions =
                 currentLease.registry
-                  .createRetainedRunnerAgentCurrentGlobalActionsService;
-              if (!createCurrentActions) {
+                  .createRetainedRunnerAgentCurrentGlobalExternalSessionsService;
+              if (!createCurrentExternalSessions) {
                 throw new PluginError({
                   code: 'plugin_services_retained_generation_unavailable',
                   message:
-                    'Retained Runner current-global Actions are unavailable',
+                    'Retained Runner current-global External Sessions are unavailable',
                 });
               }
-              const currentActions = await createCurrentActions({
-                binding: retainedAgent,
-                sessionId,
-                correlationId: invocationId,
-                signal,
-                readActiveTurnAdmissionWitness: () => operationWitness ?? null,
-                isOccurrenceCurrent: () =>
-                  authorizeOperation(operationWitness, {
-                    requireActiveTurn: true,
-                  }),
-              });
-              if (
-                !authorizeOperation(operationWitness, {
-                  requireActiveTurn: true,
-                })
-              ) {
-                throw new PluginError({
-                  code: 'plugin_services_turn_authority_unavailable',
-                  message:
-                    'Runner PluginServices Action lost its exact active-turn authority before execution',
-                });
-              }
-              // This is the runtime parse boundary: the
-              // canonical ActionsService validates the
-              // action-specific input and output schemas.
-              const executeCurrentAction = currentActions.execute as (
-                action: Parameters<RunnerDaemonCurrentGlobalActionExecutor>[0],
-                actionInput: Parameters<RunnerDaemonCurrentGlobalActionExecutor>[1],
-                actionOptions: Parameters<RunnerDaemonCurrentGlobalActionExecutor>[2],
-              ) => Promise<unknown>;
-              return await executeCurrentAction(
-                actionOrRef,
-                actionInput,
-                options,
+              return await operation(
+                await createCurrentExternalSessions({
+                  binding: retainedAgent,
+                  runnerSnapshotIdentity: runner.snapshotIdentity,
+                  sessionId,
+                  correlationId: invocationId,
+                  signal,
+                  isOccurrenceCurrent: () => authorizeOperation(undefined),
+                }),
               );
             } finally {
               await currentLease.release();
             }
           };
-        const currentGlobalMcp: RunnerDaemonCurrentGlobalMcpOwner =
-          Object.freeze({
-            async list(query) {
-              const currentLease =
-                await acquireAuthoritativePluginRuntimeRegistryLease({
-                  happyHomeDir: configuration.happyHomeDir,
-                });
-              try {
-                const createCurrentMcp =
-                  currentLease.registry
-                    .createRetainedRunnerAgentCurrentGlobalMcpService;
-                if (!createCurrentMcp) {
-                  throw new PluginError({
-                    code: 'plugin_services_retained_generation_unavailable',
-                    message:
-                      'Retained Runner current-global MCP is unavailable',
+          const currentGlobalExternalSessions: RunnerDaemonCurrentGlobalExternalSessionsOwner =
+            Object.freeze({
+              async capabilities(options) {
+                return await withCurrentGlobalExternalSessions(
+                  async (service) => await service.capabilities(options),
+                );
+              },
+              async list(query, options) {
+                return await withCurrentGlobalExternalSessions(
+                  async (service) => await service.list(query, options),
+                );
+              },
+              async closeList(cursor, options) {
+                await withCurrentGlobalExternalSessions(
+                  async (service) => await service.closeList(cursor, options),
+                );
+              },
+              async attach(ref, options) {
+                return await withCurrentGlobalExternalSessions(
+                  async (service) => await service.attach(ref, options),
+                );
+              },
+              async readTranscript(ref, query, options) {
+                return await withCurrentGlobalExternalSessions(
+                  async (service) =>
+                    await service.readTranscript(ref, query, options),
+                );
+              },
+              async followTranscript(ref, options, listener) {
+                const currentLease =
+                  await acquireAuthoritativePluginRuntimeRegistryLease({
+                    happyHomeDir: configuration.happyHomeDir,
                   });
-                }
-                return await (
-                  await createCurrentMcp({
-                    binding: retainedAgent,
-                    sessionId,
-                    correlationId: invocationId,
-                    signal,
-                    isOccurrenceCurrent: () => authorizeOperation(undefined),
-                  })
-                ).list(query);
-              } finally {
-                await currentLease.release();
-              }
-            },
-            async discover(provider, query, options) {
-              const currentLease =
-                await acquireAuthoritativePluginRuntimeRegistryLease({
-                  happyHomeDir: configuration.happyHomeDir,
-                });
-              try {
-                const createCurrentMcp =
-                  currentLease.registry
-                    .createRetainedRunnerAgentCurrentGlobalMcpService;
-                if (!createCurrentMcp) {
-                  throw new PluginError({
-                    code: 'plugin_services_retained_generation_unavailable',
-                    message:
-                      'Retained Runner current-global MCP is unavailable',
-                  });
-                }
-                return await (
-                  await createCurrentMcp({
-                    binding: retainedAgent,
-                    sessionId,
-                    correlationId: invocationId,
-                    signal,
-                    isOccurrenceCurrent: () => authorizeOperation(undefined),
-                  })
-                ).discover(provider, query, options);
-              } finally {
-                await currentLease.release();
-              }
-            },
-            async connect(ref, options) {
-              const currentLease =
-                await acquireAuthoritativePluginRuntimeRegistryLease({
-                  happyHomeDir: configuration.happyHomeDir,
-                });
-              let releaseCurrentLease = true;
-              try {
-                const createCurrentMcp =
-                  currentLease.registry
-                    .createRetainedRunnerAgentCurrentGlobalMcpService;
-                if (!createCurrentMcp) {
-                  throw new PluginError({
-                    code: 'plugin_services_retained_generation_unavailable',
-                    message:
-                      'Retained Runner current-global MCP is unavailable',
-                  });
-                }
-                const selectedClient = await (
-                  await createCurrentMcp({
-                    binding: retainedAgent,
-                    sessionId,
-                    correlationId: invocationId,
-                    signal,
-                    isOccurrenceCurrent: () => authorizeOperation(undefined),
-                  })
-                ).connect(ref, options);
-                let disposed = false;
-                let disposal: Promise<void> | null = null;
-                const dispose = () => {
-                  disposal ??= (async () => {
-                    if (disposed) return;
-                    disposed = true;
-                    signal.removeEventListener('abort', disposeOnAbort);
-                    const results = await Promise.allSettled([
-                      selectedClient.dispose(),
-                      currentLease.release(),
-                    ]);
-                    const failures = results.flatMap((result) =>
-                      result.status === 'rejected' ? [result.reason] : [],
-                    );
-                    if (failures.length === 1) {
-                      throw failures[0];
-                    }
-                    if (failures.length > 1) {
-                      throw new AggregateError(
-                        failures,
-                        'Retained Runner MCP client cleanup failed',
+                let releaseCurrentLease = true;
+                try {
+                  const createCurrentExternalSessions =
+                    currentLease.registry
+                      .createRetainedRunnerAgentCurrentGlobalExternalSessionsService;
+                  if (!createCurrentExternalSessions) {
+                    throw new PluginError({
+                      code: 'plugin_services_retained_generation_unavailable',
+                      message:
+                        'Retained Runner current-global External Sessions are unavailable',
+                    });
+                  }
+                  const followed = await (
+                    await createCurrentExternalSessions({
+                      binding: retainedAgent,
+                      runnerSnapshotIdentity: runner.snapshotIdentity,
+                      sessionId,
+                      correlationId: invocationId,
+                      signal,
+                      isOccurrenceCurrent: () => authorizeOperation(undefined),
+                    })
+                  ).followTranscript(ref, options, listener);
+                  if (followed.status === 'unavailable') {
+                    return followed;
+                  }
+                  let disposal: Promise<void> | null = null;
+                  const dispose = () => {
+                    disposal ??= (async () => {
+                      signal.removeEventListener('abort', disposeOnAbort);
+                      const results = await Promise.allSettled([
+                        followed.subscription.dispose(),
+                        currentLease.release(),
+                      ]);
+                      const failures = results.flatMap((result) =>
+                        result.status === 'rejected' ? [result.reason] : [],
                       );
-                    }
-                  })();
-                  return disposal;
-                };
-                const disposeOnAbort = () => {
-                  void dispose().catch(() => {});
-                };
-                if (signal.aborted) disposeOnAbort();
-                else
-                  signal.addEventListener('abort', disposeOnAbort, {
-                    once: true,
+                      if (failures.length === 1) {
+                        throw failures[0];
+                      }
+                      if (failures.length > 1) {
+                        throw new AggregateError(
+                          failures,
+                          'Retained Runner External Sessions follow cleanup failed',
+                        );
+                      }
+                    })();
+                    return disposal;
+                  };
+                  const disposeOnAbort = () => {
+                    void dispose().catch(() => {});
+                  };
+                  if (signal.aborted) disposeOnAbort();
+                  else
+                    signal.addEventListener('abort', disposeOnAbort, {
+                      once: true,
+                    });
+                  releaseCurrentLease = false;
+                  return Object.freeze({
+                    status: 'following' as const,
+                    startingCursor: followed.startingCursor,
+                    subscription: Object.freeze({
+                      dispose,
+                    }),
                   });
-                releaseCurrentLease = false;
-                return Object.freeze({
-                  listTools: selectedClient.listTools,
-                  callTool: selectedClient.callTool,
-                  listResources: selectedClient.listResources,
-                  listResourceTemplates: selectedClient.listResourceTemplates,
-                  readResource: selectedClient.readResource,
-                  subscribeResource: selectedClient.subscribeResource,
-                  listPrompts: selectedClient.listPrompts,
-                  getPrompt: selectedClient.getPrompt,
-                  dispose,
-                });
-              } finally {
-                if (releaseCurrentLease) {
-                  await currentLease.release();
+                } finally {
+                  if (releaseCurrentLease) {
+                    await currentLease.release();
+                  }
                 }
-              }
-            },
-          });
-        const withCurrentGlobalExternalSessions = async <T>(
-          operation: (
-            service: RunnerDaemonCurrentGlobalExternalSessionsOwner,
-          ) => Promise<T>,
-        ): Promise<T> => {
-          const currentLease =
-            await acquireAuthoritativePluginRuntimeRegistryLease({
-              happyHomeDir: configuration.happyHomeDir,
+              },
+              async takeover(ref, request, options) {
+                return await withCurrentGlobalExternalSessions(
+                  async (service) =>
+                    await service.takeover(ref, request, options),
+                );
+              },
             });
-          try {
-            const createCurrentExternalSessions =
-              currentLease.registry
-                .createRetainedRunnerAgentCurrentGlobalExternalSessionsService;
-            if (!createCurrentExternalSessions) {
-              throw new PluginError({
-                code: 'plugin_services_retained_generation_unavailable',
-                message:
-                  'Retained Runner current-global External Sessions are unavailable',
-              });
-            }
-            return await operation(
-              await createCurrentExternalSessions({
-                binding: retainedAgent,
-                sessionId,
-                correlationId: invocationId,
-                signal,
-                isOccurrenceCurrent: () => authorizeOperation(undefined),
-              }),
-            );
-          } finally {
-            await currentLease.release();
+          const invocationRetainsRegistryLease = managedProvider !== null;
+          if (!invocationRetainsRegistryLease) {
+            await lease.release();
           }
-        };
-        const currentGlobalExternalSessions: RunnerDaemonCurrentGlobalExternalSessionsOwner =
-          Object.freeze({
-            async capabilities(options) {
-              return await withCurrentGlobalExternalSessions(
-                async (service) => await service.capabilities(options),
-              );
-            },
-            async list(query, options) {
-              return await withCurrentGlobalExternalSessions(
-                async (service) => await service.list(query, options),
-              );
-            },
-            async closeList(cursor, options) {
-              await withCurrentGlobalExternalSessions(
-                async (service) => await service.closeList(cursor, options),
-              );
-            },
-            async attach(ref, options) {
-              return await withCurrentGlobalExternalSessions(
-                async (service) => await service.attach(ref, options),
-              );
-            },
-            async readTranscript(ref, query, options) {
-              return await withCurrentGlobalExternalSessions(
-                async (service) =>
-                  await service.readTranscript(ref, query, options),
-              );
-            },
-            async followTranscript(ref, options, listener) {
-              const currentLease =
-                await acquireAuthoritativePluginRuntimeRegistryLease({
-                  happyHomeDir: configuration.happyHomeDir,
-                });
-              let releaseCurrentLease = true;
-              try {
-                const createCurrentExternalSessions =
-                  currentLease.registry
-                    .createRetainedRunnerAgentCurrentGlobalExternalSessionsService;
-                if (!createCurrentExternalSessions) {
-                  throw new PluginError({
-                    code: 'plugin_services_retained_generation_unavailable',
-                    message:
-                      'Retained Runner current-global External Sessions are unavailable',
-                  });
-                }
-                const followed = await (
-                  await createCurrentExternalSessions({
-                    binding: retainedAgent,
-                    sessionId,
-                    correlationId: invocationId,
-                    signal,
-                    isOccurrenceCurrent: () => authorizeOperation(undefined),
-                  })
-                ).followTranscript(ref, options, listener);
-                if (followed.status === 'unavailable') {
-                  return followed;
-                }
-                let disposal: Promise<void> | null = null;
-                const dispose = () => {
-                  disposal ??= (async () => {
-                    signal.removeEventListener('abort', disposeOnAbort);
-                    const results = await Promise.allSettled([
-                      followed.subscription.dispose(),
-                      currentLease.release(),
-                    ]);
-                    const failures = results.flatMap((result) =>
-                      result.status === 'rejected' ? [result.reason] : [],
-                    );
-                    if (failures.length === 1) {
-                      throw failures[0];
-                    }
-                    if (failures.length > 1) {
-                      throw new AggregateError(
-                        failures,
-                        'Retained Runner External Sessions follow cleanup failed',
-                      );
-                    }
-                  })();
-                  return disposal;
-                };
-                const disposeOnAbort = () => {
-                  void dispose().catch(() => {});
-                };
-                if (signal.aborted) disposeOnAbort();
-                else
-                  signal.addEventListener('abort', disposeOnAbort, {
-                    once: true,
-                  });
-                releaseCurrentLease = false;
-                return Object.freeze({
-                  status: 'following' as const,
-                  startingCursor: followed.startingCursor,
-                  subscription: Object.freeze({
-                    dispose,
-                  }),
-                });
-              } finally {
-                if (releaseCurrentLease) {
-                  await currentLease.release();
-                }
+          releaseLease = false;
+          releaseManagedProviderInvocation = false;
+          return {
+            ...invocationProjection,
+            ...(managedProvider ? { managedProvider } : {}),
+            authorizeOperation,
+            authorizeManagedProviderMaterialization:
+              isCapturedAgentRegistrationPreOpen,
+            executeCurrentGlobalAction,
+            currentGlobalMcp,
+            currentGlobalExternalSessions,
+            dispose: async () => {
+              await cleanupManagedProvider();
+              if (invocationRetainsRegistryLease) {
+                await lease.release();
               }
             },
-            async takeover(ref, request, options) {
-              return await withCurrentGlobalExternalSessions(
-                async (service) =>
-                  await service.takeover(ref, request, options),
-              );
-            },
-          });
-        const invocationRetainsRegistryLease = managedProvider !== null;
-        if (!invocationRetainsRegistryLease) {
-          await lease.release();
-        }
-        releaseLease = false;
-        releaseManagedProviderInvocation = false;
-        return {
-          ...invocationProjection,
-          ...(managedProvider ? { managedProvider } : {}),
-          authorizeOperation,
-          authorizeManagedProviderMaterialization:
-            isCapturedAgentRegistrationPreOpen,
-          executeCurrentGlobalAction,
-          currentGlobalMcp,
-          currentGlobalExternalSessions,
-          dispose: async () => {
+          };
+        } finally {
+          if (releaseManagedProviderInvocation) {
             await cleanupManagedProvider();
-            if (invocationRetainsRegistryLease) {
-              await lease.release();
-            }
-          },
-        };
-      } finally {
-        if (releaseManagedProviderInvocation) {
-          await cleanupManagedProvider();
+          }
+          if (releaseLease) {
+            await lease.release();
+          }
         }
-        if (releaseLease) {
-          await lease.release();
-        }
+      } catch (error) {
+        throw createRunnerDaemonPluginServicesPreparationError(error, preparationStage);
       }
     },
   });
@@ -9287,10 +9344,6 @@ export async function startDaemonSessionControlRuntime(
   const runnerAgentDaemonFacetService = createRunnerAgentDaemonFacetService({
     externalSessionHostOperationOwner,
     machineId: params.machineId,
-    readAccountRevision: () =>
-      resolveActiveAccountSettingsSnapshotRevision(
-        getActiveAccountSettingsSnapshot(),
-      ),
     authorizeCurrent: async ({ sessionId, runner, retainedAgent }) => {
       const tracked = findTrackedSessionByHappySessionId(
         params.pidToTrackedSession.values(),
@@ -9736,9 +9789,10 @@ export async function startDaemonSessionControlRuntime(
       return;
     }
     await releaseExecutionRunAuthorityForRunnerExit({
-      runnerPid: pid,
+      runnerPid: trackedBeforeExit.sessionRunnerPid ?? pid,
       runnerIdentity: trackedBeforeExit,
     });
+    await runnerExecutionRunSnapshots.releaseForRunnerExit(trackedBeforeExit);
     if (trackedAfterExit !== null) {
       logger.debug(
         '[DAEMON RUN] PID ownership changed while observing child exit; preserving replacement runtime custody',
@@ -11232,10 +11286,9 @@ export async function startDaemonSessionControlRuntime(
   runtimeActionRouteProviderTarget.setComputerRoutesProvider?.(
     () => computerRoutes,
   );
-  // The person's own controls (choose, stop, hand back) reach the same owner over the machine RPC.
-  params
-    .getApiMachineForSessions()
-    ?.registerComputerRoutes(() => computerRoutes);
+  // Machine registration may finish after startup. Publish through its attachment
+  // owner so the person's controls also survive machine transport replacement.
+  params.onComputerRoutesReady?.(() => computerRoutes);
   // OWNER-GATE: one daemon-boundary browser feature gate. The first startup pass keeps the daemon
   // fail-closed when the server feature snapshot is unavailable; the returned
   // refreshBrowserRouteOwners() method re-runs the SAME gate/producer construction after the
@@ -11445,6 +11498,7 @@ export async function startDaemonSessionControlRuntime(
         const browserSidecarControlAdapterResult =
           await browserSidecarControlAdapterFactory({
             machineId: params.machineId,
+            readMachineMemory: params.readMachineMemory,
             resolveInputControl: resolveBrowserInputControl,
             readSessionIdle: browserAutomationOwners.readSessionIdle,
           });
@@ -11456,6 +11510,7 @@ export async function startDaemonSessionControlRuntime(
         }
         if (browserSidecarControlAdapterResult?.ok) {
           guardBrowserResourceOwner = browserSidecarControlAdapterResult;
+          invalidateProcessLaunchDiscovery();
           unregisterBrowserSidecarControlAdapter =
             browserControlBroker.registerAdapter(
               browserSidecarControlAdapterResult.adapter,
@@ -12135,7 +12190,9 @@ export async function startDaemonSessionControlRuntime(
     if (controlRuntimeResourcesDisposed) return;
     controlRuntimeResourcesDisposed = true;
     runtimeActionRouteProviderTarget.setComputerRoutesProvider?.(null);
-    await computerRoutes?.dispose();
+    const retiringComputerRoutes = computerRoutes;
+    computerRoutes = null;
+    await retiringComputerRoutes?.dispose();
     await managedServiceEndpointReadOwner?.dispose();
     managedServiceEndpointReadOwner = null;
     unsubscribeConnectedServiceRuntimeTargetRegistrations();
@@ -12592,8 +12649,10 @@ export async function startDaemonSessionControlRuntime(
           },
         });
       },
-      captureRunnerIdentity: ({ runnerPid, expectedParentSessionId }) => {
-        const tracked = params.pidToTrackedSession.get(runnerPid);
+      captureRunnerIdentity: async ({ runnerPid, expectedParentSessionId, runId }) => {
+        const resolveTracked = () => params.pidToTrackedSession.get(runnerPid)
+          ?? findTrackedSessionByRunnerPid(params.pidToTrackedSession, runnerPid);
+        const tracked = resolveTracked();
         if (!tracked) return null;
         const parentSessionId = normalizeOptionalString(tracked.happySessionId);
         if (
@@ -12603,12 +12662,26 @@ export async function startDaemonSessionControlRuntime(
         ) {
           return null;
         }
+        const runnerIdentity = resolveTrackedSessionRunnerIdentity(tracked);
+        const runnerStartTimeMs = runnerIdentity?.processStartTimeMs;
+        if (runId !== undefined) {
+          // The scoped control token and a tracked PID do not authorize an
+          // arbitrary Run key. Only the Run owner's sealed record supplies its
+          // Session/host lineage; visibility markers and caller input do not.
+          const record = await readRetainedExecutionRunRecord(runId).catch(() => null);
+          if (!record || record.state.runId !== runId
+            || record.state.sessionId !== parentSessionId || !runnerIdentity
+            || runnerIdentity.pid !== runnerPid) return null;
+        }
         return Object.freeze({
           identity: tracked,
           parentSessionId,
-          isCurrent: () =>
-            params.pidToTrackedSession.get(runnerPid) === tracked &&
-            tracked.happySessionId === parentSessionId,
+          isCurrent: () => {
+            const currentRunner = resolveTrackedSessionRunnerIdentity(tracked);
+            return resolveTracked() === tracked && tracked.happySessionId === parentSessionId
+              && (runId === undefined || (currentRunner?.pid === runnerPid && runnerStartTimeMs !== undefined
+                && processGenerationMatches(currentRunner.processStartTimeMs, runnerStartTimeMs)));
+          },
         });
       },
       acquireAgentPurposeContributions: async ({ agentId }) => {
@@ -14510,9 +14583,12 @@ export async function startDaemonSessionControlRuntime(
       context?: RpcActionExecutorContext,
       replay?: Parameters<ReturnType<typeof createCliActionExecutorFromCredentials>['replayApprovedApprovalRequest']>[0],
     ): Promise<ActionExecuteResult> => {
-      if (requesterAccountContext && (!await requesterAccountContext.isCurrent()
-        || !await requesterAccountContext.refreshAccountSettings(context?.signal ?? replay?.signal))) {
-        return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      context?.recordActionStartDiagnostic?.({ phase: 'credentialed_factory', requesterRuntimeBound: Boolean(requesterRuntime) });
+      if (requesterAccountContext) {
+        if (!await requesterAccountContext.isCurrent()
+          || !await requesterAccountContext.refreshAccountSettings(context?.signal ?? replay?.signal)) {
+          return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+        }
       }
       const readRequesterAccountSnapshot = () => {
         const snapshot = requesterAccountContext?.savedSecretOperationContext.readSnapshot();
@@ -14525,9 +14601,8 @@ export async function startDaemonSessionControlRuntime(
         let origin: CurrentMachineExecutionOriginContext | null = null;
         try {
           origin =
-            (await params.resolveCurrentMachineExecutionOriginContext?.(
-              context.signal,
-            )) ?? null;
+            await measureActionStartPhaseV1(context, 'machine_origin', async () =>
+              await params.resolveCurrentMachineExecutionOriginContext?.(context.signal) ?? null);
         } catch {
           origin = null;
         }
@@ -14557,7 +14632,7 @@ export async function startDaemonSessionControlRuntime(
             || binding.actionId !== actionId || binding.requestId !== context.actionRequestId
             || target?.kind !== 'machine' || target.machineId !== binding.machineId
             || !isSessionActionCallerCurrent || !await isSessionActionCallerCurrent()) {
-            return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+            return actionStartTargetUnavailableV1(context, 'credentialed_factory', 'target_binding_mismatch');
           }
           const result = await callExactMachineRpc({ credentials, machineId: binding.machineId,
             serverUrl: requesterRuntime?.bootstrap.serverHttpBaseUrl ?? params.serverBaseUrl,
@@ -14585,11 +14660,8 @@ export async function startDaemonSessionControlRuntime(
         }
         if (!origin || origin.machineId !== params.machineId) {
           const cancelled = context?.signal?.aborted === true;
-          return {
-            ok: false,
-            errorCode: cancelled ? 'cancelled' : 'target_unavailable',
-            error: cancelled ? 'cancelled' : 'target_unavailable',
-          };
+          return cancelled ? { ok: false, errorCode: 'cancelled', error: 'cancelled' }
+            : actionStartTargetUnavailableV1(context, 'machine_origin', 'target_binding_mismatch');
         }
         observedServerIdentityId = origin.serverIdentityId;
         executionContext = {
@@ -15077,7 +15149,25 @@ export async function startDaemonSessionControlRuntime(
           // carriers retain their existing owners rather than borrowing this
           // installation's ordinary Account credentials.
           if (!authorization.requesterAccountContext && !isOriginalOwnAccountActionCustody(authorization.binding)) {
-            return { authorization };
+            const binding = authorization.binding;
+            const requester = requesterAccountContext;
+            if (!requester || !('authentication' in binding)
+              || (binding.authentication.kind !== 'account' && binding.authentication.kind !== 'terminal')
+              || binding.sessionActionOrigin || binding.workflowActionOrigin
+              || binding.accountId !== requester.authorization.binding.accountId
+              || binding.serverIdentityId !== requester.authorization.binding.serverIdentityId
+              || binding.machineId !== params.machineId) return { authorization };
+            // Stored approval provenance has no credential box. The deciding
+            // invocation already holds this requester's admitted private custody;
+            // rehydrate the unchanged root through the incumbent ingress owner.
+            const installation = readInstallationIdentityIfExistsSync();
+            if (!installation || installation.installationId !== binding.installationId) return null;
+            const sealed = await requester.authorization.requesterAccountProjection?.sealRequesterAccountContext?.({
+              authorization, purpose: { kind: 'external_action' },
+              installationPublicKey: decodeBase64(installation.publicKey, 'base64url'),
+            });
+            if (!sealed) return null;
+            authorization = sealed;
           }
           return await externalActionIngressOwner?.prepareRequesterAccountContext?.({ authorization,
             ...(signal ? { signal } : {}) }) ?? null;
@@ -15119,15 +15209,14 @@ export async function startDaemonSessionControlRuntime(
                   if (!ingress?.machineAdmission || !ingress.verifyMachineAdmissionCurrent) {
                     return { kind: 'refused', code: 'machine_admission_required' };
                   }
-                  return await apiMachineForSessions.callProjectOpen({ input, credentials,
+                  return await apiMachineForSessions.callProjectOpen({ input, rpcContext: ingress,
                     context: { ...context, machineAdmission: ingress.machineAdmission,
                       verifyMachineAdmissionCurrent: ingress.verifyMachineAdmissionCurrent } });
                 },
                 invoke: async (method, request, options) => {
                   const ingress = resolveRequesterIngress(options?.localActionContext ?? executionContext);
                   return await apiMachineForSessions
-                    .getPeerMediationMachineRpcHandlerManager()
-                    .invokeLocal(method, request, { ...options,
+                    .invokeLocalMachineAction(method, request, { ...options,
                       ...(ingress ? { rpcContext: ingress } : {}),
                       ...(options?.localActionContext ?? ingress?.localActionContext
                         ? { localActionContext: options?.localActionContext ?? ingress?.localActionContext } : {}),
@@ -15330,7 +15419,7 @@ export async function startDaemonSessionControlRuntime(
     requesterRuntime: RequesterSessionRuntimeContext | null,
     serverHttpBaseUrl: string,
   ): NonNullable<Parameters<typeof createDaemonSessionAccountActionExecutor>[0]['prepareExternalActionAuthorization']> =>
-    async ({ operation, authority, isCallerCurrent, sessionActionOrigin, targetMachineId }) => {
+    async ({ operation, authority, isCallerCurrent, sessionActionOrigin, targetMachineId, workflowTarget }) => {
       // Private/client-only Actions retain their existing Session channel;
       // Home-bound public effects use only the incumbent signed carrier.
       if (
@@ -15423,9 +15512,10 @@ export async function startDaemonSessionControlRuntime(
         if (selected.kind !== 'ready') return null;
         selectedMachineId = selected.machineId;
       }
+      if (workflowTarget && workflowTarget.machineId !== selectedMachineId) return null;
       const target: ExternalActionTargetV1 = operation.actionId === 'session.board.item.upsert'
         ? { kind: 'session', sessionId: sessionActionOrigin.caller.sessionId }
-        : { kind: 'machine', machineId: selectedMachineId };
+        : workflowTarget ?? { kind: 'machine', machineId: selectedMachineId };
       const isCurrent = async () => {
         const current = readInstallationIdentityIfExistsSync();
         return (
@@ -15527,10 +15617,13 @@ export async function startDaemonSessionControlRuntime(
     typeof createDaemonSessionAccountActionExecutor
   > | null = externalActionIngressOwner
     ? async (operation, authority) => {
+        const requesterStartedAt = Date.now();
+        let requesterResolved = false;
         try {
           const requesterRuntime = await resolveSessionAccountContext(
             authority.sessionId,
           );
+          requesterResolved = true;
           const credentials =
             requesterRuntime?.bootstrap.credentials ?? params.credentials;
           const serverHttpBaseUrl =
@@ -15540,7 +15633,10 @@ export async function startDaemonSessionControlRuntime(
             serverId: params.serverId,
             serverHttpBaseUrl,
             token: credentials.token,
+            credentials,
             machineId: params.machineId,
+            initialStartDiagnostic: { phase: 'requester_runtime',
+              elapsedMs: Math.max(0, Date.now() - requesterStartedAt), requesterRuntimeBound: Boolean(requesterRuntime) },
             createExecutor: (getCurrentTurnWorkDepth, isCallerCurrent) =>
               createExternalActionExecutor(
                 credentials,
@@ -15557,10 +15653,15 @@ export async function startDaemonSessionControlRuntime(
             execute(operation, authority),
           );
         } catch {
-          const errorCode = authority.signal?.aborted
-            ? 'cancelled'
-            : 'target_unavailable';
-          return { ok: false, errorCode, error: errorCode };
+          if (authority.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+          const refusalPhase = requesterResolved ? 'credentialed_factory' : 'requester_runtime';
+          const refusalReason = requesterResolved ? 'credentialed_factory_failed' : 'requester_runtime_unavailable';
+          logDaemonSessionAccountActionRefusalV1(operation, authority.sessionId, {
+            reason: 'action_executor_refused', errorCode: 'target_unavailable', refusalCode: 'target_unavailable',
+            refusalPhase, refusalReason,
+            elapsedSubphasesMs: { [refusalPhase]: Math.max(0, Date.now() - requesterStartedAt) },
+          });
+          return actionStartTargetUnavailableV1(undefined, refusalPhase, refusalReason);
         }
       }
     : null;
@@ -15642,6 +15743,7 @@ export async function startDaemonSessionControlRuntime(
         'runner_plugin_services_host',
         async () => {
           await runnerDaemonPluginServicesHost.dispose();
+          await runnerExecutionRunSnapshots.dispose();
         },
       ],
       [
@@ -16032,7 +16134,23 @@ export async function startDaemonSessionControlRuntime(
         localServicesRuntimeActionRoutes.publicPreviewRoutes,
       agentRuntimeDaemonServices: {
         dispatch: async (request, context) => {
-          const { sessionId, runner, retainedAgent, trackedSession } = context;
+          const { sessionId, runner, trackedSession } = context;
+          if (request.operation.kind === 'execution_run.snapshot.acquire_v1'
+            || request.operation.kind === 'execution_run.snapshot.release_v1') {
+            try {
+              return await runnerExecutionRunSnapshots.dispatch(request, context);
+            } catch {
+              return { ok: false as const, error: { code: 'execution_run_contribution_snapshot_unavailable',
+                message: 'Execution Run executable snapshot is unavailable' } };
+            }
+          }
+          const executionRunSnapshotId = request.context.executionRunSnapshotId;
+          const runSnapshot = executionRunSnapshotId ? runnerExecutionRunSnapshots.read(executionRunSnapshotId, context) : null;
+          if (executionRunSnapshotId && !runSnapshot?.projection.agent) {
+            return { ok: false as const, error: { code: 'execution_run_contribution_snapshot_unavailable',
+              message: 'Execution Run executable snapshot is unavailable' } };
+          }
+          const retainedAgent = runSnapshot?.projection.agent?.binding ?? context.retainedAgent;
           if (request.operation.kind === 'mcp.request_auth.open' || request.operation.kind === 'mcp.request_auth.close') {
             const operation = request.operation;
             const tracked = trackedSession;
@@ -16413,6 +16531,7 @@ export async function startDaemonSessionControlRuntime(
                   sessionId,
                   runner,
                   retainedAgent,
+                  ...(executionRunSnapshotId ? { executionRunSnapshotId, runnerRetainedAgent: context.retainedAgent } : {}),
                   operation: pluginServiceOperation.data,
                   ...(context.signal
                     ? {
@@ -16422,24 +16541,14 @@ export async function startDaemonSessionControlRuntime(
                 }),
               };
             } catch (error) {
-              const candidateCode = isPluginError(error)
-                ? error.code
-                : error &&
-                    typeof error === 'object' &&
-                    typeof Reflect.get(error, 'code') === 'string'
-                  ? Reflect.get(error, 'code')
-                  : '';
-              const code =
-                typeof candidateCode === 'string' &&
-                /^[a-z][a-z0-9_]{0,127}$/u.test(candidateCode)
-                  ? candidateCode
-                  : 'runner_plugin_services_unavailable';
+              const failure = projectRunnerDaemonPluginServicesFailure(error,
+                pluginServiceOperation.data.kind === 'plugin_services.prepare_v1' ? 'dispatch' : undefined);
+              if (failure.cause) {
+                logger.warnLocalFile(JSON.stringify({ kind: 'runner_plugin_services_prepare_refused', cause: failure.cause }));
+              }
               return {
                 ok: false as const,
-                error: {
-                  code,
-                  message: 'Runner PluginServices operation is unavailable',
-                },
+                error: failure,
               };
             }
           }
@@ -16537,9 +16646,8 @@ export async function startDaemonSessionControlRuntime(
                 },
               };
             }
-            const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
-              happyHomeDir: configuration.happyHomeDir,
-            });
+            const lease = runSnapshot ? { ...runSnapshot.snapshot.runtimeRegistryLease, release: async () => {} }
+              : await acquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: configuration.happyHomeDir });
             try {
               if (request.operation.kind === 'model_transition.authorize') {
                 const tracked = findTrackedSessionByHappySessionId(
@@ -18422,7 +18530,9 @@ export async function startDaemonSessionControlRuntime(
           phaseStartedAt = now;
         };
         recordPhase('entered');
-        const tracked = params.pidToTrackedSession.get(input.runnerPid);
+        const resolveTracked = () => params.pidToTrackedSession.get(input.runnerPid)
+          ?? findTrackedSessionByRunnerPid(params.pidToTrackedSession, input.runnerPid);
+        const tracked = resolveTracked();
         if (!tracked || tracked.happySessionId !== input.sessionId
           || resolveTrackedSessionCatalogAgentId(tracked) !== input.agentId) return { status: 'unavailable' };
         try {
@@ -18441,21 +18551,21 @@ export async function startDaemonSessionControlRuntime(
           phase = 'account_currentness_after_presence';
           await assertSessionAccountCurrent(input.sessionId, accountContext);
           recordPhase(phase);
-          if (params.pidToTrackedSession.get(input.runnerPid) !== tracked) return { status: 'unavailable' };
+          if (resolveTracked() !== tracked) return { status: 'unavailable' };
           return await withSessionAccountHome(accountContext, () => {
             // The runner invokes this only once, after its accepted open proves
             // there are no applied CS accounts or selection environment. Later
             // reads never recreate a target invalidated by a partial hot apply.
-            if (input.initialEmpty && !connectedServiceRuntimeRegistry.getByPid(input.runnerPid)) {
+            if (input.initialEmpty && !connectedServiceRuntimeRegistry.getByPid(tracked.pid)) {
               connectedServiceRuntimeRegistry.registerTarget({
-                pid: input.runnerPid, sessionId: input.sessionId, agentId: input.agentId,
+                pid: tracked.pid, sessionId: input.sessionId, agentId: input.agentId,
                 sessionDirectory: tracked.spawnOptions?.directory,
                 connectedServicesBindingsRaw: { v: 2, bindingsByServiceId: {} },
                 connectedServiceSelectionsEnv: {},
                 ...(tracked.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: tracked.requesterWorkAttributionV1 } : {}),
               });
             }
-            return connectedServiceRuntimeRegistry.readAppliedSessionBindings(input);
+            return connectedServiceRuntimeRegistry.readAppliedSessionBindings(input, tracked);
           });
         } catch {
           logger.info('[DAEMON RUN] Applied parent selection unavailable', {

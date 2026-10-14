@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { getActiveAccountSettingsSnapshot, resolveActiveAccountConfiguredExternalSessionSourceRevision } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol';
 
@@ -147,7 +148,6 @@ export type RunnerAgentDaemonFacetService = Readonly<{
 export function createRunnerAgentDaemonFacetService(input: Readonly<{
   externalSessionHostOperationOwner: ExternalSessionHostOperationOwner;
   machineId: string;
-  readAccountRevision(): string | null;
   authorizeCurrent(input: Readonly<{
     sessionId: string;
     runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
@@ -502,7 +502,7 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
             occurrenceId: randomUUID(),
             sessionId,
             machineId: input.machineId,
-            readAccountRevision: input.readAccountRevision,
+            readAccountRevision: () => resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot()),
             isOccurrenceCurrent: () =>
               binding !== null && isCurrentBinding(binding),
             ...(agentContribution ? { agentContribution } : {}),
