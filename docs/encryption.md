@@ -2030,8 +2030,8 @@ methods retain their existing plain transport and inner-envelope contracts.
   the remote-alert owner's existing server storage. Recovery consumes that
   request and may carry generic visible "back online" copy under the same
   delivery policy, without changing the strict payload or disclosing a name.
-  Opt-out clears the request; ordinary enrollment keeps quiet recovery. No Session history or
-  private metadata enters eligibility. These development-source contracts do
+  Opt-out clears the request; ordinary enrollment keeps quiet recovery. No
+  Session history or private metadata enters eligibility. These development-source contracts do
   not claim released offline-alert availability or physical push certification.
 - Machine Sync publication carries only engine/carrier readiness. Its existing
   daemon-state version advance invalidates demanded private status/conflict reads

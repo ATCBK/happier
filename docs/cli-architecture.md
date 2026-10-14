@@ -4051,16 +4051,16 @@ submitting recovery, so repeated alive reads and later outages stay quiet.
 UI and agent settings Actions use the same enrollment producer and server
 writer. Disabling consent clears the request. Existing Account/device delivery
 policy still applies to the visible notice. There is no new presence flag,
-timer or notification lifecycle. These development
-paths do not claim released availability or physical push certification.
+timer or notification lifecycle. These development paths do not claim released
+availability or physical push certification.
 Native optional name enrichment uses the authenticated current
 Account and admitted Machine-mode codec, without including the name in the
 server payload. A requested return uses the same Expo/native presenter and
 Machine notification identity as the offline alert, with the generic body
-"A machine you follow is back online." Android data-only recovery dismisses the stable Machine notification tag;
-the existing JavaScript background owner enumerates presented notices and
-dismisses the actual OS request ids after matching and re-admitting their exact
-Home, Account and Machine. An iOS thread identifier is only grouping, not that
+"A machine you follow is back online." Android and JavaScript data-only recovery
+enumerate presented notices and dismiss only matching offline notices after
+re-admitting their exact Home, Account and Machine; a later quiet wake preserves
+the visible return notice. An iOS thread identifier is only grouping, not the
 OS request identity. Background delivery remains subject to platform policy.
 
 [`minuteHistoryStore`](../apps/cli/src/daemon/vitals/history/minuteHistoryStore.ts)
@@ -4127,7 +4127,7 @@ privacy and freshness boundaries.
 The UI's neutral
 [`machineResourceStore`](../apps/ui/sources/sync/domains/machines/resources/machineResourceStore.ts)
 reuses [`sharedSubscriptionStore`](../apps/ui/sources/sync/runtime/subscriptions/sharedSubscriptionStore.ts),
-keyed by server, Machine and view (or history range). Multiple viewers share one
+keyed by Home, Account, Machine and view (or history range). Multiple viewers share one
 in-flight refresh and one outstanding watch per key, with no client polling
 timer. Last authorized values survive a failed read; unsupported older-daemon
 results remain `not_reported` until daemon-state change permits a retry.
@@ -4136,8 +4136,15 @@ detail payloads. A daemon-state change also refreshes failed, stale or unavailab
 views with active demand, allowing a retired watch to resume without a client timer.
 For freshness, a reporting sample supersedes an older published reader failure;
 a failure published since that sample remains visible.
-Summary warming reads once without holding a watch. Overview hooks hold demand
-only while the host is actively viewed and release it on unmount or inactivity;
+Summary warming captures the same credential-owned key and reads once without
+holding a watch. The shared
+[`daemon-read target`](../apps/ui/sources/sync/domains/machines/useMachineDaemonReadTarget.ts)
+composes host visibility with destination/layout presentation for Vitals,
+Storage, Processes, Guard and Activity. Hidden retained tabs release demand;
+visible split panes keep demand even without keyboard focus. Account credential
+retirement cancels Vitals demand and withdraws its samples from selectors, and
+the existing Sync Account reset clears its retained store. Overview hooks
+release demand on unmount or inactivity;
 summary and in-process live consumers cannot activate Overview extras. Client
 state is a retained projection, not a second persisted history or sampler.
 
