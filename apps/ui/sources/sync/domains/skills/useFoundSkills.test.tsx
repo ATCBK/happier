@@ -14,7 +14,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 const { storage } = await import('@/sync/domains/state/storage');
 const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
 const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
-const { useFoundSkills, useFoundSkillsCount } = await import('./useFoundSkills');
+const { useFoundSkills, useFoundSkillsCount, useFoundSkillsCache } = await import('./useFoundSkills');
+const { saveFoundWarmCacheEntry } = await import('../state/warmCachePersistence');
 
 afterEach(() => { standardCleanup(); resetPromptLibraryCatalogEngineForTests(); resetPromptLibraryCatalogSnapshotsForTests(); });
 
@@ -34,6 +35,18 @@ async function openHome() {
   await prepareWarmCacheEncryptionKey();
   storage.setState({ isDataReady: true, artifactsLoaded: true });
 }
+
+it('reads the requested Account cache rather than the active Account cache', async () => {
+  await openHome();
+  const scope = { serverId: 'sheet-home', accountId: 'sheet-owner' };
+  const other = { serverId: 'other-home', accountId: 'other-owner' };
+  saveFoundWarmCacheEntry(scope.serverId, scope.accountId, { kind: 'skill', machineId: 'm1', observedAt: found.scannedAt, result: found });
+  const hook = await renderHook((target: typeof scope) => useFoundSkillsCache(['m1'], target), { initialProps: scope });
+  expect(hook.getCurrent().m1?.items.map(item => item.name)).toEqual(['held', 'native']);
+  await hook.rerender(other);
+  expect(hook.getCurrent().m1).toBeNull();
+  await hook.unmount();
+});
 
 it('reads a machine through the Action, shows it from the device cache, and counts what is not in the library yet', async () => {
   await openHome();

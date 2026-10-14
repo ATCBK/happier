@@ -1,0 +1,127 @@
+import {
+  SKILL_ACTION_OUTPUT_SCHEMAS_V1,
+  SkillInstallAcknowledgedEffectsV1Schema,
+  SkillInstallPreviewV1Schema,
+  type SkillFileInputV1,
+  type SkillInstallPreviewV1,
+} from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import type { ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
+
+import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
+import { readRegistryFailureStatus, type RegistryFailureStatus } from '@/registries/describeRegistrySourceStatus';
+import { readReachRulesAcknowledgment } from '@/sync/domains/capabilities/reach/reachRulesAcknowledgment';
+
+export type SkillInstallSource =
+  | Readonly<{
+      kind: 'registry';
+      sourceId: string;
+      itemId: string;
+      version: string;
+    }>
+  | Readonly<{ kind: 'link'; url: string }>
+  | Readonly<{ kind: 'upload'; files: readonly SkillFileInputV1[] }>;
+
+/** What one add produced: the created skills, and the ones whose rules were not written (IR-70 partial result). */
+export type SkillInstallOutcome =
+  | Readonly<{
+      ok: true;
+      skillIds: readonly string[];
+      rulesMissing: readonly string[];
+    }>
+  | Readonly<{ ok: false; error: string; status?: RegistryFailureStatus }>;
+
+/** A failure keeps the registry's typed status when it has one ("Try again at 14:05"). */
+function failure(result: Readonly<{ errorCode?: string; error: string; details?: unknown }>) {
+  const status = readRegistryFailureStatus(result.details);
+  return { ok: false as const, error: result.errorCode ?? result.error, ...(status ? { status } : {}) };
+}
+
+/**
+ * `skills.install` commit (P6 U6.4): the pointer the details read (registry `version` = the pinned commit), a link,
+ * or an upload, with the add flow's `where` only when the person changed it. A failure after the content landed
+ * still reports the acknowledged skills, so the retry repeats only the missing step.
+ */
+export async function installSkills(
+  execute: MountedAuthoringActionExecute,
+  input: Readonly<{
+    source: SkillInstallSource;
+    selectPaths?: readonly string[];
+    where?: ReachRulesChangeV1;
+  }>,
+): Promise<SkillInstallOutcome> {
+  const result = await execute('skills.install', {
+    source: input.source,
+    ...(input.selectPaths ? { selectPaths: [...input.selectPaths] } : {}),
+    ...(input.where ? { where: input.where } : {}),
+  });
+  if (!result.ok) {
+    const effects = SkillInstallAcknowledgedEffectsV1Schema.safeParse(
+      result.details,
+    );
+    if (effects.success && effects.data.skillIds.length > 0) {
+      return {
+        ok: true,
+        skillIds: effects.data.skillIds,
+        rulesMissing: effects.data.incomplete
+          .filter((entry) => entry.step === 'rules')
+          .map((entry) => entry.skillId),
+      };
+    }
+    return failure(result);
+  }
+  const parsed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].safeParse(
+    result.result,
+  );
+  if (
+    !parsed.success ||
+    !('skillIds' in parsed.data) ||
+    parsed.data.skillIds.length === 0
+  ) {
+    return { ok: false, error: 'skill_install_failed' };
+  }
+  return {
+    ok: true,
+    skillIds: parsed.data.skillIds,
+    rulesMissing: (parsed.data.incomplete ?? [])
+      .filter((entry) => entry.step === 'rules')
+      .map((entry) => entry.skillId),
+  };
+}
+
+/** The dry run behind From a link and Upload: what would be added, pinned, before anything is written. */
+export async function previewSkillInstall(
+  execute: MountedAuthoringActionExecute,
+  source: Exclude<SkillInstallSource, { kind: 'registry' }>,
+): Promise<
+  | Readonly<{ ok: true; items: readonly SkillInstallPreviewV1[] }>
+  | Readonly<{ ok: false; error: string; status?: RegistryFailureStatus }>
+> {
+  const result = await execute('skills.install', { source, dryRun: true });
+  if (!result.ok) return failure(result);
+  const parsed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].safeParse(
+    result.result,
+  );
+  if (!parsed.success || !('items' in parsed.data))
+    return { ok: false, error: 'skill_install_failed' };
+  return {
+    ok: true,
+    items: parsed.data.items.map((item) =>
+      SkillInstallPreviewV1Schema.parse(item),
+    ),
+  };
+}
+
+/**
+ * "Couldn't set where it's on · Try again" (IR-70/IR-93): the skill exists; only its rules are written now, through
+ * `skills.rules.set` for that acknowledged id, never a second install.
+ */
+export async function retrySkillRules(
+  execute: MountedAuthoringActionExecute,
+  input: Readonly<{ skillId: string; change: ReachRulesChangeV1 }>,
+): Promise<boolean> {
+  const result = await execute('skills.rules.set', {
+    items: [{ skillId: input.skillId }],
+    change: input.change,
+  });
+  return readReachRulesAcknowledgment('skill', input.skillId, result).ok;
+}

@@ -32,8 +32,11 @@ export function useRegistryActionRead<T>(actionId: RegistryActionIdV1, input: un
         const previous = latest.current;
         if (force && actionId === 'registries.items.read' && scope) invalidateUiRegistryItemMemoV1(scope, args);
         setState(previous => {
-            const sameAuthority = previous.scopeKey === scopeKey && Object.is(previous.revision, revision);
-            return { scopeKey, revision, inputKey: sameAuthority ? previous.inputKey : inputKey,
+            // A source-list revision refreshes descriptors, not their Account authority. Keep this exact
+            // list mounted (including mutation receipts); item reads still withdraw on source changes.
+            const sameAuthority = previous.scopeKey === scopeKey && (Object.is(previous.revision, revision)
+                || (actionId === 'registries.sources.list' && previous.inputKey === inputKey));
+            return { scopeKey, revision: sameAuthority ? previous.revision : revision, inputKey: sameAuthority ? previous.inputKey : inputKey,
                 value: sameAuthority ? previous.value : null, loading: true, error: null, status: null };
         });
         try {
@@ -50,8 +53,9 @@ export function useRegistryActionRead<T>(actionId: RegistryActionIdV1, input: un
         } catch (error) {
             if (request !== generation.current || !execution.isCurrent()) return;
             setState(previous => {
-                const sameAuthority = previous.scopeKey === scopeKey && Object.is(previous.revision, revision);
-                return { scopeKey, revision, inputKey: sameAuthority ? previous.inputKey : inputKey,
+                const sameAuthority = previous.scopeKey === scopeKey && (Object.is(previous.revision, revision)
+                    || (actionId === 'registries.sources.list' && previous.inputKey === inputKey));
+                return { scopeKey, revision: sameAuthority ? previous.revision : revision, inputKey: sameAuthority ? previous.inputKey : inputKey,
                     value: sameAuthority ? previous.value : null, loading: false,
                     error: error instanceof Error ? error.message : 'registry_unavailable',
                     status: error instanceof RegistryReadFailure ? error.status : null };
@@ -63,11 +67,13 @@ export function useRegistryActionRead<T>(actionId: RegistryActionIdV1, input: un
         void load(false);
         return () => { generation.current += 1; };
     }, [load, revision]);
-    const current = state.scopeKey === scopeKey && Object.is(state.revision, revision)
+    const current = state.scopeKey === scopeKey && (Object.is(state.revision, revision)
+        || (actionId === 'registries.sources.list' && state.inputKey === inputKey))
         ? state : { scopeKey, inputKey, revision, value: null, loading: enabled, error: null, status: null };
     // Credential retirement precedes the Sync store's next Account projection.
     // Never disclose that previous projection through an unbound mounted caller.
     return { ...current, value: execution.ready ? current.value : null, error: execution.ready ? current.error : null,
         status: execution.ready ? current.status : null,
-        loading: enabled && (current.loading || !execution.ready), stale: current.inputKey !== inputKey, refresh, execution, scope };
+        loading: enabled && (current.loading || !execution.ready),
+        stale: current.inputKey !== inputKey || !Object.is(current.revision, revision), refresh, execution, scope };
 }

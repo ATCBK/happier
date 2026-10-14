@@ -1,11 +1,11 @@
 import * as React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { act, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { act, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import {
   PromptBundleArtifactHeaderV1Schema,
   PromptBundleBodyV1Schema,
@@ -35,11 +35,13 @@ vi.mock('@/modal', async () => {
   return createModalModuleMock({ spies: {} }).module;
 });
 
+installDisconnectedServerSocketBoundary();
+// Load the real graph after transport installation, during collection rather than the interaction budget.
+const { storage } = await import('@/sync/domains/state/storage');
+const { SkillDetailScreen } = await import('./SkillDetailScreen');
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
-beforeEach(async () => {
-  await loadSyncSingletonForTests();
-});
 afterEach(async () => {
+  standardCleanup();
   const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
   const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
   resetPromptLibraryCatalogEngineForTests();
@@ -50,8 +52,6 @@ afterEach(async () => {
 
 describe('SkillDetailScreen when the library cannot be read', () => {
   it('leads with the Couldn’t load banner instead of an empty page, and Try again brings the skill back', async () => {
-    const { SkillDetailScreen } = await import('./SkillDetailScreen');
-    const { storage } = await import('@/sync/domains/state/storage');
     const catalog = createPromptLibraryCatalogBoundary();
     let failing = true;
     fixture = await createPlainArtifactHomeFixture('https://skill-detail-load-failure.test', {
@@ -80,6 +80,17 @@ describe('SkillDetailScreen when the library cannot be read', () => {
     await vi.waitFor(async () => {
       await flushHookEffects();
       expect(screen.findByTestId('skill.detail.banner')).toBeTruthy();
+    }, { timeout: 20_000 });
+    expect(screen.findByTestId('skill.detail.instructions')).toBeNull();
+    expect(screen.findByTestId('skill.detail.leave')).toBeNull();
+
+    // A failed retry must remain an actionable error rather than turning unknown content into empty.
+    const readsBeforeRetry = fixture.requests.filter(request => request.path.startsWith('/v1/artifacts')).length;
+    await screen.pressByTestIdAsync('skill.detail.banner.action');
+    await vi.waitFor(async () => {
+      await flushHookEffects();
+      expect(fixture!.requests.filter(request => request.path.startsWith('/v1/artifacts')).length).toBeGreaterThan(readsBeforeRetry);
+      expect(screen.findByTestId('skill.detail.banner.action'), screen.getTextContent()).toBeTruthy();
     }, { timeout: 20_000 });
     expect(screen.findByTestId('skill.detail.instructions')).toBeNull();
     expect(screen.findByTestId('skill.detail.leave')).toBeNull();

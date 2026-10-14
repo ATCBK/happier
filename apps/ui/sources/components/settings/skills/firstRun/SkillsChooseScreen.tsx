@@ -26,8 +26,6 @@ import { useSkillsFirstRun, type SkillsFirstRun } from './useSkillsFirstRun';
 const NO_AGENTS: readonly string[] = Object.freeze([]);
 const NO_MACHINES: readonly Readonly<{ machineId: string; name: string }>[] =
   Object.freeze([]);
-const NO_PROJECTS: readonly Readonly<{ projectKey: string; name: string }>[] =
-  Object.freeze([]);
 
 function formatDay(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -57,7 +55,6 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
   const { names } = useWhereItsOnNames({
     agentIds: NO_AGENTS,
     machines: NO_MACHINES,
-    projects: NO_PROJECTS,
   });
   const selected = React.useMemo(
     () => new Set(firstRun.selectedIds),

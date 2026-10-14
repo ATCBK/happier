@@ -6,6 +6,7 @@ import {
   foldFoundRows,
   foundAddAllItems,
   foundRowKind,
+  pickFoundHomeRows,
   orderFoundRows,
   partitionFoundMachines,
   resolveFoundMachineBody,
@@ -71,5 +72,33 @@ describe('Found machine sections', () => {
       scan({ machineId: machine.id, result: machine.id === 'off-known' || machine.id === 'on' ? result : null }));
     expect(sections.map((machine) => machine.id)).toEqual(['on', 'off-known']);
     expect(unseenOffline).toBe(2);
+  });
+});
+
+describe('Found on the homepage', () => {
+  const other = SkillFoundListResultV1Schema.parse({
+    scannedAt: 2,
+    roots: [],
+    items: [
+      { name: 'plain', description: null, path: '/o/plain', digest: 'd', agents: ['codex'], scope: 'user', inLibrary: null, masksLibrary: false, happierInstalled: false, pluginOwned: null },
+      { name: 'remote-only', description: null, path: '/o/remote-only', digest: 'f', agents: ['codex'], scope: 'user', inLibrary: null, masksLibrary: false, happierInstalled: false, pluginOwned: null },
+    ],
+  });
+
+  it('offers only rows that can be added, once per name, reachable machines first', () => {
+    const rows = pickFoundHomeRows(
+      [{ machineId: 'off', offline: true }, { machineId: 'on', offline: false }],
+      { off: other, on: result },
+      3,
+    );
+    // Held, plugin-owned and masked rows need the Found page; "plain" from the offline machine repeats a name.
+    expect(rows.map((row) => [row.machineId, row.item.name])).toEqual([
+      ['on', 'plain'], ['on', 'plain-2'], ['off', 'remote-only'],
+    ]);
+  });
+
+  it('shows nothing for a machine nothing is known about, and stops at the room it is given', () => {
+    expect(pickFoundHomeRows([{ machineId: 'on', offline: false }], { on: null }, 3)).toEqual([]);
+    expect(pickFoundHomeRows([{ machineId: 'on', offline: false }], { on: result }, 1).map((row) => row.item.name)).toEqual(['plain']);
   });
 });

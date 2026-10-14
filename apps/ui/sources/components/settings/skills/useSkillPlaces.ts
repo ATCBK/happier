@@ -6,14 +6,8 @@ import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 
 import { skillPlanOnMachine } from './skillsCollectionModel';
 
-export const NO_PROJECTS: readonly Readonly<{
-  projectKey: string;
-  name: string;
-  machineCount: number;
-}>[] = [];
-
 /** Machines, their names and which Agents can take skills there: shared by the saved page, the draft and the Add modal. */
-export function useSkillPlaces() {
+export function useSkillPlaces(serverId?: string | null) {
   const scope = useAccountSettingsScope();
   const { machines } = useReachMachines();
   const placeMachines = React.useMemo(
@@ -29,11 +23,10 @@ export function useSkillPlaces() {
     () => [...new Set(machines.flatMap((machine) => machine.agentIds))],
     [machines],
   );
-  const { names } = useWhereItsOnNames({
+  const { names, projects, workspaceRefs } = useWhereItsOnNames({
     agentIds,
     machines: placeMachines,
-    projects: NO_PROJECTS,
-    serverId: scope?.serverId ?? null,
+    serverId: serverId ?? scope?.serverId ?? null,
   });
   // IR-80: an Agent takes skills when some machine's plan for it is not `none`.
   const agentTakes = React.useCallback(
@@ -49,5 +42,5 @@ export function useSkillPlaces() {
     },
     [machines],
   );
-  return { machines, placeMachines, agentIds, names, agentTakes } as const;
+  return { machines, placeMachines, projects, workspaceRefs, agentIds, names, agentTakes } as const;
 }

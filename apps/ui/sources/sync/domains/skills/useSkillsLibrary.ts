@@ -10,6 +10,7 @@ import { refreshPromptLibraryCatalog } from '@/sync/engine/settings/promptLibrar
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 export type SkillsLibraryStatus = 'loading' | 'ready' | 'unavailable';
 export type SkillsLibrary = Readonly<{
@@ -71,16 +72,17 @@ function reconcile<T extends Readonly<{ skillId: string }>>(
  * `skill-rules` row changes, keeps the last-known list while reading, and reports a failed read as
  * `unavailable` instead of an empty library.
  */
-export function useSkillsLibrary(): SkillsLibrary {
-  const scope = useAccountSettingsScope();
+export function useSkillsLibrary(requestedScope?: ServerAccountScope | null): SkillsLibrary {
+  const activeScope = useAccountSettingsScope();
+  const scope = requestedScope === undefined ? activeScope : requestedScope;
   const scopeKey = scope ? `${scope.serverId}:${scope.accountId}` : null;
-  const { binding, ready } = useMountedActionExecution(scope?.serverId ?? null);
+  const { binding, ready } = useMountedActionExecution(scope);
   const artifacts = useArtifacts();
-  const rules = usePromptLibraryCatalogValue('skill-rules');
-  const usage = usePromptLibraryCatalogValue('skill-usage');
+  const rules = usePromptLibraryCatalogValue('skill-rules', scope);
+  const usage = usePromptLibraryCatalogValue('skill-usage', scope);
   // What the list depends on: each skill bundle's revision and the rules row's revision.
   const sourceKey = React.useMemo(() => {
-    const skills = artifacts
+    const skills = (areServerAccountScopesEqual(scope, activeScope) ? artifacts : [])
       .filter((artifact) => {
         const header = artifact.header as
           | Readonly<Record<string, unknown>>
@@ -97,7 +99,7 @@ export function useSkillsLibrary(): SkillsLibrary {
       )
       .sort();
     return `${rules.revision}|${usage.status}:${usage.revision}|${skills.join(',')}`;
-  }, [artifacts, rules.revision, usage.status, usage.revision]);
+  }, [scope, activeScope, artifacts, rules.revision, usage.status, usage.revision]);
   const [state, setState] = React.useState<{
     scopeKey: string | null;
     snapshot: Snapshot | null;

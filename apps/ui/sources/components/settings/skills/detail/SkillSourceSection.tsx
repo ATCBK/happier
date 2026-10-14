@@ -104,6 +104,7 @@ export function SkillSourceSection(
     checking: boolean;
     checkedAt: number | null;
     checkFailed: boolean;
+    checkFailureReason?: string;
     onViewUpdate: () => void;
     update: (change: SkillChange) => Promise<SkillChangeResult>;
     testID: string;
@@ -146,7 +147,7 @@ export function SkillSourceSection(
           ? t('capabilities.skillDetail.source.upToDate')
           : t('capabilities.skillDetail.source.notChecked');
   const updatesSubtitle = props.checkFailed
-    ? t('capabilities.skillDetail.source.checkFailed')
+    ? props.checkFailureReason || t('capabilities.skillDetail.source.checkFailed')
     : props.checkedAt
       ? `${stateWords} · ${t('capabilities.skillDetail.source.checked', { time: formatTime(props.checkedAt) })}`
       : stateWords;

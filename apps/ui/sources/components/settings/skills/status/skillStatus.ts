@@ -1,7 +1,9 @@
 import { deriveSkillAccountStatusesV1 } from '@happier-dev/protocol/prompts/library/skills/skillStatusV1';
-import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import type { SkillListItemV1, SkillUnavailableItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import type { SessionSkillPlanV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
+import type { SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
 /**
  * A skill's statuses in P5's vocabulary, for the page, the homepage and the P8 popover. The
@@ -10,12 +12,24 @@ import type { CapabilityStatus } from '@/components/capabilities/status/capabili
  * join here as their producers land (U6.5). Usage is an Account fact owned by the protocol.
  */
 export function skillStatus(
-  item: SkillListItemV1,
+  item: SkillListItemV1 | null,
   usage?: Readonly<{ nowMs: number; usageObservedSince: number | null }>,
+  session?: Readonly<{ skillId: string; plan: SessionSkillPlanV1 | null; notices: readonly SessionCapabilityNoticeV1[]; machineName: string; onFix: () => void }>,
 ): readonly CapabilityStatus[] {
-  return deriveSkillAccountStatusesV1(item, usage).map((kind): CapabilityStatus => ({
+  const statuses = (item ? deriveSkillAccountStatusesV1(item, usage) : []).map((kind): CapabilityStatus => ({
     kind,
   }));
+  const skillId = session?.skillId ?? item?.skillId;
+  const planItem = session?.plan?.items.find(fact => fact.skillId === skillId);
+  if (session && planItem?.state === 'masked_by_native') statuses.push({ kind: 'masked', machineName: session.machineName });
+  if (session && (planItem?.state === 'unavailable' || planItem?.state === 'name_conflict')) statuses.push({
+    kind: 'error', machineName: session.machineName, detail: planItem.reason, fix: { kind: 'try_again', onPress: session.onFix },
+  });
+  for (const notice of session?.notices ?? []) for (const fact of notice.items) {
+    if (session && fact.kind === 'skill' && fact.itemId === skillId) statuses.push({ kind: 'error', machineName: session.machineName,
+      detail: fact.detail ?? fact.code, fix: { kind: 'try_again', onPress: session.onFix } });
+  }
+  return statuses;
 }
 
 /**
@@ -31,4 +45,38 @@ export function skillNeedsALook(item: SkillListItemV1): boolean {
 /** On nowhere (no rule turns it on): its row lives in the Off group (D4). */
 export function isSkillOff(item: SkillListItemV1): boolean {
   return deriveSkillAccountStatusesV1(item).includes('off');
+}
+
+/** One "Needs a look" entry (IR-80), each with the one fix it offers. */
+export type SkillNeedsALookEntry =
+  | Readonly<{ kind: 'update' | 'removed'; key: string; item: SkillListItemV1 }>
+  | Readonly<{ kind: 'masked'; key: string; item: SkillListItemV1; machineName: string }>
+  | Readonly<{ kind: 'unreadable'; key: string; unavailable: SkillUnavailableItemV1 }>;
+
+/**
+ * Everything that needs the person, most blocking first (P5 order: error > update > masked): skills
+ * whose content cannot be read (Try again), a waiting update or a source that dropped the skill
+ * (Review / Decide), and a library skill a machine's own same-name copy wins over, known from this
+ * device's Found cache (Compare). `maskedOn` maps a library skill name to that machine's name.
+ */
+export function buildSkillsNeedsALook(
+  items: readonly SkillListItemV1[],
+  unavailable: readonly SkillUnavailableItemV1[],
+  maskedOn: ReadonlyMap<string, string>,
+): readonly SkillNeedsALookEntry[] {
+  const entries: SkillNeedsALookEntry[] = unavailable
+    .filter((entry) => entry.reason === 'skill_content_unavailable')
+    .map((entry) => ({ kind: 'unreadable', key: entry.skillId, unavailable: entry }));
+  const listed = new Set<string>();
+  for (const item of items) {
+    if (!skillNeedsALook(item)) continue;
+    listed.add(item.skillId);
+    entries.push({ kind: item.upstream?.state === 'removed_from_source' ? 'removed' : 'update', key: item.skillId, item });
+  }
+  for (const item of items) {
+    const machineName = maskedOn.get(item.name);
+    if (machineName === undefined || listed.has(item.skillId)) continue;
+    entries.push({ kind: 'masked', key: item.skillId, item, machineName });
+  }
+  return entries;
 }

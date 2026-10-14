@@ -14,6 +14,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
+import type { UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { t } from '@/text';
 
 import { readSkillActionRefusal } from './useSkillDetail';
@@ -22,9 +23,7 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 type Execute = (
   actionId: 'skills.machine.install' | 'skills.machine.uninstall',
   input: unknown,
-  operation?: Readonly<{
-    presentUserConfirmation?: Readonly<{ actionId: string }>;
-  }>,
+  operation?: UiActionOperation,
 ) => Promise<ActionExecuteResult>;
 
 /**

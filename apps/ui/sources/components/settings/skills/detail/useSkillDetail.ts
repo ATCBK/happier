@@ -8,7 +8,8 @@ import {
   SkillReadResultV1Schema,
   type SkillReadResultV1,
 } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
-import { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/registries';
+import { useRegistryUpdateCheck } from '@/registries/useRegistryUpdateCheck';
+import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -62,7 +63,7 @@ export function readSkillActionRefusal(
 export function useSkillDetail(skillId: string | null) {
   const library = useSkillsLibrary();
   const serverId = library.scope?.serverId ?? null;
-  const { execute, ready } = useMountedActionExecution(serverId);
+  const { execute, ready, isCurrent } = useMountedActionExecution(serverId);
   const folders = usePromptLibraryCatalogValue('folders');
   const listItem = React.useMemo(
     () =>
@@ -80,9 +81,8 @@ export function useSkillDetail(skillId: string | null) {
     }>
   >({ skillId, read: null, status: 'loading', errorCode: null });
   const [attempt, setAttempt] = React.useState(0);
-  const [checkedAt, setCheckedAt] = React.useState<number | null>(null);
-  const [checking, setChecking] = React.useState(false);
-  const [checkFailed, setCheckFailed] = React.useState(false);
+  const { check, checkNow } = useRegistryUpdateCheck({ scopeKey: JSON.stringify([library.scope, skillId]),
+    execute, isCurrent, kind: 'skill', keys: skillId ? [skillId] : [], retry: library.retry });
   /** The page holds an edit the library has not acknowledged: a newer revision must not replace it. */
   const holdRef = React.useRef(false);
   const readRef = React.useRef<SkillReadResultV1 | null>(null);
@@ -269,32 +269,6 @@ export function useSkillDetail(skillId: string | null) {
     [execute, folders.revision, folders.stale, folders.status, library, skillId],
   );
 
-  /** "Check now": P4's one update checker for this skill; the library re-reads the recorded upstream. */
-  const checkNow = React.useCallback(async () => {
-    if (!skillId) return;
-    setChecking(true);
-    setCheckFailed(false);
-    try {
-      const result = await execute('registries.updates.check', {
-        kind: 'skill',
-        keys: [skillId],
-      });
-      if (readSkillActionRefusal(result)) {
-        setCheckFailed(true);
-        return;
-      }
-      const parsed = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].safeParse(
-        result.ok ? result.result : null,
-      );
-      if (parsed.success) setCheckedAt(parsed.data.checkedAt);
-      retry();
-    } catch {
-      setCheckFailed(true);
-    } finally {
-      setChecking(false);
-    }
-  }, [execute, retry, skillId]);
-
   return {
     library,
     listItem,
@@ -312,9 +286,12 @@ export function useSkillDetail(skillId: string | null) {
     exportZip,
     moveToFolder,
     checkNow,
-    checkedAt,
-    checking,
-    checkFailed,
+    checkedAt: check.checkedAt,
+    checking: check.checking,
+    checkFailed: check.failed,
+    checkFailureReason: [...new Set(check.results.flatMap(result => result.upstream.state === 'unchecked'
+      ? [describeRegistrySourceStatus(result.upstream.reason)] : []))].join(' · '),
+    check,
     execute,
     ready,
   } as const;

@@ -9,7 +9,6 @@ import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 
 import {
   buildSkillsReach,
-  countSkillsNeedingALook,
   filterSkills,
   foldReachMachines,
   groupSkillsByFolder,
@@ -18,6 +17,7 @@ import {
   resolveSkillsPresent,
   skillSource,
 } from './skillsCollectionModel';
+import { buildSkillsNeedsALook } from './status/skillStatus';
 import { arrivedReachDots } from './skillsReachTravel';
 
 // Fixtures go through the canonical strict schema `skills.list` outputs, so a shape drift fails here.
@@ -178,14 +178,14 @@ describe('Skills collection model', () => {
   it('counts updates and source choices as needing a look, never Off or local modification alone', () => {
     const update = skill('u', { upstream: { state: 'update_available' } });
     expect(
-      countSkillsNeedingALook([
+      buildSkillsNeedsALook([
         update,
         skill('removed', { upstream: { state: 'removed_from_source' } }),
         skill('modified', { modified: true, upstream: { state: 'current' } }),
         skill('off', { rules: [] }),
         skill('ok'),
-      ]),
-    ).toBe(2);
+      ], [], new Map()),
+    ).toHaveLength(2);
   });
 
   it('builds one body per machine with a dot per reaching skill; offline keeps last-known dots quietly', () => {
@@ -234,14 +234,19 @@ describe('Skills collection model', () => {
     expect(reach.offlineMachineIds).toEqual(['win']);
   });
 
-  it('puts what matters first on the map: reached online machines, other online ones, then offline by last seen', () => {
+  it('ranks reached machines before idle peers, including an older reached offline machine before a recently seen idle one', () => {
     const seen = (id: string, at: number): ReachMachine => ({ ...machine(id, ['claude'], true), lastSeenAt: at });
+    const machines = [seen('old', 10), machine('idle', ['claude']), seen('recent', 50), machine('busy', ['claude']), machine('bare', [])];
+    const orderBefore = machines.map(machine => machine.machineId);
     const reach = buildSkillsReach(
-      [skill('every', { rules: [{ id: 'r', skillId: 'every', target: { t: 'machine', machineId: 'busy' }, enabled: true, createdAt: 1, updatedAt: 1 }] })],
-      [seen('old', 10), machine('idle', ['claude']), seen('recent', 50), machine('busy', ['claude']), machine('bare', [])],
+      [skill('every', { rules: ['busy', 'old'].map(machineId => ({ id: machineId, skillId: 'every',
+        target: { t: 'machine', machineId }, enabled: true, createdAt: 1, updatedAt: 1 })) })],
+      machines,
     );
-    expect(reach.machines.map((row) => row.machine.machineId)).toEqual(['busy', 'idle', 'bare', 'recent', 'old']);
-    expect(reach.bodies.map((body) => body.key)).toEqual(['busy', 'idle', 'bare', 'recent', 'old']);
+    expect(reach.machines.map((row) => row.machine.machineId)).toEqual(['busy', 'idle', 'bare', 'old', 'recent']);
+    expect(reach.bodies.map((body) => body.key)).toEqual(['busy', 'idle', 'bare', 'old', 'recent']);
+    expect(reach.bodies.find(body => body.key === 'old')?.dots).toEqual([{ key: 'every', tone: 'quiet' }]);
+    expect(machines.map(machine => machine.machineId)).toEqual(orderBefore);
   });
 
   it('folds machines past the room into one count, and folds none when all fit', () => {

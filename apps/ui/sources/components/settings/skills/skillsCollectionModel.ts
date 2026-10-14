@@ -12,7 +12,7 @@ import {
 
 import { groupRowsByFolder } from '@/components/settings/prompts/collection/promptCollectionModel';
 
-import { isSkillOff, skillNeedsALook } from './status/skillStatus';
+import { isSkillOff } from './status/skillStatus';
 
 export const SKILLS_COLLECTION_ROUTE = '/settings/skills';
 export const SKILLS_NEW_ROUTE = '/settings/skills/new';
@@ -134,12 +134,6 @@ export function filterSkills(
           .includes(query)) &&
       (!input.machine || skillReachesMachine(item, input.machine)),
   );
-}
-
-export function countSkillsNeedingALook(
-  items: readonly SkillListItemV1[],
-): number {
-  return items.filter(skillNeedsALook).length;
 }
 
 export type SkillsReachMachine = Readonly<{

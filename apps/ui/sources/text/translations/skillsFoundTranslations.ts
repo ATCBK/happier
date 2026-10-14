@@ -36,6 +36,9 @@ export type SkillsFoundTranslation = Readonly<{
   compareTheirs: (params: Readonly<{ machine: string }>) => string;
   compareFailed: (params: Readonly<{ machine: string }>) => string;
   destination: string;
+  homeBody: string;
+  seeAll: (params: Readonly<{ count: number }>) => string;
+  alreadyOnMachines: (params: Readonly<{ count: number }>) => string;
   install: Readonly<{
     installedIn: (params: Readonly<{ path: string }>) => string;
     externallyModified: (params: Readonly<{ machine: string }>) => string;
@@ -94,6 +97,10 @@ export const en: SkillsFoundTranslation = {
   compareTheirs: ({ machine }) => `On ${machine}`,
   compareFailed: ({ machine }) => `Couldn't read the copy on ${machine}.`,
   destination: 'Found on your machines',
+  homeBody:
+    "Already in your agents' own folders. Add one to your library and it follows you everywhere.",
+  seeAll: ({ count }) => `See all ${count}`,
+  alreadyOnMachines: ({ count }) => `${count} skills are already on your machines`,
   install: {
     installedIn: ({ path }) => `Installed in ${path}`,
     externallyModified: ({ machine }) =>
@@ -159,6 +166,10 @@ const ca: SkillsFoundTranslation = {
   compareFailed: ({ machine }) =>
     `No s’ha pogut llegir la còpia de ${machine}.`,
   destination: 'Trobades a les teves màquines',
+  homeBody:
+    'Ja són a les carpetes dels teus agents. Afegeix-ne una a la biblioteca i et seguirà a tot arreu.',
+  seeAll: ({ count }) => `Mostra-les totes (${count})`,
+  alreadyOnMachines: ({ count }) => `Ja hi ha ${count} habilitats a les teves màquines`,
   install: {
     installedIn: ({ path }) => `Instal·lada a ${path}`,
     externallyModified: ({ machine }) =>
@@ -226,6 +237,10 @@ const de: SkillsFoundTranslation = {
   compareFailed: ({ machine }) =>
     `Die Kopie auf ${machine} konnte nicht gelesen werden.`,
   destination: 'Auf deinen Maschinen gefunden',
+  homeBody:
+    'Schon in den eigenen Ordnern deiner Agenten. Füge einen zur Bibliothek hinzu, dann begleitet er dich überall.',
+  seeAll: ({ count }) => `Alle ${count} ansehen`,
+  alreadyOnMachines: ({ count }) => `${count} Skills sind schon auf deinen Maschinen`,
   install: {
     installedIn: ({ path }) => `Installiert in ${path}`,
     externallyModified: ({ machine }) =>
@@ -292,6 +307,10 @@ const es: SkillsFoundTranslation = {
   compareTheirs: ({ machine }) => `En ${machine}`,
   compareFailed: ({ machine }) => `No se pudo leer la copia de ${machine}.`,
   destination: 'Encontradas en tus máquinas',
+  homeBody:
+    'Ya están en las carpetas de tus agentes. Añade una a tu biblioteca y te seguirá a todas partes.',
+  seeAll: ({ count }) => `Ver las ${count}`,
+  alreadyOnMachines: ({ count }) => `Ya hay ${count} habilidades en tus máquinas`,
   install: {
     installedIn: ({ path }) => `Instalada en ${path}`,
     externallyModified: ({ machine }) =>
@@ -357,6 +376,10 @@ const fr: SkillsFoundTranslation = {
   compareFailed: ({ machine }) =>
     `Impossible de lire la copie sur ${machine}.`,
   destination: 'Trouvés sur vos machines',
+  homeBody:
+    'Déjà dans les dossiers de vos agents. Ajoutez-en un à votre bibliothèque et il vous suit partout.',
+  seeAll: ({ count }) => `Tout voir (${count})`,
+  alreadyOnMachines: ({ count }) => `${count} compétences sont déjà sur vos machines`,
   install: {
     installedIn: ({ path }) => `Installé dans ${path}`,
     externallyModified: ({ machine }) =>
@@ -423,6 +446,10 @@ const it: SkillsFoundTranslation = {
   compareFailed: ({ machine }) =>
     `Impossibile leggere la copia su ${machine}.`,
   destination: 'Trovate sulle tue macchine',
+  homeBody:
+    'Già nelle cartelle dei tuoi agenti. Aggiungine una alla libreria e ti segue ovunque.',
+  seeAll: ({ count }) => `Vedi tutte (${count})`,
+  alreadyOnMachines: ({ count }) => `Ci sono già ${count} skill sulle tue macchine`,
   install: {
     installedIn: ({ path }) => `Installata in ${path}`,
     externallyModified: ({ machine }) =>
@@ -488,6 +515,10 @@ const ja: SkillsFoundTranslation = {
   compareFailed: ({ machine }) =>
     `${machine} のコピーを読み取れませんでした。`,
   destination: 'マシンで見つかったスキル',
+  homeBody:
+    'エージェント自身のフォルダーにすでにあります。ライブラリに追加すると、どこでも使えます。',
+  seeAll: ({ count }) => `${count} 件すべて表示`,
+  alreadyOnMachines: ({ count }) => `${count} 件のスキルがすでにマシンにあります`,
   install: {
     installedIn: ({ path }) => `${path} にインストール済み`,
     externallyModified: ({ machine }) =>
@@ -554,6 +585,10 @@ const pl: SkillsFoundTranslation = {
   compareFailed: ({ machine }) =>
     `Nie udało się odczytać kopii z ${machine}.`,
   destination: 'Znalezione na Twoich maszynach',
+  homeBody:
+    'Już w folderach Twoich agentów. Dodaj jedną do biblioteki, a będzie z Tobą wszędzie.',
+  seeAll: ({ count }) => `Zobacz wszystkie (${count})`,
+  alreadyOnMachines: ({ count }) => `Na Twoich maszynach jest już ${count} umiejętności`,
   install: {
     installedIn: ({ path }) => `Zainstalowano w ${path}`,
     externallyModified: ({ machine }) =>
@@ -621,6 +656,10 @@ const pt: SkillsFoundTranslation = {
   compareFailed: ({ machine }) =>
     `Não foi possível ler a cópia em ${machine}.`,
   destination: 'Encontradas nas suas máquinas',
+  homeBody:
+    'Já estão nas pastas dos seus agentes. Adicione uma à biblioteca e ela acompanha você em todo lugar.',
+  seeAll: ({ count }) => `Ver todas (${count})`,
+  alreadyOnMachines: ({ count }) => `Já existem ${count} habilidades nas suas máquinas`,
   install: {
     installedIn: ({ path }) => `Instalada em ${path}`,
     externallyModified: ({ machine }) =>
@@ -687,6 +726,10 @@ const ru: SkillsFoundTranslation = {
   compareFailed: ({ machine }) =>
     `Не удалось прочитать копию на ${machine}.`,
   destination: 'Найдено на ваших машинах',
+  homeBody:
+    'Уже лежат в папках ваших агентов. Добавьте навык в библиотеку, и он будет с вами везде.',
+  seeAll: ({ count }) => `Все (${count})`,
+  alreadyOnMachines: ({ count }) => `На ваших машинах уже есть навыков: ${count}`,
   install: {
     installedIn: ({ path }) => `Установлен в ${path}`,
     externallyModified: ({ machine }) =>
@@ -748,6 +791,10 @@ const zhHans: SkillsFoundTranslation = {
   compareTheirs: ({ machine }) => `在 ${machine} 上`,
   compareFailed: ({ machine }) => `无法读取 ${machine} 上的副本。`,
   destination: '在你的机器上找到',
+  homeBody:
+    '已在你的智能体自己的文件夹中。加入资料库后，它会随你到每台机器。',
+  seeAll: ({ count }) => `查看全部 ${count} 个`,
+  alreadyOnMachines: ({ count }) => `你的机器上已有 ${count} 个技能`,
   install: {
     installedIn: ({ path }) => `已安装在 ${path}`,
     externallyModified: ({ machine }) =>
@@ -808,6 +855,10 @@ const zhHant: SkillsFoundTranslation = {
   compareTheirs: ({ machine }) => `在 ${machine} 上`,
   compareFailed: ({ machine }) => `無法讀取 ${machine} 上的副本。`,
   destination: '在你的機器上找到',
+  homeBody:
+    '已在你的代理自己的資料夾中。加入資料庫後，它會隨你到每台機器。',
+  seeAll: ({ count }) => `查看全部 ${count} 個`,
+  alreadyOnMachines: ({ count }) => `你的機器上已有 ${count} 個技能`,
   install: {
     installedIn: ({ path }) => `已安裝在 ${path}`,
     externallyModified: ({ machine }) =>

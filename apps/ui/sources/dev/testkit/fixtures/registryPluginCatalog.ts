@@ -1,11 +1,13 @@
 import { MarketplaceIndexSourceSnapshotV1Schema, deriveMarketplaceSourceId, createMarketplaceNpmDiscoveryProjectionV1 } from '@happier-dev/protocol/marketplace';
 import { createPluginCompatibilityProjectionV1 } from '@happier-dev/protocol/plugins/availability/v1';
 import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest';
+import type { PluginManifestV2 } from '@happier-dev/protocol/plugins/manifest';
 
-export function createRegistryNpmPackageFixture(input: Readonly<{ packageName: string; pluginId: string; title: string; version: string }>) {
+export function createRegistryNpmPackageFixture(input: Readonly<{ packageName: string; pluginId: string; title: string; version: string;
+    contributes?: PluginManifestV2['contributes'] }>) {
     const compatibility = createPluginCompatibilityProjectionV1({
         manifest: PluginManifestV2Schema.parse({ schemaVersion: 2, id: input.pluginId, version: input.version, displayName: input.title,
-            runtime: { apiVersion: 1 }, entrypoints: { daemon: './dist/index.js' }, hostAccess: { required: [], optional: [] }, contributes: {} }),
+            runtime: { apiVersion: 1 }, entrypoints: { daemon: './dist/index.js' }, hostAccess: { required: [], optional: [] }, contributes: input.contributes ?? {} }),
         uiArtifacts: { version: 2, entries: [] },
     });
     return { name: input.packageName, version: input.version,

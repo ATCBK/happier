@@ -14,6 +14,7 @@ import {
   subscribeFoundWarmCacheEntry,
 } from '@/sync/domains/state/warmCachePersistence';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 export type FoundItem = SkillFoundListResultV1['items'][number];
 export type FoundMachineFailure = 'failed' | 'older_machine';
@@ -38,32 +39,35 @@ export type FoundAdoptOutcome = Readonly<{
 const NOT_AVAILABLE = /RPC_METHOD_(NOT_AVAILABLE|NOT_FOUND)|unsupported_action/;
 
 type Entries = Readonly<Record<string, SkillFoundListResultV1 | null>>;
+const EMPTY_ENTRIES: Entries = Object.freeze({});
 
 /**
  * The last known `skills.found.list` result per machine from the device-local warm cache, kept current
  * as any reader writes it (the page's scan, the composer's). It never reads a machine.
  */
-export function useFoundSkillsCache(machineIds: readonly string[]): Entries {
-  const scope = useAccountSettingsScope();
+export function useFoundSkillsCache(machineIds: readonly string[], requestedScope?: ServerAccountScope | null): Entries {
+  const activeScope = useAccountSettingsScope();
+  const scope = requestedScope === undefined ? activeScope : requestedScope;
   const idsKey = machineIds.join('\u0000');
-  const [entries, setEntries] = React.useState<Entries>({});
   const accountId = scope?.accountId;
   const serverId = scope?.serverId;
+  const key = JSON.stringify([serverId, accountId, idsKey]);
+  const [entries, setEntries] = React.useState<Readonly<{ key: string; value: Entries }>>({ key, value: EMPTY_ENTRIES });
   React.useLayoutEffect(() => {
     const ids = idsKey ? idsKey.split('\u0000') : [];
     const read = (machineId: string) => {
       const entry = loadFoundWarmCacheEntry(serverId, accountId, 'skill', machineId);
       return entry?.kind === 'skill' ? entry.result : null;
     };
-    setEntries(Object.fromEntries(ids.map((id) => [id, read(id)])));
+    setEntries({ key, value: Object.fromEntries(ids.map((id) => [id, read(id)])) });
     const unsubscribers = ids.map((machineId) =>
       subscribeFoundWarmCacheEntry(serverId, accountId, 'skill', machineId, () =>
-        setEntries((prev) => ({ ...prev, [machineId]: read(machineId) })),
+        setEntries((prev) => prev.key === key ? { key, value: { ...prev.value, [machineId]: read(machineId) } } : prev),
       ),
     );
     return () => unsubscribers.forEach((off) => off());
-  }, [accountId, idsKey, serverId]);
-  return entries;
+  }, [accountId, idsKey, serverId, key]);
+  return entries.key === key ? entries.value : EMPTY_ENTRIES;
 }
 
 /** How many Found skills are not in the library yet, across the last known results (the rail's count). */

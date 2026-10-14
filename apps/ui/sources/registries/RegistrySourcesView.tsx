@@ -46,6 +46,8 @@ import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalo
 import { Modal } from '@/modal';
 import { useRegistrySourceMutations } from './useRegistrySourceMutations';
 import { useRegistrySources } from './useRegistrySources';
+import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { useActiveServerAccountScopeLifetime } from '@/sync/store/hooks';
 
 type Detected = z.infer<typeof RegistryDetectedSourceV1Schema>;
 export type RegistrySourcesViewItemFromSource = Readonly<{
@@ -319,6 +321,12 @@ function RegistrySourceDetail(
   const { source } = props;
   const mutations = useRegistrySourceMutations();
   const [name, setName] = React.useState(source.title);
+  const lifetime = useActiveServerAccountScopeLifetime();
+  const noticeKey = `registry-source:${JSON.stringify(lifetime?.scope)}:${source.id}`;
+  React.useEffect(() => {
+    const retirement = lifetime?.onRetire(() => retirePresentationNotice(noticeKey));
+    return () => { retirement?.dispose(); retirePresentationNotice(noticeKey); };
+  }, [lifetime, noticeKey]);
   const [busy, setBusy] = React.useState<'remove' | 'enable' | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   // The page of this source answers count, status and "Checked HH:MM"; it reads only while the source is on.
@@ -355,18 +363,36 @@ function RegistrySourceDetail(
     setError(null);
     mutations
       .update({ sourceId: source.id, title: next })
+      .then(() => { if (!lifetime?.isCurrent()) return; publishPresentationNotice({ key: noticeKey, message: next, severity: 'info',
+        undo: { label: t('bots.undo'), run: () => {
+          if (!lifetime.isCurrent()) return;
+          void mutations.update({ sourceId: source.id, title: source.title }).then(result => {
+            if (!lifetime.isCurrent()) return;
+            setName(result.source.title);
+            retirePresentationNotice(noticeKey);
+          }).catch(() => { if (lifetime.isCurrent()) publishPresentationNotice({ key: noticeKey,
+            message: t('capabilities.registries.detail.updateFailed'), severity: 'error' }); });
+        } } }); })
       .catch(() => setError(t('capabilities.registries.detail.updateFailed')));
-  }, [editable, mutations, name, source.id, source.title]);
+  }, [editable, mutations, name, source.id, source.title, lifetime, noticeKey]);
   const setEnabled = React.useCallback(
     (enabled: boolean) => {
       setBusy('enable');
       setError(null);
       mutations
         .update({ sourceId: source.id, enabled })
+        .then(() => { if (!lifetime?.isCurrent()) return; publishPresentationNotice({ key: noticeKey, message: source.title, severity: 'info',
+          undo: { label: t('bots.undo'), run: () => {
+            if (!lifetime.isCurrent()) return;
+            void mutations.update({ sourceId: source.id, enabled: source.enabled }).then(() => {
+              if (lifetime.isCurrent()) retirePresentationNotice(noticeKey);
+            }).catch(() => { if (lifetime.isCurrent()) publishPresentationNotice({ key: noticeKey,
+              message: t('capabilities.registries.detail.updateFailed'), severity: 'error' }); });
+          } } }); })
         .catch(() => setError(t('capabilities.registries.detail.updateFailed')))
         .finally(() => setBusy(null));
     },
-    [mutations, source.id],
+    [mutations, source.id, source.enabled, source.title, lifetime, noticeKey],
   );
   const remove = React.useCallback(() => {
     setBusy('remove');

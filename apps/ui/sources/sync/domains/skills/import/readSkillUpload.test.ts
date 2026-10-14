@@ -8,9 +8,10 @@ const SKILL_MD = text('---\nname: release-notes\ndescription: Draft release note
 
 async function zipOf(entries: readonly Readonly<{ path: string; body: Uint8Array; mode?: number }>[]): Promise<Uint8Array> {
     const { BlobWriter, Uint8ArrayReader, ZipWriter } = await import('@zip.js/zip.js');
-    const writer = new ZipWriter(new BlobWriter('application/zip'), { useWebWorkers: false });
+    const writer = new ZipWriter(new BlobWriter('application/zip'));
     for (const entry of entries) {
-        await writer.add(entry.path, new Uint8ArrayReader(entry.body), entry.mode === undefined ? {} : {
+        await writer.add(entry.path, new Uint8ArrayReader(entry.body), entry.mode === undefined ? { useWebWorkers: false } : {
+            useWebWorkers: false,
             // Unix-made archives keep the mode in the high half of the external attributes.
             externalFileAttributes: (0o100000 | entry.mode) << 16 >>> 0,
             versionMadeBy: (3 << 8) | 20,

@@ -21,6 +21,8 @@ import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/li
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL } from '@happier-dev/protocol/marketplace';
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { checkRegistryUpstreamV1, type RegistrySourceDescriptorV1 } from '@happier-dev/protocol/registries';
+import { createUiRegistryHttpV1 } from './registryHttpV1';
 
 const transport = vi.hoisted(() => ({ calls: [] as ServerScopedMachineRpcParams<RegistryFetchRequestV1>[], platform: 'web' }));
 // Machine RPC leaves this process; source ownership, supplier selection and REACH stay real.
@@ -56,6 +58,9 @@ const { readCurrentAppShellPluginUiProjection } = await import('@/components/app
 const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 const { useRegistrySuggestions } = await import('./useRegistrySuggestions');
 const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const { useSkillsLibrary } = await import('@/sync/domains/skills/useSkillsLibrary');
+const { useSkillsUpdates } = await import('@/components/settings/skills/updates/useSkillsUpdates');
+const { useSkillDetail } = await import('@/components/settings/skills/detail/useSkillDetail');
 
 it.each([false, true])('previews a multi-plugin skill link with one repository read (manifest absent: %s)', async absentManifest => {
     const requests: string[] = [];
@@ -139,6 +144,26 @@ it('opens an empty web skill recommendation shelf without a daemon browse even w
 });
 
 it('reads a tokened source on a shared Machine through the captured requester Account rather than raw custodian RPC', async () => {
+    let upstreamFails = false;
+    const checkedSources: RegistrySourceDescriptorV1[] = ['healthy', '403', '429', 'unreachable'].map(id => ({
+        id, title: id, format: 'git', kinds: ['skill'], url: `https://github.com/fixture/${id}`,
+        enabled: true, addedAt: 0, origin: { kind: 'user' }, removable: true,
+    }));
+    const produceCheck = async () => {
+        const http = createUiRegistryHttpV1(async url => {
+            const path = String(url);
+            if (upstreamFails && path.includes('/403/')) return new Response('', { status: 403 });
+            if (upstreamFails && path.includes('/429/')) return new Response('', { status: 429 });
+            if (upstreamFails && path.includes('/unreachable/')) throw new TypeError('offline');
+            return Response.json({ sha: '1'.repeat(40) });
+        });
+        const upstream = await checkRegistryUpstreamV1({ http }, { sources: checkedSources, items: checkedSources.map(source => ({
+            key: source.id, provenance: { sourceId: source.id, sourceUrl: source.url, format: source.format, itemId: 'review', importedAt: 0,
+                ref: { kind: 'gitTree' as const, repo: source.url, path: 'review', commit: '1'.repeat(40), treeSha: '2'.repeat(40) } },
+        })) });
+        return REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].parse({ checkedAt: upstreamFails ? 20 : 10,
+            results: checkedSources.map(source => ({ kind: 'skill', key: source.id, upstream: upstream.get(source.id) })) });
+    };
     const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(19));
     const machineId = 'shared-registry-machine';
     const installationId = 'shared-registry-installation';
@@ -185,8 +210,7 @@ it('reads a tokened source on a shared Machine through the captured requester Ac
             afterRemoteAck?.();
             return Response.json(response);
         }
-        const result = actionId === 'registries.updates.check' ? { checkedAt: 10, results: [{ kind: 'skill', key: 'tracked-private-skill',
-            upstream: { state: 'unchecked', reason: { state: 'rate_limited' } } }] }
+        const result = actionId === 'registries.updates.check' ? await produceCheck()
             : actionId === 'registries.items.list' ? { pages: [{ sourceId: source.id, status: { state: 'ok', fetchedAt: 1 }, items: [], nextCursor: null }] }
             : { item: { summary: { sourceId: source.id, kind: 'skill', itemId: 'private-skill', title: 'Requester skill', version: '1'.repeat(40) },
                 payload: { kind: 'skill', skill: { ref: { kind: 'gitTree', repo: source.url, path: '', commit: '1'.repeat(40), treeSha: '2'.repeat(40) },
@@ -227,7 +251,8 @@ it('reads a tokened source on a shared Machine through the captured requester Ac
     const checked = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].parse(await host.execute('registries.updates.check', {
         kind: 'skill', keys: ['tracked-private-skill'],
     }));
-    expect(checked.results).toEqual([{ kind: 'skill', key: 'tracked-private-skill', upstream: { state: 'unchecked', reason: { state: 'rate_limited' } } }]);
+    expect(checked.results).toHaveLength(4);
+    expect(checked.results.every(item => item.upstream.state === 'current')).toBe(true);
     expect(actionCalls.at(-1)).toBe('registries.updates.check');
     expect(transport.calls).toEqual([]);
     const fixture = createPromptRegistrySkillFixture({ sourceId: source.id, itemId: 'private-skill', title: 'Requester skill',
@@ -281,6 +306,29 @@ it('reads a tokened source on a shared Machine through the captured requester Ac
     else expect(preview.error).toMatchObject({ name: 'AbortError' });
     expect(artifacts.list()).toHaveLength(1);
     expect(transport.calls).toEqual([]);
+    const updates = await renderHook(() => useSkillsUpdates(useSkillsLibrary()));
+    const detail = await renderHook(() => useSkillDetail(skillId));
+    await waitForHomeGovernance(() => expect(updates.getCurrent().ready).toBe(true));
+    await act(async () => { await updates.getCurrent().checkNow(); });
+    expect(updates.getCurrent().check).toMatchObject({ failed: false, checkedAt: 10 });
+    upstreamFails = true;
+    await act(async () => { await updates.getCurrent().checkNow(); });
+    expect(updates.getCurrent().check).toMatchObject({ failed: true, checkedAt: 10, results: [
+        { key: 'healthy', upstream: { state: 'current' } },
+        { key: '403', upstream: { state: 'unchecked', reason: { state: 'auth_failed' } } },
+        { key: '429', upstream: { state: 'unchecked', reason: { state: 'rate_limited' } } },
+        { key: 'unreachable', upstream: { state: 'unchecked', reason: { state: 'unreachable' } } },
+    ] });
+    expect(artifacts.readPlainBody(skillId)).toBe(JSON.stringify(PromptBundleBodyV1Schema.parse({ v: 1, createdAtMs: 0, updatedAtMs: 0,
+        entries: fixture.files.map(file => ({ ...file, contentKind: 'utf8' })) })));
+    await act(async () => { await detail.getCurrent().checkNow(); });
+    expect(detail.getCurrent().checkFailed).toBe(true);
+    upstreamFails = false;
+    await act(async () => { await updates.getCurrent().checkNow(); await detail.getCurrent().checkNow(); });
+    expect(updates.getCurrent().check.failed).toBe(false);
+    expect(detail.getCurrent().checkFailed).toBe(false);
+    await updates.unmount();
+    await detail.unmount();
 });
 
 it('routes native non-GitHub Git through the captured Account Machine transport while keeping public GitHub direct', async () => {

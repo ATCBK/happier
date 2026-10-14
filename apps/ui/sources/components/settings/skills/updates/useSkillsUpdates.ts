@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/registries';
+import { useRegistryUpdateCheck } from '@/registries/useRegistryUpdateCheck';
 import {
   SKILL_ACTION_OUTPUT_SCHEMAS_V1,
   type SkillLibraryActionResultByIdV1,
@@ -15,9 +15,9 @@ import type { SkillFileChoice } from './skillsUpdatesModel';
 export type SkillUpdateDiff =
   SkillLibraryActionResultByIdV1['skills.updates.diff'];
 export type SkillUpdateDiffState =
-  | Readonly<{ status: 'loading' }>
-  | Readonly<{ status: 'ready'; diff: SkillUpdateDiff }>
-  | Readonly<{ status: 'failed'; code: string }>;
+  | Readonly<{ status: 'loading'; revision: string }>
+  | Readonly<{ status: 'ready'; revision: string; diff: SkillUpdateDiff }>
+  | Readonly<{ status: 'failed'; revision: string; code: string }>;
 export type SkillUpdateApplyState =
   | Readonly<{ status: 'applying' }>
   | Readonly<{ status: 'applied'; ref: string | null }>
@@ -29,12 +29,10 @@ export type SkillUpdateApplyState =
  * state (P4: the checker returns it; nothing stores it), and every write refreshes the library.
  */
 export function useSkillsUpdates(library: SkillsLibrary) {
-  const { execute, ready } = useMountedActionExecution(
-    library.scope?.serverId ?? null,
-  );
-  const [check, setCheck] = React.useState<
-    Readonly<{ checking: boolean; checkedAt: number | null; failed: boolean; code: string | null }>
-  >({ checking: false, checkedAt: null, failed: false, code: null });
+  const { execute, ready, isCurrent } = useMountedActionExecution(library.scope);
+  const { check, checkNow } = useRegistryUpdateCheck({
+    scopeKey: JSON.stringify(library.scope), execute, isCurrent, kind: 'skill', retry: library.retry,
+  });
   const [diffs, setDiffs] = React.useState<
     ReadonlyMap<string, SkillUpdateDiffState>
   >(new Map());
@@ -42,39 +40,20 @@ export function useSkillsUpdates(library: SkillsLibrary) {
     ReadonlyMap<string, SkillUpdateApplyState>
   >(new Map());
   const { retry } = library;
-
-  const checkNow = React.useCallback(async () => {
-    setCheck((previous) => ({ ...previous, checking: true, failed: false }));
-    try {
-      const result = await execute('registries.updates.check', {
-        kind: 'skill',
-      });
-      const refusal = readSkillActionRefusal(result);
-      const parsed = refusal
-        ? null
-        : REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].safeParse(result.ok ? result.result : null);
-      setCheck((previous) =>
-        parsed?.success
-          ? { checking: false, checkedAt: parsed.data.checkedAt, failed: false, code: null }
-          : { ...previous, checking: false, failed: true, code: refusal ?? 'invalid_action_output' },
-      );
-      // Whatever the checker recorded, the library re-reads it; a failed check keeps prior facts.
-      retry();
-      setDiffs(new Map());
-    } catch (error) {
-      setCheck((previous) => ({
-        ...previous,
-        checking: false,
-        failed: true,
-        code: error instanceof Error ? error.message : 'unknown',
-      }));
-    }
-  }, [execute, retry]);
+  const libraryRef = React.useRef(library);
+  libraryRef.current = library;
+  const scopeKey = JSON.stringify(library.scope);
+  const scopeRef = React.useRef(scopeKey);
+  scopeRef.current = scopeKey;
 
   const loadDiff = React.useCallback(
     async (skillId: string) => {
+      const revision = libraryRef.current.items.find(item => item.skillId === skillId)?.revision;
+      if (!revision || !isCurrent()) return;
+      const current = () => isCurrent() && scopeRef.current === scopeKey
+        && libraryRef.current.items.some(item => item.skillId === skillId && item.revision === revision);
       setDiffs((previous) =>
-        new Map(previous).set(skillId, { status: 'loading' }),
+        new Map(previous).set(skillId, { status: 'loading', revision }),
       );
       try {
         const result = await execute('skills.updates.diff', { skillId });
@@ -84,38 +63,64 @@ export function useSkillsUpdates(library: SkillsLibrary) {
           : SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.updates.diff'].safeParse(
               result.ok ? result.result : null,
             );
+        if (!current()) return;
         setDiffs((previous) =>
           new Map(previous).set(
             skillId,
             parsed?.success
-              ? { status: 'ready', diff: parsed.data }
-              : { status: 'failed', code: refusal ?? 'invalid_action_output' },
+              ? { status: 'ready', revision, diff: parsed.data }
+              : { status: 'failed', revision, code: refusal ?? 'invalid_action_output' },
           ),
         );
       } catch (error) {
+        if (!current()) return;
         setDiffs((previous) =>
           new Map(previous).set(skillId, {
             status: 'failed',
+            revision,
             code: error instanceof Error ? error.message : 'unknown',
           }),
         );
       }
     },
-    [execute],
+    [execute, isCurrent, scopeKey],
   );
+
+  // Retire the review when the library changes, including a checker's upstream observation.
+  // Only already-open reviews reload; this does not fetch a diff for every library item.
+  React.useEffect(() => {
+    for (const item of library.items) {
+      const review = diffs.get(item.skillId);
+      if (review && review.revision !== item.revision) void loadDiff(item.skillId);
+    }
+    setDiffs(previous => {
+      const retained = new Map([...previous].filter(([id]) => library.items.some(item => item.skillId === id)));
+      return retained.size === previous.size ? previous : retained;
+    });
+  }, [library.items, diffs, loadDiff]);
+  React.useLayoutEffect(() => { setDiffs(new Map()); setApplies(new Map()); }, [scopeKey]);
 
   const apply = React.useCallback(
     async (
       item: SkillListItemV1,
       choices?: Readonly<Record<string, SkillFileChoice>>,
+      reviewedRevision?: string,
     ) => {
+      if (!isCurrent()) return;
+      const review = diffs.get(item.skillId);
+      const expectedRevision = reviewedRevision ?? (choices && review?.status === 'ready' ? review.revision : undefined);
+      // Choices can only authorize the version whose sides were reviewed.
+      if (choices && !expectedRevision) {
+        setApplies(previous => new Map(previous).set(item.skillId, { status: 'failed', code: 'revision_conflict' }));
+        return;
+      }
       setApplies((previous) =>
         new Map(previous).set(item.skillId, { status: 'applying' }),
       );
       try {
         const result = await execute('skills.updates.apply', {
           skillId: item.skillId,
-          expectedRevision: item.revision,
+          expectedRevision: expectedRevision ?? item.revision,
           ...(choices ? { choices } : {}),
         });
         const refusal = readSkillActionRefusal(result);
@@ -124,6 +129,7 @@ export function useSkillsUpdates(library: SkillsLibrary) {
           : SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.updates.apply'].safeParse(
               result.ok ? result.result : null,
             );
+        if (!isCurrent() || scopeRef.current !== scopeKey) return;
         setApplies((previous) =>
           new Map(previous).set(
             item.skillId,
@@ -135,8 +141,9 @@ export function useSkillsUpdates(library: SkillsLibrary) {
               : { status: 'failed', code: refusal ?? 'invalid_action_output' },
           ),
         );
-        if (parsed?.success) retry();
+        if (parsed?.success || refusal === 'revision_conflict') retry();
       } catch (error) {
+        if (!isCurrent() || scopeRef.current !== scopeKey) return;
         setApplies((previous) =>
           new Map(previous).set(item.skillId, {
             status: 'failed',
@@ -145,7 +152,7 @@ export function useSkillsUpdates(library: SkillsLibrary) {
         );
       }
     },
-    [execute, retry],
+    [execute, retry, diffs, isCurrent, scopeKey],
   );
 
   return { ready, check, checkNow, diffs, loadDiff, applies, apply };

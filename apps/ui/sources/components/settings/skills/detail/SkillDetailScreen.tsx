@@ -65,7 +65,7 @@ import {
   useSkillMachineTruth,
   type SkillMachineTruth,
 } from './useSkillMachineTruth';
-import { NO_PROJECTS, useSkillPlaces } from '../useSkillPlaces';
+import { useSkillPlaces } from '../useSkillPlaces';
 
 
 function formatDay(ms: number): string {
@@ -319,7 +319,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
         places={{
           agentIds: places.agentIds,
           machines: places.placeMachines,
-          projects: NO_PROJECTS,
+          projects: places.projects,
         }}
         agentTakes={places.agentTakes}
         onChange={reach.change}
@@ -357,6 +357,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
             checking={detail.checking}
             checkedAt={detail.checkedAt}
             checkFailed={detail.checkFailed}
+            checkFailureReason={detail.checkFailureReason}
             onViewUpdate={() =>
               router.push(`${SKILLS_COLLECTION_ROUTE}/updates` as never)
             }
@@ -545,8 +546,10 @@ function SkillDraft() {
       projectReachOnMachines(
         draftReach.rules,
         places.machines as readonly ReachMachine[],
+        undefined,
+        places.workspaceRefs,
       ),
-    [draftReach.rules, places.machines],
+    [draftReach.rules, places.machines, places.workspaceRefs],
   );
 
   const add = React.useCallback(async () => {
@@ -630,7 +633,7 @@ function SkillDraft() {
         places={{
           agentIds: places.agentIds,
           machines: places.placeMachines,
-          projects: NO_PROJECTS,
+          projects: places.projects,
         }}
         agentTakes={places.agentTakes}
         onChange={draftReach.onChange}

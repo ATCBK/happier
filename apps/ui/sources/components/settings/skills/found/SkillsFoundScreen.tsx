@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -9,6 +9,7 @@ import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsO
 import { CapabilityStatusChip } from '@/components/capabilities/status/CapabilityStatusChip';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
+import { resolveProseDiffPresentation } from '@/components/ui/code/diff/diffPresentationStyle';
 import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -46,7 +47,6 @@ import {
 } from './foundSkillsModel';
 
 const NO_ITEMS: readonly FoundItem[] = Object.freeze([]);
-const NO_PROJECTS: readonly Readonly<{ projectKey: string; name: string }>[] = Object.freeze([]);
 
 /**
  * `/settings/skills/found`: the skills each machine's agents already keep in their own folders
@@ -81,7 +81,7 @@ export const SkillsFoundScreen = React.memo(function SkillsFoundScreen() {
     ],
     [found.scans, ordered],
   );
-  const { names } = useWhereItsOnNames({ agentIds, machines: placeMachines, projects: NO_PROJECTS });
+  const { names } = useWhereItsOnNames({ agentIds, machines: placeMachines });
   const { scan } = found;
   const scanned = React.useRef(new Set<string>());
 
@@ -575,26 +575,32 @@ function FoundCompare(
       cancelled = true;
     };
   }, [readBoth, machineId, path, libraryId]);
+  const [width, setWidth] = React.useState<number | null>(null);
   return (
     <SectionContentRow showDivider testID={props.testID}>
       {state.kind === 'ready' ? (
-        <View style={styles.compare}>
-          <View style={styles.compareLabels}>
-            <Text variant="label" style={[styles.quiet, styles.compareLabel]}>
-              {t('capabilities.skillsFound.compareYours')}
-            </Text>
-            <Text variant="label" style={[styles.quiet, styles.compareLabel]}>
-              {t('capabilities.skillsFound.compareTheirs', { machine: props.machineName })}
-            </Text>
-          </View>
-          <DiffViewer
-            mode="text"
-            oldText={state.yours}
-            newText={state.theirs}
-            filePath="SKILL.md"
-            wrapLines
-            presentationStyleOverride="split"
-          />
+        <View onLayout={(event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)}>
+        <DiffViewer
+          mode="text"
+          face="prose"
+          oldText={state.yours}
+          newText={state.theirs}
+          filePath="SKILL.md"
+          wrapLines
+          presentationStyleOverride={resolveProseDiffPresentation(width)}
+          prose={{
+            oldLabel: (
+              <Text variant="label" emphasis="semiBold" style={styles.compareLabel}>
+                {t('capabilities.skillsFound.compareYours')}
+              </Text>
+            ),
+            newLabel: (
+              <Text variant="label" emphasis="semiBold" style={styles.compareLabel}>
+                {t('capabilities.skillsFound.compareTheirs', { machine: props.machineName })}
+              </Text>
+            ),
+          }}
+        />
         </View>
       ) : state.kind === 'failed' ? (
         <Text variant="meta" style={styles.quiet}>
@@ -613,6 +619,7 @@ const styles = StyleSheet.create((theme) => ({
   titleAccessory: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, flexShrink: 1 },
   count: { color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] },
   held: { color: theme.colors.text.secondary },
+  compareLabel: { color: theme.colors.text.primary },
   quiet: { color: theme.colors.text.tertiary },
   noteBox: {
     flexDirection: 'row',
@@ -624,7 +631,4 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface.inset,
   },
   noteText: { flexShrink: 1, color: theme.colors.text.secondary },
-  compare: { gap: theme.space.s10 },
-  compareLabels: { flexDirection: 'row', gap: theme.space.s12 },
-  compareLabel: { flex: 1 },
 }));

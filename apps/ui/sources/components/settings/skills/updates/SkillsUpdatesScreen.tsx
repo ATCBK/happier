@@ -42,11 +42,10 @@ import {
   type SkillUpdateApplyState,
   type SkillUpdateDiffState,
 } from './useSkillsUpdates';
+import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
 
 const NO_AGENTS: readonly string[] = Object.freeze([]);
 const NO_MACHINES: readonly Readonly<{ machineId: string; name: string }>[] =
-  Object.freeze([]);
-const NO_PROJECTS: readonly Readonly<{ projectKey: string; name: string }>[] =
   Object.freeze([]);
 
 function formatTime(ms: number): string {
@@ -96,7 +95,6 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
   const { names } = useWhereItsOnNames({
     agentIds: NO_AGENTS,
     machines: NO_MACHINES,
-    projects: NO_PROJECTS,
   });
   const groups = React.useMemo(
     () => groupSkillUpdates(library.items),
@@ -133,7 +131,7 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
   // A failed check that never succeeded says nothing about freshness: no "up to date" claim.
   const nothing =
     !loading &&
-    !(updates.check.failed && updates.check.checkedAt === null) &&
+    !updates.check.failed &&
     groups.ready.length === 0 &&
     groups.needsChoice.length === 0 &&
     applied.length === 0;
@@ -168,6 +166,9 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
             size="line"
             kind="error"
             title={t('capabilities.skillsUpdates.updates.checkFailed')}
+            note={updates.check.results.flatMap(result => result.upstream.state === 'unchecked'
+              ? [`${library.items.find(item => item.skillId === result.key)?.name ?? ''}${library.items.some(item => item.skillId === result.key) ? ': ' : ''}${describeRegistrySourceStatus(result.upstream.reason)}`]
+              : []).join('\n') || undefined}
             diagnosticCode={updates.check.code ?? undefined}
             action={{
               label: t('capabilities.skillsUpdates.updates.tryAgain'),
@@ -184,6 +185,16 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
           title={t('capabilities.skills.loadFailed')}
           action={{ label: t('common.retry'), onPress: library.retry }}
         />
+      ) : loading ? (
+        // The library is still being read: say so in the place the answer will appear, never a blank page.
+        <ItemGroup surface="none">
+          <SurfaceStateCard
+            testID="skills.updates.loading"
+            size="line"
+            kind="loading"
+            title={t('capabilities.skillsUpdates.updates.checking')}
+          />
+        </ItemGroup>
       ) : nothing ? (
         <ItemGroup surface="none">
           <SurfaceStateCard
@@ -210,12 +221,12 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
               key={item.skillId}
               item={item}
               machineName={names.machineName}
-              diff={diffs.get(item.skillId) ?? null}
+              diff={diffs.get(item.skillId)?.revision === item.revision ? diffs.get(item.skillId)! : null}
               applyState={updates.applies.get(item.skillId) ?? null}
               onToggleDiff={(open) =>
                 open ? void loadDiff(item.skillId) : undefined
               }
-              onUpdate={() => void updates.apply(item)}
+              onUpdate={() => void updates.apply(item, undefined, diffs.get(item.skillId)?.revision)}
             />,
           ])}
         </ItemGroup>
@@ -225,10 +236,10 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
           key={item.skillId}
           item={item}
           first={index === 0}
-          diff={diffs.get(item.skillId) ?? null}
+          diff={diffs.get(item.skillId)?.revision === item.revision ? diffs.get(item.skillId)! : null}
           applyState={updates.applies.get(item.skillId) ?? null}
           onRetryDiff={() => void loadDiff(item.skillId)}
-          onApply={(choices) => void updates.apply(item, choices)}
+          onApply={(choices) => void updates.apply(item, choices, diffs.get(item.skillId)?.revision)}
           onNotNow={leave}
         />
       ))}
@@ -312,6 +323,8 @@ function ReadyRow(
                 }
             : {}),
         }}
+        // Two actions are wide: on a phone they move under the text so the change summary reads whole.
+        stackActionWhenNarrow
         action={
           applied ? null : (
             <View style={styles.actions}>
@@ -411,9 +424,11 @@ function ChoiceSection(
 ) {
   const { item, diff } = props;
   const files = diff?.status === 'ready' ? diff.diff.files : null;
-  const [picked, setPicked] = React.useState<
-    Readonly<Record<string, SkillFileChoice>>
-  >({});
+  const [selection, setSelection] = React.useState<Readonly<{
+    review: SkillUpdateDiffState | null;
+    picked: Readonly<Record<string, SkillFileChoice>>;
+  }>>({ review: diff, picked: {} });
+  const picked = selection.review === diff ? selection.picked : {};
   const defaults = React.useMemo(
     () => (files ? defaultSkillFileChoices(files) : {}),
     [files],
@@ -488,14 +503,19 @@ function ChoiceSection(
                   ]}
                   value={picked[file.path] ?? defaults[file.path] ?? 'mine'}
                   onChange={(next) =>
-                    setPicked((previous) => ({
-                      ...previous,
+                    setSelection(previous => ({ review: diff, picked: {
+                      ...(previous.review === diff ? previous.picked : {}),
                       [file.path]: next,
-                    }))
+                    } }))
                   }
                 />,
                 <SectionContentRow key={`${file.path}:sides`} continuesRow>
-                  <SkillUpdateSides file={file} item={item} showPath={false} />
+                  <SkillUpdateSides
+                    file={file}
+                    item={item}
+                    showPath={false}
+                    kept={picked[file.path] ?? defaults[file.path] ?? 'mine'}
+                  />
                 </SectionContentRow>,
               ]
             : [
@@ -555,14 +575,15 @@ function ChoiceSection(
 }
 
 /**
- * R5: one file's two sides as prose, Yours beside Theirs (stacked on a phone, an accepted refinement),
- * through the shared diff viewer.
+ * R5: one file's two sides in the shared diff viewer's prose face, Yours beside Theirs (stacked on a
+ * phone, an accepted refinement). Once a side is chosen it stays bright and the other is set aside.
  */
 function SkillUpdateSides(
   props: Readonly<{
     file: SkillUpdateFileV1;
     item: SkillListItemV1;
     showPath: boolean;
+    kept?: SkillFileChoice | null;
   }>,
 ) {
   // R5 prose: Yours beside Theirs down to the prose minimum, stacked under it (a phone).
@@ -576,25 +597,36 @@ function SkillUpdateSides(
           {props.file.path}
         </Text>
       ) : null}
-      <View style={styles.sideLabels}>
-        <Text variant="label" style={styles.sideLabel}>
-          {t('capabilities.skillDetail.instructions.yours')}
-        </Text>
-        <Text variant="label" style={styles.sideLabel}>
-          {theirsRef
-            ? `${t('capabilities.skillDetail.instructions.theirs')} · ${theirsRef}`
-            : t('capabilities.skillDetail.instructions.theirs')}
-        </Text>
-      </View>
       <DiffViewer
         mode="text"
+        face="prose"
         oldText={fileText(props.file.mine)}
         newText={fileText(props.file.theirs)}
         filePath={props.file.path}
         wrapLines
         presentationStyleOverride={resolveProseDiffPresentation(width)}
+        prose={{
+          oldLabel: <SideLabel title={t('capabilities.skillDetail.instructions.yours')} />,
+          newLabel: <SideLabel title={t('capabilities.skillDetail.instructions.theirs')} detail={theirsRef} />,
+          kept: props.kept === 'mine' ? 'old' : props.kept === 'theirs' ? 'new' : null,
+        }}
       />
     </View>
+  );
+}
+
+function SideLabel(props: Readonly<{ title: string; detail?: string | null }>) {
+  return (
+    <>
+      <Text variant="label" emphasis="semiBold" style={styles.path}>
+        {props.title}
+      </Text>
+      {props.detail ? (
+        <Text variant="micro" style={styles.sideDetail}>
+          {props.detail}
+        </Text>
+      ) : null}
+    </>
   );
 }
 
@@ -602,8 +634,7 @@ const styles = StyleSheet.create((theme) => ({
   actions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s16 },
   diffs: { gap: theme.space.s16 },
   sides: { gap: theme.space.s8 },
-  sideLabels: { flexDirection: 'row' },
-  sideLabel: { flex: 1, color: theme.colors.text.secondary },
+  sideDetail: { color: theme.colors.text.tertiary },
   path: { color: theme.colors.text.primary },
   foot: {
     flexDirection: 'row',

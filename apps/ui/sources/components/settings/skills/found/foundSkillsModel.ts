@@ -88,3 +88,47 @@ export function partitionFoundMachines<T extends Readonly<{ offline: boolean }>>
   }
   return { sections, unseenOffline };
 }
+
+export type FoundHomeRow = Readonly<{ machineId: string; item: FoundItem }>;
+
+/**
+ * The homepage's "Found on your machines" rows (P6 §4.2, lab hs A2): a few skills from the last known
+ * results that can simply be added (held, plugin and same-name rows need the Found page), each name
+ * once, machines that can answer first so Add works. `room` is the block's size, not a cap on what
+ * exists: "See all" opens every row.
+ */
+export function pickFoundHomeRows(
+  machines: readonly Readonly<{ machineId: string; offline: boolean }>[],
+  results: Readonly<Record<string, Readonly<{ items: readonly FoundItem[] }> | null>>,
+  room: number,
+): readonly FoundHomeRow[] {
+  const ordered = [...machines].sort((a, b) => Number(a.offline) - Number(b.offline));
+  const rows: FoundHomeRow[] = [];
+  const names = new Set<string>();
+  for (const machine of ordered) {
+    for (const item of results[machine.machineId]?.items ?? []) {
+      if (rows.length >= room) return rows;
+      if (foundRowKind(item) !== 'addable' || names.has(item.name)) continue;
+      names.add(item.name);
+      rows.push({ machineId: machine.machineId, item });
+    }
+  }
+  return rows;
+}
+
+/**
+ * Library skill names a machine's own same-name copy wins over (`masksLibrary`), from the last known
+ * results, each with the first machine (by the given order) where that happens.
+ */
+export function maskedLibraryNames(
+  machines: readonly Readonly<{ machineId: string; name: string | null }>[],
+  results: Readonly<Record<string, Readonly<{ items: readonly FoundItem[] }> | null>>,
+): ReadonlyMap<string, string> {
+  const masked = new Map<string, string>();
+  for (const machine of machines) {
+    for (const item of results[machine.machineId]?.items ?? []) {
+      if (item.masksLibrary && !masked.has(item.name)) masked.set(item.name, machine.name ?? machine.machineId);
+    }
+  }
+  return masked;
+}
