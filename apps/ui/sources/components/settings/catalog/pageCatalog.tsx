@@ -316,7 +316,7 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                             { id: 'promptsStacks', titleKey: 'contextPages.account.title', route: SETTINGS_ROUTES.promptsStacks, keywordsKey: 'settingsSearchKeywords.promptsStacks', icon: ({ theme }) => <Icon name="stack-simple" size={16} color={theme.colors.text.secondary} /> },
                             { id: 'promptsRegistries', titleKey: 'promptLibrary.registries', route: SETTINGS_ROUTES.promptsRegistries, keywordsKey: 'settingsSearchKeywords.promptsRegistries', icon: ({ theme }) => <Icon name="globe" size={16} color={theme.colors.text.secondary} /> },
                             { id: 'promptsLibrary', titleKey: 'promptLibrary.prompts', route: SETTINGS_ROUTES.promptsLibrary, keywordsKey: 'settingsSearchKeywords.promptsLibrary', icon: ({ theme }) => <Icon name="books" size={16} color={theme.colors.text.secondary} /> },
-                            { id: 'promptsAssets', titleKey: 'promptLibrary.externalAssets', route: SETTINGS_ROUTES.promptsAssets, keywordsKey: 'settingsSearchKeywords.promptsAssets', gate: { featureId: 'prompts.assets.external' }, icon: ({ theme }) => <Icon name="cloud" size={16} color={theme.colors.text.secondary} /> },
+                            { id: 'promptsAssets', titleKey: 'promptLibrary.externalAssets', route: SETTINGS_ROUTES.promptsAssets, keywordsKey: 'settingsSearchKeywords.promptsAssets', icon: ({ theme }) => <Icon name="cloud" size={16} color={theme.colors.text.secondary} /> },
                         ],
                     },
                     {
