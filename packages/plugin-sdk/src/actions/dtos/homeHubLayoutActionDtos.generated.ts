@@ -89,7 +89,7 @@ export type HomeHubLayoutActionInputById = {
                             submitLabel?: string | undefined;
                             fields?: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -216,7 +216,7 @@ export type HomeHubLayoutActionInputById = {
                             submitLabel?: string | undefined;
                             fields?: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -387,7 +387,7 @@ export type HomeHubLayoutActionInputById = {
                                     submitLabel?: string | undefined;
                                     fields?: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -547,7 +547,7 @@ export type HomeHubLayoutActionInputById = {
                             submitLabel?: string | undefined;
                             fields?: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -729,7 +729,7 @@ export type HomeHubLayoutActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -854,7 +854,7 @@ export type HomeHubLayoutActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -1009,7 +1009,7 @@ export type HomeHubLayoutActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -1139,7 +1139,7 @@ export type HomeHubLayoutActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -1284,7 +1284,7 @@ export type HomeHubLayoutActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -1415,7 +1415,7 @@ export type HomeHubLayoutActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;
@@ -1540,7 +1540,7 @@ export type HomeHubLayoutActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -1695,7 +1695,7 @@ export type HomeHubLayoutActionResultById = {
                         inputs: {
                             fields: readonly {
                                 path: string;
-                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                 title: string;
                                 inputType?: {
                                     pluginId: string;
@@ -1825,7 +1825,7 @@ export type HomeHubLayoutActionResultById = {
                                 inputs: {
                                     fields: readonly {
                                         path: string;
-                                        widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                         title: string;
                                         inputType?: {
                                             pluginId: string;
@@ -1970,7 +1970,7 @@ export type HomeHubLayoutActionResultById = {
                             inputs: {
                                 fields: readonly {
                                     path: string;
-                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                                     title: string;
                                     inputType?: {
                                         pluginId: string;

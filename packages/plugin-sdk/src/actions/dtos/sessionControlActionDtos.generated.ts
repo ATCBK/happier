@@ -111,6 +111,10 @@ export type SessionControlActionInputById = {
         serverId: string;
         expectedMetadataRevision: number;
         intent: {
+            kind: 'set_enabled';
+            entryId: string;
+            enabled: boolean;
+        } | {
             kind: 'set';
             entry: {
                 id: string;
@@ -150,10 +154,6 @@ export type SessionControlActionInputById = {
             kind: 'set_budget';
             entryId: string;
             maxChars: number | null;
-        } | {
-            kind: 'set_enabled';
-            entryId: string;
-            enabled: boolean;
         } | {
             kind: 'inherited_enable';
             entryId: string;
@@ -332,47 +332,8 @@ export type SessionControlActionInputById = {
         sessionId: string;
         agentId: string;
         bindings: {
-            v: 1;
-            bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            }>;
-        } | {
-            v: 1;
-            bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            }>;
-        } | {
             v: 2;
             bindingsByServiceId?: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -388,7 +349,46 @@ export type SessionControlActionInputById = {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
             }> | undefined;
+        } | {
+            v: 1;
+            bindingsByServiceId: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            }>;
+        } | {
+            v: 1;
+            bindingsByServiceId: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            }>;
         };
         machineId: string;
         rematerializeServiceId?: string | undefined;

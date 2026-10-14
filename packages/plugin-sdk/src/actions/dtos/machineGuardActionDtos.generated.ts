@@ -92,7 +92,7 @@ export type MachineGuardActionResultById = {
             episode?: {
                 state: 'sustaining' | 'acting' | 'verifying' | 'out_of_steps';
                 since: number;
-                step?: 1 | 2 | 3 | undefined;
+                step?: 1 | 3 | 2 | undefined;
                 expectedReturnBytes?: number | undefined;
             } | undefined;
         };
@@ -201,7 +201,7 @@ export type MachineGuardActionResultById = {
                 inUseBytes?: number | undefined;
                 swapBytes?: number | undefined;
             } | undefined;
-            step?: 1 | 2 | 3 | undefined;
+            step?: 1 | 3 | 2 | undefined;
             episodeId?: string | undefined;
             freedBytes?: number | undefined;
             inTrashBytes?: number | undefined;
@@ -298,7 +298,7 @@ export type MachineGuardActionResultById = {
                 inUseBytes?: number | undefined;
                 swapBytes?: number | undefined;
             } | undefined;
-            step?: 1 | 2 | 3 | undefined;
+            step?: 1 | 3 | 2 | undefined;
             episodeId?: string | undefined;
             freedBytes?: number | undefined;
             inTrashBytes?: number | undefined;

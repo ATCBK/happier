@@ -140,12 +140,12 @@ export type FilesystemActionInputById = {
 };
 export type FilesystemActionResultById = {
     readonly "daemon.filesystem.readFile": {
-        success: true;
-        content: string;
-    } | {
         success: false;
         error: string;
         errorCode?: string | undefined;
+    } | {
+        success: true;
+        content: string;
     };
     readonly "daemon.filesystem.writeFile": {
         success: false;
@@ -183,6 +183,11 @@ export type FilesystemActionResultById = {
     } | {
         success: true;
     } | {
+        success: false;
+        status: 'unknown' | 'failed' | 'cancelled';
+        error: string;
+        errorCode?: string | undefined;
+    } | {
         success: true;
         status: 'accepted';
         operationId: string;
@@ -215,11 +220,6 @@ export type FilesystemActionResultById = {
         path: string;
         sizeBytes: number;
         sha256: string;
-    } | {
-        success: false;
-        status: 'unknown' | 'failed' | 'cancelled';
-        error: string;
-        errorCode?: string | undefined;
     } | {
         success: true;
         status: 'accepted';
@@ -291,6 +291,11 @@ export type FilesystemActionResultById = {
         };
     };
     readonly "daemon.filesystem.upload": {
+        success: false;
+        status: 'unknown' | 'failed' | 'cancelled';
+        error: string;
+        errorCode?: string | undefined;
+    } | {
         success: true;
         status: 'accepted';
         operationId: string;
@@ -323,11 +328,6 @@ export type FilesystemActionResultById = {
         path: string;
         sizeBytes: number;
         sha256: string;
-    } | {
-        success: false;
-        status: 'unknown' | 'failed' | 'cancelled';
-        error: string;
-        errorCode?: string | undefined;
     };
     readonly "daemon.filesystem.download": {
         success: false;

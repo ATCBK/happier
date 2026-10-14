@@ -41,10 +41,10 @@ export type McpServersActionInputById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {
@@ -284,10 +284,10 @@ export type McpServersActionInputById = {
                     command: string;
                     args: string[];
                     cwd?: {
-                        t: 'session';
-                    } | {
                         t: 'path';
                         path: string;
+                    } | {
+                        t: 'session';
                     } | undefined;
                 } | undefined;
                 remote?: {
@@ -602,10 +602,10 @@ export type McpServersActionInputById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {
@@ -895,10 +895,10 @@ export type McpServersActionInputById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {
@@ -1146,10 +1146,10 @@ export type McpServersActionInputById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {
@@ -1726,10 +1726,10 @@ export type McpServersActionResultById = {
                     command: string;
                     args: string[];
                     cwd?: {
-                        t: 'session';
-                    } | {
                         t: 'path';
                         path: string;
+                    } | {
+                        t: 'session';
                     } | undefined;
                 } | undefined;
                 remote?: {
@@ -1992,10 +1992,10 @@ export type McpServersActionResultById = {
                     command: string;
                     args: string[];
                     cwd?: {
-                        t: 'session';
-                    } | {
                         t: 'path';
                         path: string;
+                    } | {
+                        t: 'session';
                     } | undefined;
                 } | undefined;
                 remote?: {
@@ -2321,10 +2321,10 @@ export type McpServersActionResultById = {
                 command: string;
                 args: string[];
                 cwd?: {
-                    t: 'session';
-                } | {
                     t: 'path';
                     path: string;
+                } | {
+                    t: 'session';
                 } | undefined;
             } | undefined;
             remote?: {
@@ -2523,6 +2523,9 @@ export type McpServersActionResultById = {
         revision: number | 'absent';
     };
     readonly "mcp.servers.create": {
+        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
+        reason?: string | undefined;
+    } | {
         status: 'updated';
         revision: number;
         cursor: number;
@@ -2532,11 +2535,11 @@ export type McpServersActionResultById = {
     } | {
         status: 'settings-conflict';
         revision: number;
-    } | {
-        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
-        reason?: string | undefined;
     };
     readonly "mcp.servers.update": {
+        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
+        reason?: string | undefined;
+    } | {
         status: 'updated';
         revision: number;
         cursor: number;
@@ -2546,11 +2549,11 @@ export type McpServersActionResultById = {
     } | {
         status: 'settings-conflict';
         revision: number;
-    } | {
-        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
-        reason?: string | undefined;
     };
     readonly "mcp.servers.duplicate": {
+        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
+        reason?: string | undefined;
+    } | {
         status: 'updated';
         revision: number;
         cursor: number;
@@ -2560,11 +2563,11 @@ export type McpServersActionResultById = {
     } | {
         status: 'settings-conflict';
         revision: number;
-    } | {
-        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
-        reason?: string | undefined;
     };
     readonly "mcp.servers.delete": {
+        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
+        reason?: string | undefined;
+    } | {
         status: 'updated';
         revision: number;
         cursor: number;
@@ -2574,9 +2577,6 @@ export type McpServersActionResultById = {
     } | {
         status: 'settings-conflict';
         revision: number;
-    } | {
-        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
-        reason?: string | undefined;
     } | {
         status: 'updated';
         revision: number;
@@ -2791,7 +2791,7 @@ export type McpServersActionResultById = {
     readonly "mcp.servers.tools.set": {
         revision: number;
         previous: {
-            tools: Readonly<Record<string, 'ask' | 'off' | 'allow' | 'inherit'>>;
+            [x: string]: any;
             default?: 'ask' | 'allow_read_only' | 'allow_all' | undefined;
         };
     };

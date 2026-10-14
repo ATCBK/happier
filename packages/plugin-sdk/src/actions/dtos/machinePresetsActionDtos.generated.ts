@@ -23,7 +23,6 @@ export type MachinePresetsActionInputById = {
     };
     readonly "machines.presets.create": {
         homeId: string;
-        id: string;
         owner: {
             kind: 'account';
             accountId: string;
@@ -31,6 +30,7 @@ export type MachinePresetsActionInputById = {
             kind: 'team';
             teamId: string;
         };
+        id: string;
         controller: {
             machineId: string;
             installationId: string;
@@ -162,6 +162,9 @@ export type MachinePresetsActionInputById = {
 };
 export type MachinePresetsActionResultById = {
     readonly "machines.presets.list": {
+        kind: 'refused';
+        code: 'invalid_request' | 'permission_denied' | 'admission_unavailable' | 'acquisition_disabled' | 'controller_unavailable' | 'controller_retired' | 'credential_unavailable' | 'provider_unavailable' | 'request_conflict' | 'intent_changed' | 'managed_not_found' | 'enrollment_retired' | 'resource_mismatch' | 'preset_not_found' | 'preset_archived' | 'preset_limit_reached';
+    } | {
         kind: 'listed';
         presets: {
             id: string;
@@ -232,9 +235,6 @@ export type MachinePresetsActionResultById = {
             archivedAt?: number | undefined;
         }[];
         cursor?: string | undefined;
-    } | {
-        kind: 'refused';
-        code: 'invalid_request' | 'permission_denied' | 'admission_unavailable' | 'acquisition_disabled' | 'controller_unavailable' | 'controller_retired' | 'credential_unavailable' | 'provider_unavailable' | 'request_conflict' | 'intent_changed' | 'managed_not_found' | 'enrollment_retired' | 'resource_mismatch' | 'preset_not_found' | 'preset_archived' | 'preset_limit_reached';
     };
     readonly "machines.presets.get": {
         kind: 'refused';

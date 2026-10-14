@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SCM_PULL_REQUEST_REVIEW_SCOPE_INPUT_KEY,
@@ -24,75 +25,73 @@ export const ReviewChangeTypeSchema = lazyZodSchema(() => z.enum(['all', 'commit
 export type ReviewChangeType = z.infer<typeof ReviewChangeTypeSchema>;
 
 export const ReviewBaseSchema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('none') }).passthrough(),
-  z.object({ kind: z.literal('branch'), baseBranch: z.string().min(1) }).passthrough(),
-  z.object({ kind: z.literal('commit'), baseCommit: z.string().min(1) }).passthrough(),
+  z.looseObject({ kind: z.literal('none') }),
+  z.looseObject({ kind: z.literal('branch'), baseBranch: z.string().check(z.minLength(1)) }),
+  z.looseObject({ kind: z.literal('commit'), baseCommit: z.string().check(z.minLength(1)) }),
 ]));
 export type ReviewBase = z.infer<typeof ReviewBaseSchema>;
 
-export const ReviewEngineIdSchema = lazyZodSchema(() => z.string().trim().min(1));
+export const ReviewEngineIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 export type ReviewEngineId = z.infer<typeof ReviewEngineIdSchema>;
 
-export const ReviewEngineInputSchema = lazyZodSchema(() => z.object({}).passthrough());
+export const ReviewEngineInputSchema = lazyZodSchema(() => z.looseObject({}));
 export type ReviewEngineInput = z.infer<typeof ReviewEngineInputSchema>;
 
-export const ReviewEngineInputsSchema = lazyZodSchema(() => z.record(ReviewEngineIdSchema, ReviewEngineInputSchema).default({}));
+export const ReviewEngineInputsSchema = lazyZodSchema(() => z._default(z.record(ReviewEngineIdSchema, ReviewEngineInputSchema), {}));
 export type ReviewEngineInputs = z.infer<typeof ReviewEngineInputsSchema>;
 const DEFAULT_REVIEW_ENGINE_INPUTS: ReviewEngineInputs = ReviewEngineInputsSchema.parse({});
 
 export const REVIEW_SCM_SCOPE_INPUT_KEY = 'scmReviewScope';
 
-export const ReviewStartInputSchema = lazyZodSchema(() => z
-  .object({
-    roleId: z.string().trim().min(1).optional(),
-    launchProfileId: z.string().trim().min(1).optional(),
-    sessionId: z.string().min(1).optional(),
-    target: z.object({ kind: z.literal('detached') }).strict().optional(),
+export const ReviewStartInputSchema = lazyZodSchema(() => z.looseObject({
+    roleId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    launchProfileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    sessionId: z.optional(z.string().check(z.minLength(1))),
+    target: z.optional(z.strictObject({ kind: z.literal('detached') })),
+    childSelection: ExecutionRunStartRequestBaseSchema.shape.childSelection,
     cwd: ExecutionRunStartRequestBaseSchema.shape.cwd,
-    engineIds: z.array(ReviewEngineIdSchema).min(1),
-    instructions: z.string().trim().min(1),
-    outputs: z.array(z.literal('walkthrough')).min(1).optional(),
-    comparisonId: z.string().min(1).optional(),
-    narrator: ReviewNarratorSelectionSchema.optional(),
-    notifyParentOnCompletion: z.boolean().optional(),
-    reviewCommentAuthorIntent: z.enum(['open', 'propose']).default('propose'),
+    engineIds: z.array(ReviewEngineIdSchema).check(z.minLength(1)),
+    instructions: z.string().check(z.trim(), z.minLength(1)),
+    outputs: z.optional(z.array(z.literal('walkthrough')).check(z.minLength(1))),
+    comparisonId: z.optional(z.string().check(z.minLength(1))),
+    narrator: zMini.optional(ReviewNarratorSelectionSchema),
+    notifyParentOnCompletion: z.optional(z.boolean()),
+    reviewCommentAuthorIntent: z._default(z.enum(['open', 'propose']), 'propose'),
     // Intentionally default to uncommitted changes: the common "review what I just changed"
     // flow should stay narrowly scoped unless the user explicitly broadens it.
-    changeType: ReviewChangeTypeSchema.default('uncommitted'),
-    base: ReviewBaseSchema.default({ kind: 'none' }),
-    engines: ReviewEngineInputsSchema.prefault(DEFAULT_REVIEW_ENGINE_INPUTS),
-    scmReviewScope: ReviewScmScopeV1Schema.optional(),
+    changeType: z._default(ReviewChangeTypeSchema, 'uncommitted'),
+    base: z._default(ReviewBaseSchema, { kind: 'none' }),
+    engines: z.prefault(ReviewEngineInputsSchema, DEFAULT_REVIEW_ENGINE_INPUTS),
+    scmReviewScope: zMini.optional(ReviewScmScopeV1Schema),
     // A selected pull request is scoped by its own strict sibling key, never by
     // widening the worktree scope above: `ReviewProfile` re-derives that one on
     // every start and would discard anything packed into it.
-    [SCM_PULL_REQUEST_REVIEW_SCOPE_INPUT_KEY]: ScmPullRequestReviewScopeV1Schema.optional(),
-    permissionMode: z.string().min(1).default('read_only'),
-    profileId: z.string().trim().min(1).optional(),
-    profileSourceCustody: PluginSourceCustodyV1Schema.optional(),
+    [SCM_PULL_REQUEST_REVIEW_SCOPE_INPUT_KEY]: zMini.optional(ScmPullRequestReviewScopeV1Schema),
+    permissionMode: z._default(z.string().check(z.minLength(1)), 'read_only'),
+    profileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    profileSourceCustody: zMini.optional(PluginSourceCustodyV1Schema),
     // Match the other fan-out Actions: exact target entries override the blanket selection.
     // The shared Action composer normalizes these before any Run starts.
-    connectedServices: StrictJsonValueSchema.optional(),
-    connectedServicesByBackendTargetKey: z.record(z.string(), StrictJsonValueSchema).optional(),
-    secretReferenceOverlay: SecretReferenceOverlayV1Schema.optional(),
+    connectedServices: zMini.optional(StrictJsonValueSchema),
+    connectedServicesByBackendTargetKey: z.optional(z.record(z.string(), StrictJsonValueSchema)),
+    secretReferenceOverlay: zMini.optional(SecretReferenceOverlayV1Schema),
     modelSelection: ExecutionRunStartRequestBaseSchema.shape.modelSelection,
-    teamCredentialModel: TeamCredentialProviderModelSelectionV1Schema.optional(),
-    teamCredentialSessionBindingConsent: ExecutionRunTeamCredentialSessionBindingConsentV1Schema.optional(),
-  })
-  .passthrough()
-  .superRefine((value, ctx) => {
+    teamCredentialModel: zMini.optional(TeamCredentialProviderModelSelectionV1Schema),
+    teamCredentialSessionBindingConsent: zMini.optional(ExecutionRunTeamCredentialSessionBindingConsentV1Schema),
+  }).check(z.superRefine((value, ctx) => {
     if (value.target && value.sessionId !== undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['target'], message: 'A detached review cannot target a Session' });
+      ctx.addIssue({ code: "custom", path: ['target'], message: 'A detached review cannot target a Session' });
     }
     if (Boolean(value.profileId) !== Boolean(value.profileSourceCustody)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'profileId and profileSourceCustody must be provided together',
         path: value.profileId ? ['profileSourceCustody'] : ['profileId'],
       });
     }
     if (value.teamCredentialModel && value.engineIds.length !== 1) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'A Team credential model requires exactly one review engine',
         path: ['engineIds'],
       });
@@ -107,13 +106,13 @@ export const ReviewStartInputSchema = lazyZodSchema(() => z
         || consent.expectedResourceRevision !== selection.expectedResourceRevision
       ) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: 'Session binding consent must exactly match the selected Team resource revision',
           path: ['teamCredentialSessionBindingConsent'],
         });
       }
     }
-  }))
+  })))
   // Intentionally no engine-specific requirements here: this is a generalized,
   // cross-surface intent input. Engines may interpret optional `engines.*` blocks.
   ;

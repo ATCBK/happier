@@ -223,11 +223,6 @@ export type MachineConnectionActionInputById = {
 export type MachineConnectionActionResultById = {
     readonly "machines.terminal.open": {
         [x: string]: unknown;
-        ok: true;
-        terminalId: string;
-        reused: boolean;
-    } | {
-        [x: string]: unknown;
         ok: false;
         errorCode: 'terminal_disabled' | 'terminal_not_found' | 'terminal_forbidden' | 'terminal_unavailable' | 'terminal_cwd_denied' | 'terminal_spawn_failed' | 'terminal_invalid_request' | 'terminal_busy' | 'terminal_resize_unavailable' | 'agent_login_unsupported' | 'agent_cli_missing';
         error: string;
@@ -235,6 +230,11 @@ export type MachineConnectionActionResultById = {
             reason: 'too_many_open_files' | 'no_ptys' | 'process_limit' | 'out_of_memory' | 'other';
             errno?: string | undefined;
         } | undefined;
+    } | {
+        [x: string]: unknown;
+        ok: true;
+        terminalId: string;
+        reused: boolean;
     };
     readonly "machines.terminal.list": {
         ok: true;
@@ -332,11 +332,6 @@ export type MachineConnectionActionResultById = {
     };
     readonly "machines.terminal.restart": {
         [x: string]: unknown;
-        ok: true;
-        terminalId: string;
-        reused: boolean;
-    } | {
-        [x: string]: unknown;
         ok: false;
         errorCode: 'terminal_disabled' | 'terminal_not_found' | 'terminal_forbidden' | 'terminal_unavailable' | 'terminal_cwd_denied' | 'terminal_spawn_failed' | 'terminal_invalid_request' | 'terminal_busy' | 'terminal_resize_unavailable' | 'agent_login_unsupported' | 'agent_cli_missing';
         error: string;
@@ -344,6 +339,11 @@ export type MachineConnectionActionResultById = {
             reason: 'too_many_open_files' | 'no_ptys' | 'process_limit' | 'out_of_memory' | 'other';
             errno?: string | undefined;
         } | undefined;
+    } | {
+        [x: string]: unknown;
+        ok: true;
+        terminalId: string;
+        reused: boolean;
     };
     readonly "machines.metadata.update": {
         version: number;

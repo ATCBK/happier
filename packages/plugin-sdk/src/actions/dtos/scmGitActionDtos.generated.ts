@@ -813,7 +813,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -873,7 +873,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -936,7 +936,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -972,7 +972,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1011,7 +1011,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1073,7 +1073,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1112,7 +1112,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1158,7 +1158,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1218,7 +1218,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1281,7 +1281,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1317,7 +1317,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1356,7 +1356,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1418,7 +1418,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1457,7 +1457,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1503,7 +1503,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1563,7 +1563,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1626,7 +1626,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1662,7 +1662,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1701,7 +1701,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1763,7 +1763,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1802,7 +1802,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1848,7 +1848,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1908,7 +1908,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -1971,7 +1971,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2007,7 +2007,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2046,7 +2046,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2108,7 +2108,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2147,7 +2147,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2215,7 +2215,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2275,7 +2275,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2338,7 +2338,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2374,7 +2374,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2413,7 +2413,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2475,7 +2475,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2514,7 +2514,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2560,7 +2560,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2620,7 +2620,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2683,7 +2683,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2719,7 +2719,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2758,7 +2758,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2820,7 +2820,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2859,7 +2859,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -2981,7 +2981,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3041,7 +3041,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3104,7 +3104,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3140,7 +3140,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3179,7 +3179,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3241,7 +3241,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3280,7 +3280,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3326,7 +3326,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3386,7 +3386,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3449,7 +3449,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3485,7 +3485,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3524,7 +3524,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3586,7 +3586,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3625,7 +3625,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3675,7 +3675,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3735,7 +3735,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3798,7 +3798,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3834,7 +3834,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3873,7 +3873,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3935,7 +3935,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -3974,7 +3974,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4040,7 +4040,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4100,7 +4100,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4163,7 +4163,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4199,7 +4199,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4238,7 +4238,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4300,7 +4300,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4339,7 +4339,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4405,7 +4405,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4465,7 +4465,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4528,7 +4528,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4564,7 +4564,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4603,7 +4603,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4665,7 +4665,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4704,7 +4704,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4770,7 +4770,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4830,7 +4830,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4893,7 +4893,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4929,7 +4929,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -4968,7 +4968,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5030,7 +5030,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5069,7 +5069,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5135,7 +5135,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5195,7 +5195,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5258,7 +5258,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5294,7 +5294,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5333,7 +5333,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5395,7 +5395,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5434,7 +5434,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5500,7 +5500,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5560,7 +5560,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5623,7 +5623,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5659,7 +5659,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5698,7 +5698,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5760,7 +5760,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5799,7 +5799,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5865,7 +5865,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5925,7 +5925,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -5988,7 +5988,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6024,7 +6024,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6063,7 +6063,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6125,7 +6125,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6164,7 +6164,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6232,7 +6232,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6292,7 +6292,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6355,7 +6355,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6391,7 +6391,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6430,7 +6430,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6492,7 +6492,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6531,7 +6531,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6576,7 +6576,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6636,7 +6636,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6699,7 +6699,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6735,7 +6735,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6774,7 +6774,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6836,7 +6836,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6875,7 +6875,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6919,7 +6919,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -6979,7 +6979,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7042,7 +7042,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7078,7 +7078,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7117,7 +7117,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7179,7 +7179,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7218,7 +7218,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7264,7 +7264,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7324,7 +7324,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7387,7 +7387,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7423,7 +7423,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7462,7 +7462,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7524,7 +7524,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7563,7 +7563,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7609,7 +7609,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7669,7 +7669,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7732,7 +7732,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7768,7 +7768,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7807,7 +7807,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7869,7 +7869,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7908,7 +7908,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -7959,7 +7959,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8019,7 +8019,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8082,7 +8082,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8118,7 +8118,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8157,7 +8157,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8219,7 +8219,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8258,7 +8258,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8309,7 +8309,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8369,7 +8369,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8432,7 +8432,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8468,7 +8468,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8507,7 +8507,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8569,7 +8569,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8608,7 +8608,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8659,7 +8659,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8719,7 +8719,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8782,7 +8782,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8818,7 +8818,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8857,7 +8857,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8919,7 +8919,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -8958,7 +8958,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9004,7 +9004,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9064,7 +9064,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9127,7 +9127,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9163,7 +9163,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9202,7 +9202,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9264,7 +9264,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9303,7 +9303,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9349,7 +9349,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9409,7 +9409,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9472,7 +9472,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9508,7 +9508,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9547,7 +9547,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9609,7 +9609,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9648,7 +9648,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9694,7 +9694,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9754,7 +9754,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9817,7 +9817,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9853,7 +9853,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9892,7 +9892,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9954,7 +9954,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -9993,7 +9993,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10069,7 +10069,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10129,7 +10129,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10192,7 +10192,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10228,7 +10228,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10267,7 +10267,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10329,7 +10329,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10368,7 +10368,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10417,7 +10417,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10477,7 +10477,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10540,7 +10540,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10576,7 +10576,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10615,7 +10615,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10677,7 +10677,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10716,7 +10716,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10762,7 +10762,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10822,7 +10822,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10885,7 +10885,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10921,7 +10921,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -10960,7 +10960,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -11022,7 +11022,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -11061,7 +11061,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -11107,7 +11107,7 @@ export type ScmGitActionResultById = {
             kind: 'succeeded';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -11167,7 +11167,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -11230,7 +11230,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -11266,7 +11266,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -11305,7 +11305,7 @@ export type ScmGitActionResultById = {
             errorCode: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED';
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -11367,7 +11367,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;
@@ -11406,7 +11406,7 @@ export type ScmGitActionResultById = {
             };
             v: 1;
             nextActions: ({
-                kind: 'abort' | 'continue' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
+                kind: 'abort' | 'skip' | 'refresh' | 'retry' | 'resolve_conflicts' | 'continue' | 'reconcile_index' | 'choose_dirty_policy' | 'choose_reconcile' | 'configure_upstream' | 'authenticate';
             } | {
                 kind: 'open_url';
                 url: string;

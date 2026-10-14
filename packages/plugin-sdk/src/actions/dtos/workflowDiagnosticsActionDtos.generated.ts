@@ -134,17 +134,6 @@ export type WorkflowDiagnosticsActionResultById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -160,6 +149,17 @@ export type WorkflowDiagnosticsActionResultById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'persisted' | 'direct' | null | undefined;
@@ -374,13 +374,13 @@ export type WorkflowDiagnosticsActionResultById = {
                 enabled: boolean;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -471,17 +471,6 @@ export type WorkflowDiagnosticsActionResultById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -497,6 +486,17 @@ export type WorkflowDiagnosticsActionResultById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'persisted' | 'direct' | null | undefined;
@@ -711,13 +711,13 @@ export type WorkflowDiagnosticsActionResultById = {
                 enabled: boolean;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -740,13 +740,13 @@ export type WorkflowDiagnosticsActionResultById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };

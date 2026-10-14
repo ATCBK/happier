@@ -37,6 +37,9 @@ export type ArtifactFoldersActionInputById = {
 };
 export type ArtifactFoldersActionResultById = {
     readonly "artifact.folders.list": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'ready';
         items: {
             id: string;
@@ -46,9 +49,6 @@ export type ArtifactFoldersActionResultById = {
         revision: number | 'absent';
         coverage: 'complete';
         nextCursor: null;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "artifact.folders.read": {
         status: 'unavailable';

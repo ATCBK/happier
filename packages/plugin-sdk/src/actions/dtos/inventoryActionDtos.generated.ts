@@ -16,6 +16,10 @@ export type InventoryActionInputById = {
         };
         expectedRevision: number | 'absent';
         intent: {
+            kind: 'set_enabled';
+            entryId: string;
+            enabled: boolean;
+        } | {
             kind: 'attach';
             entry: {
                 id: string;
@@ -41,10 +45,6 @@ export type InventoryActionInputById = {
             kind: 'set_budget';
             entryId: string;
             maxChars: number | null;
-        } | {
-            kind: 'set_enabled';
-            entryId: string;
-            enabled: boolean;
         };
     };
     readonly "projects.visibility.set": {
@@ -238,47 +238,8 @@ export type InventoryActionInputById = {
             profileId?: string | undefined;
             runtimeDescriptorV1?: unknown;
             connectedServices?: {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
                 v: 2;
                 bindingsByServiceId?: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                } | {
                     source: 'team_resource';
                     resourceId: string;
                     deliveryMode: 'direct';
@@ -294,7 +255,46 @@ export type InventoryActionInputById = {
                     resourceId: string;
                     deliveryMode: 'brokered';
                     disclosedMember?: undefined;
+                } | {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
                 }> | undefined;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
             } | undefined;
         } | undefined;
     };
@@ -313,47 +313,8 @@ export type InventoryActionInputById = {
             profileId?: string | undefined;
             runtimeDescriptorV1?: unknown;
             connectedServices?: {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
                 v: 2;
                 bindingsByServiceId?: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                } | {
                     source: 'team_resource';
                     resourceId: string;
                     deliveryMode: 'direct';
@@ -369,7 +330,46 @@ export type InventoryActionInputById = {
                     resourceId: string;
                     deliveryMode: 'brokered';
                     disclosedMember?: undefined;
+                } | {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
                 }> | undefined;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
             } | undefined;
         } | undefined;
     };
@@ -387,47 +387,8 @@ export type InventoryActionInputById = {
             profileId?: string | undefined;
             runtimeDescriptorV1?: unknown;
             connectedServices?: {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
                 v: 2;
                 bindingsByServiceId?: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                } | {
                     source: 'team_resource';
                     resourceId: string;
                     deliveryMode: 'direct';
@@ -443,7 +404,46 @@ export type InventoryActionInputById = {
                     resourceId: string;
                     deliveryMode: 'brokered';
                     disclosedMember?: undefined;
+                } | {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
                 }> | undefined;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
             } | undefined;
         } | undefined;
     };
@@ -579,6 +579,11 @@ export type InventoryActionResultById = {
         currentRevision?: number | 'absent' | undefined;
     };
     readonly "projects.workspace.update": {
+        ok: false;
+        errorCode: string;
+        error: string;
+        details?: unknown;
+    } | {
         ok: true;
         workspaceRef: {
             id: string;
@@ -641,11 +646,6 @@ export type InventoryActionResultById = {
                 skillMigrationV1?: true | undefined;
             }[] | undefined;
         } | undefined;
-    } | {
-        ok: false;
-        errorCode: string;
-        error: string;
-        details?: unknown;
     };
     readonly "projects.workspace.forget": {
         ok: false;

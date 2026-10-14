@@ -256,6 +256,10 @@ export type LaunchProfilesActionInputById = {
         id: string;
         expectedRevision: number | 'absent';
         intent: {
+            kind: 'set_enabled';
+            entryId: string;
+            enabled: boolean;
+        } | {
             kind: 'attach';
             entry: {
                 id: string;
@@ -281,10 +285,6 @@ export type LaunchProfilesActionInputById = {
             kind: 'set_budget';
             entryId: string;
             maxChars: number | null;
-        } | {
-            kind: 'set_enabled';
-            entryId: string;
-            enabled: boolean;
         };
     };
     readonly "launch_profiles.legacy.preview": {

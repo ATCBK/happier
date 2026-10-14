@@ -234,6 +234,9 @@ export type HomeRuntimeActionInputById = {
 };
 export type HomeRuntimeActionResultById = {
     readonly "relay.access.status": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -256,11 +259,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.access.configure": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -283,11 +286,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.access.disable": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -310,11 +313,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.status": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -337,11 +340,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.install_or_update": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -364,11 +367,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.start": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -391,11 +394,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.stop": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -418,11 +421,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.restart": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -445,11 +448,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.uninstall": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -472,11 +475,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.personal_home.inspect": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -499,11 +502,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.personal_home.backup": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -526,11 +529,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.personal_home.verify_backup": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -553,11 +556,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.personal_home.restore": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -580,11 +583,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.personal_home.recover_restore": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -607,11 +610,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.personal_home.erase": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -634,11 +637,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.personal_home.claim": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -661,11 +664,11 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.personal_home.relocate": {
+        status: 'unavailable';
+        reason: string;
+    } | {
         status: 'task_started';
         taskId: string;
     } | {
@@ -688,9 +691,6 @@ export type HomeRuntimeActionResultById = {
     } | {
         status: 'outcome_unknown';
         taskId?: string | undefined;
-    } | {
-        status: 'unavailable';
-        reason: string;
     };
     readonly "relay.runtime.personal_home.choose_archive": {
         status: 'unavailable';

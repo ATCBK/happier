@@ -33,6 +33,10 @@ export type PromptLibraryActionInputById = {
         surface: 'coding' | 'voice';
         expectedRevision: number | 'absent';
         intent: {
+            kind: 'set_enabled';
+            entryId: string;
+            enabled: boolean;
+        } | {
             kind: 'attach';
             entry: {
                 id: string;
@@ -58,10 +62,6 @@ export type PromptLibraryActionInputById = {
             kind: 'set_budget';
             entryId: string;
             maxChars: number | null;
-        } | {
-            kind: 'set_enabled';
-            entryId: string;
-            enabled: boolean;
         };
     };
     readonly "prompt_doc.update": {

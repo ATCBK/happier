@@ -133,19 +133,7 @@ export type SessionLifecycleActionInputById = {
     readonly "session.fork": {
         requestId?: string | undefined;
         strategy?: 'native' | 'auto' | 'provider_native' | 'acp_fork_latest' | 'replay' | undefined;
-        replaySummaryRunner?: {
-            [x: string]: unknown;
-            v: 1;
-            backendTarget: {
-                kind: 'builtInAgent';
-                agentId: string;
-            } | {
-                kind: 'configuredAcpBackend';
-                backendId: string;
-            };
-            modelId?: string | undefined;
-            permissionMode?: 'no_tools' | 'read_only' | 'workspace_write' | 'full' | undefined;
-        } | undefined;
+        replaySummaryRunner?: unknown;
         replayMaxSeedChars?: number | undefined;
         sessionId?: string | undefined;
         serverId?: string | undefined;
@@ -166,19 +154,7 @@ export type SessionLifecycleActionInputById = {
             recentMessagesCount?: number | undefined;
             maxSeedChars?: number | undefined;
             seedMode?: 'draft' | 'daemon_initial_prompt' | undefined;
-            summaryRunner?: {
-                [x: string]: unknown;
-                v: 1;
-                backendTarget: {
-                    kind: 'builtInAgent';
-                    agentId: string;
-                } | {
-                    kind: 'configuredAcpBackend';
-                    backendId: string;
-                };
-                modelId?: string | undefined;
-                permissionMode?: 'no_tools' | 'read_only' | 'workspace_write' | 'full' | undefined;
-            } | undefined;
+            summaryRunner?: unknown;
         };
         approvedNewDirectoryCreation?: boolean | undefined;
         permissionMode?: string | undefined;
@@ -600,47 +576,8 @@ export type SessionLifecycleActionInputById = {
         agentModeId?: string | undefined;
         configuration?: unknown;
         connectedServices?: {
-            v: 1;
-            bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            }>;
-        } | {
-            v: 1;
-            bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            }>;
-        } | {
             v: 2;
             bindingsByServiceId?: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -656,7 +593,46 @@ export type SessionLifecycleActionInputById = {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
             }> | undefined;
+        } | {
+            v: 1;
+            bindingsByServiceId: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            }>;
+        } | {
+            v: 1;
+            bindingsByServiceId: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            }>;
         } | undefined;
         capabilitySelection?: {
             mcp?: {
@@ -738,7 +714,7 @@ export type SessionLifecycleActionInputById = {
                     presentation: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'error' | 'check' | 'file' | 'external' | 'search' | 'terminal' | 'review' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'error' | 'check' | 'file' | 'terminal' | 'review' | 'external' | 'search' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };
@@ -1073,7 +1049,7 @@ export type SessionLifecycleActionInputById = {
                         label: string;
                         typeLabel: string;
                         description?: string | undefined;
-                        icon?: 'error' | 'check' | 'file' | 'external' | 'search' | 'terminal' | 'review' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'error' | 'check' | 'file' | 'terminal' | 'review' | 'external' | 'search' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                     content?: {
@@ -1354,10 +1330,10 @@ export type SessionLifecycleActionInputById = {
                 enabled: boolean;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
-                    kind: 'firstMatch';
-                } | {
                     kind: 'nextMatches';
                     count: number;
+                } | {
+                    kind: 'firstMatch';
                 } | {
                     kind: 'everyMatch';
                 };
@@ -1450,17 +1426,6 @@ export type SessionLifecycleActionInputById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -1476,6 +1441,17 @@ export type SessionLifecycleActionInputById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'persisted' | 'direct' | null | undefined;

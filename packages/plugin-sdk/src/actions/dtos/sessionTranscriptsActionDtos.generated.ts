@@ -171,27 +171,6 @@ export type SessionTranscriptsActionResultById = {
         ok?: boolean | undefined;
     };
     readonly "transcript.follow": {
-        [x: string]: unknown;
-        items: (string | number | boolean | readonly JsonValue[] | {
-            readonly [key: string]: JsonValue;
-        } | null)[];
-        nextCursor: string | null;
-        truncated: boolean;
-        ok?: boolean | undefined;
-        changes?: ({
-            kind: 'append';
-        } | {
-            kind: 'revision';
-            messageId: string;
-            seq: number;
-        } | {
-            kind: 'session';
-        } | {
-            kind: 'reset';
-        })[] | undefined;
-        leaseId?: string | undefined;
-        projection?: undefined;
-    } | {
         ok: true;
         leaseId: string;
         projection: 'openedMessagesV1';
@@ -217,7 +196,7 @@ export type SessionTranscriptsActionResultById = {
             sourceUpdatedAt?: number | undefined;
             transcriptObservationProvenance?: {
                 kind: 'non_dependent';
-                source: 'external' | 'sidechain' | 'background' | 'history';
+                source: 'sidechain' | 'background' | 'external' | 'history';
             } | undefined;
             surfaceItemReference?: {
                 v: 1;
@@ -348,7 +327,7 @@ export type SessionTranscriptsActionResultById = {
             sourceUpdatedAt?: number | undefined;
             transcriptObservationProvenance?: {
                 kind: 'non_dependent';
-                source: 'external' | 'sidechain' | 'background' | 'history';
+                source: 'sidechain' | 'background' | 'external' | 'history';
             } | undefined;
             surfaceItemReference?: {
                 v: 1;
@@ -645,6 +624,27 @@ export type SessionTranscriptsActionResultById = {
         } | {
             kind: 'reset';
         })[] | undefined;
+    } | {
+        [x: string]: unknown;
+        items: (string | number | boolean | readonly JsonValue[] | {
+            readonly [key: string]: JsonValue;
+        } | null)[];
+        nextCursor: string | null;
+        truncated: boolean;
+        ok?: boolean | undefined;
+        changes?: ({
+            kind: 'append';
+        } | {
+            kind: 'revision';
+            messageId: string;
+            seq: number;
+        } | {
+            kind: 'session';
+        } | {
+            kind: 'reset';
+        })[] | undefined;
+        leaseId?: string | undefined;
+        projection?: undefined;
     };
     readonly "transcript.unfollow": {
         ok: true;

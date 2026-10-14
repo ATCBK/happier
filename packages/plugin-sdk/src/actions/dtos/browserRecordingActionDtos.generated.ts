@@ -103,6 +103,12 @@ export type BrowserRecordingActionResultById = {
                 reason?: string | undefined;
             }[];
             relatedReferences: ({
+                refKind: 'sessionMedia';
+                mediaId: string;
+                mediaKind: 'image' | 'video';
+                mimeType: string;
+                sizeBytes: number;
+            } | {
                 refKind: 'browserContextScreenshot';
                 contextId: string;
                 mediaId?: string | undefined;
@@ -113,12 +119,6 @@ export type BrowserRecordingActionResultById = {
                 refKind: 'browserActionTimeline';
                 timelineId: string;
                 actionIds: string[];
-            } | {
-                refKind: 'sessionMedia';
-                mediaId: string;
-                mediaKind: 'image' | 'video';
-                mimeType: string;
-                sizeBytes: number;
             })[];
             stoppedAtMs?: number | undefined;
             outcomeReason?: 'user_canceled' | 'user_discarded' | 'session_closed' | 'logout' | 'expired' | 'user_stopped' | 'duration_cap' | 'size_cap' | 'view_hidden' | 'view_parked' | 'view_suspended' | 'host_lost' | 'view_closed' | 'policy_revoked' | 'permission_denied' | 'adapter_lost' | 'capture_failed' | 'capture_unavailable' | 'unsupported' | 'retention_limit' | undefined;
@@ -179,6 +179,12 @@ export type BrowserRecordingActionResultById = {
                 reason?: string | undefined;
             }[];
             relatedReferences: ({
+                refKind: 'sessionMedia';
+                mediaId: string;
+                mediaKind: 'image' | 'video';
+                mimeType: string;
+                sizeBytes: number;
+            } | {
                 refKind: 'browserContextScreenshot';
                 contextId: string;
                 mediaId?: string | undefined;
@@ -189,12 +195,6 @@ export type BrowserRecordingActionResultById = {
                 refKind: 'browserActionTimeline';
                 timelineId: string;
                 actionIds: string[];
-            } | {
-                refKind: 'sessionMedia';
-                mediaId: string;
-                mediaKind: 'image' | 'video';
-                mimeType: string;
-                sizeBytes: number;
             })[];
             stoppedAtMs?: number | undefined;
             outcomeReason?: 'user_canceled' | 'user_discarded' | 'session_closed' | 'logout' | 'expired' | 'user_stopped' | 'duration_cap' | 'size_cap' | 'view_hidden' | 'view_parked' | 'view_suspended' | 'host_lost' | 'view_closed' | 'policy_revoked' | 'permission_denied' | 'adapter_lost' | 'capture_failed' | 'capture_unavailable' | 'unsupported' | 'retention_limit' | undefined;
@@ -248,6 +248,12 @@ export type BrowserRecordingActionResultById = {
                 reason?: string | undefined;
             }[];
             relatedReferences: ({
+                refKind: 'sessionMedia';
+                mediaId: string;
+                mediaKind: 'image' | 'video';
+                mimeType: string;
+                sizeBytes: number;
+            } | {
                 refKind: 'browserContextScreenshot';
                 contextId: string;
                 mediaId?: string | undefined;
@@ -258,12 +264,6 @@ export type BrowserRecordingActionResultById = {
                 refKind: 'browserActionTimeline';
                 timelineId: string;
                 actionIds: string[];
-            } | {
-                refKind: 'sessionMedia';
-                mediaId: string;
-                mediaKind: 'image' | 'video';
-                mimeType: string;
-                sizeBytes: number;
             })[];
             stoppedAtMs?: number | undefined;
             outcomeReason?: 'user_canceled' | 'user_discarded' | 'session_closed' | 'logout' | 'expired' | 'user_stopped' | 'duration_cap' | 'size_cap' | 'view_hidden' | 'view_parked' | 'view_suspended' | 'host_lost' | 'view_closed' | 'policy_revoked' | 'permission_denied' | 'adapter_lost' | 'capture_failed' | 'capture_unavailable' | 'unsupported' | 'retention_limit' | undefined;
@@ -325,6 +325,12 @@ export type BrowserRecordingActionResultById = {
                 reason?: string | undefined;
             }[];
             relatedReferences: ({
+                refKind: 'sessionMedia';
+                mediaId: string;
+                mediaKind: 'image' | 'video';
+                mimeType: string;
+                sizeBytes: number;
+            } | {
                 refKind: 'browserContextScreenshot';
                 contextId: string;
                 mediaId?: string | undefined;
@@ -335,12 +341,6 @@ export type BrowserRecordingActionResultById = {
                 refKind: 'browserActionTimeline';
                 timelineId: string;
                 actionIds: string[];
-            } | {
-                refKind: 'sessionMedia';
-                mediaId: string;
-                mediaKind: 'image' | 'video';
-                mimeType: string;
-                sizeBytes: number;
             })[];
             stoppedAtMs?: number | undefined;
             outcomeReason?: 'user_canceled' | 'user_discarded' | 'session_closed' | 'logout' | 'expired' | 'user_stopped' | 'duration_cap' | 'size_cap' | 'view_hidden' | 'view_parked' | 'view_suspended' | 'host_lost' | 'view_closed' | 'policy_revoked' | 'permission_denied' | 'adapter_lost' | 'capture_failed' | 'capture_unavailable' | 'unsupported' | 'retention_limit' | undefined;
@@ -399,6 +399,12 @@ export type BrowserRecordingActionResultById = {
             reason?: string | undefined;
         }[];
         relatedReferences: ({
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        } | {
             refKind: 'browserContextScreenshot';
             contextId: string;
             mediaId?: string | undefined;
@@ -409,12 +415,6 @@ export type BrowserRecordingActionResultById = {
             refKind: 'browserActionTimeline';
             timelineId: string;
             actionIds: string[];
-        } | {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
         })[];
         stoppedAtMs?: number | undefined;
         outcomeReason?: 'user_canceled' | 'user_discarded' | 'session_closed' | 'logout' | 'expired' | 'user_stopped' | 'duration_cap' | 'size_cap' | 'view_hidden' | 'view_parked' | 'view_suspended' | 'host_lost' | 'view_closed' | 'policy_revoked' | 'permission_denied' | 'adapter_lost' | 'capture_failed' | 'capture_unavailable' | 'unsupported' | 'retention_limit' | undefined;
@@ -466,6 +466,12 @@ export type BrowserRecordingActionResultById = {
             reason?: string | undefined;
         }[];
         relatedReferences: ({
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        } | {
             refKind: 'browserContextScreenshot';
             contextId: string;
             mediaId?: string | undefined;
@@ -476,12 +482,6 @@ export type BrowserRecordingActionResultById = {
             refKind: 'browserActionTimeline';
             timelineId: string;
             actionIds: string[];
-        } | {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
         })[];
         stoppedAtMs?: number | undefined;
         outcomeReason?: 'user_canceled' | 'user_discarded' | 'session_closed' | 'logout' | 'expired' | 'user_stopped' | 'duration_cap' | 'size_cap' | 'view_hidden' | 'view_parked' | 'view_suspended' | 'host_lost' | 'view_closed' | 'policy_revoked' | 'permission_denied' | 'adapter_lost' | 'capture_failed' | 'capture_unavailable' | 'unsupported' | 'retention_limit' | undefined;
@@ -535,6 +535,12 @@ export type BrowserRecordingActionResultById = {
                 reason?: string | undefined;
             }[];
             relatedReferences: ({
+                refKind: 'sessionMedia';
+                mediaId: string;
+                mediaKind: 'image' | 'video';
+                mimeType: string;
+                sizeBytes: number;
+            } | {
                 refKind: 'browserContextScreenshot';
                 contextId: string;
                 mediaId?: string | undefined;
@@ -545,12 +551,6 @@ export type BrowserRecordingActionResultById = {
                 refKind: 'browserActionTimeline';
                 timelineId: string;
                 actionIds: string[];
-            } | {
-                refKind: 'sessionMedia';
-                mediaId: string;
-                mediaKind: 'image' | 'video';
-                mimeType: string;
-                sizeBytes: number;
             })[];
             stoppedAtMs?: number | undefined;
             outcomeReason?: 'user_canceled' | 'user_discarded' | 'session_closed' | 'logout' | 'expired' | 'user_stopped' | 'duration_cap' | 'size_cap' | 'view_hidden' | 'view_parked' | 'view_suspended' | 'host_lost' | 'view_closed' | 'policy_revoked' | 'permission_denied' | 'adapter_lost' | 'capture_failed' | 'capture_unavailable' | 'unsupported' | 'retention_limit' | undefined;

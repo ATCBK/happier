@@ -196,12 +196,20 @@ test('current published Action DTO closure emits portable declarations and recur
   inspectDeclarations(resolve(actionsRoot, 'declarations'));
   writeFileSync(resolve(actionsRoot, 'consumer.ts'), `
     import type { Input, Result } from './declarations/actions/compare.js';
-    import type { PluginActionWorkflowIngressBlockV1, PluginActionWorkflowBlockV1, PluginActionResultById } from './declarations/actions/actionTypeMap.generated.js';
+    import type { PluginActionWorkflowIngressBlockV1, PluginActionWorkflowBlockV1, PluginActionResultById, PluginActionInputById,
+      ExecutionRunChildChoiceV1, ExecutionRunStartFailureDetailsV1 } from './declarations/actions/actionTypeMap.generated.js';
     import type { PluginDeclarativeNodeV2 } from './declarations/actions/dtos/actionDeclarativeNodeDto.generated.js';
     declare const input: Input;
     declare const result: Result;
     export const authored = input;
     export const received = result;
+    declare const childFailure: ExecutionRunStartFailureDetailsV1;
+    export const childChoice: ExecutionRunChildChoiceV1 | undefined = childFailure.childChoice;
+    export const runCreation: 'noRunCreated' | 'outcomeUnknown' = childFailure.executionRunStart.runCreation;
+    declare const review: PluginActionInputById['review.start'];
+    export const reviewChildSelection: 'agentDefault' | undefined = review.childSelection;
+    // @ts-expect-error child choices expose a fixed pair of admissible responses
+    export const invalidChoice: ExecutionRunChildChoiceV1['options'] = ['inherit'];
     export const unavailable: PluginActionResultById['browser.goBack'] = {
       v: 1, commandId: 'back', status: 'failed',
       error: { code: 'sandbox_unavailable', message: 'Sandbox unavailable' },

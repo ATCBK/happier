@@ -94,12 +94,6 @@ export type ConnectedServicesConfigurationActionInputById = {
         } | null;
     };
     readonly "connectedServices.configuration.get": {
-        modeId: string;
-        service: {
-            pluginId: string;
-            localId: string;
-        };
-    } | {
         machineId: string;
         target: {
             kind: 'account';
@@ -113,6 +107,12 @@ export type ConnectedServicesConfigurationActionInputById = {
         } | {
             kind: 'attempt';
             attemptId: string;
+        };
+    } | {
+        modeId: string;
+        service: {
+            pluginId: string;
+            localId: string;
         };
     };
     readonly "connectedServices.configuration.replace": {
@@ -185,6 +185,13 @@ export type ConnectedServicesConfigurationActionInputById = {
                 observedAtMs: number;
                 id: string;
             } | undefined;
+        } | undefined;
+        projection?: {
+            range: {
+                startAtMs: number;
+                endAtMs: number;
+            };
+            resolution: 'accepted_observations';
         } | undefined;
     };
     readonly "connectedServices.pools.selection.get": {
@@ -280,17 +287,6 @@ export type ConnectedServicesConfigurationActionInputById = {
             localId: 'mcp-sign-in';
         };
         selection: {
-            source: 'native';
-        } | {
-            source: 'connected';
-            selection: 'group';
-            groupId: string;
-            profileId?: string | undefined;
-        } | {
-            source: 'connected';
-            profileId: string;
-            selection?: 'profile' | undefined;
-        } | {
             source: 'team_resource';
             resourceId: string;
             deliveryMode: 'direct';
@@ -306,6 +302,17 @@ export type ConnectedServicesConfigurationActionInputById = {
             resourceId: string;
             deliveryMode: 'brokered';
             disclosedMember?: undefined;
+        } | {
+            source: 'native';
+        } | {
+            source: 'connected';
+            selection: 'group';
+            groupId: string;
+            profileId?: string | undefined;
+        } | {
+            source: 'connected';
+            profileId: string;
+            selection?: 'profile' | undefined;
         };
         purpose?: string | undefined;
         teamId?: string | undefined;
@@ -1792,12 +1799,6 @@ export type ConnectedServicesConfigurationActionResultById = {
         diagnostic?: unknown;
     };
     readonly "connectedServices.authentication.pending.list": {
-        status: 'conflict';
-        code: string;
-    } | {
-        status: 'unavailable';
-        code: string;
-    } | {
         status: 'pendingAttempts';
         attempts: {
             attemptId: string;
@@ -1808,6 +1809,12 @@ export type ConnectedServicesConfigurationActionResultById = {
             createdAtMs: number;
             expiresAtMs: number;
         }[];
+    } | {
+        status: 'conflict';
+        code: string;
+    } | {
+        status: 'unavailable';
+        code: string;
     };
     readonly "connectedServices.subscription.price.set": {
         applied: true;
@@ -3189,7 +3196,7 @@ export type ConnectedServicesConfigurationActionResultById = {
                 unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
             }> | undefined;
             diagnostics?: {
-                kind: 'unknown' | 'unavailable' | 'storage' | 'validation' | 'provider_http' | 'runtime_signal' | 'projection';
+                kind: 'unknown' | 'unavailable' | 'storage' | 'projection' | 'validation' | 'provider_http' | 'runtime_signal';
                 code?: string | undefined;
                 message?: string | undefined;
                 status?: number | undefined;
@@ -3398,7 +3405,7 @@ export type ConnectedServicesConfigurationActionResultById = {
                         unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
                     }> | undefined;
                     diagnostics?: {
-                        kind: 'unknown' | 'unavailable' | 'storage' | 'validation' | 'provider_http' | 'runtime_signal' | 'projection';
+                        kind: 'unknown' | 'unavailable' | 'storage' | 'projection' | 'validation' | 'provider_http' | 'runtime_signal';
                         code?: string | undefined;
                         message?: string | undefined;
                         status?: number | undefined;
@@ -3412,6 +3419,151 @@ export type ConnectedServicesConfigurationActionResultById = {
                 observedAtMs: number;
                 id: string;
             } | null;
+        } | undefined;
+        pageProjection?: {
+            v: 1;
+            recordId: string;
+            resolution: 'accepted_observations';
+            range: {
+                startAtMs: number;
+                endAtMs: number;
+            };
+            bases: {
+                state: 'not_loaded' | 'loaded_empty' | 'loaded_data' | 'stale_data' | 'error_last_known_good';
+                source: 'unknown' | 'manual' | 'cached' | 'runtimeSignal' | 'providerHttp' | 'proxy' | 'connectedServiceProbe';
+                v: 1;
+                staleAfterMs: number;
+                providerId: string;
+                confidence: 'unknown' | 'estimated' | 'confirmed';
+                recordId: string;
+                recordKey: {
+                    providerId: string;
+                    accountSubjectId: string;
+                    subjectKind: 'unknown' | 'account' | 'subscription' | 'workspace' | 'organization' | 'tenant' | 'project' | 'modelFamily';
+                    quotaScope: 'unknown' | 'account' | 'provider' | 'model' | 'workspace' | 'organization' | 'project';
+                    quotaScopeId?: string | undefined;
+                };
+                accountSubject: {
+                    kind: 'providerSubject' | 'provisionalLocalSubject';
+                    id: string;
+                    mergeKey?: string | undefined;
+                };
+                planLabel?: string | null | undefined;
+                accountLabel?: string | null | undefined;
+                recoveryCredits?: {
+                    availableCount: number;
+                    credits: {
+                        kind: 'unknown' | 'usage_limit_reset' | 'rate_limit_reset' | 'quota_reset';
+                        status: 'unknown' | 'unavailable' | 'available' | 'redeeming' | 'redeemed' | 'expired';
+                        id?: string | undefined;
+                        providerResetType?: string | undefined;
+                        appliesToProviderLimitId?: string | null | undefined;
+                        grantedAtMs?: number | null | undefined;
+                        expiresAtMs?: number | null | undefined;
+                        redeemStartedAtMs?: number | null | undefined;
+                        redeemedAtMs?: number | null | undefined;
+                        title?: string | null | undefined;
+                        description?: string | null | undefined;
+                    }[];
+                    totalCount?: number | undefined;
+                    nextExpiresAtMs?: number | null | undefined;
+                    source?: 'unknown' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | 'cached' | undefined;
+                    confidence?: 'unknown' | 'exact' | 'derived' | 'estimated' | 'stale' | undefined;
+                } | undefined;
+                recoveryCreditDetails?: Record<string, {
+                    remainingCount: number;
+                    appliesToProviderLimitIds: string[];
+                    unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
+                }> | undefined;
+                diagnostics?: {
+                    kind: 'unknown' | 'unavailable' | 'storage' | 'projection' | 'validation' | 'provider_http' | 'runtime_signal';
+                    code?: string | undefined;
+                    message?: string | undefined;
+                    status?: number | undefined;
+                    headers?: Record<string, string> | undefined;
+                    observedAtMs?: number | undefined;
+                    retryAtMs?: number | undefined;
+                }[] | undefined;
+            }[];
+            meters: {
+                meterId: string;
+                label: string;
+                used: number | null;
+                limit: number | null;
+                unit: 'unknown' | 'count' | 'credits' | 'tokens' | 'usd' | 'requests';
+                utilizationPct: number | null;
+                resetsAt: number | null;
+                status: 'unavailable' | 'ok' | 'estimated';
+                details: {
+                    note?: string | null | undefined;
+                    code?: string | undefined;
+                    rawScope?: string | undefined;
+                    remainingPct?: number | null | undefined;
+                    scope?: 'unknown' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'session' | 'rolling' | 'model' | undefined;
+                    providerLimitId?: string | undefined;
+                    limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                };
+                remaining?: number | null | undefined;
+                remainingPct?: number | null | undefined;
+                usedPct?: number | null | undefined;
+                resetAtMs?: number | null | undefined;
+                resetSource?: 'unknown' | 'provider' | 'manual' | 'in_band_snapshot' | 'header' | 'body' | 'provider_event' | 'provider_probe' | 'computed' | 'retry_after' | undefined;
+                providerLimitId?: string | undefined;
+                windowDurationMs?: number | undefined;
+                modelId?: string | null | undefined;
+                isExhausted?: boolean | undefined;
+                isSoftLimited?: boolean | undefined;
+                isCapacityLimited?: boolean | undefined;
+                source?: 'unknown' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | 'cached' | undefined;
+                scope?: 'unknown' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'session' | 'rolling' | 'model' | undefined;
+                limitScope?: 'unknown' | 'account' | 'provider' | 'session' | 'model' | 'workspace' | 'organization' | undefined;
+                confidence?: 'unknown' | 'exact' | 'derived' | 'estimated' | 'stale' | undefined;
+            }[];
+            subscriptions: {
+                status: 'unavailable' | 'none' | 'subscribed';
+                staleAfterMs: number;
+                renewal: 'unknown' | 'off' | 'on';
+                currentPeriodStartAtMs?: number | undefined;
+                currentPeriodEndAtMs?: number | undefined;
+                monetaryFacts?: {
+                    kind: 'paid' | 'list';
+                    amount: number;
+                    currency: string;
+                    period: {
+                        startAtMs: number;
+                        endAtMs: number;
+                    };
+                    source: {
+                        kind: 'provider' | 'published';
+                        id: string;
+                        version: string;
+                    };
+                    effectiveAtMs: number;
+                    asOfMs: number;
+                    tier?: string | undefined;
+                    region?: string | undefined;
+                }[] | undefined;
+                enteredMonthlyPrice?: {
+                    amount: number;
+                    currency: string;
+                    enteredAtMs: number;
+                } | undefined;
+                lastRefreshError?: {
+                    observedAtMs: number;
+                    code: 'network' | 'malformed' | 'provider_backoff' | 'auth_failure' | 'missing_auth';
+                    status?: number | undefined;
+                } | undefined;
+            }[];
+            observations: [
+                string,
+                number,
+                number,
+                number,
+                number,
+                number[],
+                number | null,
+                number | null
+            ][];
         } | undefined;
         unusedCapacity?: {
             historyStatus: 'unavailable' | 'not_loaded' | 'partial' | 'returned_page';
@@ -3503,12 +3655,6 @@ export type ConnectedServicesConfigurationActionResultById = {
         code: 'unsupported' | 'connected_account_daemon_owner_unavailable' | 'connected_account_daemon_runtime_unavailable' | 'connected_account_daemon_response_invalid';
     };
     readonly "connectedServices.accounts.revoke": {
-        status: 'conflict';
-        code: string;
-    } | {
-        status: 'unavailable';
-        code: string;
-    } | {
         status: 'revoked';
         account: {
             service: {
@@ -3518,6 +3664,12 @@ export type ConnectedServicesConfigurationActionResultById = {
             accountId: string;
         };
         remoteStatus: 'remoteRevoked' | 'remoteUnsupported' | 'remoteNotAttempted';
+    } | {
+        status: 'conflict';
+        code: string;
+    } | {
+        status: 'unavailable';
+        code: string;
     } | {
         status: 'removalReviewRequired';
         account: {
@@ -4244,7 +4396,7 @@ export type ConnectedServicesConfigurationActionResultById = {
                 } | undefined;
             } | undefined;
             diagnostics?: {
-                kind: 'unknown' | 'unavailable' | 'storage' | 'validation' | 'provider_http' | 'runtime_signal' | 'projection';
+                kind: 'unknown' | 'unavailable' | 'storage' | 'projection' | 'validation' | 'provider_http' | 'runtime_signal';
                 code?: string | undefined;
                 message?: string | undefined;
                 status?: number | undefined;

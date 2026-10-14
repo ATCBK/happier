@@ -1108,17 +1108,6 @@ export type UsageCoachEvaluation = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -1134,6 +1123,17 @@ export type UsageCoachEvaluation = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -1360,7 +1360,7 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 label: string;
                 typeLabel: string;
                 description?: string | undefined;
-                icon?: "file" | "external" | "search" | "error" | "check" | "info" | "warning" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
+                icon?: "file" | "error" | "check" | "info" | "warning" | "external" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "search" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
                 tone?: "success" | "info" | "warning" | "neutral" | "danger" | undefined;
             };
         }[];
@@ -1433,17 +1433,6 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: "native";
-            } | {
-                source: "connected";
-                selection: "group";
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: "connected";
-                selection: "profile";
-                profileId: string;
-            } | {
                 source: "team_resource";
                 resourceId: string;
                 deliveryMode: "direct";
@@ -1459,6 +1448,17 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 resourceId: string;
                 deliveryMode: "brokered";
                 disclosedMember?: undefined;
+            } | {
+                source: "native";
+            } | {
+                source: "connected";
+                selection: "group";
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: "connected";
+                selection: "profile";
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -1673,17 +1673,6 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: "native";
-            } | {
-                source: "connected";
-                selection: "group";
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: "connected";
-                selection: "profile";
-                profileId: string;
-            } | {
                 source: "team_resource";
                 resourceId: string;
                 deliveryMode: "direct";
@@ -1699,6 +1688,17 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 resourceId: string;
                 deliveryMode: "brokered";
                 disclosedMember?: undefined;
+            } | {
+                source: "native";
+            } | {
+                source: "connected";
+                selection: "group";
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: "connected";
+                selection: "profile";
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -1902,17 +1902,6 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: "native";
-            } | {
-                source: "connected";
-                selection: "group";
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: "connected";
-                selection: "profile";
-                profileId: string;
-            } | {
                 source: "team_resource";
                 resourceId: string;
                 deliveryMode: "direct";
@@ -1928,6 +1917,17 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 resourceId: string;
                 deliveryMode: "brokered";
                 disclosedMember?: undefined;
+            } | {
+                source: "native";
+            } | {
+                source: "connected";
+                selection: "group";
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: "connected";
+                selection: "profile";
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -2095,7 +2095,7 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 label: string;
                 typeLabel: string;
                 description?: string | undefined;
-                icon?: "file" | "external" | "search" | "error" | "check" | "info" | "warning" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
+                icon?: "file" | "error" | "check" | "info" | "warning" | "external" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "search" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
                 tone?: "success" | "info" | "warning" | "neutral" | "danger" | undefined;
             };
         }[];
@@ -2166,17 +2166,6 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: "native";
-            } | {
-                source: "connected";
-                selection: "group";
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: "connected";
-                selection: "profile";
-                profileId: string;
-            } | {
                 source: "team_resource";
                 resourceId: string;
                 deliveryMode: "direct";
@@ -2192,6 +2181,17 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 resourceId: string;
                 deliveryMode: "brokered";
                 disclosedMember?: undefined;
+            } | {
+                source: "native";
+            } | {
+                source: "connected";
+                selection: "group";
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: "connected";
+                selection: "profile";
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -2388,7 +2388,7 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 label: string;
                 typeLabel: string;
                 description?: string | undefined;
-                icon?: "file" | "external" | "search" | "error" | "check" | "info" | "warning" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
+                icon?: "file" | "error" | "check" | "info" | "warning" | "external" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "search" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
                 tone?: "success" | "info" | "warning" | "neutral" | "danger" | undefined;
             };
         }[];
@@ -2461,17 +2461,6 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: "native";
-            } | {
-                source: "connected";
-                selection: "group";
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: "connected";
-                selection: "profile";
-                profileId: string;
-            } | {
                 source: "team_resource";
                 resourceId: string;
                 deliveryMode: "direct";
@@ -2487,6 +2476,17 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 resourceId: string;
                 deliveryMode: "brokered";
                 disclosedMember?: undefined;
+            } | {
+                source: "native";
+            } | {
+                source: "connected";
+                selection: "group";
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: "connected";
+                selection: "profile";
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -2701,17 +2701,6 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: "native";
-            } | {
-                source: "connected";
-                selection: "group";
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: "connected";
-                selection: "profile";
-                profileId: string;
-            } | {
                 source: "team_resource";
                 resourceId: string;
                 deliveryMode: "direct";
@@ -2727,6 +2716,17 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 resourceId: string;
                 deliveryMode: "brokered";
                 disclosedMember?: undefined;
+            } | {
+                source: "native";
+            } | {
+                source: "connected";
+                selection: "group";
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: "connected";
+                selection: "profile";
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -2930,17 +2930,6 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: "native";
-            } | {
-                source: "connected";
-                selection: "group";
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: "connected";
-                selection: "profile";
-                profileId: string;
-            } | {
                 source: "team_resource";
                 resourceId: string;
                 deliveryMode: "direct";
@@ -2956,6 +2945,17 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 resourceId: string;
                 deliveryMode: "brokered";
                 disclosedMember?: undefined;
+            } | {
+                source: "native";
+            } | {
+                source: "connected";
+                selection: "group";
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: "connected";
+                selection: "profile";
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -3123,7 +3123,7 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 label: string;
                 typeLabel: string;
                 description?: string | undefined;
-                icon?: "file" | "external" | "search" | "error" | "check" | "info" | "warning" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
+                icon?: "file" | "error" | "check" | "info" | "warning" | "external" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "search" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
                 tone?: "success" | "info" | "warning" | "neutral" | "danger" | undefined;
             };
         }[];
@@ -3194,17 +3194,6 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: "native";
-            } | {
-                source: "connected";
-                selection: "group";
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: "connected";
-                selection: "profile";
-                profileId: string;
-            } | {
                 source: "team_resource";
                 resourceId: string;
                 deliveryMode: "direct";
@@ -3220,6 +3209,17 @@ export type PluginActionWorkflowBlockV1<Input extends boolean = false> = Input e
                 resourceId: string;
                 deliveryMode: "brokered";
                 disclosedMember?: undefined;
+            } | {
+                source: "native";
+            } | {
+                source: "connected";
+                selection: "group";
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: "connected";
+                selection: "profile";
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -3684,7 +3684,7 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
                     label: string;
                     typeLabel: string;
                     description?: string | undefined;
-                    icon?: "file" | "external" | "search" | "error" | "check" | "info" | "warning" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
+                    icon?: "file" | "error" | "check" | "info" | "warning" | "external" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "search" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
                     tone?: "success" | "info" | "warning" | "neutral" | "danger" | undefined;
                 };
             }[];
@@ -3757,17 +3757,6 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
             connectedServices?: {
                 v: 2;
                 bindingsByServiceId: Record<string, {
-                    source: "native";
-                } | {
-                    source: "connected";
-                    selection: "group";
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: "connected";
-                    selection: "profile";
-                    profileId: string;
-                } | {
                     source: "team_resource";
                     resourceId: string;
                     deliveryMode: "direct";
@@ -3783,6 +3772,17 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
                     resourceId: string;
                     deliveryMode: "brokered";
                     disclosedMember?: undefined;
+                } | {
+                    source: "native";
+                } | {
+                    source: "connected";
+                    selection: "group";
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: "connected";
+                    selection: "profile";
+                    profileId: string;
                 }>;
             } | null | undefined;
             transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -3997,17 +3997,6 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
             connectedServices?: {
                 v: 2;
                 bindingsByServiceId: Record<string, {
-                    source: "native";
-                } | {
-                    source: "connected";
-                    selection: "group";
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: "connected";
-                    selection: "profile";
-                    profileId: string;
-                } | {
                     source: "team_resource";
                     resourceId: string;
                     deliveryMode: "direct";
@@ -4023,6 +4012,17 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
                     resourceId: string;
                     deliveryMode: "brokered";
                     disclosedMember?: undefined;
+                } | {
+                    source: "native";
+                } | {
+                    source: "connected";
+                    selection: "group";
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: "connected";
+                    selection: "profile";
+                    profileId: string;
                 }>;
             } | null | undefined;
             transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -4214,7 +4214,7 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
                     label: string;
                     typeLabel: string;
                     description?: string | undefined;
-                    icon?: "file" | "external" | "search" | "error" | "check" | "info" | "warning" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
+                    icon?: "file" | "error" | "check" | "info" | "warning" | "external" | "terminal" | "new" | "action" | "browser" | "copy" | "globe" | "preview" | "refresh" | "settings" | "add" | "back" | "close" | "forward" | "more" | "search" | "change-open" | "change-complete" | "issue" | "bug" | "pin" | "conversations" | "waveform" | "desktop" | "pause" | "failure" | "unavailable" | "denied" | "review" | "attention" | "escalating" | "merge-ready" | "mention" | "assigned" | "waiting" | "list" | "board" | undefined;
                     tone?: "success" | "info" | "warning" | "neutral" | "danger" | undefined;
                 };
             }[];
@@ -4287,17 +4287,6 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
             connectedServices?: {
                 v: 2;
                 bindingsByServiceId: Record<string, {
-                    source: "native";
-                } | {
-                    source: "connected";
-                    selection: "group";
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: "connected";
-                    selection: "profile";
-                    profileId: string;
-                } | {
                     source: "team_resource";
                     resourceId: string;
                     deliveryMode: "direct";
@@ -4313,6 +4302,17 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
                     resourceId: string;
                     deliveryMode: "brokered";
                     disclosedMember?: undefined;
+                } | {
+                    source: "native";
+                } | {
+                    source: "connected";
+                    selection: "group";
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: "connected";
+                    selection: "profile";
+                    profileId: string;
                 }>;
             } | null | undefined;
             transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -4527,17 +4527,6 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
             connectedServices?: {
                 v: 2;
                 bindingsByServiceId: Record<string, {
-                    source: "native";
-                } | {
-                    source: "connected";
-                    selection: "group";
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: "connected";
-                    selection: "profile";
-                    profileId: string;
-                } | {
                     source: "team_resource";
                     resourceId: string;
                     deliveryMode: "direct";
@@ -4553,6 +4542,17 @@ export type PluginActionWorkflowRepetitionV1<Input extends boolean = false> = In
                     resourceId: string;
                     deliveryMode: "brokered";
                     disclosedMember?: undefined;
+                } | {
+                    source: "native";
+                } | {
+                    source: "connected";
+                    selection: "group";
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: "connected";
+                    selection: "profile";
+                    profileId: string;
                 }>;
             } | null | undefined;
             transcriptStorage?: "direct" | "persisted" | null | undefined;
@@ -5402,17 +5402,6 @@ export type PluginActionWorkflowDefinitionV1 = {
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                selection: 'profile';
-                profileId: string;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -5428,6 +5417,17 @@ export type PluginActionWorkflowDefinitionV1 = {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                selection: 'profile';
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -5688,17 +5688,6 @@ export type PluginActionWorkflowSessionAuthoringSelectionV1 = {
     connectedServices?: {
         v: 2;
         bindingsByServiceId: Record<string, {
-            source: 'native';
-        } | {
-            source: 'connected';
-            selection: 'group';
-            groupId: string;
-            profileId?: string | undefined;
-        } | {
-            source: 'connected';
-            selection: 'profile';
-            profileId: string;
-        } | {
             source: 'team_resource';
             resourceId: string;
             deliveryMode: 'direct';
@@ -5714,6 +5703,17 @@ export type PluginActionWorkflowSessionAuthoringSelectionV1 = {
             resourceId: string;
             deliveryMode: 'brokered';
             disclosedMember?: undefined;
+        } | {
+            source: 'native';
+        } | {
+            source: 'connected';
+            selection: 'group';
+            groupId: string;
+            profileId?: string | undefined;
+        } | {
+            source: 'connected';
+            selection: 'profile';
+            profileId: string;
         }>;
     } | null | undefined;
     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -5802,17 +5802,6 @@ export type PluginActionWorkflowStepExecutionSelectionV1 = {
     connectedServices?: {
         v: 2;
         bindingsByServiceId: Record<string, {
-            source: 'native';
-        } | {
-            source: 'connected';
-            selection: 'group';
-            groupId: string;
-            profileId?: string | undefined;
-        } | {
-            source: 'connected';
-            selection: 'profile';
-            profileId: string;
-        } | {
             source: 'team_resource';
             resourceId: string;
             deliveryMode: 'direct';
@@ -5828,6 +5817,17 @@ export type PluginActionWorkflowStepExecutionSelectionV1 = {
             resourceId: string;
             deliveryMode: 'brokered';
             disclosedMember?: undefined;
+        } | {
+            source: 'native';
+        } | {
+            source: 'connected';
+            selection: 'group';
+            groupId: string;
+            profileId?: string | undefined;
+        } | {
+            source: 'connected';
+            selection: 'profile';
+            profileId: string;
         }>;
     } | null | undefined;
     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -5962,7 +5962,7 @@ export type PluginActionWorkflowStepV1 = {
                 label: string;
                 typeLabel: string;
                 description?: string | undefined;
-                icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                 tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
             };
         }[];
@@ -6035,17 +6035,6 @@ export type PluginActionWorkflowStepV1 = {
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                selection: 'profile';
-                profileId: string;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -6061,6 +6050,17 @@ export type PluginActionWorkflowStepV1 = {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                selection: 'profile';
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -6239,7 +6239,7 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
                 label: string;
                 typeLabel: string;
                 description?: string | undefined;
-                icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                 tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
             };
         }[];
@@ -6312,17 +6312,6 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                selection: 'profile';
-                profileId: string;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -6338,6 +6327,17 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                selection: 'profile';
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -6552,17 +6552,6 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                selection: 'profile';
-                profileId: string;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -6578,6 +6567,17 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                selection: 'profile';
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -6781,17 +6781,6 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                selection: 'profile';
-                profileId: string;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -6807,6 +6796,17 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                selection: 'profile';
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -6974,7 +6974,7 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
                 label: string;
                 typeLabel: string;
                 description?: string | undefined;
-                icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                 tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
             };
         }[];
@@ -7045,17 +7045,6 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
         connectedServices?: {
             v: 2;
             bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                selection: 'profile';
-                profileId: string;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -7071,6 +7060,17 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                selection: 'profile';
+                profileId: string;
             }>;
         } | null | undefined;
         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -7800,7 +7800,6 @@ export type SessionBoardItemUpsertSchemaInputV1<Input extends boolean = false> =
             }[];
         } | undefined;
     } | {
-        title: string;
         v: 1;
         source: {
             kind: "hostedHtml";
@@ -7822,6 +7821,7 @@ export type SessionBoardItemUpsertSchemaInputV1<Input extends boolean = false> =
                 network?: "none" | "open" | undefined;
             } | undefined;
         };
+        title: string;
         height: {
             mode: "auto";
             fallback: "tall" | "compact" | "regular";
@@ -8096,7 +8096,6 @@ export type SessionBoardItemUpsertSchemaInputV1<Input extends boolean = false> =
             }[];
         } | undefined;
     } | {
-        title: string;
         v: 1;
         source: {
             kind: "hostedHtml";
@@ -8118,6 +8117,7 @@ export type SessionBoardItemUpsertSchemaInputV1<Input extends boolean = false> =
                 network?: "none" | "open" | undefined;
             } | undefined;
         };
+        title: string;
         height: {
             mode: "auto";
             fallback: "tall" | "compact" | "regular";
@@ -8585,7 +8585,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                 presentation: {
                     label: string;
                     description?: string | undefined;
-                    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                     tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                 };
             };
@@ -8617,7 +8617,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                 presentation?: {
                     label: string;
                     description?: string | undefined;
-                    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                     tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                 } | undefined;
             };
@@ -8643,7 +8643,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
         key: string;
         fallback: string;
     } | undefined;
-    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     tone?: 'success' | 'default' | 'warning' | 'danger' | 'muted' | undefined;
     action?: string | {
         pluginId: string;
@@ -8661,7 +8661,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
         key: string;
         fallback: string;
     } | undefined;
-    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
 } | {
     kind: 'section';
     children: ({
@@ -8678,7 +8678,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
         tone?: 'success' | 'default' | 'warning' | 'danger' | 'muted' | undefined;
         action?: string | {
             pluginId: string;
@@ -8696,7 +8696,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     })[];
     title?: string | {
         key: string;
@@ -8722,7 +8722,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
         tone?: 'success' | 'default' | 'warning' | 'danger' | 'muted' | undefined;
         action?: string | {
             pluginId: string;
@@ -8740,7 +8740,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     } | {
         kind: 'section';
         children: ({
@@ -8757,7 +8757,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                 key: string;
                 fallback: string;
             } | undefined;
-            icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+            icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
             tone?: 'success' | 'default' | 'warning' | 'danger' | 'muted' | undefined;
             action?: string | {
                 pluginId: string;
@@ -8775,7 +8775,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                 key: string;
                 fallback: string;
             } | undefined;
-            icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+            icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
         })[];
         title?: string | {
             key: string;
@@ -8819,7 +8819,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     } | undefined;
 } | {
     kind: 'metadata';
@@ -8901,7 +8901,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                     presentation: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };
@@ -8933,7 +8933,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                     presentation?: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     } | undefined;
                 };
@@ -9226,7 +9226,7 @@ export interface SystemTaskJsonObject {
     readonly [key: string]: SystemTaskJsonValue;
 }
 export type PluginUiToneV1 = 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent';
-export type PluginUiIconTokenV1 = 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board';
+export type PluginUiIconTokenV1 = 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board';
 export type PluginDeclarativeControlV2 = {
     kind: 'text';
     settingId: string;
@@ -9314,7 +9314,7 @@ export type PluginDeclarativeComposerApplyEffectV1 = {
             presentation: {
                 label: string;
                 description?: string | undefined;
-                icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                 tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
             };
         };
@@ -9346,7 +9346,7 @@ export type PluginDeclarativeComposerApplyEffectV1 = {
             presentation?: {
                 label: string;
                 description?: string | undefined;
-                icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                 tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
             } | undefined;
         };
@@ -9417,7 +9417,7 @@ export type PluginDeclarativeActionNodeV2 = {
                 presentation: {
                     label: string;
                     description?: string | undefined;
-                    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                     tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                 };
             };
@@ -9449,7 +9449,7 @@ export type PluginDeclarativeActionNodeV2 = {
                 presentation?: {
                     label: string;
                     description?: string | undefined;
-                    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                     tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                 } | undefined;
             };
@@ -9476,7 +9476,7 @@ export type PluginDeclarativeRowNodeV2 = {
         key: string;
         fallback: string;
     } | undefined;
-    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     tone?: 'success' | 'default' | 'warning' | 'danger' | 'muted' | undefined;
     action?: string | {
         pluginId: string;
@@ -9494,7 +9494,7 @@ export type PluginDeclarativeRowNodeV2 = {
         key: string;
         fallback: string;
     } | undefined;
-    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
 };
 export type PluginDeclarativeTargetedSurfaceReferenceV1 = {
     point: {
@@ -9526,7 +9526,7 @@ export type PluginDeclarativeListNodeV2 = {
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
         tone?: 'success' | 'default' | 'warning' | 'danger' | 'muted' | undefined;
         action?: string | {
             pluginId: string;
@@ -9544,7 +9544,7 @@ export type PluginDeclarativeListNodeV2 = {
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     } | {
         kind: 'section';
         children: ({
@@ -9561,7 +9561,7 @@ export type PluginDeclarativeListNodeV2 = {
                 key: string;
                 fallback: string;
             } | undefined;
-            icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+            icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
             tone?: 'success' | 'default' | 'warning' | 'danger' | 'muted' | undefined;
             action?: string | {
                 pluginId: string;
@@ -9579,7 +9579,7 @@ export type PluginDeclarativeListNodeV2 = {
                 key: string;
                 fallback: string;
             } | undefined;
-            icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+            icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
         })[];
         title?: string | {
             key: string;
@@ -9611,7 +9611,7 @@ export type PluginDeclarativeSectionNodeV2 = {
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
         tone?: 'success' | 'default' | 'warning' | 'danger' | 'muted' | undefined;
         action?: string | {
             pluginId: string;
@@ -9629,7 +9629,7 @@ export type PluginDeclarativeSectionNodeV2 = {
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     })[];
     title?: string | {
         key: string;
@@ -9654,7 +9654,7 @@ export type PluginDeclarativeItemNodeV2 = {
         key: string;
         fallback: string;
     } | undefined;
-    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     tone?: 'success' | 'default' | 'warning' | 'danger' | 'muted' | undefined;
     action?: string | {
         pluginId: string;
@@ -9673,7 +9673,7 @@ export type PluginDeclarativeStateNodeV2 = {
         key: string;
         fallback: string;
     } | undefined;
-    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+    icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
 };
 export type PluginDeclarativeTargetedSurfaceNodeV2 = {
     kind: 'targetedSurface';
@@ -9704,7 +9704,7 @@ export type PluginDeclarativeTargetedSurfaceNodeV2 = {
             key: string;
             fallback: string;
         } | undefined;
-        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     } | undefined;
 };
 export type PluginDeclarativeMetadataNodeV2 = {
@@ -9788,7 +9788,7 @@ export type PluginDeclarativeActionPanelNodeV2 = {
                     presentation: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };
@@ -9820,7 +9820,7 @@ export type PluginDeclarativeActionPanelNodeV2 = {
                     presentation?: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     } | undefined;
                 };
@@ -9920,7 +9920,7 @@ export type ComposerContentMimeTypeV1 = 'image/png' | 'image/jpeg' | 'image/webp
 export type ComposerAttachmentAuthorPresentationV1 = {
     readonly label: string;
     readonly description?: string | undefined;
-    readonly icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'info' | 'warning' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+    readonly icon?: 'file' | 'error' | 'check' | 'info' | 'warning' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
     readonly tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
 };
 export type PluginLocalizedStringV2 = string | {

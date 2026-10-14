@@ -129,7 +129,6 @@ export type ManagedMachinesActionInputById = {
                 };
                 definitionId?: string | undefined;
             };
-            title?: string | undefined;
             creationKey?: string | undefined;
             placementOrigin?: {
                 kind: 'machine_pool';
@@ -173,47 +172,8 @@ export type ManagedMachinesActionInputById = {
             unlistedTools?: 'ask' | 'deny' | undefined;
             configuration?: unknown;
             connectedServices?: {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
                 v: 2;
                 bindingsByServiceId?: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                } | {
                     source: 'team_resource';
                     resourceId: string;
                     deliveryMode: 'direct';
@@ -229,7 +189,46 @@ export type ManagedMachinesActionInputById = {
                     resourceId: string;
                     deliveryMode: 'brokered';
                     disclosedMember?: undefined;
+                } | {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
                 }> | undefined;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
             } | undefined;
             capabilitySelection?: {
                 mcp?: {
@@ -268,6 +267,7 @@ export type ManagedMachinesActionInputById = {
                 baseRef: string | null;
                 branchMode?: 'new' | 'existing' | undefined;
             } | null | undefined;
+            title?: string | undefined;
             attestedContext?: {
                 externalPrincipalId: string;
                 sourceMessageId: string;
@@ -304,7 +304,7 @@ export type ManagedMachinesActionInputById = {
                         presentation: {
                             label: string;
                             description?: string | undefined;
-                            icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     };
@@ -639,7 +639,7 @@ export type ManagedMachinesActionInputById = {
                             label: string;
                             typeLabel: string;
                             description?: string | undefined;
-                            icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                         content?: {
@@ -920,10 +920,10 @@ export type ManagedMachinesActionInputById = {
                     enabled: boolean;
                     events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                     policy: {
-                        kind: 'firstMatch';
-                    } | {
                         kind: 'nextMatches';
                         count: number;
+                    } | {
+                        kind: 'firstMatch';
                     } | {
                         kind: 'everyMatch';
                     };
@@ -1016,17 +1016,6 @@ export type ManagedMachinesActionInputById = {
                             connectedServices?: {
                                 v: 2;
                                 bindingsByServiceId: Record<string, {
-                                    source: 'native';
-                                } | {
-                                    source: 'connected';
-                                    selection: 'group';
-                                    groupId: string;
-                                    profileId?: string | undefined;
-                                } | {
-                                    source: 'connected';
-                                    selection: 'profile';
-                                    profileId: string;
-                                } | {
                                     source: 'team_resource';
                                     resourceId: string;
                                     deliveryMode: 'direct';
@@ -1042,6 +1031,17 @@ export type ManagedMachinesActionInputById = {
                                     resourceId: string;
                                     deliveryMode: 'brokered';
                                     disclosedMember?: undefined;
+                                } | {
+                                    source: 'native';
+                                } | {
+                                    source: 'connected';
+                                    selection: 'group';
+                                    groupId: string;
+                                    profileId?: string | undefined;
+                                } | {
+                                    source: 'connected';
+                                    selection: 'profile';
+                                    profileId: string;
                                 }>;
                             } | null | undefined;
                             transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -1567,7 +1567,6 @@ export type ManagedMachinesActionInputById = {
                 };
                 definitionId?: string | undefined;
             };
-            title?: string | undefined;
             creationKey?: string | undefined;
             placementOrigin?: {
                 kind: 'machine_pool';
@@ -1611,47 +1610,8 @@ export type ManagedMachinesActionInputById = {
             unlistedTools?: 'ask' | 'deny' | undefined;
             configuration?: unknown;
             connectedServices?: {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
                 v: 2;
                 bindingsByServiceId?: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                } | {
                     source: 'team_resource';
                     resourceId: string;
                     deliveryMode: 'direct';
@@ -1667,7 +1627,46 @@ export type ManagedMachinesActionInputById = {
                     resourceId: string;
                     deliveryMode: 'brokered';
                     disclosedMember?: undefined;
+                } | {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
                 }> | undefined;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
             } | undefined;
             capabilitySelection?: {
                 mcp?: {
@@ -1706,6 +1705,7 @@ export type ManagedMachinesActionInputById = {
                 baseRef: string | null;
                 branchMode?: 'new' | 'existing' | undefined;
             } | null | undefined;
+            title?: string | undefined;
             attestedContext?: {
                 externalPrincipalId: string;
                 sourceMessageId: string;
@@ -1742,7 +1742,7 @@ export type ManagedMachinesActionInputById = {
                         presentation: {
                             label: string;
                             description?: string | undefined;
-                            icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     };
@@ -2077,7 +2077,7 @@ export type ManagedMachinesActionInputById = {
                             label: string;
                             typeLabel: string;
                             description?: string | undefined;
-                            icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'external' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                         content?: {
@@ -2358,10 +2358,10 @@ export type ManagedMachinesActionInputById = {
                     enabled: boolean;
                     events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                     policy: {
-                        kind: 'firstMatch';
-                    } | {
                         kind: 'nextMatches';
                         count: number;
+                    } | {
+                        kind: 'firstMatch';
                     } | {
                         kind: 'everyMatch';
                     };
@@ -2454,17 +2454,6 @@ export type ManagedMachinesActionInputById = {
                             connectedServices?: {
                                 v: 2;
                                 bindingsByServiceId: Record<string, {
-                                    source: 'native';
-                                } | {
-                                    source: 'connected';
-                                    selection: 'group';
-                                    groupId: string;
-                                    profileId?: string | undefined;
-                                } | {
-                                    source: 'connected';
-                                    selection: 'profile';
-                                    profileId: string;
-                                } | {
                                     source: 'team_resource';
                                     resourceId: string;
                                     deliveryMode: 'direct';
@@ -2480,6 +2469,17 @@ export type ManagedMachinesActionInputById = {
                                     resourceId: string;
                                     deliveryMode: 'brokered';
                                     disclosedMember?: undefined;
+                                } | {
+                                    source: 'native';
+                                } | {
+                                    source: 'connected';
+                                    selection: 'group';
+                                    groupId: string;
+                                    profileId?: string | undefined;
+                                } | {
+                                    source: 'connected';
+                                    selection: 'profile';
+                                    profileId: string;
                                 }>;
                             } | null | undefined;
                             transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -3134,14 +3134,12 @@ export type ManagedMachinesActionResultById = {
                     } | undefined;
                 };
                 actions: {
+                    [x: string]: any;
                     check: string;
                     acquire: string;
                     bootstrap: string;
                     inspect: string;
                     destroy: string;
-                    options?: string | undefined;
-                    power?: string | undefined;
-                    rebuild?: string | undefined;
                 };
                 kindTitle?: string | {
                     key: string;
@@ -3169,9 +3167,9 @@ export type ManagedMachinesActionResultById = {
                     optionalWhen: InputPredicate;
                 }[] | undefined;
                 reconciliation?: {
+                    [x: string]: any;
                     nativeOperationSchema: PluginJsonSchemaV2;
                     action: string;
-                    cleanup?: string | undefined;
                     continueAcquire?: true | undefined;
                 } | undefined;
             };

@@ -10,7 +10,10 @@ export type MachineWorkSummaryActionInputById = {
     };
 };
 export type MachineWorkSummaryActionResultById = {
-    readonly "machines.work.summary.get": Readonly<{
+    readonly "machines.work.summary.get": {
+        kind: 'refused';
+        code: 'access_denied' | 'machine_unavailable' | 'recipient_encryption_incompatible' | 'recipient_key_pending' | 'encryption_material_unavailable' | 'recipient_binding_changed' | 'machine_key_changed' | 'invalid_recipient_envelope' | 'principal_not_found' | 'principal_ineligible' | 'custodian_protected' | 'data_key_not_required' | 'unsupported_operation';
+    } | Readonly<{
         kind: 'current';
         requesters: readonly Readonly<{
             sessions: number;
@@ -39,8 +42,5 @@ export type MachineWorkSummaryActionResultById = {
         } | {
             kind: 'unknown';
         } | undefined;
-    }> | {
-        kind: 'refused';
-        code: 'access_denied' | 'machine_unavailable' | 'recipient_encryption_incompatible' | 'recipient_key_pending' | 'encryption_material_unavailable' | 'recipient_binding_changed' | 'machine_key_changed' | 'invalid_recipient_envelope' | 'principal_not_found' | 'principal_ineligible' | 'custodian_protected' | 'data_key_not_required' | 'unsupported_operation';
-    };
+    }>;
 };

@@ -74,6 +74,7 @@ export type MemoryActionInputById = {
         };
         machineIds?: string[] | undefined;
         mode?: 'auto' | 'indexed' | 'standard' | undefined;
+        retryUnreachableMachines?: boolean | undefined;
     };
     readonly "memory.get_window": {
         source: {
@@ -242,20 +243,6 @@ export type MemoryActionResultById = {
             score: number;
             type?: undefined;
         } | {
-            type: 'external_transcript';
-            source: {
-                type: 'external_transcript';
-                agentId: string;
-                sourceKey: string;
-                nativeSessionId: string;
-            };
-            sourceItemId: string;
-            createdAtFromMs: number;
-            createdAtToMs: number;
-            summary: string;
-            score: number;
-            cursor?: string | undefined;
-        } | {
             type: 'artifact';
             ref: {
                 artifactId: string;
@@ -273,6 +260,20 @@ export type MemoryActionResultById = {
             summary: string;
             score: number;
             factId?: string | undefined;
+        } | {
+            type: 'external_transcript';
+            source: {
+                type: 'external_transcript';
+                agentId: string;
+                sourceKey: string;
+                nativeSessionId: string;
+            };
+            sourceItemId: string;
+            createdAtFromMs: number;
+            createdAtToMs: number;
+            summary: string;
+            score: number;
+            cursor?: string | undefined;
         })[];
         documents?: {
             state: 'ready' | 'pending' | 'unavailable';

@@ -161,6 +161,71 @@ export type ProjectSourcesActionInputById = {
 };
 export type ProjectSourcesActionResultById = {
     readonly "projects.sources.list": {
+        ok: false;
+        error: 'source_unavailable' | 'source_access_denied' | 'source_invalid' | 'source_conflict' | 'artifact_unavailable' | 'artifact_wrong_kind' | 'source_backend_unavailable';
+        current?: {
+            id: string;
+            revision: number;
+            name: string;
+            repository: {
+                provider: {
+                    id: string;
+                    kind: 'unknown' | 'custom' | 'github' | 'gitlab' | 'bitbucket' | 'azure-devops';
+                    displayName: string;
+                    baseUrl: string;
+                };
+                repository: {
+                    nameWithOwner: string;
+                    defaultBranch?: string | null | undefined;
+                    visibility?: 'private' | 'public' | 'internal' | undefined;
+                    webUrl?: string | undefined;
+                    cloneUrl?: string | undefined;
+                    sshUrl?: string | undefined;
+                };
+                protocol: 'auto' | 'ssh' | 'https';
+            };
+            audience: {
+                principal: {
+                    kind: 'account';
+                    accountId: string;
+                } | {
+                    kind: 'team';
+                    teamId: string;
+                } | {
+                    kind: 'group';
+                    teamId: string;
+                    groupId: string;
+                };
+                level: 'view';
+            }[];
+            createdByAccountId: string;
+            defaultRef?: string | undefined;
+            subdir?: string | undefined;
+            attachments?: ({
+                purpose: 'context';
+                entry: {
+                    id: string;
+                    enabled: boolean;
+                    placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
+                    ref: {
+                        kind: 'doc' | 'bundle';
+                        artifactId: string;
+                        serverId?: string | undefined;
+                    };
+                    maxChars?: number | undefined;
+                    required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
+                };
+            } | {
+                purpose: 'dashboard';
+                ref: {
+                    kind: 'doc' | 'bundle';
+                    artifactId: string;
+                    serverId?: string | undefined;
+                };
+            })[] | undefined;
+        } | undefined;
+    } | {
         ok: true;
         sources: {
             id: string;
@@ -228,71 +293,6 @@ export type ProjectSourcesActionResultById = {
             complete: boolean;
             nextCursor: string | null;
         };
-    } | {
-        ok: false;
-        error: 'source_unavailable' | 'source_access_denied' | 'source_invalid' | 'source_conflict' | 'artifact_unavailable' | 'artifact_wrong_kind' | 'source_backend_unavailable';
-        current?: {
-            id: string;
-            revision: number;
-            name: string;
-            repository: {
-                provider: {
-                    id: string;
-                    kind: 'unknown' | 'custom' | 'github' | 'gitlab' | 'bitbucket' | 'azure-devops';
-                    displayName: string;
-                    baseUrl: string;
-                };
-                repository: {
-                    nameWithOwner: string;
-                    defaultBranch?: string | null | undefined;
-                    visibility?: 'private' | 'public' | 'internal' | undefined;
-                    webUrl?: string | undefined;
-                    cloneUrl?: string | undefined;
-                    sshUrl?: string | undefined;
-                };
-                protocol: 'auto' | 'ssh' | 'https';
-            };
-            audience: {
-                principal: {
-                    kind: 'account';
-                    accountId: string;
-                } | {
-                    kind: 'team';
-                    teamId: string;
-                } | {
-                    kind: 'group';
-                    teamId: string;
-                    groupId: string;
-                };
-                level: 'view';
-            }[];
-            createdByAccountId: string;
-            defaultRef?: string | undefined;
-            subdir?: string | undefined;
-            attachments?: ({
-                purpose: 'context';
-                entry: {
-                    id: string;
-                    enabled: boolean;
-                    placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
-                    ref: {
-                        kind: 'doc' | 'bundle';
-                        artifactId: string;
-                        serverId?: string | undefined;
-                    };
-                    maxChars?: number | undefined;
-                    required?: boolean | undefined;
-                    skillMigrationV1?: true | undefined;
-                };
-            } | {
-                purpose: 'dashboard';
-                ref: {
-                    kind: 'doc' | 'bundle';
-                    artifactId: string;
-                    serverId?: string | undefined;
-                };
-            })[] | undefined;
-        } | undefined;
     };
     readonly "projects.sources.read": {
         ok: false;

@@ -567,6 +567,12 @@ export type PluginDevLoopActionResultById = {
         review?: undefined;
     };
     readonly "plugins.sessionHooks.status.get": {
+        ok: false;
+        diagnostic: {
+            code: 'version_unsupported' | 'installation_unsupported' | 'feature_disabled' | 'agent_unavailable' | 'invalid_config' | 'concurrent_edit' | 'listener_unavailable' | 'permission_denied' | 'installation_replaced' | 'operation_failed';
+            retryable: boolean;
+        };
+    } | {
         ok: true;
         rows: {
             agent: {
@@ -644,12 +650,6 @@ export type PluginDevLoopActionResultById = {
             code: 'installation_record_invalid' | 'installation_record_read_failed';
             retryable: boolean;
         }[];
-    } | {
-        ok: false;
-        diagnostic: {
-            code: 'version_unsupported' | 'installation_unsupported' | 'feature_disabled' | 'agent_unavailable' | 'invalid_config' | 'concurrent_edit' | 'listener_unavailable' | 'permission_denied' | 'installation_replaced' | 'operation_failed';
-            retryable: boolean;
-        };
     };
     readonly "plugins.sessionHooks.install": {
         ok: false;

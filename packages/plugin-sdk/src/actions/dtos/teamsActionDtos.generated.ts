@@ -474,9 +474,6 @@ export type TeamsActionInputById = {
         } | null | undefined;
         authenticationPolicy?: {
             v: 1;
-            mode: 'inherit';
-        } | {
-            v: 1;
             mode: 'restricted';
             accepted: ({
                 kind: 'home_method';
@@ -485,6 +482,9 @@ export type TeamsActionInputById = {
                 kind: 'team_connection';
                 connectionId: string;
             })[];
+        } | {
+            v: 1;
+            mode: 'inherit';
         } | null | undefined;
     };
     readonly "teams.archive": {

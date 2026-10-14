@@ -187,7 +187,7 @@ export type WorkflowsActionInputById = {
                             label: string;
                             typeLabel: string;
                             description?: string | undefined;
-                            icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     }[] | undefined;
@@ -230,7 +230,7 @@ export type WorkflowsActionInputById = {
                                 label: string;
                                 typeLabel: string;
                                 description?: string | undefined;
-                                icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                                 tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                             };
                         }[] | undefined;
@@ -294,7 +294,7 @@ export type WorkflowsActionInputById = {
                             label: string;
                             typeLabel: string;
                             description?: string | undefined;
-                            icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     }[] | undefined;
@@ -439,47 +439,8 @@ export type WorkflowsActionInputById = {
                 } | undefined;
             } | null | undefined;
             connectedServices?: {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
                 v: 2;
                 bindingsByServiceId?: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                } | {
                     source: 'team_resource';
                     resourceId: string;
                     deliveryMode: 'direct';
@@ -495,7 +456,46 @@ export type WorkflowsActionInputById = {
                     resourceId: string;
                     deliveryMode: 'brokered';
                     disclosedMember?: undefined;
+                } | {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
                 }> | undefined;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
             } | null | undefined;
             transcriptStorage?: 'direct' | 'persisted' | null | undefined;
             terminal?: {
@@ -655,47 +655,8 @@ export type WorkflowsActionInputById = {
                 } | undefined;
             } | null | undefined;
             connectedServices?: {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
                 v: 2;
                 bindingsByServiceId?: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                } | {
                     source: 'team_resource';
                     resourceId: string;
                     deliveryMode: 'direct';
@@ -711,7 +672,46 @@ export type WorkflowsActionInputById = {
                     resourceId: string;
                     deliveryMode: 'brokered';
                     disclosedMember?: undefined;
+                } | {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
                 }> | undefined;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
             } | null | undefined;
             transcriptStorage?: 'direct' | 'persisted' | null | undefined;
             terminal?: {
@@ -903,6 +903,11 @@ export type WorkflowsActionInputById = {
         } | {
             kind: 'rename';
             name: string;
+        } | {
+            kind: 'rename_result_field';
+            blockId: string;
+            from: string;
+            to: string;
         })[];
     };
     readonly "workflow.definition.delete": {
@@ -1042,13 +1047,13 @@ export type WorkflowsActionInputById = {
             sourceSessionId: string;
             events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
             policy: {
+                kind: 'nextMatches';
+                count: number;
+            } | {
                 kind: 'currentTurn';
                 sourceTurnId: string;
             } | {
                 kind: 'firstMatch';
-            } | {
-                kind: 'nextMatches';
-                count: number;
             } | {
                 kind: 'everyMatch';
             };
@@ -1205,17 +1210,6 @@ export type WorkflowsActionInputById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -1231,6 +1225,17 @@ export type WorkflowsActionInputById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -1513,17 +1518,6 @@ export type WorkflowsActionInputById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -1539,6 +1533,17 @@ export type WorkflowsActionInputById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -1852,13 +1857,13 @@ export type WorkflowsActionInputById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -2064,13 +2069,13 @@ export type WorkflowsActionInputById = {
             sourceSessionId: string;
             events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
             policy: {
+                kind: 'nextMatches';
+                count: number;
+            } | {
                 kind: 'currentTurn';
                 sourceTurnId: string;
             } | {
                 kind: 'firstMatch';
-            } | {
-                kind: 'nextMatches';
-                count: number;
             } | {
                 kind: 'everyMatch';
             };
@@ -2205,17 +2210,6 @@ export type WorkflowsActionInputById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -2231,6 +2225,17 @@ export type WorkflowsActionInputById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -2546,17 +2551,6 @@ export type WorkflowsActionInputById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -2572,6 +2566,17 @@ export type WorkflowsActionInputById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -2890,13 +2895,13 @@ export type WorkflowsActionInputById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -3065,17 +3070,6 @@ export type WorkflowsActionResultById = {
                 connectedServices?: {
                     v: 2;
                     bindingsByServiceId: Record<string, {
-                        source: 'native';
-                    } | {
-                        source: 'connected';
-                        selection: 'group';
-                        groupId: string;
-                        profileId?: string | undefined;
-                    } | {
-                        source: 'connected';
-                        selection: 'profile';
-                        profileId: string;
-                    } | {
                         source: 'team_resource';
                         resourceId: string;
                         deliveryMode: 'direct';
@@ -3091,6 +3085,17 @@ export type WorkflowsActionResultById = {
                         resourceId: string;
                         deliveryMode: 'brokered';
                         disclosedMember?: undefined;
+                    } | {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
                     }>;
                 } | null | undefined;
                 transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -3477,6 +3482,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         admission: 'created' | 'existing';
@@ -3671,6 +3677,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         }[];
         metadataByRunId: Record<string, {
@@ -3909,6 +3916,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         callerAccess: {
@@ -3990,17 +3998,6 @@ export type WorkflowsActionResultById = {
                 connectedServices?: {
                     v: 2;
                     bindingsByServiceId: Record<string, {
-                        source: 'native';
-                    } | {
-                        source: 'connected';
-                        selection: 'group';
-                        groupId: string;
-                        profileId?: string | undefined;
-                    } | {
-                        source: 'connected';
-                        selection: 'profile';
-                        profileId: string;
-                    } | {
                         source: 'team_resource';
                         resourceId: string;
                         deliveryMode: 'direct';
@@ -4016,6 +4013,17 @@ export type WorkflowsActionResultById = {
                         resourceId: string;
                         deliveryMode: 'brokered';
                         disclosedMember?: undefined;
+                    } | {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
                     }>;
                 } | null | undefined;
                 transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -4297,17 +4305,6 @@ export type WorkflowsActionResultById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -4323,6 +4320,17 @@ export type WorkflowsActionResultById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -4595,17 +4603,6 @@ export type WorkflowsActionResultById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -4621,6 +4618,17 @@ export type WorkflowsActionResultById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -4868,6 +4876,9 @@ export type WorkflowsActionResultById = {
         } | {
             startedBy: 'agent' | 'user' | 'trigger';
             source: {
+                kind: 'inline';
+                sourceArtifactId?: string | undefined;
+            } | {
                 kind: 'automation';
                 automationId: string;
                 definitionId?: string | undefined;
@@ -4883,9 +4894,6 @@ export type WorkflowsActionResultById = {
                     accountId: string;
                     sessionId?: string | undefined;
                 } | null | undefined;
-            } | {
-                kind: 'inline';
-                sourceArtifactId?: string | undefined;
             } | {
                 kind: 'saved';
                 definitionId: string;
@@ -4973,17 +4981,6 @@ export type WorkflowsActionResultById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -4999,6 +4996,17 @@ export type WorkflowsActionResultById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -5271,17 +5279,6 @@ export type WorkflowsActionResultById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -5297,6 +5294,17 @@ export type WorkflowsActionResultById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -5622,17 +5630,6 @@ export type WorkflowsActionResultById = {
                 connectedServices?: {
                     v: 2;
                     bindingsByServiceId: Record<string, {
-                        source: 'native';
-                    } | {
-                        source: 'connected';
-                        selection: 'group';
-                        groupId: string;
-                        profileId?: string | undefined;
-                    } | {
-                        source: 'connected';
-                        selection: 'profile';
-                        profileId: string;
-                    } | {
                         source: 'team_resource';
                         resourceId: string;
                         deliveryMode: 'direct';
@@ -5648,6 +5645,17 @@ export type WorkflowsActionResultById = {
                         resourceId: string;
                         deliveryMode: 'brokered';
                         disclosedMember?: undefined;
+                    } | {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
                     }>;
                 } | null | undefined;
                 transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -6054,6 +6062,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'terminal';
@@ -6251,6 +6260,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'paused';
@@ -6448,6 +6458,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'needs_attention';
@@ -6645,6 +6656,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'timeout';
@@ -6841,6 +6853,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'not_matched_terminal';
@@ -7038,6 +7051,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         intent: 'cancelled' | 'pause_requested' | 'paused' | 'unavailable' | 'cancel_requested' | 'resumed' | 'recovery_required';
@@ -7232,6 +7246,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         intent: 'cancelled' | 'pause_requested' | 'paused' | 'unavailable' | 'cancel_requested' | 'resumed' | 'recovery_required';
@@ -7426,6 +7441,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         intent: 'cancelled' | 'pause_requested' | 'paused' | 'unavailable' | 'cancel_requested' | 'resumed' | 'recovery_required';
@@ -7895,17 +7911,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -7921,6 +7926,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -8056,7 +8072,7 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
@@ -8560,17 +8576,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -8586,6 +8591,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -8721,7 +8737,7 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
@@ -8964,6 +8980,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         invocation: {
@@ -9435,17 +9452,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -9461,6 +9467,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -9596,7 +9613,7 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'external' | 'search' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
@@ -9839,6 +9856,7 @@ export type WorkflowsActionResultById = {
                 workspaceRefId?: string | undefined;
             } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         invocation: {
@@ -10063,17 +10081,6 @@ export type WorkflowsActionResultById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -10089,6 +10096,17 @@ export type WorkflowsActionResultById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -10370,17 +10388,6 @@ export type WorkflowsActionResultById = {
                 connectedServices?: {
                     v: 2;
                     bindingsByServiceId: Record<string, {
-                        source: 'native';
-                    } | {
-                        source: 'connected';
-                        selection: 'group';
-                        groupId: string;
-                        profileId?: string | undefined;
-                    } | {
-                        source: 'connected';
-                        selection: 'profile';
-                        profileId: string;
-                    } | {
                         source: 'team_resource';
                         resourceId: string;
                         deliveryMode: 'direct';
@@ -10396,6 +10403,17 @@ export type WorkflowsActionResultById = {
                         resourceId: string;
                         deliveryMode: 'brokered';
                         disclosedMember?: undefined;
+                    } | {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
                     }>;
                 } | null | undefined;
                 transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -10699,17 +10717,6 @@ export type WorkflowsActionResultById = {
                 connectedServices?: {
                     v: 2;
                     bindingsByServiceId: Record<string, {
-                        source: 'native';
-                    } | {
-                        source: 'connected';
-                        selection: 'group';
-                        groupId: string;
-                        profileId?: string | undefined;
-                    } | {
-                        source: 'connected';
-                        selection: 'profile';
-                        profileId: string;
-                    } | {
                         source: 'team_resource';
                         resourceId: string;
                         deliveryMode: 'direct';
@@ -10725,6 +10732,17 @@ export type WorkflowsActionResultById = {
                         resourceId: string;
                         deliveryMode: 'brokered';
                         disclosedMember?: undefined;
+                    } | {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
                     }>;
                 } | null | undefined;
                 transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -11028,17 +11046,6 @@ export type WorkflowsActionResultById = {
                 connectedServices?: {
                     v: 2;
                     bindingsByServiceId: Record<string, {
-                        source: 'native';
-                    } | {
-                        source: 'connected';
-                        selection: 'group';
-                        groupId: string;
-                        profileId?: string | undefined;
-                    } | {
-                        source: 'connected';
-                        selection: 'profile';
-                        profileId: string;
-                    } | {
                         source: 'team_resource';
                         resourceId: string;
                         deliveryMode: 'direct';
@@ -11054,6 +11061,17 @@ export type WorkflowsActionResultById = {
                         resourceId: string;
                         deliveryMode: 'brokered';
                         disclosedMember?: undefined;
+                    } | {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
                     }>;
                 } | null | undefined;
                 transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -11352,17 +11370,6 @@ export type WorkflowsActionResultById = {
                 connectedServices?: {
                     v: 2;
                     bindingsByServiceId: Record<string, {
-                        source: 'native';
-                    } | {
-                        source: 'connected';
-                        selection: 'group';
-                        groupId: string;
-                        profileId?: string | undefined;
-                    } | {
-                        source: 'connected';
-                        selection: 'profile';
-                        profileId: string;
-                    } | {
                         source: 'team_resource';
                         resourceId: string;
                         deliveryMode: 'direct';
@@ -11378,6 +11385,17 @@ export type WorkflowsActionResultById = {
                         resourceId: string;
                         deliveryMode: 'brokered';
                         disclosedMember?: undefined;
+                    } | {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
                     }>;
                 } | null | undefined;
                 transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -11669,17 +11687,6 @@ export type WorkflowsActionResultById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -11695,6 +11702,17 @@ export type WorkflowsActionResultById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -11977,17 +11995,6 @@ export type WorkflowsActionResultById = {
                 connectedServices?: {
                     v: 2;
                     bindingsByServiceId: Record<string, {
-                        source: 'native';
-                    } | {
-                        source: 'connected';
-                        selection: 'group';
-                        groupId: string;
-                        profileId?: string | undefined;
-                    } | {
-                        source: 'connected';
-                        selection: 'profile';
-                        profileId: string;
-                    } | {
                         source: 'team_resource';
                         resourceId: string;
                         deliveryMode: 'direct';
@@ -12003,6 +12010,17 @@ export type WorkflowsActionResultById = {
                         resourceId: string;
                         deliveryMode: 'brokered';
                         disclosedMember?: undefined;
+                    } | {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
                     }>;
                 } | null | undefined;
                 transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -12289,17 +12307,6 @@ export type WorkflowsActionResultById = {
                     connectedServices?: {
                         v: 2;
                         bindingsByServiceId: Record<string, {
-                            source: 'native';
-                        } | {
-                            source: 'connected';
-                            selection: 'group';
-                            groupId: string;
-                            profileId?: string | undefined;
-                        } | {
-                            source: 'connected';
-                            selection: 'profile';
-                            profileId: string;
-                        } | {
                             source: 'team_resource';
                             resourceId: string;
                             deliveryMode: 'direct';
@@ -12315,6 +12322,17 @@ export type WorkflowsActionResultById = {
                             resourceId: string;
                             deliveryMode: 'brokered';
                             disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
                         }>;
                     } | null | undefined;
                     transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -12647,13 +12665,13 @@ export type WorkflowsActionResultById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -12805,17 +12823,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -12831,6 +12838,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -13139,17 +13157,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -13165,6 +13172,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -13516,13 +13534,13 @@ export type WorkflowsActionResultById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -13674,17 +13692,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -13700,6 +13707,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -14008,17 +14026,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -14034,6 +14041,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -14387,13 +14405,13 @@ export type WorkflowsActionResultById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -14545,17 +14563,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -14571,6 +14578,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -14879,17 +14897,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -14905,6 +14912,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -15258,13 +15276,13 @@ export type WorkflowsActionResultById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -15416,17 +15434,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -15442,6 +15449,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -15750,17 +15768,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -15776,6 +15783,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -16280,13 +16298,13 @@ export type WorkflowsActionResultById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -16438,17 +16456,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -16464,6 +16471,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -16772,17 +16790,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -16798,6 +16805,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -17161,13 +17179,13 @@ export type WorkflowsActionResultById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -17319,17 +17337,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -17345,6 +17352,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -17653,17 +17671,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -17679,6 +17686,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -18032,13 +18050,13 @@ export type WorkflowsActionResultById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -18190,17 +18208,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -18216,6 +18223,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -18524,17 +18542,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -18550,6 +18557,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -18903,13 +18921,13 @@ export type WorkflowsActionResultById = {
                 sourceSessionId: string;
                 events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                 policy: {
+                    kind: 'nextMatches';
+                    count: number;
+                } | {
                     kind: 'currentTurn';
                     sourceTurnId: string;
                 } | {
                     kind: 'firstMatch';
-                } | {
-                    kind: 'nextMatches';
-                    count: number;
                 } | {
                     kind: 'everyMatch';
                 };
@@ -19061,17 +19079,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -19087,6 +19094,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;
@@ -19395,17 +19413,6 @@ export type WorkflowsActionResultById = {
                         connectedServices?: {
                             v: 2;
                             bindingsByServiceId: Record<string, {
-                                source: 'native';
-                            } | {
-                                source: 'connected';
-                                selection: 'group';
-                                groupId: string;
-                                profileId?: string | undefined;
-                            } | {
-                                source: 'connected';
-                                selection: 'profile';
-                                profileId: string;
-                            } | {
                                 source: 'team_resource';
                                 resourceId: string;
                                 deliveryMode: 'direct';
@@ -19421,6 +19428,17 @@ export type WorkflowsActionResultById = {
                                 resourceId: string;
                                 deliveryMode: 'brokered';
                                 disclosedMember?: undefined;
+                            } | {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
                             }>;
                         } | null | undefined;
                         transcriptStorage?: 'direct' | 'persisted' | null | undefined;

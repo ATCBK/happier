@@ -173,14 +173,14 @@ export type ExternalSessionsActionResultById = {
         };
     };
     readonly "sessions.external.backgroundFollow.set": {
+        ok: false;
+        errorCode: 'internal_error' | 'invalid_request' | 'machine_offline' | 'agent_unavailable' | 'agent_timeout' | 'agent_error';
+        error: string;
+    } | {
         ok: true;
         enabled: boolean;
         leaseActive: boolean;
         updatedAtMs: number;
-    } | {
-        ok: false;
-        errorCode: 'internal_error' | 'invalid_request' | 'machine_offline' | 'agent_unavailable' | 'agent_timeout' | 'agent_error';
-        error: string;
     };
     readonly "sessions.external.status.get": {
         ok: false;

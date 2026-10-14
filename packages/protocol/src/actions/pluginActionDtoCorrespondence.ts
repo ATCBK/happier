@@ -14,8 +14,9 @@ import type { PluginMachineExecutionOriginV1 as CanonicalOrigin } from '../machi
 import type { ActionId, RuntimeActionIdV1 } from './actionIds.js';
 import type { RUNTIME_ACTION_INPUT_SCHEMAS, RUNTIME_ACTION_OUTPUT_SCHEMAS } from './specs/index.js';
 import type { ACTION_ID_FAMILIES_V1 } from './actionIds.js';
+import type { ExecutionRunChildChoiceV1, ExecutionRunStartFailureDetailsV1 } from '../execution/runs/responseSchemas.js';
 
-    import type { z } from 'zod';
+    import type { z } from 'zod/mini';
     import type { JsonValue } from '../json/strictJsonValue.js';
     import type { PluginJsonValueV2 } from '../plugins/contributions/jsonSchema.js';
     type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2)
@@ -27,7 +28,7 @@ import type { ACTION_ID_FAMILIES_V1 } from './actionIds.js';
       : Equal<T, JsonValue> extends true
       ? JsonValue
       : Equal<T, PluginJsonValueV2> extends true ? Input extends true ? JsonValue : PluginJsonValueV2
-      : T extends z.ZodType ? unknown
+      : T extends z.ZodMiniType ? unknown
         : T extends string ? T extends z.core.$brand<string> ? string : T
           : T extends (...args: never[]) => unknown ? T
             : T extends object ? { [K in keyof T]: PublicValue<T[K], Input> } : T;
@@ -100,6 +101,8 @@ type CanonicalSupport = {
   effectiveField: CanonicalHints.EffectiveActionInputField;
   predicate: CanonicalPredicate;
   executionOrigin: CanonicalOrigin;
+  childChoice: ExecutionRunChildChoiceV1;
+  runStartFailureDetails: ExecutionRunStartFailureDetailsV1;
   linkArray: CanonicalExternalLinks.PluginAgentExternalSessionLinkDataArray;
   linkObject: CanonicalExternalLinks.PluginAgentExternalSessionLinkDataObject;
   linkValue: CanonicalExternalLinks.PluginAgentExternalSessionLinkDataValue;
@@ -113,6 +116,8 @@ type PublicSupport = {
   effectiveField: DtoSupport.EffectiveActionInputField;
   predicate: DtoSupport.ActionInputPredicate;
   executionOrigin: DtoSupport.PluginMachineExecutionOriginV1;
+  childChoice: DtoSupport.ExecutionRunChildChoiceV1;
+  runStartFailureDetails: DtoSupport.ExecutionRunStartFailureDetailsV1;
   linkArray: DtoSupport.PluginAgentExternalSessionLinkDataArray;
   linkObject: DtoSupport.PluginAgentExternalSessionLinkDataObject;
   linkValue: DtoSupport.PluginAgentExternalSessionLinkDataValue;

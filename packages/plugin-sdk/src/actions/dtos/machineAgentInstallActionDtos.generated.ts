@@ -31,20 +31,20 @@ export type MachineAgentInstallActionInputById = {
 };
 export type MachineAgentInstallActionResultById = {
     readonly "machines.agents.install": {
-        ok: true;
-        jobId: string;
-    } | {
         ok: false;
         errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use' | 'definition_version_changed';
         error: string;
+    } | {
+        ok: true;
+        jobId: string;
     };
     readonly "machines.agents.uninstall": {
-        ok: true;
-        jobId: string;
-    } | {
         ok: false;
         errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use' | 'definition_version_changed';
         error: string;
+    } | {
+        ok: true;
+        jobId: string;
     };
     readonly "machines.agents.install.status": {
         ok: false;

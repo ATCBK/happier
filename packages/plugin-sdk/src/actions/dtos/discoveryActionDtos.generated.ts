@@ -97,7 +97,7 @@ export type DiscoveryActionInputById = {
                         submitLabel?: string | undefined;
                         fields?: readonly {
                             path: string;
-                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                             title: string;
                             inputType?: {
                                 pluginId: string;
@@ -193,7 +193,7 @@ export type DiscoveryActionResultById = {
             inputHints: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;
@@ -313,7 +313,7 @@ export type DiscoveryActionResultById = {
             inputHints: {
                 fields: readonly {
                     path: string;
-                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                    widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
                     title: string;
                     inputType?: {
                         pluginId: string;

@@ -56,12 +56,6 @@ export type ReviewCommentsActionInputById = {
             targetPath: string;
         };
         snapshot: {
-            t: 'plain';
-            v: unknown;
-        } | {
-            t: 'encrypted';
-            c: string;
-        } | {
             kind: 'none';
             capturedAt: number;
         } | {
@@ -113,6 +107,12 @@ export type ReviewCommentsActionInputById = {
             capBytes: number;
             capturedAt: number;
             sha256?: string | undefined;
+        } | {
+            t: 'plain';
+            v: unknown;
+        } | {
+            t: 'encrypted';
+            c: string;
         };
         body: string | {
             t: 'plain';
@@ -149,7 +149,7 @@ export type ReviewCommentsActionInputById = {
             engineId?: string | undefined;
         } | undefined;
         linkedRefs?: ({
-            kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+            kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
             id?: string | undefined;
             url?: string | undefined;
         } | {
@@ -711,12 +711,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -768,6 +762,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -954,7 +954,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -1035,12 +1035,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -1092,6 +1086,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -1278,7 +1278,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -1359,12 +1359,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -1416,6 +1410,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -1602,7 +1602,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -1682,12 +1682,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -1739,6 +1733,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -1925,7 +1925,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -2005,12 +2005,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -2062,6 +2056,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -2248,7 +2248,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -2328,12 +2328,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -2385,6 +2379,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -2571,7 +2571,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -2649,12 +2649,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -2706,6 +2700,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -2892,7 +2892,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -2972,12 +2972,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -3029,6 +3023,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -3215,7 +3215,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -3295,12 +3295,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -3352,6 +3346,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -3538,7 +3538,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -3618,12 +3618,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -3675,6 +3669,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -3861,7 +3861,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {
@@ -3942,12 +3942,6 @@ export type ReviewCommentsActionResultById = {
                 targetPath: string;
             };
             snapshot: {
-                t: 'plain';
-                v: unknown;
-            } | {
-                t: 'encrypted';
-                c: string;
-            } | {
                 kind: 'none';
                 capturedAt: number;
             } | {
@@ -3999,6 +3993,12 @@ export type ReviewCommentsActionResultById = {
                 capBytes: number;
                 capturedAt: number;
                 sha256?: string | undefined;
+            } | {
+                t: 'plain';
+                v: unknown;
+            } | {
+                t: 'encrypted';
+                c: string;
             };
             body: string | {
                 t: 'plain';
@@ -4185,7 +4185,7 @@ export type ReviewCommentsActionResultById = {
                 engineId?: string | undefined;
             } | undefined;
             linkedRefs?: ({
-                kind: 'external' | 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint';
+                kind: 'executionRun' | 'session' | 'pullRequest' | 'commit' | 'checkpoint' | 'external';
                 id?: string | undefined;
                 url?: string | undefined;
             } | {

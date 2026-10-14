@@ -297,10 +297,10 @@ export type SavedSecretSharingActionInputById = {
                                 command: string;
                                 args: string[];
                                 cwd?: {
-                                    t: 'session';
-                                } | {
                                     t: 'path';
                                     path: string;
+                                } | {
+                                    t: 'session';
                                 } | undefined;
                             } | undefined;
                             remote?: {
@@ -1551,18 +1551,6 @@ export type SavedSecretSharingActionInputById = {
 export type SavedSecretSharingActionResultById = {
     readonly "secrets.shared.list": {
         resources: ({
-            materialStatus: 'resource_corrupt';
-            relationship: 'owner';
-            repair: {
-                kind: 'delete_resource';
-                resourceId: string;
-                expectedRevision: number;
-            };
-        } | {
-            materialStatus: 'resource_corrupt';
-            relationship: 'recipient';
-            repair: null;
-        } | {
             ref: string;
             source: 'personal' | 'shared_resource';
             relationship: 'owner' | 'recipient';
@@ -1624,6 +1612,18 @@ export type SavedSecretSharingActionResultById = {
                 manageAccess: boolean;
                 delete: boolean;
             };
+        } | {
+            materialStatus: 'resource_corrupt';
+            relationship: 'owner';
+            repair: {
+                kind: 'delete_resource';
+                resourceId: string;
+                expectedRevision: number;
+            };
+        } | {
+            materialStatus: 'resource_corrupt';
+            relationship: 'recipient';
+            repair: null;
         })[];
     };
     readonly "secrets.shared.create": {

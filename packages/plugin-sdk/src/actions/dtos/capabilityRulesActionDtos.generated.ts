@@ -49,6 +49,7 @@ export type CapabilityRulesActionInputById = {
                 agentId?: string | undefined;
             }[];
         };
+        expectedRevision?: number | undefined;
     };
     readonly "skills.rules.set": {
         items: ({

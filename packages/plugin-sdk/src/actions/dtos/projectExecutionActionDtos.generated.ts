@@ -206,16 +206,6 @@ export type ProjectExecutionActionResultById = {
                 errorCode: string;
                 error: string;
                 details?: {
-                    kind: 'no_worker_can_accept';
-                    unavailable: 'primary' | 'ask' | 'fail';
-                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
-                    workerCopy?: {
-                        serverId: string;
-                        sourceWorkspaceRefId: string;
-                        sourceMachineId: string;
-                        targetMachineId: string;
-                    } | undefined;
-                } | {
                     reviewedEffect: string | number | boolean | readonly JsonValue[] | {
                         readonly [key: string]: JsonValue;
                     } | null;
@@ -230,6 +220,16 @@ export type ProjectExecutionActionResultById = {
                         readonly [key: string]: JsonValue;
                     } | null;
                     reviewedEffectDigest: string;
+                } | {
+                    kind: 'no_worker_can_accept';
+                    unavailable: 'primary' | 'ask' | 'fail';
+                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
+                    workerCopy?: {
+                        serverId: string;
+                        sourceWorkspaceRefId: string;
+                        sourceMachineId: string;
+                        targetMachineId: string;
+                    } | undefined;
                 } | undefined;
             } | undefined;
             domainRef?: {
@@ -458,16 +458,6 @@ export type ProjectExecutionActionResultById = {
                 errorCode: string;
                 error: string;
                 details?: {
-                    kind: 'no_worker_can_accept';
-                    unavailable: 'primary' | 'ask' | 'fail';
-                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
-                    workerCopy?: {
-                        serverId: string;
-                        sourceWorkspaceRefId: string;
-                        sourceMachineId: string;
-                        targetMachineId: string;
-                    } | undefined;
-                } | {
                     reviewedEffect: string | number | boolean | readonly JsonValue[] | {
                         readonly [key: string]: JsonValue;
                     } | null;
@@ -482,6 +472,16 @@ export type ProjectExecutionActionResultById = {
                         readonly [key: string]: JsonValue;
                     } | null;
                     reviewedEffectDigest: string;
+                } | {
+                    kind: 'no_worker_can_accept';
+                    unavailable: 'primary' | 'ask' | 'fail';
+                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
+                    workerCopy?: {
+                        serverId: string;
+                        sourceWorkspaceRefId: string;
+                        sourceMachineId: string;
+                        targetMachineId: string;
+                    } | undefined;
                 } | undefined;
             } | undefined;
             domainRef?: {
@@ -710,16 +710,6 @@ export type ProjectExecutionActionResultById = {
                 errorCode: string;
                 error: string;
                 details?: {
-                    kind: 'no_worker_can_accept';
-                    unavailable: 'primary' | 'ask' | 'fail';
-                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
-                    workerCopy?: {
-                        serverId: string;
-                        sourceWorkspaceRefId: string;
-                        sourceMachineId: string;
-                        targetMachineId: string;
-                    } | undefined;
-                } | {
                     reviewedEffect: string | number | boolean | readonly JsonValue[] | {
                         readonly [key: string]: JsonValue;
                     } | null;
@@ -734,6 +724,16 @@ export type ProjectExecutionActionResultById = {
                         readonly [key: string]: JsonValue;
                     } | null;
                     reviewedEffectDigest: string;
+                } | {
+                    kind: 'no_worker_can_accept';
+                    unavailable: 'primary' | 'ask' | 'fail';
+                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
+                    workerCopy?: {
+                        serverId: string;
+                        sourceWorkspaceRefId: string;
+                        sourceMachineId: string;
+                        targetMachineId: string;
+                    } | undefined;
                 } | undefined;
             } | undefined;
             domainRef?: {

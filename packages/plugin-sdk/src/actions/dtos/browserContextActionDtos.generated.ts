@@ -181,32 +181,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -362,6 +336,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -431,33 +437,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -622,17 +606,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.captureScreenshot": {
         v: 1;
         contextId: string;
@@ -643,32 +643,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -824,6 +798,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -893,33 +899,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -1084,17 +1068,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.captureSelectedElement": {
         v: 1;
         contextId: string;
@@ -1105,32 +1105,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -1286,6 +1260,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -1355,33 +1361,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -1546,17 +1530,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.captureNetworkSummary": {
         v: 1;
         contextId: string;
@@ -1567,32 +1567,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -1748,6 +1722,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -1817,33 +1823,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -2008,17 +1992,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.captureConsoleSummary": {
         v: 1;
         contextId: string;
@@ -2029,32 +2029,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -2210,6 +2184,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -2279,33 +2285,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -2470,17 +2454,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.annotation.start": {
         v: 1;
         contextId: string;
@@ -2491,32 +2491,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -2672,6 +2646,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -2741,33 +2747,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -2932,17 +2916,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.annotation.cancel": {
         v: 1;
         contextId: string;
@@ -2953,32 +2953,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -3134,6 +3108,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -3203,33 +3209,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -3394,17 +3378,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.annotation.captureRegion": {
         v: 1;
         contextId: string;
@@ -3415,32 +3415,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -3596,6 +3570,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -3665,33 +3671,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -3856,17 +3840,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.annotation.captureElement": {
         v: 1;
         contextId: string;
@@ -3877,32 +3877,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -4058,6 +4032,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -4127,33 +4133,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -4318,17 +4302,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.annotation.attachComment": {
         v: 1;
         contextId: string;
@@ -4339,32 +4339,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -4520,6 +4494,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -4589,33 +4595,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -4780,17 +4764,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.annotation.attachStroke": {
         v: 1;
         contextId: string;
@@ -4801,32 +4801,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -4982,6 +4956,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -5051,33 +5057,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -5242,17 +5226,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.annotation.attachStyleIntent": {
         v: 1;
         contextId: string;
@@ -5263,32 +5263,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -5444,6 +5418,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -5513,33 +5519,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -5704,17 +5688,33 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
     readonly "browser.context.attachToComposer": {
         v: 1;
         attachmentId: string;
@@ -5865,32 +5865,6 @@ export type BrowserContextActionResultById = {
         navigationGeneration: number;
         lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
         redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
-    } | {
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
         kind: 'browserPageReference';
         disabledReason?: string | undefined;
         targetId?: string | undefined;
@@ -6046,6 +6020,38 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
+    } | {
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    } | {
+        v: 1;
+        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
+        status: 'started' | 'cancelled' | 'captured' | 'updated';
+        contextId?: string | undefined;
+        attachmentId?: string | undefined;
     } | {
         v: 1;
         attachmentId: string;
@@ -6115,33 +6121,11 @@ export type BrowserContextActionResultById = {
             pageUrl?: string | undefined;
             pageTitle?: string | undefined;
         } | undefined;
-    } | ({
-        v: 1;
-        contextId: string;
-        sourceViewId: string;
-        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
-        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
-        capturedAtMs: number;
-        navigationGeneration: number;
-        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
-        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
-        kind: 'browserRecordingEvidence';
-        recordingId: string;
-        artifactId: string;
-        mediaRef: {
-            refKind: 'sessionMedia';
-            mediaId: string;
-            mediaKind: 'image' | 'video';
-            mimeType: string;
-            sizeBytes: number;
-        };
-        sourceNavigationGenerationRange: {
-            start: number;
-            end?: number | undefined;
-        };
-        actionChapterRefs: string[];
-        disabledReason?: string | undefined;
     } | {
+        ok: false;
+        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
+        error: string;
+    } | ({
         v: 1;
         contextId: string;
         sourceViewId: string;
@@ -6306,15 +6290,31 @@ export type BrowserContextActionResultById = {
         } | undefined;
         pageUrl?: string | undefined;
         pageTitle?: string | undefined;
-    })[] | {
-        v: 1;
-        actionId: 'browser.workspace.open' | 'browser.sandbox.install' | 'browser.control.takeControl' | 'browser.control.handBack' | 'browser.view.open' | 'browser.view.openExternal' | 'browser.view.close' | 'browser.view.focus' | 'browser.target.set' | 'browser.navigate' | 'browser.reload' | 'browser.goBack' | 'browser.goForward' | 'browser.stop' | 'browser.diagnostics.snapshot' | 'browser.diagnostics.clear' | 'browser.diagnostics.pause' | 'browser.diagnostics.resume' | 'browser.diagnostics.eval' | 'browser.diagnostics.getProperties' | 'browser.diagnostics.releaseObjectGroup' | 'browser.diagnostics.elementPicker.start' | 'browser.diagnostics.elementPicker.cancel' | 'browser.context.capturePage' | 'browser.context.captureScreenshot' | 'browser.context.captureSelectedElement' | 'browser.context.captureNetworkSummary' | 'browser.context.captureConsoleSummary' | 'browser.context.annotation.start' | 'browser.context.annotation.cancel' | 'browser.context.annotation.captureRegion' | 'browser.context.annotation.captureElement' | 'browser.context.annotation.attachComment' | 'browser.context.annotation.attachStroke' | 'browser.context.annotation.attachStyleIntent' | 'browser.context.attachToComposer' | 'browser.context.attachToAgentTurn' | 'browser.context.clear' | 'browser.automation.status' | 'browser.automation.snapshot' | 'browser.automation.semanticSnapshot' | 'browser.automation.queryElements' | 'browser.automation.waitFor' | 'browser.automation.timeline.get' | 'browser.automation.cancelActive' | 'browser.automation.navigate' | 'browser.automation.reload' | 'browser.automation.goBack' | 'browser.automation.goForward' | 'browser.automation.click' | 'browser.automation.tap' | 'browser.automation.type' | 'browser.automation.press' | 'browser.automation.scroll' | 'browser.automation.hover' | 'browser.automation.focus' | 'browser.automation.select' | 'browser.automation.setValue' | 'browser.automation.secret.fill' | 'browser.automation.upload' | 'browser.automation.drag' | 'computer.targets.list' | 'computer.target.get' | 'computer.target.select' | 'computer.permissions.openSettings' | 'computer.capture' | 'computer.query' | 'computer.input' | 'computer.secret.fill' | 'computer.control.status' | 'computer.control.interrupt' | 'computer.control.handBack' | 'computer.target.close' | 'browser.recording.start' | 'browser.recording.stop' | 'browser.recording.cancel' | 'browser.recording.status' | 'browser.recording.listForView' | 'browser.recording.discard' | 'browser.recording.cleanupExpired' | 'browser.recording.attachToComposer' | 'localServices.inventory.list' | 'localServices.inventory.refresh' | 'localServices.launcher.snapshot' | 'localServices.launcher.start' | 'localServices.launcher.openPreview' | 'localServices.launcher.registerPreview' | 'localServices.launcher.history.clear' | 'localServices.preview.openOrCreate' | 'localServices.preview.status' | 'localServices.preview.revoke' | 'localServices.publicPreview.create' | 'localServices.publicPreview.status' | 'localServices.publicPreview.revoke' | 'localServices.publicPreview.copyUrl' | 'projects.service.relocate' | 'localServices.actions.copyUrl' | 'localServices.actions.openPreview' | 'localServices.actions.forget' | 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged' | 'localServices.actions.terminateDetected' | 'peerMediation.observability.snapshot' | 'peerMediation.observability.subscribe' | 'peerMediation.observability.unsubscribe' | 'devices.simulator.list' | 'devices.simulator.stream.keyframe' | 'devices.simulator.stream.snapshot' | 'devices.simulator.stream.quality.set' | 'devices.simulator.stream.fps.set' | 'devices.simulator.stream.scale.set' | 'devices.simulator.lease.acquire' | 'devices.simulator.lease.renew' | 'devices.simulator.lease.release' | 'devices.simulator.input.tap' | 'devices.simulator.input.swipe' | 'devices.simulator.input.text' | 'devices.simulator.input.key' | 'devices.simulator.input.button' | 'devices.simulator.input.orientation' | 'devices.simulator.input.pinch' | 'devices.simulator.input.rotate' | 'devices.simulator.sideband.request';
-        status: 'started' | 'cancelled' | 'captured' | 'updated';
-        contextId?: string | undefined;
-        attachmentId?: string | undefined;
     } | {
-        ok: false;
-        errorCode: 'invalid_parameters' | 'runtime_action_disabled';
-        error: string;
-    };
+        v: 1;
+        contextId: string;
+        sourceViewId: string;
+        sourceAdapterKind: 'localPreview' | 'hostedPlugin' | 'externalUrl' | 'chromiumSidecar' | 'streamedBrowserSurface' | 'simulatorPreview';
+        fidelity: 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | 'unavailable';
+        capturedAtMs: number;
+        navigationGeneration: number;
+        lifecycleState: 'available' | 'policyDenied' | 'sensitiveOrigin' | 'sensitiveFieldsPresent' | 'ephemeralOnly' | 'navigationStale' | 'adapterUnavailable' | 'captureFailed';
+        redactionLevel: 'none' | 'metadataOnly' | 'summaryOnly' | 'blocked';
+        kind: 'browserRecordingEvidence';
+        recordingId: string;
+        artifactId: string;
+        mediaRef: {
+            refKind: 'sessionMedia';
+            mediaId: string;
+            mediaKind: 'image' | 'video';
+            mimeType: string;
+            sizeBytes: number;
+        };
+        sourceNavigationGenerationRange: {
+            start: number;
+            end?: number | undefined;
+        };
+        actionChapterRefs: string[];
+        disabledReason?: string | undefined;
+    })[];
 };

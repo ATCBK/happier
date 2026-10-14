@@ -94,16 +94,6 @@ export type OperationOutputActionResultById = {
                 errorCode: string;
                 error: string;
                 details?: {
-                    kind: 'no_worker_can_accept';
-                    unavailable: 'ask' | 'primary' | 'fail';
-                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
-                    workerCopy?: {
-                        serverId: string;
-                        sourceWorkspaceRefId: string;
-                        sourceMachineId: string;
-                        targetMachineId: string;
-                    } | undefined;
-                } | {
                     reviewedEffect: string | number | boolean | readonly JsonValue[] | {
                         readonly [key: string]: JsonValue;
                     } | null;
@@ -118,6 +108,16 @@ export type OperationOutputActionResultById = {
                         readonly [key: string]: JsonValue;
                     } | null;
                     reviewedEffectDigest: string;
+                } | {
+                    kind: 'no_worker_can_accept';
+                    unavailable: 'ask' | 'primary' | 'fail';
+                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
+                    workerCopy?: {
+                        serverId: string;
+                        sourceWorkspaceRefId: string;
+                        sourceMachineId: string;
+                        targetMachineId: string;
+                    } | undefined;
                 } | undefined;
             } | undefined;
             domainRef?: {
@@ -306,6 +306,8 @@ export type OperationOutputActionResultById = {
         nextCursor: string | null;
     };
     readonly "action.operations.get": {
+        kind: 'not_found';
+    } | {
         kind: 'found';
         operation: {
             version: 1;
@@ -343,16 +345,6 @@ export type OperationOutputActionResultById = {
                 errorCode: string;
                 error: string;
                 details?: {
-                    kind: 'no_worker_can_accept';
-                    unavailable: 'ask' | 'primary' | 'fail';
-                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
-                    workerCopy?: {
-                        serverId: string;
-                        sourceWorkspaceRefId: string;
-                        sourceMachineId: string;
-                        targetMachineId: string;
-                    } | undefined;
-                } | {
                     reviewedEffect: string | number | boolean | readonly JsonValue[] | {
                         readonly [key: string]: JsonValue;
                     } | null;
@@ -367,6 +359,16 @@ export type OperationOutputActionResultById = {
                         readonly [key: string]: JsonValue;
                     } | null;
                     reviewedEffectDigest: string;
+                } | {
+                    kind: 'no_worker_can_accept';
+                    unavailable: 'ask' | 'primary' | 'fail';
+                    reason: 'empty' | 'no_available_machine' | 'not_accepting' | 'draining' | 'unsupported' | 'forbidden' | 'workspace_unavailable' | 'memory_insufficient' | 'worker_copy_missing';
+                    workerCopy?: {
+                        serverId: string;
+                        sourceWorkspaceRefId: string;
+                        sourceMachineId: string;
+                        targetMachineId: string;
+                    } | undefined;
                 } | undefined;
             } | undefined;
             domainRef?: {
@@ -552,8 +554,6 @@ export type OperationOutputActionResultById = {
                 consentScope?: 'thisTime' | 'untilChanged' | undefined;
             } | undefined;
         };
-    } | {
-        kind: 'not_found';
     };
     readonly "action.operations.cancel": {
         kind: 'not_found';

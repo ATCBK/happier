@@ -83,47 +83,8 @@ export type WorkflowAuthoringActionInputById = {
                 } | undefined;
             } | null | undefined;
             connectedServices?: {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
                 v: 2;
                 bindingsByServiceId?: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                } | {
                     source: 'team_resource';
                     resourceId: string;
                     deliveryMode: 'direct';
@@ -139,7 +100,46 @@ export type WorkflowAuthoringActionInputById = {
                     resourceId: string;
                     deliveryMode: 'brokered';
                     disclosedMember?: undefined;
+                } | {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
                 }> | undefined;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
             } | null | undefined;
             transcriptStorage?: 'persisted' | 'direct' | null | undefined;
             terminal?: {
@@ -299,47 +299,8 @@ export type WorkflowAuthoringActionInputById = {
                 } | undefined;
             } | null | undefined;
             connectedServices?: {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
-                v: 1;
-                bindingsByServiceId: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                }>;
-            } | {
                 v: 2;
                 bindingsByServiceId?: Record<string, {
-                    source: 'native';
-                } | {
-                    source: 'connected';
-                    selection: 'group';
-                    groupId: string;
-                    profileId?: string | undefined;
-                } | {
-                    source: 'connected';
-                    profileId: string;
-                    selection?: 'profile' | undefined;
-                } | {
                     source: 'team_resource';
                     resourceId: string;
                     deliveryMode: 'direct';
@@ -355,7 +316,46 @@ export type WorkflowAuthoringActionInputById = {
                     resourceId: string;
                     deliveryMode: 'brokered';
                     disclosedMember?: undefined;
+                } | {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
                 }> | undefined;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
+            } | {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                }>;
             } | null | undefined;
             transcriptStorage?: 'persisted' | 'direct' | null | undefined;
             terminal?: {
@@ -547,6 +547,11 @@ export type WorkflowAuthoringActionInputById = {
         } | {
             kind: 'rename';
             name: string;
+        } | {
+            kind: 'rename_result_field';
+            blockId: string;
+            from: string;
+            to: string;
         })[] | undefined;
         settings?: {
             description?: string | undefined;
@@ -681,13 +686,13 @@ export type WorkflowAuthoringActionInputById = {
                         sourceSessionId: string;
                         events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                         policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
                             kind: 'currentTurn';
                             sourceTurnId: string;
                         } | {
                             kind: 'firstMatch';
-                        } | {
-                            kind: 'nextMatches';
-                            count: number;
                         } | {
                             kind: 'everyMatch';
                         };
@@ -956,13 +961,13 @@ export type WorkflowAuthoringActionResultById = {
                             sourceSessionId: string;
                             events: ('parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled' | 'userActionRequired' | 'sessionStarted' | 'sessionArchived')[];
                             policy: {
+                                kind: 'nextMatches';
+                                count: number;
+                            } | {
                                 kind: 'currentTurn';
                                 sourceTurnId: string;
                             } | {
                                 kind: 'firstMatch';
-                            } | {
-                                kind: 'nextMatches';
-                                count: number;
                             } | {
                                 kind: 'everyMatch';
                             };

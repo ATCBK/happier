@@ -321,6 +321,19 @@ export type ComputerControlActionResultById = {
             } | undefined;
         };
     } | {
+        status: 'failed';
+        code: string;
+        target: {
+            kind: 'window';
+            displayId: string;
+            pid: number;
+            windowId: number;
+        } | {
+            kind: 'display';
+            displayId: string;
+        };
+        sourceId: string;
+    } | {
         status: 'captured';
         captureId: string;
         geometry: {
@@ -353,19 +366,6 @@ export type ComputerControlActionResultById = {
                 mimeType: 'image/png';
             };
         };
-        target: {
-            kind: 'window';
-            displayId: string;
-            pid: number;
-            windowId: number;
-        } | {
-            kind: 'display';
-            displayId: string;
-        };
-        sourceId: string;
-    } | {
-        status: 'failed';
-        code: string;
         target: {
             kind: 'window';
             displayId: string;

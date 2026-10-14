@@ -10,12 +10,14 @@ export type DiagnosticsActionInputById = {
 };
 export type DiagnosticsActionResultById = {
     readonly "diagnostics.diagnosis.run": {
+        status: 'unavailable';
+    } | {
         status: 'completed';
         report: {
             capturedAt: string;
             findings: {
                 code: 'server.mismatch.ui_vs_machine' | 'server.mismatch.ui_vs_pasted' | 'server.mismatch.settings_vs_resolved' | 'server.multiple_machines_multiple_servers' | 'server.profile_missing_for_active_url' | 'auth.mismatch.ui_vs_machine_account' | 'auth.machine_missing_account' | 'machine.none_online' | 'server.diagnostics_disabled' | 'auth.server_401' | 'server.unreachable' | 'server.http_error';
-                severity: 'error' | 'info' | 'warning';
+                severity: 'info' | 'warning' | 'error';
                 machineIds?: string[] | undefined;
                 details?: {
                     activeServerId?: string | undefined;
@@ -33,8 +35,6 @@ export type DiagnosticsActionResultById = {
                 } | undefined;
             }[];
         };
-    } | {
-        status: 'unavailable';
     };
     readonly "diagnostics.daemons.check": {
         status: 'unavailable';
