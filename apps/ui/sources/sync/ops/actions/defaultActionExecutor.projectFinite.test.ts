@@ -171,6 +171,29 @@ beforeEach(async () => {
 afterEach(async () => { restoreHttpReplyDecoder?.(); restoreHttpReplyDecoder = undefined; await homes.reset(); });
 
 describe('Project finite delivery through the default UI Action host', () => {
+    it('confirms project setup with the catalog human summary, never the agent specification', async () => {
+        homes.answer(requesterHomeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1 },
+        } } } });
+        foreignDisclosure.mockResolvedValueOnce(false);
+        const actionId = 'projects.prepare';
+        const spec = getActionSpec(actionId);
+        const result = await createDefaultActionExecutor().execute(actionId, {
+            workspace: { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' },
+            phase: 'setup',
+        }, { serverId, surface: 'ui', authority: 'present_user' });
+
+        expect(result).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+        expect(foreignDisclosure).toHaveBeenCalledOnce();
+        const [title, body] = foreignDisclosure.mock.calls[0] ?? [];
+        expect(title).toBe(spec.title);
+        expect(body).toBe(spec.inputHints?.description);
+        expect(body).not.toBe(spec.description);
+        expect(body).not.toContain(actionId);
+        expect(body).not.toMatch(/waiver/i);
+        expect(homes.requestsFor(`/v1/actions/${actionId}`)).toHaveLength(0);
+    });
+
     it.each(['invalid_json', 'mismatched', 'mismatched_refusal', 'outcome_unknown', 'pre_open_refusal'] as const)('keeps original Open custody after HTTP settlement: %s', async settlement => {
         const [{ createProjectOpenController }, { createSessionDraftRepository }, { createSessionDraftCipher },
             { captureLazyActionAccountContext }] = await Promise.all([

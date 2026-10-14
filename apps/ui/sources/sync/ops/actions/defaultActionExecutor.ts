@@ -34,7 +34,7 @@ import { verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actio
 import { readOriginalAccountActionMachine } from '@/sync/api/externalActionAccountTransport';
 import { normalizeActionsSettingsV1, isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { buildApprovalPreviewSummary, createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD, type CurrentSessionPresentationActionResultV1 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createUiProviderActionExecuteV1 } from './providerActionDeps';
@@ -3718,10 +3718,36 @@ async function readActionAdmissionSettings(account: LazyActionAccountContext) {
   }
 }
 
+/** Default UI confirmation consumes the same policy as admission; explicit Inbox requirements still win. */
+async function confirmPresentUserAction(
+  actionId: ActionId,
+  input: unknown,
+  context: UiActionExecutorContext,
+  settings: Awaited<ReturnType<typeof readActionAdmissionSettings>>,
+  opts?: DefaultActionExecutorOptions,
+): Promise<UiActionExecutorContext | null> {
+  if (context.surface !== 'ui' || context.authority !== 'present_user' || context.bypassApprovals
+    || context.presentUserConfirmation?.actionId === actionId
+    || (context.actionCaller && context.actionCaller.kind !== 'host')) return context;
+  const spec = getActionSpec(actionId);
+  if (spec.safety !== 'danger' && !spec.safetyForInput && spec.approvalPolicy?.uiConfirmation !== 'policy'
+    && !spec.approvalPolicy?.uiConfirmationForInput) return context;
+  const parsed = spec.inputSchema.safeParse(input);
+  if (!parsed.success || opts?.isActionEnabled?.(actionId, context) === false) return context;
+  const policy = normalizeActionsSettingsV1(settings.actionsSettingsV1);
+  if (!isActionEnabledByActionsSettings(actionId, policy, context)
+    || !isApprovalRequiredByActionsSettings(actionId, policy, context, undefined, undefined, parsed.data)) return context;
+  const confirmed = { ...context, presentUserConfirmation: { actionId } };
+  if (isApprovalRequiredByActionsSettings(actionId, policy, confirmed, undefined, undefined, parsed.data)) return context;
+  const { Modal } = await import('@/modal');
+  return await Modal.confirm(spec.title, buildApprovalPreviewSummary(spec, parsed.data)) ? confirmed : null;
+}
+
 export async function withDefaultActionExecuteContext<TResult>(
   opts: DefaultActionExecutorOptions,
   context: DefaultActionExecuteContext,
-  work: (executor: ReturnType<typeof buildDefaultActionExecutor>, account: LazyActionAccountContext) => Promise<TResult>,
+  work: (executor: ReturnType<typeof buildDefaultActionExecutor>, account: LazyActionAccountContext,
+    settings: Awaited<ReturnType<typeof readActionAdmissionSettings>>) => Promise<TResult>,
   executedActionId?: ActionId,
 ): Promise<TResult> {
   const account = await captureLazyActionAccountContext(context.serverId, context.signal);
@@ -3731,7 +3757,7 @@ export async function withDefaultActionExecuteContext<TResult>(
       const settings = await readActionAdmissionSettings(account);
       account.assertCurrent();
       context.signal?.throwIfAborted();
-      const result = await work(buildDefaultActionExecutor({ ...opts, ...(context.openRoute ? { openRoute: context.openRoute } : {}) }, { ...account, settings }), account);
+      const result = await work(buildDefaultActionExecutor({ ...opts, ...(context.openRoute ? { openRoute: context.openRoute } : {}) }, { ...account, settings }), account, settings);
       const effectClass = executedActionId ? getActionSpec(executedActionId).sideEffectClass : undefined;
       // Return an effect's actual disposition to its captured invoker. Retirement
       // suppresses Account projection publication, but cannot rewrite an acknowledgement.
@@ -3765,13 +3791,17 @@ export async function executeDefaultActionInCapturedAccount(
     const settings = await readActionAdmissionSettings(account);
     account.assertCurrent();
     signal?.throwIfAborted();
-    const result = await buildDefaultActionExecutor(undefined, { ...account, settings }).execute(actionId, input, {
+    const admittedContext = await confirmPresentUserAction(actionId, input, {
       ...context,
       signal,
       serverId: account.serverId,
       ...(account.serverIdentityId ? { serverIdentityId: account.serverIdentityId } : {}),
       runtimeAccountId: account.accountId,
-    });
+    }, settings);
+    account.assertCurrent();
+    signal?.throwIfAborted();
+    if (!admittedContext) return { ok: false as const, errorCode: 'approval_canceled', error: 'approval_canceled' };
+    const result = await buildDefaultActionExecutor(undefined, { ...account, settings }).execute(actionId, input, admittedContext);
     account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
     return result;
   };
@@ -3908,14 +3938,17 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       if (!serverId) return await ordinary().execute(actionId, input, actionContext);
       try {
         const native = resolveNativeManagedAction(actionId, opts);
-        const execute = (signal?: AbortSignal) => withDefaultActionExecuteContext(opts, { ...actionContext, signal, openRoute, serverId }, async (executor, account) => {
-          const capturedContext = {
+        const execute = (signal?: AbortSignal) => withDefaultActionExecuteContext(opts, { ...actionContext, signal, openRoute, serverId }, async (executor, account, settings) => {
+          const capturedContext = await confirmPresentUserAction(actionId, input, {
             ...actionContext,
             signal,
             serverId,
             ...(account.serverIdentityId ? { serverIdentityId: account.serverIdentityId } : {}),
             runtimeAccountId: account.accountId,
-          };
+          }, settings, opts);
+          account.assertCurrent();
+          signal?.throwIfAborted();
+          if (!capturedContext) return { ok: false as const, errorCode: 'approval_canceled', error: 'approval_canceled' };
           return native ? await executor.executeNativeManagedAction(native, input, capturedContext)
             : await executor.execute(actionId, input, capturedContext);
         }, actionId);

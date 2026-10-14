@@ -1203,15 +1203,15 @@ function sentenceTerminated(value: string): string {
   return /[.!?…]$/u.test(value) ? value : `${value}.`;
 }
 
-/** One canonical summary source for every approval; domain presenters refine exact effects. */
-function buildApprovalPreviewSummary(spec: ActionSpec, input: unknown): string {
+/** One canonical summary source for every approval and present-user confirmation; domain presenters refine exact effects. */
+export function buildApprovalPreviewSummary(spec: ActionSpec, input: unknown): string {
   let domainSummary: string | null = null;
   try {
     domainSummary = spec.approvalPresentation?.summary(input)?.trim() || null;
   } catch {
     // Presentation cannot become a second effect-admission failure.
   }
-  const fallback = String(spec.inputHints?.description ?? spec.description ?? spec.title ?? spec.id).trim();
+  const fallback = String(spec.inputHints?.description ?? spec.title ?? spec.id).trim();
   return sentenceTerminated(domainSummary ?? (fallback || String(spec.id)));
 }
 
