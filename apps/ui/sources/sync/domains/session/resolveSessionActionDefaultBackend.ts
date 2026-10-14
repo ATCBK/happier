@@ -3,6 +3,7 @@ import type { AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/execut
 import { readAcpConfiguredBackendV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/acpConfiguredBackendV1';
 import { resolveLinkedExternalSessionMetadataV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
 import type { BackendTargetRefV2, PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { readBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 
 import {
     isBundledAgentId,
@@ -28,6 +29,14 @@ export function resolveSessionActionDefaultTarget(
   resolved: ResolvedSessionActionDefaultBackend | null | undefined,
 ): PersistedBackendTargetRefV2 | null {
   return resolved?.agentTarget ?? resolved?.backendTarget ?? null;
+}
+
+export function resolveSessionActionDefaultTargetKey(
+  resolved: ResolvedSessionActionDefaultBackend | null | undefined,
+): string | null {
+  // A presentation id is not an execution selection, especially while the
+  // private definition/correspondence is still hydrating.
+  return readBackendTargetKeyV2(resolveSessionActionDefaultTarget(resolved));
 }
 
 function normalizeEnabledAgentIds(enabledAgentIds: readonly AgentId[] | null | undefined): readonly AgentId[] {

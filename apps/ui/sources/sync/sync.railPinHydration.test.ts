@@ -32,7 +32,7 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         connection = undefined;
     });
 
-    it.each(['retained', 'new'] as const)('hydrates %s off-page rail-only Bots alongside list and dual-surface pins', async membership => {
+    it.each(['retained', 'new', 'overtaken', 'list-only-newer'] as const)('hydrates %s pinned Bots alongside list and dual-surface pins', async membership => {
         const pins = [
             { sessionId: 'list-only', sortKey: 'a', pinnedAt: 1, listPinned: true, railPinned: false },
             { sessionId: 'rail-only', sortKey: 'b', pinnedAt: 2, listPinned: false, railPinned: true },
@@ -45,7 +45,9 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         const emptySnapshot = SessionOrganizationSnapshotResponseSchema.parse({ snapshot: {
             ...snapshot.snapshot, version: 0, pins: [],
         } });
-        let pinsAvailable = membership === 'retained';
+        let pinsAvailable = membership !== 'new';
+        let serveNewerRow = false;
+        let staleSnapshotAvailable = false;
         const sourceMetadata = { path: '/bot', host: 'fixture', bot: { kind: 'bot' } };
         const owner = createSessionOwnerMetadataV1({ metadata: sourceMetadata });
         if (!owner.ok) throw new Error('Bot owner metadata fixture was rejected');
@@ -73,12 +75,17 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
                 if (path === '/v2/account/settings') return Response.json(AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {} }, version: 1 }));
                 if (path === '/v2/session-organization') return Response.json(pinsAvailable ? snapshot : emptySnapshot);
                 if (path === '/v2/sessions/metadata-upgrades') return Response.json({ sessionIds: [] });
-                if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+                if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({
+                    sessions: staleSnapshotAvailable ? [records.get('rail-only')] : [],
+                    nextCursor: null, hasNext: false,
+                });
                 const sessionId = path.startsWith('/v2/sessions/') ? decodeURIComponent(path.slice('/v2/sessions/'.length)) : '';
                 const record = records.get(sessionId);
                 if (!record) return null;
                 exactReads.push(sessionId);
-                return Response.json({ session: record });
+                return Response.json({ session: serveNewerRow
+                    ? { ...record, seq: 14, updatedAt: 3, metadataVersion: 2 }
+                    : record });
             },
         });
         const serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
@@ -87,6 +94,31 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         // already has a last-known organization snapshot.
         pinsAvailable = true;
         const { sync } = await import('./sync');
+        // Join bootstrap's public queue before arranging the later live read.
+        await sync.refreshSessions();
+        if (membership === 'overtaken') {
+            // A live detail read has already hydrated a newer revision than
+            // the exact-id row returned by this list refresh.
+            serveNewerRow = true;
+            await sync.ensureSessionVisibleForMessageRoute('rail-only', { forceRefresh: true, hydrateMessages: false });
+            expect(storage.getState().sessions['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
+            serveNewerRow = false;
+        }
+        staleSnapshotAvailable = membership === 'overtaken' || membership === 'list-only-newer';
+        if (membership === 'list-only-newer') {
+            // A newer list projection without the opened Session entity cannot
+            // be promoted to successful required hydration.
+            const { ['rail-only']: _railSession, ...sessions } = storage.getState().sessions;
+            storage.setState({ sessions });
+            storage.getState().applyServerScopedSessionListRowPatches(serverId, [{
+                sessionId: 'rail-only', patch: { seq: 14, updatedAt: 3, metadataVersion: 2 },
+            }]);
+            expect(storage.getState().sessionListRowsByServerId[serverId]['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
+            expect(storage.getState().sessions['rail-only']).toBeUndefined();
+            await expect(sync.refreshSessions({ awaitSessionListHydration: true })).rejects.toThrow('Required session hydration failed for rail-only');
+            expect(storage.getState().sessions['rail-only']).toBeUndefined();
+            return;
+        }
         await sync.refreshSessions({ awaitSessionListHydration: true });
 
         expect(new Set(exactReads)).toEqual(new Set(['list-only', 'rail-only', 'both']));
@@ -97,5 +129,9 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         const entries = buildAppRailEntries([], { botHomes: [{ serverId, organization,
             rowsBySessionId: storage.getState().sessionListRowsByServerId[serverId] ?? {} }] });
         expect(entries.bots.map(entry => entry.sessionId)).toEqual(['rail-only', 'both']);
+        if (membership === 'overtaken') {
+            expect(storage.getState().sessions['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
+            expect(storage.getState().sessionListRowsByServerId[serverId]['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
+        }
     });
 });

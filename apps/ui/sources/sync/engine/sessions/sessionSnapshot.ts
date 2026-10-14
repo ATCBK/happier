@@ -63,6 +63,7 @@ import {
 } from './sessionHttpCompat';
 import { orderRowsForSessionListHydration } from './sessionListHydrationPriority';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { hasAuthoritativeSessionRouteData } from '@/sync/domains/session/hasAuthoritativeSessionRouteData';
 import {
     buildSessionOwnerMetadataUnavailableShell,
     projectSessionLayout1LockedOwnerVisibility,
@@ -2151,7 +2152,20 @@ export async function fetchAndApplySessions(params: {
                                             });
                                             staleSkippedRowsBeforeEnqueue += 1;
                                             hydrationAttribution.staleBeforeEnqueueRows += 1;
-                                            markRequiredHydrationResult(row, null);
+                                            // A newer opened Session may already have satisfied this
+                                            // read through detail/socket hydration. Skipping its older
+                                            // snapshot is not a required-hydration failure; a newer
+                                            // list-only projection still cannot satisfy that contract.
+                                            const existingSession = params.getExistingSession?.(row.id);
+                                            const currentSession = existingSession
+                                                && existingSession.serverId === decryptedSession.serverId
+                                                && existingSession.seq >= decryptedSession.seq
+                                                && existingSession.updatedAt >= decryptedSession.updatedAt
+                                                && classifySessionTupleApplyCurrentness(decryptedSession, existingSession).fullyCurrent
+                                                && hasAuthoritativeSessionRouteData(existingSession)
+                                                && isHydratedSessionCurrentForListState(existingSession, params.getCurrentSessionListRenderable)
+                                                ? existingSession : null;
+                                            markRequiredHydrationResult(row, currentSession);
                                             return null;
                                         }
                                         const enqueueStartedAtMs = nowMs();
