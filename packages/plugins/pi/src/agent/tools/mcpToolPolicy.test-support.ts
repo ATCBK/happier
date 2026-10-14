@@ -14,7 +14,8 @@ import type { PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import type { PluginProtocolClientHandle, PluginProtocolClientSpec } from '@happier-dev/plugin-sdk/exec/protocol-clients';
 import type { AgentMcpToolPolicyContractInput, AgentMcpToolPolicyCallObservation,
   AgentMcpToolPolicyPermissionObservation } from '@happier-dev/plugin-sdk/testing';
-import { accountSettingsParse, projectMcpServerMaterializationV1, resolveSessionCapabilitiesV1 } from '@happier-dev/protocol';
+import { accountSettingsParse, projectMcpServerMaterializationV1, resolveSessionCapabilitiesV1,
+  TranscriptRawAgentEventV1Schema, type TranscriptRawAgentEventV1 } from '@happier-dev/protocol';
 import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { commitMcpServerCatalogMutationV1, loadMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import type { McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/catalogSchemasV1';
@@ -23,6 +24,7 @@ import type { AgentState } from '@/api/types';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
 import { createNativeAgentSessionServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
+import { createNativeAgentSessionHostServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
 import { materializeMcpServerConfigRecord, type MaterializeMcpServerConfigRecordResult } from '@/mcp/servers/materializeMcpServerConfigRecord';
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -57,6 +59,8 @@ let revision = 1;
 let modelServer: Server;
 let receiptServer: Server;
 let providerExtensionPath = '';
+let fixtureMcpServerPath = '';
+let capabilityNotices: TranscriptRawAgentEventV1[] = [];
 let privateConfigFiles: string[] = [];
 let materialized: MaterializeMcpServerConfigRecordResult | undefined;
 let calls: (AgentMcpToolPolicyCallObservation & Readonly<{ privateTokenDelivered: boolean }>)[] = [];
@@ -100,6 +104,7 @@ function sse(model: string, name?: string, args: unknown = {}) {
 }
 
 async function spawnPi(spec: Extract<PluginProtocolClientSpec, { kind: 'jsonStream' }>): Promise<PluginProtocolClientHandle<'jsonStream'>> {
+  const startedAtMs = Date.now();
   const argv = [piCliPath, ...(spec.launch.args ?? []), '--no-session', '--extension', providerExtensionPath,
     '--provider', 'fixture', '--model', 'fixture'];
   // Fixture isolation is deliberate: never collect or pass an Account's real
@@ -117,6 +122,9 @@ async function spawnPi(spec: Extract<PluginProtocolClientSpec, { kind: 'jsonStre
   const lines = createInterface({ input: child.stdout });
   lines.on('line', line => {
     let record: JsonValue = JSON.parse(line);
+    if (record && typeof record === 'object' && !Array.isArray(record) && record.type === 'response') {
+      console.info('Real Pi RPC response', JSON.stringify({ command: record.command, elapsedMs: Date.now() - startedAtMs }));
+    }
     if (record && typeof record === 'object' && !Array.isArray(record) && record.type === 'extension_error') console.info('Real Pi extension failure', JSON.stringify(record));
     // Sensitivity case at the genuine native RPC transport boundary: leave the
     // installed vendor's tool event and confirmation intact except its id link.
@@ -141,7 +149,11 @@ async function spawnPi(spec: Extract<PluginProtocolClientSpec, { kind: 'jsonStre
     await terminal;
     lines.close();
   };
-  return { client: { write: async record => write(new TextEncoder().encode(`${JSON.stringify(record)}\n`)),
+  return { client: { write: async record => {
+    console.info('Real Pi RPC command', JSON.stringify({ type: record && typeof record === 'object' && !Array.isArray(record) ? record.type : null,
+      elapsedMs: Date.now() - startedAtMs }));
+    await write(new TextEncoder().encode(`${JSON.stringify(record)}\n`));
+  },
     subscribe(listener) { subscribers.add(listener); return { dispose() { subscribers.delete(listener); } }; }, dispose },
     process: { write, closeStdin: async () => { child.stdin.end(); }, wait: () => terminal, onOutput: () => ({ dispose() {} }), dispose },
     wait: () => terminal, dispose };
@@ -152,6 +164,10 @@ import { createInterface } from 'node:readline';
 const lines = createInterface({input:process.stdin});
 lines.on('line', async line => {
   const message=JSON.parse(line); if (message.id===undefined) return;
+  if (message.method === process.env.MCP_FIXTURE_FAIL) {
+    process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:message.id,error:{code:-32603,message:'private-failure-sentinel'}})+'\\n');
+    return;
+  }
   let result;
   if(message.method==='initialize') result={protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'fixture',version:'1'}};
   else if(message.method==='tools/list') result={tools:[{name:'echo',inputSchema:{type:'object',properties:{}}}]};
@@ -231,9 +247,20 @@ export type PiMcpToolPolicyContractFixture = AgentMcpToolPolicyContractInput & R
   openRun(request: AgentExecutionRunOpenRequest): Promise<AgentExecutionRunRuntime>;
   observePermissions(): readonly AgentMcpToolPolicyPermissionObservation[];
   observeServerCalls(): readonly (AgentMcpToolPolicyCallObservation & Readonly<{ privateTokenDelivered: boolean }>)[];
+  observeCapabilityNotices(): readonly TranscriptRawAgentEventV1[];
 }>;
 
-export function createPiMcpToolPolicyContractFixture(options: Readonly<{ corruptNativeApprovalCorrelation?: boolean }> = {}): PiMcpToolPolicyContractFixture {
+export function createPiMcpToolPolicyContractFixture(options: Readonly<{
+  corruptNativeApprovalCorrelation?: boolean;
+  brokenServer?: 'spawn' | 'initialize' | 'list';
+}> = {}): PiMcpToolPolicyContractFixture {
+  const addBrokenServer = (servers: AgentExecutionRunOpenRequest['mcpServers']) => ({
+    ...servers,
+    ...(options.brokenServer ? { broken: {
+      command: options.brokenServer === 'spawn' ? join(cwd, 'missing-command') : process.execPath,
+      args: [fixtureMcpServerPath], env: { MCP_FIXTURE_FAIL: options.brokenServer === 'initialize' ? 'initialize' : 'tools/list' },
+    } } : {}),
+  });
   return {
   agent: PI_PLUGIN.manifest.contributes.agents.find(agent => agent.id === 'pi')!,
   candidateControl: { off: 'hidden', approval: 'host' },
@@ -245,7 +272,7 @@ export function createPiMcpToolPolicyContractFixture(options: Readonly<{ corrupt
   },
   fixtureServer: {
     async prepare(input) {
-      cwd = input.cwd; sequence = 0; revision = 1; calls = []; permissions = []; privateConfigFiles = [];
+      cwd = input.cwd; sequence = 0; revision = 1; calls = []; permissions = []; privateConfigFiles = []; capabilityNotices = [];
       advertisedTools = new Set();
       corruptNativeApprovalCorrelation = options.corruptNativeApprovalCorrelation === true;
       launch = { argv: [], env: {}, acpSessionNew: null, appServerRequests: [], filesWritten: [], runtimeEvents: [] };
@@ -275,7 +302,7 @@ export function createPiMcpToolPolicyContractFixture(options: Readonly<{ corrupt
       const modelUrl = await listen(modelServer);
       providerExtensionPath = join(cwd, 'fixture-provider.mjs');
       await writeFile(providerExtensionPath, `export default function(pi){pi.registerProvider('fixture',{baseUrl:${JSON.stringify(modelUrl)},apiKey:'fixture-key',api:'anthropic-messages',models:[{id:'fixture',name:'fixture',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:200000,maxTokens:8192}]});}`);
-      const serverPath = join(cwd, 'fixture-mcp.mjs'); await writeFile(serverPath, serverSource);
+      const serverPath = join(cwd, 'fixture-mcp.mjs'); fixtureMcpServerPath = serverPath; await writeFile(serverPath, serverSource);
       const identities = ['a', 'b'].map(key => ({ key, serverId: `catalog-${key}`, title: 'Duplicate fixture', tool: 'echo' }));
       catalog = { v: 1, bindings: identities.map(server => ({ id: `rule-${server.key}`, serverId: server.serverId, enabled: true,
         target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 })), servers: identities.map(server => ({ id: server.serverId, name: server.key, title: server.title,
@@ -318,10 +345,27 @@ export function createPiMcpToolPolicyContractFixture(options: Readonly<{ corrupt
   },
   async openSession(request) {
     // The host context is the boundary; native preparation and launch stay real.
-    const runtime = await createPiAgentRuntime().sessions.open({ ...request,
+    const sessionServices = createNativeAgentSessionHostServices({
+      owners: { features: { isEnabled: () => false }, sessionHooks: {}, transcripts: { fileFollow: {} },
+        accountUsage: {}, mcp: {}, toolExecution: {} },
+      agentId: 'pi', sessionId: request.sessionId, directory: cwd, signal: controller.signal, isCurrent: () => true,
+      session: { sessionId: request.sessionId, updateMetadata() {},
+        async enqueueAgentMessageCommitted(...args: Parameters<ApiSessionClient['enqueueAgentMessageCommitted']>) {
+          const payload = args[1];
+          if (payload.type === 'event') capabilityNotices.push(TranscriptRawAgentEventV1Schema.parse(payload.data));
+          return { persisted: true, delivered: false };
+        },
+      },
+      publications: { models: { bind: () => ({ dispose() {} }) }, modes: { bind: () => ({ dispose() {} }) },
+        activeInput: { bind: () => ({ dispose() {} }), publishStatus() {} } },
+      readToolExecutionCapability: () => null,
+      // Unused host capabilities are inert fixture fields; the real transcript
+      // publisher and strict event consumer above are never replaced.
+    } as never);
+    const runtime = await createPiAgentRuntime().sessions.open({ ...request, mcpServers: addBrokenServer(request.mcpServers),
       launchEnvironment: { values: { PI_CODING_AGENT_DIR: cwd }, unset: [] },
     }, { signal: controller.signal, services: createRuntimeServices(),
-      session: { id: request.sessionId, services: {} },
+      session: { id: request.sessionId, services: { transcripts: sessionServices.transcripts } },
     } as unknown as AgentSessionRuntimeContext);
     const observed: AgentSessionRuntimeEvent[] = []; events.set(runtime, observed);
     runtime.watch(event => { observed.push(event); launch.runtimeEvents.push(event); });
@@ -329,13 +373,14 @@ export function createPiMcpToolPolicyContractFixture(options: Readonly<{ corrupt
   },
   async openRun(request) {
     const open = createPiAgentRuntime().sessions.executionRunContextV1!.open;
-    return await open({ ...request, launchEnvironment: { values: { PI_CODING_AGENT_DIR: cwd }, unset: [] } },
+    return await open({ ...request, mcpServers: addBrokenServer(request.mcpServers), launchEnvironment: { values: { PI_CODING_AGENT_DIR: cwd }, unset: [] } },
       { signal: controller.signal, services: createRuntimeServices(),
         scope: { kind: 'execution_run', executionRunId: request.runId },
         executionRun: { id: request.runId, services: {} },
       } as unknown as AgentExecutionRunRuntimeContextV1);
   },
   observePermissions: () => permissions,
+  observeCapabilityNotices: () => capabilityNotices,
   observeServerCalls: () => calls,
   async invokeTool(runtime, request) {
     const before = permissions.length;
