@@ -23,6 +23,7 @@ import {
 } from '@/sync/api/account/usageAnalytics';
 import { getPreferredLanguage, t, type TranslationKeyNoParams } from '@/text';
 import { projectUsagePageCost } from '@happier-dev/protocol/usage/usageCostFacts';
+import { wasConnectedServiceQuotaObserved } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { type UsagePageCostProjection, type UsageAnalyticsCoverage } from '@happier-dev/protocol';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { formatUsageCalendarPeriod, formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
@@ -182,7 +183,18 @@ export function readUsageCoverageGaps(
 ): readonly UsageQuerySourceState[] {
   const accounting = sources.includes('accounting') ? slice.accounting?.coverage : undefined;
   const dependent = new Set([...sources, ...(accounting?.sources.map(source => source.source) ?? [])]);
-  const gaps = slice.sources.filter(source => dependent.has(source.source) && source.status !== 'available');
+  const quotaRequested = sources.includes('quota');
+  const gaps = slice.sources.filter(source => (dependent.has(source.source)
+    || quotaRequested && source.source.startsWith('quota:')) && source.status !== 'available');
+  // Transport settlement does not establish history completeness. Keep the
+  // settled allowance's qualification visible between refreshes as well.
+  if (quotaRequested && slice.quota?.some(read => read.history?.nextCursor != null
+    || read.unusedCapacity && read.unusedCapacity.historyStatus !== 'returned_page')
+    && !gaps.some(source => source.source === 'quota')) {
+    const clocks = slice.quota.flatMap(read => read.current && wasConnectedServiceQuotaObserved(read.current)
+      ? [read.current.fetchedAtMs] : []);
+    gaps.push({ source: 'quota', status: 'partial', ...(clocks.length ? { asOfMs: Math.min(...clocks) } : {}) });
+  }
   if (sources.includes('accounting') && slice.accounting && !accounting
     && !gaps.some(source => source.source === 'accounting')) {
     gaps.unshift({ source: 'accounting', status: 'unknown' });

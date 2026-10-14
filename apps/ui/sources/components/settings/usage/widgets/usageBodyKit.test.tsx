@@ -3,6 +3,8 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { ProviderAccountUsageSnapshotV1Schema, buildProviderAccountUsageRecordId } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { projectProviderAccountUsageQuotaReadV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { resolveUsagePageAggregation, type UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { renderScreen } from '@/dev/testkit';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
@@ -100,6 +102,29 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(usageCoverageSummary(slice('pending'), ['quota'])).toBe(t('usage.board.page.coveragePending', { sources: usageSourceTitle('quota') }));
         expect(usageCoverageSummary(slice('error'), ['quota'])).toContain(usageSourceTitle('quota'));
         expect(usageCoverageSummary({ sources: [] } as unknown as UsageQueryResultSlice, ['quota'])).toBe('');
+    });
+
+    it('keeps settled incomplete allowance coverage visible through refresh and removes it only when history completes', async () => {
+        const recordKey = { providerId: 'codex', accountSubjectId: 'work', subjectKind: 'account', quotaScope: 'account' } as const;
+        const current = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordKey, recordId: buildProviderAccountUsageRecordId(recordKey),
+            providerId: 'codex', accountSubject: { kind: 'providerSubject', id: 'work' }, observedAtMs: 100, fetchedAtMs: 100,
+            staleAfterMs: 1000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_empty', meters: [] });
+        const source = QualifiedConnectedServiceUsageSourceV4Schema.parse({ bindingKind: 'account',
+            ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' } });
+        const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 200 } });
+        const sliceFor = (complete: boolean) => resolveUsagePageAggregation({ queries: [query],
+            quota: { status: 'available', asOfMs: 100, value: [projectProviderAccountUsageQuotaReadV1({ input: { source },
+                current, nowMs: 200, history: { entries: [], nextCursor: complete ? null : { id: 'next', observedAtMs: 50 } } })] },
+        }).results[0]!;
+        const settled = sliceFor(false);
+        const screen = await renderScreen(<UsageCoverageLine slice={settled} sources={['quota']} testID="settled-coverage" />);
+        expect.soft(usageCoverageSummary(settled, ['quota'])).toBe('Partial history');
+        expect.soft(screen.findHostByTestId('settled-coverage') !== null).toBe(true);
+        const before = screen.getTextContent();
+        await screen.update(<UsageCoverageLine slice={{ ...settled, pending: true }} sources={['quota']} testID="settled-coverage" />);
+        expect(screen.getTextContent()).toBe(before);
+        await screen.update(<UsageCoverageLine slice={sliceFor(true)} sources={['quota']} testID="settled-coverage" />);
+        expect(screen.findHostByTestId('settled-coverage') === null).toBe(true);
     });
 
     it('names every source still being read once for the page header', () => {
