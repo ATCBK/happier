@@ -44,7 +44,7 @@ function setup() {
     );
     return {
         row,
-        notify: (reason: 'expand' | 'collapse') => act(async () => notifyRef.current?.({ reason, sourceId: 'tool-body' })),
+        notify: (reason: 'expand' | 'collapse' | 'content-change') => act(async () => notifyRef.current?.({ reason, sourceId: 'tool-body' })),
     };
 }
 
@@ -63,6 +63,20 @@ const layout = (screen: Screen, height: number) => act(async () => {
 const reservedMinHeight = (screen: Screen) => (shell(screen).props.style as { minHeight?: number } | undefined)?.minHeight;
 
 describe('TranscriptRowShell row-local collapse', () => {
+    it('replaces a visual fallback reservation with its intrinsic content height', async () => {
+        const { row, notify } = setup();
+        const screen = await renderScreen(row(0));
+        await layout(screen, 405);
+        await screen.update(row(1));
+        expect(reservedMinHeight(screen)).toBe(405);
+        await notify('content-change');
+        expect(reservedMinHeight(screen)).toBeUndefined();
+        await layout(screen, 240);
+        await screen.update(<></>);
+        await screen.update(row(2));
+        expect(reservedMinHeight(screen)).toBe(240);
+    });
+
     it('stops reserving the open height once a body that mounted open collapses', async () => {
         const { row, notify } = setup();
         const screen = await renderScreen(row(0));
