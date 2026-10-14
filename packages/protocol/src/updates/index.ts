@@ -34,6 +34,7 @@ import { MachineKeyBasisV1Schema } from '../machines/machineContentKeyTransition
 import { AccessibleMachineAccessV1Schema } from '../machines/machineAccessV1.js';
 import { ManagedWakeTargetV1Schema } from '../machines/managed/managedIntentV1.js';
 import { DevcontainerChildProjectionV1Schema } from '../machines/managed/devcontainerV1.js';
+import { AccountEncryptionCurrentnessResponseSchema } from '../account/encryptionMode.js';
 
 const TimestampMsSchema = lazyZodSchema(() => z.number().int().min(0));
 const Base64Schema = lazyZodSchema(() => z.string());
@@ -236,6 +237,8 @@ export const UpdateBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.object({
     t: z.literal('update-account'),
     id: z.string(),
+    // Omitted on profile-only updates; null withdraws encryption admission.
+    encryptionCurrentness: AccountEncryptionCurrentnessResponseSchema.nullable().optional(),
     name: z.string().nullable().optional(),
   }).passthrough(),
   z.object({
