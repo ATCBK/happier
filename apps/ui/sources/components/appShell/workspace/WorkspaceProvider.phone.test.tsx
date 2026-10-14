@@ -364,7 +364,9 @@ describe('workspace owner on a phone', () => {
         // A tab switch replaces the screen: Back still leads to the list.
         expect(boundary.replaces).toEqual(['/session/A3?serverId=home-a']);
 
-        await act(async () => { read(screen).tabs.close(kept.id); });
+        // This no-Account layout harness exercises the already admitted mounted transport;
+        // human close admission is composed with real Account policy in WorkspaceTabs.seam.
+        await act(async () => { expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.close', input: { tabId: kept.id } })).toEqual({ ok: true }); });
         expect(rows(read(screen).tabs)).toEqual(['session:A1 (preview)']);
         expect(projectWorkspaceSharedTabs(read(screen).workspace.state).order).toEqual([]);
     });

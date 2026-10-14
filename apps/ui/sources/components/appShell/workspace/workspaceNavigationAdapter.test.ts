@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { resolveCompactAppDestinations } from '../destinations/compactAppDestinationCatalog';
 import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
 import { createWorkspaceNavigationAdapter } from './workspaceNavigationAdapter';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
 import { normalizeWorkspaceSingletonTabs } from './workspaceDestinationPolicy';
 import { applyCloseDetailsTab, applyOpenDetailsTab, createEmptyPaneDetailsState } from '../panes/details/workspace/detailsWorkspaceReducer';
+import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { readScopedWorkspaceLayout, workspaceLayoutScopeKey, writeScopedWorkspaceLayout } from './workspacePersistence';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -76,6 +78,49 @@ describe('workspace navigation adapter', () => {
         h.adapter.openHref('/settings/account');
         expect(h.commits.map(commit => commit.href)).toEqual(['/settings/account']);
         expect(h.adapter.canGoBack).toBe(true);
+    });
+
+    it('adopts the saved terminal pane for an exact cold alias URL without merging other presentations or Accounts', async () => {
+        const endpoint = 'http://happier-agent-qa-find-search.localhost:3009';
+        const alias = (await upsertServerProfile({ serverUrl: endpoint })).id;
+        const home = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
+        const profile = await setServerProfileIdentityForUrl(endpoint, home);
+        if (!profile) throw new Error('Home identity missing');
+        onTestFinished(async () => { await removeServerProfile(profile.id); });
+        const scope = { serverId: profile.id, accountId: 'alice' };
+        const sessionId = 'cmv88vp4l0062m2i1pvpsyc0i';
+        const paneId = 'be022062-19f9-45a6-9adb-3fc5a79208d0';
+        const original = createWorkspaceState({ id: paneId, target: { kind: 'session',
+            params: { id: sessionId, serverId: home, bottom: 'terminal', right: 'terminal' } }, preview: false, pinned: false });
+        const key = workspaceLayoutScopeKey({ ...scope, windowId: 'main' });
+        const saved = readScopedWorkspaceLayout(JSON.parse(JSON.stringify(writeScopedWorkspaceLayout({}, key, original))), key);
+        if (!saved) throw new Error('Written layout was not admitted');
+        let state = saved;
+        const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: false, friends: false }, pages: [] });
+        const adapter = createWorkspaceNavigationAdapter({ getState: () => state, getCatalog: () => catalog, getScope: () => scope,
+            dispatch: action => { state = reduceWorkspaceState(state, action); },
+            transport: { commit: () => {} }, createId: () => crypto.randomUUID(), onChange: () => {} });
+        adapter.initialize(`/session/${sessionId}?serverId=${alias}&bottom=terminal`);
+        const active = () => state.tabs[state.groups[state.focusedGroupId].activeTabId];
+        expect(active()).toEqual(original.tabs[paneId]);
+        expect(Object.keys(state.tabs)).toEqual([paneId]);
+        adapter.acceptUrl(`/session/${sessionId}?serverId=${alias}&right=files`);
+        expect(active().id).not.toBe(paneId);
+        expect(active().target.params.right).toBe('files');
+        adapter.initialize(`/session/${sessionId}?serverId=${alias}&bottom=terminal&accountId=bob`);
+        expect(active().id).not.toBe(paneId);
+        adapter.initialize(`/session/${sessionId}?serverId=unrelated-home&bottom=terminal`);
+        expect(active().id).not.toBe(paneId);
+        adapter.initialize(`/session/${sessionId}?serverId=${home}&bottom=terminal&right=files`);
+        expect(active().id).toBe(paneId);
+        expect(active().target.params.right).toBe('files');
+        // An intentional second view remains its own current pane even when
+        // the unchanged URL is re-admitted using the equivalent Home label.
+        adapter.openHref(`/session/${sessionId}?serverId=${home}&bottom=terminal&right=files`, { mode: 'newTab' });
+        const secondPaneId = active().id;
+        expect(secondPaneId).not.toBe(paneId);
+        adapter.acceptUrl(`/session/${sessionId}?serverId=${alias}&bottom=terminal&right=files`);
+        expect(active().id).toBe(secondPaneId);
     });
 
     it('contracts restored duplicate Workflows hubs without dropping distinct workflow details', () => {

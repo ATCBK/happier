@@ -17,7 +17,7 @@ import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue, type 
 import type { DestinationNavigation } from './DestinationInstanceHost';
 import type { SplitCanvasHostControls } from '../splitCanvas/components/SplitCanvasHost';
 import { createWorkspaceActionAdapter, selectWorkspaceTabsToClose, workspaceActionFailure, type WorkspaceActionOutcome } from './workspaceActions';
-import { registerMountedWorkspaceAction } from './workspaceActionRuntime';
+import { executeWorkspaceUiAction, registerMountedWorkspaceAction } from './workspaceActionRuntime';
 import { admitWorkspaceSingletonState, workspaceSingletonDestinationIds } from './workspaceDestinationPolicy';
 import { selectWorkspaceClosableTabIds, type WorkspaceState } from './workspaceState';
 import { resolvePhoneWorkspaceTabHref } from './workspacePhoneProjection';
@@ -227,9 +227,10 @@ export function WorkspaceProvider(props: Readonly<{
                 await runGuardedTabNavigation(closing.tabIds, () => {
                     const selection = selectWorkspaceTabsToClose(latest.current.owner.getState(), request.actionId, request.input);
                     if (!selection || selection.groupId !== closing.groupId || selection.tabIds.length !== closing.tabIds.length
-                        || selection.tabIds.some((id, index) => id !== closing.tabIds[index])) return;
+                        || selection.tabIds.some((id, index) => id !== closing.tabIds[index])) return false;
                     if (phone) runtime.initialized = true;
                     outcome = execute(request.actionId, request.input);
+                    return outcome.ok;
                 }, {
                     includeActiveGuard: state.focusedGroupId === closing.groupId
                         && closing.tabIds.includes(state.groups[closing.groupId].activeTabId),
@@ -312,35 +313,6 @@ export function WorkspaceProvider(props: Readonly<{
         });
         if (result !== true) fireAndForget(result, { tag: 'Workspace.closeTabs' });
     }, [isCurrentUiOwner, runtime]);
-    const phoneOnTab = phoneTabHref !== null;
-    const phoneControls = React.useMemo<WorkspacePhoneControls | null>(() => {
-        if (!phone || !owner.isReady) return null;
-        const navigate = (operation: () => void) => runUiNavigation(() => {
-            runtime.initialized = true;
-            operation();
-        });
-        return {
-            catalog: props.catalog,
-            onTab: phoneOnTab,
-            openHref: (href, mode, onOpened) => {
-                const tabHref = resolvePhoneWorkspaceTabHref(latest.current.catalog, href);
-                if (!tabHref) return false;
-                navigate(() => { runtime.adapter.openHref(tabHref, { mode, onOpened }); });
-                return true;
-            },
-            activateTab: (tabId) => {
-                const state = latest.current.owner.getState();
-                const group = Object.values(state.groups).find((item) => item.tabIds.includes(tabId));
-                if (group) activateTab(group.id, tabId);
-            },
-            closeTab: (tabId) => {
-                const state = latest.current.owner.getState();
-                const group = Object.values(state.groups).find((item) => item.tabIds.includes(tabId));
-                if (group) closeTabs(group.id, [tabId], false);
-            },
-        };
-    }, [activateTab, closeTabs, owner.isReady, phone, phoneOnTab, props.catalog, runUiNavigation, runtime]);
-
     const openHref = React.useCallback((href: string, options?: WorkspaceOpenOptions) => {
         const canEnter = () => entry && latest.current.entry && latest.current.scopeKey === scopeKey
             && latest.current.phoneTransport === phoneTransport && runtime.browser !== null;
@@ -408,6 +380,39 @@ export function WorkspaceProvider(props: Readonly<{
         tabNavigations.set(tabId, navigation);
         return navigation;
     }, [guardTraversal, isCurrentUiOwner, openHref, runUiNavigation, runtime, tabNavigations]);
+    const phoneOnTab = phoneTabHref !== null;
+    const phoneControls = React.useMemo<WorkspacePhoneControls | null>(() => {
+        if (!phone || !owner.isReady) return null;
+        const navigate = (operation: () => void) => runUiNavigation(() => {
+            runtime.initialized = true;
+            operation();
+        });
+        return {
+            catalog: props.catalog,
+            onTab: phoneOnTab,
+            openHref: (href, mode, onOpened) => {
+                const tabHref = resolvePhoneWorkspaceTabHref(latest.current.catalog, href);
+                if (!tabHref) return false;
+                navigate(() => { runtime.adapter.openHref(tabHref, { mode, onOpened }); });
+                return true;
+            },
+            activateTab: (tabId) => {
+                const state = latest.current.owner.getState();
+                const group = Object.values(state.groups).find((item) => item.tabIds.includes(tabId));
+                if (group) activateTab(group.id, tabId);
+            },
+            closeTab: (tabId) => {
+                if (!isCurrentUiOwner()) return;
+                const state = latest.current.owner.getState();
+                if (!state.tabs[tabId]) return;
+                fireAndForget(executeWorkspaceUiAction({ actionId: 'workspace.tabs.close', input: { tabId } }, href => {
+                    const focused = latest.current.owner.getState();
+                    const navigation = navigationForTab(focused.groups[focused.focusedGroupId].activeTabId);
+                    (navigation.pushRetainingCurrent ?? navigation.push)(href);
+                }), { tag: 'Workspace.phone.close' });
+            },
+        };
+    }, [activateTab, isCurrentUiOwner, navigationForTab, owner.isReady, phone, phoneOnTab, props.catalog, runUiNavigation, runtime]);
     const navigation = React.useMemo<WorkspaceNavigationContextValue>(() => ({
         // Scoped restoration grants the retained host custody synchronously.
         // Transport initialization adopts the URL in a layout effect; it is

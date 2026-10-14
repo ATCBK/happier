@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { WORKSPACE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storage';
@@ -18,7 +18,9 @@ import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard, type Acti
 import { useUnsavedChangesBeforeRemoveGuard } from '@/utils/navigation/useUnsavedChangesBeforeRemoveGuard';
 import { KeyboardShortcutProvider, useKeyboardCommand, type KeyboardCommandId } from '@/keyboard';
 import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
-import { serializeWorkspaceLayout, workspaceLayoutScopeKey } from './workspacePersistence';
+import { parseWorkspaceLayout, serializeWorkspaceLayout, workspaceLayoutScopeKey, writeScopedWorkspaceLayout } from './workspacePersistence';
+import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { AppShellTitleStrip } from '@/components/navigation/shell/appRail/AppShellTitleStrip';
 import { reconcileWorkspaceSyncedTabs } from './workspaceSyncedTabs';
 import { registerWorkspaceRouteContext } from './workspaceRouteContext';
@@ -954,6 +956,69 @@ describe('consumed workspace navigation owner', () => {
         act(() => { navigation().openHref('/session/A2?serverId=home-a', { mode: 'newTab' }); });
         expect(boundary.layouts).not.toBe(layouts);
         expect(Object.values(boundary.layouts)[0]).toEqual(serializeWorkspaceLayout(navigation().state));
+        await screen.unmount();
+    });
+    it.each([true, false])('adopts the persisted terminal pane on a cold exact Home-alias URL (ready=%s)', async ready => {
+        const endpoint = 'http://happier-agent-qa-find-search.localhost:3009';
+        const alias = 'happier-agent-qa-find-search.localhost-3009';
+        const home = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
+        const sessionId = 'cmv88vp4l0062m2i1pvpsyc0i';
+        const paneId = 'be022062-19f9-45a6-9adb-3fc5a79208d0';
+        // Learn equivalence through the real profile producer before the cold mount.
+        expect((await upsertServerProfile({ serverUrl: endpoint })).id).toBe(alias);
+        const profile = await setServerProfileIdentityForUrl(endpoint, home);
+        if (!profile) throw new Error('Home identity was not learned');
+        // The MMKV backing is the testkit's isolated native-storage boundary.
+        // Retire only the profile created for this case.
+        onTestFinished(async () => {
+            // Retire the browser boundary before native-profile cleanup.
+            vi.stubGlobal('window', undefined);
+            await removeServerProfile(profile.id);
+        });
+        boundary.scope = { serverId: profile.id, accountId: 'alice' };
+        const saved = reduceWorkspaceState(createWorkspaceState({ id: paneId, target: { kind: 'session',
+            params: { id: sessionId, serverId: home, bottom: 'terminal', right: 'terminal' } }, pinned: false, preview: false }),
+            { type: 'openTab', groupId: 'group:1', tab: { id: 'saved-inbox', target: { kind: 'inbox', params: {} },
+                pinned: false, preview: true } });
+        const key = workspaceLayoutScopeKey({ ...boundary.scope, windowId: 'main' });
+        // Use the app's writer, JSON storage round-trip and exact reader, not a copied layout shape.
+        boundary.layouts = JSON.parse(JSON.stringify(writeScopedWorkspaceLayout({}, key, saved)));
+        expect(parseWorkspaceLayout(boundary.layouts[key])).toEqual(saved);
+        const persisted = boundary.layouts;
+        boundary.platform = 'web';
+        boundary.pathname = `/session/${sessionId}`;
+        boundary.params = { serverId: alias, bottom: 'terminal' };
+        boundary.dataReady = ready;
+        const history = { state: null as unknown,
+            replaceState(data: unknown) { this.state = data; }, pushState(data: unknown) { this.state = data; } };
+        installBrowserBoundary({ location: { pathname: boundary.pathname, search: `?serverId=${alias}&bottom=terminal`, hash: '' },
+            history, sessionStorage: { getItem: () => 'main' } });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: true, workflows: false, friends: false,
+        } });
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>
+            {navigation => <NavigationProbe navigation={navigation} />}
+        </WorkspaceProvider>);
+        if (!ready) await act(async () => { boundary.dataReady = true; });
+        const navigation = screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const state = navigation.state;
+        const active = state.tabs[state.groups[state.focusedGroupId].activeTabId];
+        expect(active.id).toBe(paneId);
+        expect(active.target).toEqual(saved.tabs[paneId].target);
+        expect(Object.keys(state.tabs)).toEqual([paneId, 'saved-inbox']);
+        expect(screen.root.findByType('HostedIdentity').props.params.serverId).toBe(home);
+        expect(createSessionPaneScopeId(sessionId, active.target.params.serverId, active.id))
+            .toBe(createSessionPaneScopeId(sessionId, home, paneId));
+        expect(boundary.layouts).toBe(persisted);
+        // A pending sync publication can temporarily withdraw readiness after
+        // restoration. Re-admitting the unchanged alias URL must keep custody.
+        await act(async () => { boundary.dataReady = false; });
+        await act(async () => { boundary.dataReady = true; });
+        const resumed = screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        expect(resumed.state.groups[resumed.state.focusedGroupId].activeTabId).toBe(paneId);
+        // Explicit user intent writes the adopted pane through the real layout owner.
+        await act(async () => { resumed.dispatch({ type: 'setPinned', tabId: paneId, pinned: true }); });
+        expect(parseWorkspaceLayout(boundary.layouts[key])?.tabs[paneId]).toMatchObject({ pinned: true, target: active.target });
         await screen.unmount();
     });
     it('keeps an initial deep link selected when shared tabs hydrate afterwards', async () => {

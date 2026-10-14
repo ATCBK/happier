@@ -52,7 +52,7 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
         const admitted = input.resolveOpenHref ? input.resolveOpenHref(href) : href;
         return admitted ? resolveDestinationRefFromHref(input.getCatalog(), admitted) : null;
     };
-    const findOpenDestination = (target: DestinationRef, state = input.getState(), groupId?: string): WorkspaceOpenDestination | null => {
+    const findOpenDestination = (target: DestinationRef, state = input.getState(), groupId?: string, tabId?: string): WorkspaceOpenDestination | null => {
         const catalog = input.getCatalog();
         const singleton = isWorkspaceSingletonDestination(catalog, target);
         const scope = input.getScope?.();
@@ -65,6 +65,7 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
         };
         const identity = target.kind === 'session' ? sessionIdentity(target) : null;
         const tab = Object.values(state.tabs).find(tab => {
+            if (tabId && tab.id !== tabId) return false;
             if (groupId && !state.groups[groupId]?.tabIds.includes(tab.id)) return false;
             if (singleton) return tab.target.kind === target.kind;
             const href = hrefForDestinationRef(catalog, tab.target);
@@ -125,6 +126,20 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             return target ? findOpenDestination(target) : null;
         },
         initialize(href: string) {
+            const target = resolveOpenTarget(href);
+            const reusable = target?.kind === 'session' ? findOpenDestination(target) : null;
+            if (target && reusable) {
+                // Cold admission addresses the Session, not a new pane. Keep its
+                // saved view state and Home qualifier while applying explicit URL state.
+                const retained = input.getState().tabs[reusable.tabId].target;
+                const adopted = { ...target, params: { ...retained.params, ...target.params,
+                    ...(retained.params.serverId ? { serverId: retained.params.serverId } : {}),
+                } };
+                if (!sameDestinationRef(retained, adopted)) input.dispatch({ type: 'setTarget', tabId: reusable.tabId, target: adopted });
+                input.dispatch({ type: 'activateTab', groupId: reusable.groupId, tabId: reusable.tabId });
+                visit(true, false, true);
+                return;
+            }
             // The navigator is already mounting this URL; adopt it rather than
             // dispatching a replacement before its route is registered.
             this.openHref(href, { replace: true }, false);
@@ -260,8 +275,15 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             }
             const target = resolveDestinationRefFromHref(input.getCatalog(), href);
             if (!target) return false;
-            if (sameDestinationRef(focusedEntry().target, target)) {
-                input.transport.adoptCurrent?.(focusedEntry(), history.index);
+            const current = focusedEntry();
+            const currentSession = target.kind === 'session'
+                && findOpenDestination(target, input.getState(), undefined, current.tabId);
+            // Readiness may re-admit the cold URL after initialization. Its Home
+            // alias and omitted view state must not replace the same current pane.
+            if (sameDestinationRef(current.target, target) || (currentSession
+                && Object.entries(target.params).every(([key, value]) => key === 'id' || key === 'serverId' || key === 'accountId'
+                    || current.target.params[key] === value))) {
+                input.transport.adoptCurrent?.(current, history.index);
                 return true;
             }
             return this.openHref(href, {}, false);

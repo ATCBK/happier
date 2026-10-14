@@ -130,9 +130,10 @@ export const PhoneOpenTabsRail = React.memo(function PhoneOpenTabsRail() {
         const pane = tab?.panes.find((item) => item.id === tab.activeTabId);
         const href = pane && catalog ? hrefForDestinationRef(catalog, pane.target) : null;
         if (tab && pane && !href) {
-            void Modal.confirm(t('phoneNav.rail.notAvailableTitle'), t('phoneNav.rail.notAvailableUnknown'), {
-                confirmText: t('phoneNav.rail.closeTab'), cancelText: t('common.done'),
-            }).then((close) => { if (close) closeTab(tab.id); });
+            Modal.alert(t('phoneNav.rail.notAvailableTitle'), t('phoneNav.rail.notAvailableUnknown'), [
+                { text: t('phoneNav.rail.closeTab'), onPress: () => closeTab(tab.id) },
+                { text: t('common.done'), style: 'cancel' },
+            ]);
             return;
         }
         activateTab(tabId);

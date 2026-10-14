@@ -45,7 +45,7 @@ export async function executeWorkspaceUiAction(request: Parameters<MountedWorksp
         });
         if (result.ok) {
             const pending = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
-            if (pending.success && scope && lifetime.isCurrent()) openApproval(buildApprovalHref(pending.data.artifactId, scope.serverId) as Href);
+            if (pending.success && scope && lifetime.isCurrent()) openApproval(buildApprovalHref(pending.data.artifactId, scope.serverId));
         } else if (lifetime.isCurrent() && !['workspace_navigation_cancelled', 'action_cancelled', 'approval_rejected', 'approval_cancelled'].includes(result.errorCode)) {
             await Modal.alertAsync(t('common.error'), result.errorCode === 'action_disabled' ? t('common.disabled') : t('common.unavailable'));
         }

@@ -4,6 +4,9 @@ import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit';
 
+// Dialog presentation is the external boundary; the real Action decision remains in-process.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+
 // This local navigation journey cannot use the recipient-envelope HTTP/process APIs.
 vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
     const unused = () => { throw new Error('Workspace Action reached recipient-envelope API'); };
@@ -64,6 +67,37 @@ describe('workspace UI Action approval presentation', () => {
         const opened = new URL(workspace.hrefs.at(-1) ?? '', 'https://workspace.test');
         expect(opened.pathname).toBe(`/inbox/approvals/${pending.artifactId}`);
         expect(opened.searchParams.get('serverId')).toBe(scope.serverId);
+    });
+
+    it.each(['disabled', 'require', 'waive'] as const)('admits an explicit pinned close through the %s UI policy', async policy => {
+        const { serverId, scope } = await activateApprovalHome(`workspace-close-${policy}`, 'alice');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
+        const settings = { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({
+            v: 1, actions: { 'workspace.tabs.close': policy === 'disabled' ? { enabled: false }
+                : policy === 'require' ? { approvalRequiredSurfaces: ['ui'] } : {} },
+            ...(policy === 'waive' ? { approvalWaivedSurfaces: { 'workspace.tabs.close': ['ui'] } } : {}),
+        }) };
+        storage.getState().applySettingsForScope(scope, settings, 2);
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 2 } });
+        const workspace = mountWorkspace(serverId);
+        const result = await executeWorkspaceUiAction({ actionId: 'workspace.tabs.close', input: { tabId: 'keep' } }, workspace.openApproval);
+        if (policy === 'disabled') {
+            expect(result).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+            expect(workspace.state().tabs.keep).toBeDefined();
+            expect(homes.artifacts(serverId).list()).toHaveLength(0);
+        } else if (policy === 'require') {
+            expect(result.ok).toBe(true);
+            if (!result.ok) throw new Error(result.errorCode);
+            const pending = ActionApprovalRequestCreatedResultSchema.parse(result.result);
+            expect(homes.artifacts(serverId).readPlainBody(pending.artifactId)).not.toBeNull();
+            expect(workspace.state().tabs.keep).toBeDefined();
+        } else {
+            expect(result).toMatchObject({ ok: true });
+            expect(workspace.state().tabs.keep).toBeUndefined();
+            expect(workspace.state().tabs.close).toBeDefined();
+            expect(homes.artifacts(serverId).list()).toHaveLength(0);
+        }
     });
 
     it('keeps an acknowledged approval after Account retirement without opening it in the new Account workspace', async () => {

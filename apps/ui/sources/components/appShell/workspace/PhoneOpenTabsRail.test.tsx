@@ -73,13 +73,13 @@ describe('phone production tab carry', () => {
         const h = harness();
         const offsets: number[] = [];
         const screen = await renderScreen(<WorkspaceNavigationContext.Provider value={h.workspace}><PhoneOpenTabsRail /></WorkspaceNavigationContext.Provider>, {
-            createNodeMock: element => element.type === 'ScrollView' ? { scrollTo: (options: { x: number }) => offsets.push(options.x) } : null,
+            createNodeMock: element => String(element.type) === 'ScrollView' ? { scrollTo: (options: { x: number }) => offsets.push(options.x) } : null,
         });
-        const scroll = screen.root.find(node => node.type === 'ScrollView' && node.props.accessibilityRole === 'tablist');
+        const scroll = screen.root.find(node => String(node.type) === 'ScrollView' && node.props.accessibilityRole === 'tablist');
         await act(async () => { scroll.props.onLayout({ nativeEvent: { layout: { width: 100 } } }); });
         const item = scroll.children.find(child => typeof child === 'object' && child.findAll(node => node.props.testID === 'phone-rail-tab-inbox-tab').length > 0);
         if (!item || typeof item !== 'object') throw new Error('Expected the active rail item');
-        const outer = item.type === 'View' ? item : item.find(node => node.type === 'View');
+        const outer = String(item.type) === 'View' ? item : item.find(node => String(node.type) === 'View');
         await act(async () => { outer.props.onLayout({ nativeEvent: { layout: { x: 300, width: 80 } } }); });
         expect(offsets.some(x => x > 0)).toBe(true);
         await screen.unmount();
@@ -117,7 +117,7 @@ describe('phone production tab carry', () => {
         const screen = await renderScreen(<WorkspaceNavigationContext.Provider value={h.workspace}><PhoneOpenTabsRail /></WorkspaceNavigationContext.Provider>);
         await act(async () => { screen.pressByTestId('phone-rail-tab-session-tab'); });
         expect(h.activated).toEqual(['session-tab']);
-        for (const scroll of screen.root.findAll(node => node.type === 'ScrollView' && typeof node.props.onScroll === 'function')) {
+        for (const scroll of screen.root.findAll(node => String(node.type) === 'ScrollView' && typeof node.props.onScroll === 'function')) {
             await act(async () => { scroll.props.onScroll({ nativeEvent: { contentOffset: { x: 200, y: 0 } } }); });
         }
         expect(runtime.getSnapshot().phase).toBe('idle');
