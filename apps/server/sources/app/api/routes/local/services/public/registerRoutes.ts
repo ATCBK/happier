@@ -1,20 +1,7 @@
-import type {
-    DaemonLocalServicePublicPreviewCreateRequestV1,
-    DaemonLocalServicePublicPreviewRevokeRequestV1,
-    DaemonLocalServicePublicPreviewStatusRequestV1,
-    LocalServicePreviewResourceV1,
-    LocalServicePublicExposureModeV1,
-    LocalServicePublicExposureV1,
-    LocalServicePublicPreviewSnapshotV1,
-} from "@happier-dev/protocol";
+import type { DaemonLocalServicePublicPreviewCreateRequestV1, DaemonLocalServicePublicPreviewRevokeRequestV1, DaemonLocalServicePublicPreviewStatusRequestV1, LocalServicePublicExposureModeV1, LocalServicePublicExposureV1, LocalServicePublicPreviewSnapshotV1 } from '@happier-dev/protocol/local/services/public/v1';
+import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import { isDeepStrictEqual } from 'node:util';
-import {
-    DaemonLocalServicePublicPreviewCreateRequestV1Schema,
-    DaemonLocalServicePublicPreviewRevokeRequestV1Schema,
-    DaemonLocalServicePublicPreviewStatusRequestV1Schema,
-    DaemonLocalServicePublicPreviewStatusResponseV1Schema,
-    isLocalServicePublicPreviewCreateConfirmed,
-} from "@happier-dev/protocol";
+import { DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, DaemonLocalServicePublicPreviewStatusResponseV1Schema, isLocalServicePublicPreviewCreateConfirmed } from '@happier-dev/protocol/local/services/public/v1';
 import { readSessionAccessAuthenticationFromRequest, type SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 
 import {
@@ -33,6 +20,8 @@ import {
 import { writeLocalServicePreviewDownstream } from "@/app/local/services/preview/downstream";
 import { encodeLocalServiceRequestPath } from "@/app/local/services/preview/requestTarget";
 import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
+import { LOCAL_SERVICE_APPLICATION_HTTP_METHODS } from '../hostRoutes';
+import { readLocalServiceRequestHostname } from '@/app/local/services/preview/origin';
 import {
     readLocalServicePublicClientKey,
     resolveLocalServicePublicAccessIdentity,
@@ -60,6 +49,7 @@ import {
 export type RegisterLocalServicePublicRoutesOptions = Readonly<{
     resolvePreview: (previewId: string) => LocalServicePreviewResourceV1 | null | undefined;
     resolveExposure?: (exposureId: string) => LocalServicePublicExposureV1 | null | undefined;
+    resolveExposureByHost?: (hostname: string) => LocalServicePublicExposureV1 | null | undefined;
     authorizeServiceAccess?: LocalServicePublicAccessServiceAuthorizer;
     authorizeSessionAccess?: (input: Readonly<{
         userId: string;
@@ -145,7 +135,6 @@ const PUBLIC_CONTROL_ROUTE_PATH = "/v1/local-services/public";
 const PUBLIC_STATUS_ROUTE_PATH = "/v1/local-services/public/status";
 const PUBLIC_RESOURCE_ROUTE_PATH = "/v1/local-services/public/:exposureId";
 const PUBLIC_PROXY_ROUTE_PATH = "/v1/local-services/public/:exposureId/*";
-const PUBLIC_PROXY_HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
 const PUBLIC_RESPONSE_REFERRER_POLICY_HEADER = "Referrer-Policy";
 const PUBLIC_RESPONSE_REFERRER_POLICY_VALUE = "no-referrer";
 const textEncoder = new TextEncoder();
@@ -364,6 +353,8 @@ function redirectPublicTokenExchange(
         path: string;
         search: string;
         rawToken: string;
+        hostExposure?: LocalServicePublicExposureV1 | null;
+        hostPath?: boolean;
     }>,
 ): void {
     applyPublicResponsePrivacyHeaders(reply);
@@ -371,10 +362,10 @@ function redirectPublicTokenExchange(
         .code?.(303)
         .header?.("Set-Cookie", scopedLocalServiceViewerTokenCookie({
             name: LOCAL_SERVICE_PUBLIC_TOKEN_COOKIE_NAME,
-            path: localServicePublicTokenCookiePath(input.exposureId),
+            path: localServicePublicTokenCookiePath(input.exposureId, input.hostExposure),
             rawToken: input.rawToken,
         }))
-        .header?.("Location", publicRedirectLocation(input))
+        .header?.("Location", input.hostPath ? `${input.path}${input.search}` : publicRedirectLocation(input))
         .send?.();
 }
 
@@ -585,19 +576,27 @@ async function handleRevokeExposure(
     reply.send?.({ ok: true });
 }
 
-async function handlePublicPreviewRequest(
-    request: RouteRequest,
-    reply: RouteReply,
+export async function handleLocalServicePublicHttpRequest(
+    requestInput: unknown,
+    replyInput: unknown,
     options: RegisterLocalServicePublicRoutesOptions,
 ): Promise<unknown> {
+    const request = requestInput as RouteRequest;
+    const reply = replyInput as RouteReply;
     if (!await isPublicPreviewFeatureEnabled(options, request)) {
         sendNotFound(reply);
         return undefined;
     }
-
-    const exposureId = readExposureId(request);
+    const hostname = readLocalServiceRequestHostname(request.headers);
+    const hostExposure = hostname ? options.resolveExposureByHost?.(hostname) : null;
+    const pathExposureId = readExposureId(request);
+    const exposureId = pathExposureId ?? hostExposure?.exposureId;
     if (!exposureId) {
         sendError(reply, 400, "invalid_public_preview_request", "missing_exposure_id");
+        return undefined;
+    }
+    if (options.resolveExposureByHost && pathExposureId && hostExposure?.exposureId !== pathExposureId) {
+        sendError(reply, 403, 'public_preview_access_denied', 'exposure_binding_mismatch');
         return undefined;
     }
 
@@ -633,6 +632,8 @@ async function handlePublicPreviewRequest(
             path: readWildcardPath(request),
             search: serializeQuery(request.query),
             rawToken: exchanged.rawToken,
+            hostExposure,
+            hostPath: !pathExposureId,
         });
         return undefined;
     }
@@ -660,10 +661,6 @@ async function handlePublicPreviewRequest(
     }
 
     const proxyHttp = options.proxyHttp ?? proxyLocalServicePreviewHttpRequest;
-    if (!options.openTunnel && !options.proxyHttp) {
-        sendError(reply, 503, "preview_transport_unavailable", "pms_tunnel_unavailable");
-        return undefined;
-    }
 
     const registration = new AbortController();
     const releaseConnection = options.retainConnection?.(exposureId, () => {
@@ -678,7 +675,7 @@ async function handlePublicPreviewRequest(
             preview: access.preview,
             request: createPublicHttpRequest(request, signal),
             response: createResponseSink(reply),
-            openTunnel: options.openTunnel as OpenLocalServicePreviewTunnel,
+            openTunnel: options.openTunnel,
             observability: createPublicExposureObservabilityEmitter(options.observability, exposureId),
         });
     } finally {
@@ -690,12 +687,11 @@ export function registerLocalServicePublicRoutes(
     app: Fastify,
     options: RegisterLocalServicePublicRoutesOptions,
 ): void {
-    // The upgrade handling is async (S-2 resolves the caller's session access before validating
-    // access), so the promise is returned rather than discarded. Node ignores an `upgrade`
-    // listener's return value; returning it lets callers and tests await the completed handling
-    // instead of guessing how many microtasks it takes.
+    // Node ignores the listener's Promise; contain admission failures as well as forwarding.
+    // Returning the contained Promise still lets registration callers await completion.
     app.server?.on?.("upgrade", (request, socket, head) => (
         handleLocalServicePublicWebSocketUpgrade(request, socket, head, options)
+            .catch(() => { socket.destroy?.(); })
     ));
 
     app.post(PUBLIC_CONTROL_ROUTE_PATH, {
@@ -742,9 +738,9 @@ export function registerLocalServicePublicRoutes(
         // keep Fastify's JSON parser in their parent scope.
         dataPlane.removeContentTypeParser(["application/json", "text/plain", "*"]);
         dataPlane.addContentTypeParser("*", (_request, payload, done) => done(null, payload));
-        for (const method of PUBLIC_PROXY_HTTP_METHODS) {
+        for (const method of LOCAL_SERVICE_APPLICATION_HTTP_METHODS) {
             const handler = async (request: unknown, reply: unknown) => {
-                await handlePublicPreviewRequest(request as RouteRequest, reply as RouteReply, options);
+                await handleLocalServicePublicHttpRequest(request, reply, options);
             };
             const registerProxyRoute = (path: string) => {
                 if (method === "GET") {

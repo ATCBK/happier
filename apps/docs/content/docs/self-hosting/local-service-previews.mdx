@@ -90,6 +90,11 @@ scoped to the top-level viewer site; opening under another site needs a fresh ad
 Older browsers that block cross-site cookies and do not support partitioning may still
 refuse the embedded preview.
 
+In 0.3 development, disabling the Home preview feature refuses new admissions and subsequent
+requests from existing viewers. Registrations remain available if the feature is enabled again.
+If a Home configuration read fails during a WebSocket upgrade, that socket closes and the server
+continues serving other requests.
+
 Final effective access loss closes the affected viewer's streams. Losing the starter's
 serving admission retires the service's exposures immediately, even if native Stop is
 unsupported or its outcome is still uncertain. Another valid overlapping grant preserves

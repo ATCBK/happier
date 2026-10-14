@@ -3,14 +3,22 @@ import { createPeerMediationFlowEvent, createPeerMediationHttpRequestFinishedEve
 import { log } from "@/utils/logging/log";
 import { prepareCooperativePreview } from './collectorBootstrap';
 export * from "@happier-dev/peer-mediation/localServices/preview/httpAdapter";
-export type ProxyLocalServicePreviewHttpRequestInput = Omit<SharedInput, "observability"> & Readonly<{ observability?: PeerMediationObservabilityEmitter }>;
+export type ProxyLocalServicePreviewHttpRequestInput = Omit<SharedInput, "observability" | "openTunnel"> & Readonly<{
+    observability?: PeerMediationObservabilityEmitter;
+    openTunnel?: SharedInput['openTunnel'];
+}>;
 export async function proxyLocalServicePreviewHttpRequest(input: ProxyLocalServicePreviewHttpRequestInput) {
     const prepared = await prepareCooperativePreview(input);
     if (!prepared) return { ok: true } as const;
     const observability = input.observability;
     return await proxyShared({
         ...prepared,
-        onTransportUnavailable: (event) => log(event, `Local service preview tunnel unavailable: ${event.reasonCode}`),
+        // Routes with no transport use the same typed refusal as a tunnel that cannot open.
+        openTunnel: prepared.openTunnel ?? (async () => { throw new Error('pms_tunnel_unavailable'); }),
+        onTransportUnavailable: (event) => {
+            prepared.onTransportUnavailable?.(event);
+            log(event, `Local service preview tunnel unavailable: ${event.reasonCode}`);
+        },
         observability: observability ? {
             createPeerMediationFlowEvent: (event) => observability.emit(createPeerMediationFlowEvent(event)),
             createPeerMediationHttpRequestFinishedEvent: (event) => observability.emit(createPeerMediationHttpRequestFinishedEvent(event)),

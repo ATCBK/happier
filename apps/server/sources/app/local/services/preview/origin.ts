@@ -1,4 +1,15 @@
-import type { LocalServicePreviewInitialPathV1, LocalServicePreviewOriginModeV1 } from "@happier-dev/protocol";
+import type { LocalServicePreviewInitialPathV1, LocalServicePreviewOriginModeV1 } from '@happier-dev/protocol/local/services/preview/v1';
+
+export function readLocalServiceRequestHostname(headers: Record<string, unknown> | undefined): string | null {
+    const raw = headers?.host;
+    const host = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof host !== 'string') return null;
+    try {
+        return new URL(`http://${host.trim()}`).hostname.toLowerCase().replace(/\.$/u, '') || null;
+    } catch {
+        return null;
+    }
+}
 
 export type ResolveLocalServicePreviewUrlInput = Readonly<{
     originMode: LocalServicePreviewOriginModeV1;

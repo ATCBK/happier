@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { IncomingMessage } from 'node:http';
+import { Socket } from 'node:net';
 import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
 import { createLocalServicePublicRuntime } from './runtime';
@@ -51,7 +53,12 @@ function socketBoundary(hold = false) {
 
 function upgradeRequest(ip: string) {
     const headers = { host: 'share.preview.example.test', upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'sec-websocket-version': '13', 'x-forwarded-for': ip };
-    return { url: '/v1/local-services/public/share/socket', headers, rawHeaders: Object.entries(headers).flat() };
+    // Node owns headers through a prototype accessor; a plain object hides lost-header projections.
+    const request = new IncomingMessage(new Socket());
+    request.url = '/v1/local-services/public/share/socket';
+    request.rawHeaders = Object.entries(headers).flat();
+    request.headers = headers;
+    return request;
 }
 
 describe('public WS access lifecycle', () => {

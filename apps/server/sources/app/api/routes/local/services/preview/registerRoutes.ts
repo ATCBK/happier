@@ -9,7 +9,7 @@ import { readLocalServicePreviewAdmission, observeLocalServicePreviewRetirement 
 import { readSessionAccessAuthenticationFromRequest, type SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { readMachineAvailabilityState } from '@/app/machines/machineStateGuards';
 import { LocalServicePreviewAccessRequestV1Schema, LocalServicePreviewServerAccessV1Schema, LocalServicePreviewNativeRegistrationRequestV1Schema, type LocalServicePreviewNativeDirectAccessRequestV1, type LocalServicePreviewNativeDirectAccessV1 } from '@happier-dev/protocol/local/services/preview/nativeDirect';
-import type { MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol';
+import type { MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 
 import type { Fastify } from "@/app/api/types";
 import {
@@ -33,6 +33,8 @@ import {
 import { writeLocalServicePreviewDownstream } from "@/app/local/services/preview/downstream";
 import { encodeLocalServiceRequestPath } from "@/app/local/services/preview/requestTarget";
 import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
+import { LOCAL_SERVICE_APPLICATION_HTTP_METHODS, registerLocalServiceHostRoutes } from '../hostRoutes';
+import { readLocalServiceRequestHostname } from '@/app/local/services/preview/origin';
 import type {
     LocalServicePreviewRuntimeRegistrationInput,
     LocalServicePreviewRuntimeRegistrationResult,
@@ -134,10 +136,8 @@ type PreviewTokenMaterial = Readonly<{
 }>;
 
 const PREVIEW_ROUTE_PATH = "/v1/local-services/preview/:previewId/*";
-const PREVIEW_HOST_ROUTE_PATH = "/*";
 const PREVIEW_REGISTRATION_ROUTE_PATH = "/v1/local-services/preview";
 const PREVIEW_RESOURCE_ROUTE_PATH = "/v1/local-services/preview/:previewId";
-const PREVIEW_HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
 const PREVIEW_UPGRADE_ROUTE_PREFIX = "/v1/local-services/preview/";
 const textEncoder = new TextEncoder();
 
@@ -214,31 +214,8 @@ function readPreviewTokenFromUrl(url: URL): string | null {
     return readString(url.searchParams.get("previewToken"));
 }
 
-function normalizeHostname(value: string): string | null {
-    try {
-        return new URL(`http://${value.trim()}`).hostname.toLowerCase().replace(/\.$/u, "") || null;
-    } catch {
-        return null;
-    }
-}
-
-function escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function hostOriginConstraint(hostOriginBaseDomain: string | null | undefined): RegExp | null {
-    if (!hostOriginBaseDomain) return null;
-    const normalized = normalizeHostname(hostOriginBaseDomain);
-    if (!normalized || normalized.includes("..")) return null;
-    const labels = normalized.split(".");
-    if (labels.length < 2 || labels.some((label) => label.length === 0)) return null;
-    return new RegExp(`^[^.]+\\.${escapeRegExp(normalized)}(?::\\d+)?$`, "iu");
-}
-
 function readHostHeader(headers: Record<string, unknown> | undefined): string | null {
-    const rawHost = headers?.host;
-    const host = Array.isArray(rawHost) ? rawHost[0] : rawHost;
-    return typeof host === "string" ? normalizeHostname(host) : null;
+    return readLocalServiceRequestHostname(headers);
 }
 
 type PreviewHttpRouteTarget = Readonly<{
@@ -507,11 +484,17 @@ async function isPreviewLifecycleAuthorized(
     });
 }
 
-async function handlePreviewHttpRequest(
-    request: RouteRequest,
-    reply: RouteReply,
+export async function handleLocalServicePreviewHttpRequest(
+    requestInput: unknown,
+    replyInput: unknown,
     options: RegisterLocalServicePreviewRoutesOptions,
 ): Promise<unknown> {
+    const request = requestInput as RouteRequest;
+    const reply = replyInput as RouteReply;
+    if (options.featureEnabled && !await options.featureEnabled(request)) {
+        reply.code?.(404).send?.({ error: "not_found" });
+        return undefined;
+    }
     const target = resolvePreviewHttpRouteTarget(request, options);
     if (isPreviewHttpRouteError(target)) {
         sendError(reply, target.errorStatusCode, target.error, target.reasonCode);
@@ -555,10 +538,6 @@ async function handlePreviewHttpRequest(
     }
 
     const proxyHttp = options.proxyHttp ?? proxyLocalServicePreviewHttpRequest;
-    if (!options.openTunnel && !options.proxyHttp) {
-        sendError(reply, 503, "preview_transport_unavailable", "pms_tunnel_unavailable");
-        return undefined;
-    }
 
     const registration = new AbortController();
     const releaseConnection = options.retainConnection?.(target.previewId, () => {
@@ -573,7 +552,7 @@ async function handlePreviewHttpRequest(
             preview: target.preview,
             request: createPreviewHttpRequest(request, target, signal),
             response: createResponseSink(reply),
-            openTunnel: options.openTunnel as OpenLocalServicePreviewTunnel,
+            openTunnel: options.openTunnel,
             observability: options.observability,
             observabilityAccountId: resolveObservabilityAccountId(options, target.previewId),
         });
@@ -773,7 +752,9 @@ export function registerLocalServicePreviewRoutes(
     options: RegisterLocalServicePreviewRoutesOptions,
 ): void {
     app.server?.on?.("upgrade", (request, socket, head) => (
+        // Node ignores the listener's Promise; contain admission failures as well as forwarding.
         handlePreviewWebSocketUpgrade(request as UpgradeRequest, socket as UpgradeSocket, head, options)
+            .catch(() => { (socket as UpgradeSocket).destroy?.(); })
     ));
 
     app.post(PREVIEW_REGISTRATION_ROUTE_PATH, {
@@ -863,41 +844,22 @@ export function registerLocalServicePreviewRoutes(
         if (lease.signal.aborted || request.raw?.aborted) finish();
     });
 
-    const hostRouteConstraint = hostOriginConstraint(options.hostOriginBaseDomain);
-
     app.register(async (dataPlane) => {
         // Data-plane bytes are owned by the upstream application. Control routes above retain
         // their normal JSON parser and API body contract through Fastify encapsulation.
         dataPlane.removeContentTypeParser(["application/json", "text/plain", "*"]);
         dataPlane.addContentTypeParser("*", (_request, payload, done) => done(null, payload));
-        for (const method of PREVIEW_HTTP_METHODS) {
+        for (const method of LOCAL_SERVICE_APPLICATION_HTTP_METHODS) {
             const handler = async (request: unknown, reply: unknown) => {
-                await handlePreviewHttpRequest(request as RouteRequest, reply as RouteReply, options);
+                await handleLocalServicePreviewHttpRequest(request, reply, options);
             };
             if (method === "GET") {
                 dataPlane.get(PREVIEW_ROUTE_PATH, { exposeHeadRoute: false }, handler);
-                if (hostRouteConstraint) {
-                    // An unconstrained static UI root wins over a constrained wildcard.
-                    // Match that path explicitly while keeping the same preview policy.
-                    for (const path of ["/", PREVIEW_HOST_ROUTE_PATH]) {
-                        dataPlane.get(path, {
-                            exposeHeadRoute: false,
-                            constraints: { host: hostRouteConstraint },
-                        }, handler);
-                    }
-                }
                 continue;
             }
             dataPlane[method.toLowerCase() as Lowercase<typeof method>](PREVIEW_ROUTE_PATH, handler);
-            if (method === "OPTIONS" || !hostRouteConstraint) {
-                continue;
-            }
-            const hostPaths = method === "HEAD" ? ["/", PREVIEW_HOST_ROUTE_PATH] : [PREVIEW_HOST_ROUTE_PATH];
-            for (const path of hostPaths) {
-                dataPlane[method.toLowerCase() as Lowercase<typeof method>](path, {
-                    constraints: { host: hostRouteConstraint },
-                }, handler);
-            }
         }
     });
+    registerLocalServiceHostRoutes(app, options.hostOriginBaseDomain,
+        (request, reply) => handleLocalServicePreviewHttpRequest(request, reply, options));
 }

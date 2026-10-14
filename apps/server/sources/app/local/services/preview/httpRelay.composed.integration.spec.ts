@@ -1,5 +1,8 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
+import { connect, type Socket } from 'node:net';
+import type { Duplex } from 'node:stream';
 import Fastify from 'fastify';
 import { Server } from 'socket.io';
 import { io as createClient } from 'socket.io-client';
@@ -10,7 +13,9 @@ import { TEST_MACHINE_INSTALLATION_ID } from '@/app/api/testkit/machineAdmission
 import { createPeerTcpTunnelRelayBridge } from '@/app/api/socket/peer/mediation/tunnel/relayBridge';
 import { createPeerTcpTunnelRelayCoordinator } from '@/app/api/socket/peer/mediation/tunnel/relayCoordinator';
 import { registerPeerTcpTunnelRelaySocketHandler } from '@/app/api/socket/peer/mediation/tunnel/registerRelay';
-import { registerLocalServicePreviewRoutes } from '@/app/api/routes/local/services/preview/registerRoutes';
+import { registerLocalServiceRoutes } from '@/app/api/routes/local/services/registerRoutes';
+import { createLocalServicePublicRuntime } from '../public/runtime';
+import { createLocalServicePublicRateLimitChecker } from '../public/rateLimits';
 import { registerMachinePeerTcpTunnelRelayRuntime } from '../../../../../../cli/src/daemon/machine/registerMachinePeerTcpTunnelRelayRuntime';
 import { createLocalServicePreviewRuntime } from './runtime';
 import { createLocalServicePreviewTunnelOpener } from './tunnel';
@@ -21,8 +26,8 @@ vi.mock('@/storage/db', async () => {
     return { db: createMachineAdmissionPersistenceBoundary('user_1').db };
 });
 
-describe('private preview HTTP through the server relay and daemon TCP terminator', () => {
-    it('returns the fixture body after admission exchange and forwards a tokenless subresource', async () => {
+describe('preview HTTP and public WebSocket through the server relay and daemon TCP terminator', () => {
+    it('returns the private fixture body/subresource and closes a real public websocket on revoke', async () => {
         const paths: string[] = [];
         const wireTrace: string[] = [];
         const closeTransports: (() => void)[] = [];
@@ -42,6 +47,16 @@ describe('private preview HTTP through the server relay and daemon TCP terminato
             response.setHeader('content-type', 'text/plain');
             response.end(`fixture:${request.url}`);
         });
+        const fixtureUpgradeSockets = new Set<Duplex>();
+        fixture.on('upgrade', (request, socket) => {
+            fixtureUpgradeSockets.add(socket);
+            socket.on('close', () => fixtureUpgradeSockets.delete(socket));
+            const accept = createHash('sha1').update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+            socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+            const message = Buffer.from('public fixture message');
+            socket.write(Buffer.concat([Buffer.from([0x81, message.length]), message]));
+        });
+        let publicClient: Socket | undefined;
         fixture.listen(0, '127.0.0.1');
         await once(fixture, 'listening');
         const address = fixture.address();
@@ -106,10 +121,32 @@ describe('private preview HTTP through the server relay and daemon TCP terminato
         });
         const app = Fastify();
         app.decorate('authenticate', async () => {});
-        registerLocalServicePreviewRoutes(app as never, {
-            resolvePreview: runtime.resolvePreview, resolvePreviewByHost: runtime.resolvePreviewByHost,
-            validateAccess: runtime.validateAccess, exchangeAccessToken: runtime.exchangeAccessToken,
-            retainConnection: runtime.retainConnection, hostOriginBaseDomain: 'example.test', openTunnel,
+        const publicRuntime = createLocalServicePublicRuntime({
+            publicBaseUrl: 'https://home.example.test', hostOriginBaseDomain: 'example.test',
+            tokenSecret: 'public-fixture-secret', resolvePreview: runtime.resolvePreview,
+            policy: { enabled: true, allowedModes: ['secret_link'], maxTtlMs: 60_000, auditRequired: false, rateLimitProfileIds: ['default'] },
+            // Three application reads and one admitted WebSocket in this journey.
+            checkRateLimit: createLocalServicePublicRateLimitChecker({ kind: 'fixed_window', maxRequests: 4, windowMs: 60_000 }),
+        });
+        registerLocalServiceRoutes(app as never, {
+            env: {
+                PUBLIC_URL: 'https://home.example.test',
+                HAPPIER_FEATURE_LOCAL_SERVICES__ENABLED: 'true',
+                HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true',
+                HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'example.test',
+                HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: 'true',
+                HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: 'secret_link',
+                HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: '60000',
+                HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOW_TEST_AUDIT_SINK: 'true',
+                HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_PROFILE_IDS: 'default',
+                HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOW_TEST_RATE_LIMIT_CHECKER: 'true',
+                HAPPIER_FEATURE_MACHINES_TUNNEL_SERVER_ROUTED__ENABLED: 'true',
+                HAPPIER_FEATURE_MACHINES_TUNNEL_ALLOWED_PORTS: String(address.port),
+                HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID: 'fixture-key',
+                HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY: Buffer.from(key.secretKey).toString('base64url'),
+            },
+            runtimes: { preview: runtime, public: publicRuntime },
+            openTunnel,
         });
         try {
             const url = new URL(registered.accessUrl);
@@ -126,9 +163,46 @@ describe('private preview HTTP through the server relay and daemon TCP terminato
             expect(asset.statusCode).toBe(200);
             expect(asset.body).toBe('fixture:/asset.js');
             expect(paths).toEqual(['/body', '/asset.js']);
+
+            const created = publicRuntime.createExposure({
+                preview, requestedMode: 'secret_link', requestedTtlMs: 60_000,
+                actorId: 'user_1', sessionAuthorized: true, dnsTlsValid: true, rateLimitProfileId: 'default',
+            });
+            if (!created.ok) throw new Error(created.reasonCode);
+            const publicUrl = new URL(created.exposure.publicUrl);
+            const publicExchange = await app.inject({ method: 'GET', url: publicUrl.pathname + publicUrl.search, headers: { host: publicUrl.host } });
+            expect(publicExchange.statusCode).toBe(303);
+            const publicCookie = String(publicExchange.headers['set-cookie']).split(';')[0];
+            expect(publicExchange.headers['set-cookie']).toContain('Path=/;');
+            for (const path of ['/asset.css', '/asset.js?revision=2', '/other']) {
+                const asset = await app.inject({ method: 'GET', url: path, headers: { host: publicUrl.host, cookie: publicCookie } });
+                expect(asset.statusCode, `public absolute application path ${path}`).toBe(200);
+                expect(asset.body).toBe(`fixture:${path}`);
+            }
+            const isolated = await app.inject({ method: 'GET', url: '/asset.js', headers: { host: url.host, cookie: publicCookie } });
+            expect(isolated.statusCode).toBe(401);
+            const wrongOrigin = await app.inject({ method: 'GET', url: publicUrl.pathname, headers: { host: 'home.example.test', cookie: publicCookie } });
+            expect(wrongOrigin.statusCode, 'public content must stay off the API origin').toBe(403);
+            const listener = new URL(await app.listen({ port: 0, host: '127.0.0.1' }));
+            publicClient = connect(Number(listener.port), '127.0.0.1');
+            const publicBytes: Buffer[] = [];
+            publicClient.on('data', bytes => publicBytes.push(bytes));
+            await once(publicClient, 'connect');
+            publicClient.write(`GET /socket HTTP/1.1\r\nHost: ${publicUrl.host}\r\nCookie: ${publicCookie}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+            await expect.poll(() => Buffer.concat(publicBytes).toString(), { timeout: 5000, message: 'the admitted public websocket reaches the real fixture' }).toContain('public fixture message');
+            expect(Buffer.concat(publicBytes).toString()).toContain('101 Switching Protocols');
+            const closed = once(publicClient, 'close');
+            expect(publicRuntime.revokeExposure(created.exposure.exposureId, { actorId: 'user_1' })).toEqual({ ok: true });
+            await closed;
+            const denied = await app.inject({ method: 'GET', url: publicUrl.pathname, headers: { host: publicUrl.host, cookie: publicCookie } });
+            expect(denied.statusCode).toBe(403);
+            const revokedAsset = await app.inject({ method: 'GET', url: '/asset.js', headers: { host: publicUrl.host, cookie: publicCookie } });
+            expect(revokedAsset.statusCode).toBe(403);
         } catch (error) {
             throw new Error(`Preview transport trace: ${JSON.stringify(wireTrace)}`, { cause: error });
         } finally {
+            publicClient?.destroy();
+            for (const socket of fixtureUpgradeSockets) socket.destroy();
             for (const close of closeTransports) close();
             await daemon.dispose();
             client.disconnect();

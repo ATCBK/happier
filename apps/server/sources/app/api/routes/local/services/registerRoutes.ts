@@ -6,9 +6,13 @@ import { readAvailableMachineIrohEndpointAuthority } from '@/app/machines/machin
 import { resolveApiTrustProxy } from '@/app/api/utils/apiRateLimitPolicy';
 import {
     registerLocalServicePreviewRoutes,
+    handleLocalServicePreviewHttpRequest,
+    type RegisterLocalServicePreviewRoutesOptions,
     type LocalServicePreviewSessionAccessPurpose,
 } from "@/app/api/routes/local/services/preview/registerRoutes";
-import { registerLocalServicePublicRoutes } from "@/app/api/routes/local/services/public/registerRoutes";
+import { registerLocalServicePublicRoutes, handleLocalServicePublicHttpRequest, type RegisterLocalServicePublicRoutesOptions } from "@/app/api/routes/local/services/public/registerRoutes";
+import { registerLocalServiceHostRoutes } from './hostRoutes';
+import { readLocalServiceRequestHostname } from '@/app/local/services/preview/origin';
 import {
     createServerFeatureGatedRouteApp,
     isServerFeatureEnabledForHome,
@@ -35,11 +39,8 @@ import {
 } from "@/app/local/services/public/runtime";
 import { createLocalServicePublicAuditRecorder } from "@/app/local/services/public/audit";
 import { createLocalServicePublicRateLimitChecker } from "@/app/local/services/public/rateLimits";
-import {
-    LocalServicePublicPreviewExchangeRequestV1Schema,
-    LocalServicePublicPreviewExchangeResponseV1Schema,
-    resolvePeerRouteFeatureId,
-} from "@happier-dev/protocol";
+import { LocalServicePublicPreviewExchangeRequestV1Schema, LocalServicePublicPreviewExchangeResponseV1Schema } from '@happier-dev/protocol/local/services/public/v1';
+import { resolvePeerRouteFeatureId } from '@happier-dev/protocol/machines/peer/mediation/routeFeature';
 import type { OpenLocalServicePreviewTunnel } from "@/app/local/services/preview/httpAdapter";
 import {
     createLocalServicePreviewTunnelOpener,
@@ -60,6 +61,7 @@ const PUBLIC_EXCHANGE_ROUTE_PATH = "/v1/local-services/public/:exposureId/exchan
 
 type ExchangeRouteRequest = Readonly<{
     params?: Record<string, unknown>;
+    headers?: Record<string, unknown>;
     query?: unknown;
     body?: unknown;
 }>;
@@ -227,7 +229,7 @@ export function registerLocalServiceRoutes(
                 : undefined
         );
 
-    registerLocalServicePreviewRoutes(createServerFeatureGatedRouteApp(app, "localServices.preview", env), {
+    const previewRouteOptions: RegisterLocalServicePreviewRoutesOptions = {
         registerPreview: (input) => runtimes.preview.registerPreview(input),
         mintNativeDirectAccess: (input) => runtimes.preview.mintNativeDirectAccess(input),
         resolveNativeDirectTarget: (input) => readAvailableMachineIrohEndpointAuthority({ ...input, requiredCapability: 'localServicePreviewNativeAccess' }),
@@ -246,14 +248,20 @@ export function registerLocalServiceRoutes(
         observability: routeApp.peerMediationObservability,
         resolvePreviewAccountId: (previewId) => runtimes.preview.resolvePreviewContext(previewId)?.accountId ?? null,
         featureEnabled: (request) => isServerFeatureEnabledForHome("localServices.preview", { env, request }),
+    };
+    // The aggregate owns the single shared host plane below; this registration
+    // retains the private control/prefix routes and raw upgrade handler.
+    registerLocalServicePreviewRoutes(createServerFeatureGatedRouteApp(app, "localServices.preview", env), {
+        ...previewRouteOptions, hostOriginBaseDomain: null,
     });
 
     const publicRouteApp = createServerFeatureGatedRouteApp(app, "localServices.publicPreview", env);
-    registerLocalServicePublicRoutes(publicRouteApp, {
+    const publicRouteOptions: RegisterLocalServicePublicRoutesOptions = {
         resolvePreview: (previewId) => runtimes.preview.resolvePreview(previewId),
         getStatus: (request) => runtimes.public.getSnapshot(request),
         createExposure: (input) => runtimes.public.createExposure(input),
         resolveExposure: (exposureId) => runtimes.public.resolveExposure(exposureId),
+        resolveExposureByHost: (hostname) => runtimes.public.resolveExposureByHost(hostname),
         trustProxy: resolveApiTrustProxy(env),
         externalProtocol,
         retainConnection: (exposureId, close, actorAccountId) => {
@@ -271,6 +279,13 @@ export function registerLocalServiceRoutes(
         featureEnabled: (request) => isServerFeatureEnabledForHome("localServices.publicPreview", { env, request }),
         openTunnel,
         observability: routeApp.peerMediationObservability,
+    };
+    registerLocalServicePublicRoutes(publicRouteApp, publicRouteOptions);
+    registerLocalServiceHostRoutes(app, featureEnv.previewHostOriginBaseDomain, async (request, reply) => {
+        const hostname = readLocalServiceRequestHostname((request as { headers?: Record<string, unknown> }).headers);
+        return hostname && runtimes.public.resolveExposureByHost(hostname)
+            ? handleLocalServicePublicHttpRequest(request, reply, publicRouteOptions)
+            : handleLocalServicePreviewHttpRequest(request, reply, previewRouteOptions);
     });
 
     // U3: one-time exchange of the capability URL token. Mirrors the private preview
@@ -315,10 +330,12 @@ function registerLocalServicePublicExchangeRoute(
             typedReply.code?.(403).send?.({ error: "public_preview_access_denied", reasonCode: result.reasonCode });
             return;
         }
+        const hostname = readLocalServiceRequestHostname(typedRequest.headers);
         typedReply
             .header?.("Set-Cookie", scopedLocalServiceViewerTokenCookie({
                 name: LOCAL_SERVICE_PUBLIC_TOKEN_COOKIE_NAME,
-                path: localServicePublicTokenCookiePath(result.exposureId),
+                path: localServicePublicTokenCookiePath(result.exposureId,
+                    hostname ? runtimes.public.resolveExposureByHost(hostname) : null),
                 rawToken: result.rawToken,
             }))
             .send?.(LocalServicePublicPreviewExchangeResponseV1Schema.parse({

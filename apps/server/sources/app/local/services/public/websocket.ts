@@ -25,7 +25,9 @@ import {
     type LocalServicePublicAuthenticatedUser,
     type LocalServicePublicAccessServiceAuthorizer,
 } from "@/app/local/services/public/accessAuthorization";
-import type { LocalServicePublicExposureV1, LocalServicePreviewResourceV1 } from "@happier-dev/protocol";
+import type { LocalServicePublicExposureV1 } from '@happier-dev/protocol/local/services/public/v1';
+import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
+import { readLocalServiceRequestHostname } from '@/app/local/services/preview/origin';
 
 type UpgradeRequest = Readonly<{
     url?: string;
@@ -53,6 +55,7 @@ export type LocalServicePublicWebSocketUpgradeOptions = Readonly<{
         clientKey: string;
     }>) => LocalServicePublicRuntimeAccessResult;
     resolveExposure?: (exposureId: string) => LocalServicePublicExposureV1 | null | undefined;
+    resolveExposureByHost?: (hostname: string) => LocalServicePublicExposureV1 | null | undefined;
     trustProxy?: boolean | number;
     externalProtocol?: "http" | "https";
     retainConnection?: (exposureId: string, close: () => void, actorAccountId?: string) => () => void;
@@ -106,10 +109,20 @@ function serializeUrlSearchWithoutPublicToken(url: URL): string {
     return search ? `?${search}` : "";
 }
 
-function parsePublicUpgradeRoute(request: UpgradeRequest): PublicUpgradeRoute | null {
+function parsePublicUpgradeRoute(request: UpgradeRequest, options: LocalServicePublicWebSocketUpgradeOptions): PublicUpgradeRoute | null {
     const url = upgradeUrl(request);
-    if (!url || !url.pathname.startsWith(PUBLIC_UPGRADE_ROUTE_PREFIX)) {
-        return null;
+    if (!url) return null;
+    const headers = requestHeadersToRecord(request.headers);
+    if (!url.pathname.startsWith(PUBLIC_UPGRADE_ROUTE_PREFIX)) {
+        const hostname = readLocalServiceRequestHostname(headers);
+        const exposure = hostname ? options.resolveExposureByHost?.(hostname) : null;
+        if (!exposure) return null;
+        return {
+            exposureId: exposure.exposureId, path: url.pathname,
+            search: serializeUrlSearchWithoutPublicToken(url),
+            rawToken: readLocalServicePublicTokenCookie(headers),
+            hasQueryToken: Boolean(url.searchParams.get('publicToken')),
+        };
     }
     const rest = url.pathname.slice(PUBLIC_UPGRADE_ROUTE_PREFIX.length);
     const [encodedExposureId, ...pathParts] = rest.split("/");
@@ -121,7 +134,6 @@ function parsePublicUpgradeRoute(request: UpgradeRequest): PublicUpgradeRoute | 
     }
     const exposureId = readString(decodedExposureId);
     if (!exposureId) return null;
-    const headers = requestHeadersToRecord(request.headers);
     const queryToken = readLocalServicePublicQueryToken(Object.fromEntries(url.searchParams.entries()));
     return {
         exposureId,
@@ -169,19 +181,24 @@ export async function handleLocalServicePublicWebSocketUpgrade(
     head: Uint8Array,
     options: LocalServicePublicWebSocketUpgradeOptions,
 ): Promise<void> {
-    const url = upgradeUrl(request);
-    if (!url || !url.pathname.startsWith(PUBLIC_UPGRADE_ROUTE_PREFIX)) return;
+    const route = parsePublicUpgradeRoute(request, options);
+    if (!route && !upgradeUrl(request)?.pathname.startsWith(PUBLIC_UPGRADE_ROUTE_PREFIX)) return;
 
     if (options.featureEnabled && !await options.featureEnabled(request)) {
         await sendUpgradeError(socket, 404, "Not Found");
         return;
     }
 
-    const route = parsePublicUpgradeRoute(request);
     if (!route) {
-        await sendUpgradeError(socket, 400, "Bad Request");
+        await sendUpgradeError(socket, 400, 'Bad Request');
         return;
     }
+    const hostname = readLocalServiceRequestHostname(requestHeadersToRecord(request.headers));
+    if (options.resolveExposureByHost && (!hostname || options.resolveExposureByHost(hostname)?.exposureId !== route.exposureId)) {
+        await sendUpgradeError(socket, 403, 'Forbidden');
+        return;
+    }
+
     if (route.hasQueryToken) {
         await sendUpgradeError(socket, 403, "Forbidden");
         return;
@@ -222,8 +239,8 @@ export async function handleLocalServicePublicWebSocketUpgrade(
         authenticated: identity.authenticated,
         sessionAuthorized: identity.sessionAuthorized,
         // Same proxy-addr implementation and trust function as Fastify's request.ip.
-        // The library reads only headers and socket; raw upgrade requests have this shape.
-        clientKey: readLocalServicePublicClientKey([proxyAddr({ ...request, socket } as IncomingMessage,
+        // Project Node's prototype-backed headers explicitly at the external library boundary.
+        clientKey: readLocalServicePublicClientKey([proxyAddr({ headers: request.headers ?? {}, socket } as IncomingMessage,
             trustProxy === true ? () => true
                 : typeof trustProxy === 'number' ? (_address, hop) => hop < trustProxy
                     : () => false)]),

@@ -22,7 +22,8 @@ export function readLocalServicePublicTokenCookie(headers: Record<string, unknow
     return null;
 }
 
-export function localServicePublicTokenCookiePath(exposureId: string): string {
+export function localServicePublicTokenCookiePath(exposureId: string, hostExposure?: Readonly<{ exposureId: string }> | null): string {
+    if (hostExposure?.exposureId === exposureId) return '/';
     return `/v1/local-services/public/${encodeURIComponent(exposureId)}`;
 }
 
