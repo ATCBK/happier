@@ -14,7 +14,7 @@ import { resolveClaudeConfigDirEnvOverlay } from "./utils/resolveClaudeConfigDir
 import { resolveClaudeSessionEnvOverlay } from "./spawn/resolveClaudeSessionEnvOverlay";
 import { logClaudeRuntimeAuthEnvDiagnostic } from "./spawn/logClaudeRuntimeAuthEnvDiagnostic";
 import { ensureClaudeJsRuntimeExecutable } from "./utils/ensureClaudeJsRuntimeExecutable";
-import { isClaudeCliJavaScriptFile, resolveClaudeCliPath } from "./utils/resolveClaudeCliPath";
+import { resolveClaudeCliPath } from "./utils/resolveClaudeCliPath";
 import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath';
 import { buildClaudeEffortCliArgs, resolveModeEffortLevelsForModel } from "./utils/claudeEffort";
 import {
@@ -332,9 +332,7 @@ export async function claudeRemote(opts: {
         onProcessExited: async ({ nativeExited, processTreeStopped }) => {
             if (!ownsQuery) return;
             // Native provider exit requires the launcher's positive IPC fact or owned tree cleanup.
-            const providerStopped = isClaudeCliJavaScriptFile(resolvedClaudeCliPath)
-                || nativeExited
-                || processTreeStopped;
+            const providerStopped = nativeExited || processTreeStopped;
             try {
                 await opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit', { providerStopped });
             } finally {

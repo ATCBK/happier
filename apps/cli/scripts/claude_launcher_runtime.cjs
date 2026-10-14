@@ -5,7 +5,7 @@ const { pathToFileURL } = require('url');
 
 const { expandHomeDirPath } = require('@happier-dev/cli-common/expandHomeDirPath');
 const { withWindowsHide } = require('./childProcessOptions.cjs');
-const { reportNativeProcessExited } = require('./native_process_exit.cjs');
+const { reportNativeProcessExited, reportProviderInLauncher } = require('./native_process_exit.cjs');
 
 function resolvePathSafe(filePath) {
     if (!fs.existsSync(filePath)) return null;
@@ -114,8 +114,8 @@ function runClaudeCli(cliPath) {
 
     if (isJsFile) {
         const importUrl = pathToFileURL(cliPath).href;
-        import(importUrl);
-        return;
+        // The importer owns this provider process; flush that fact before provider code can exit.
+        return reportProviderInLauncher(process).then(() => import(importUrl));
     }
 
     const args = process.argv.slice(2);

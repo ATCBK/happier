@@ -133,6 +133,11 @@ and the remote query finishes that cleanup before a replacement query can reuse
 the ledger. Native launchers report the native child's actual exit over their
 private IPC channel; the owner drains that channel before deciding whether the
 provider stopped. A launcher exit code or signal alone cannot establish that fact.
+The standalone binary payload includes the shared native-exit sidecar. Claude's
+launch-mode classifier follows symlinks to the same real path that the launcher
+imports. The launcher also reports when it imports the provider into its own
+process; its actual exit then proves provider exit, including extensionless links
+to JavaScript. Filesystem classification alone never retires provider tasks.
 Unverified owned cleanup or an unexpected native launcher exit whose provider
 termination cannot be confirmed ends the runner instead of retrying into the same
 ledger; unresolved task identities remain unknown. Native children may keep stream

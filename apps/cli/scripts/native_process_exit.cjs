@@ -6,13 +6,16 @@ function isNativeProcessExited(message) {
         && (message.code !== null || message.signal !== null);
 }
 
-function reportNativeProcessExited(proc, code, signal) {
-    const message = { type: 'terminal-native-exited', code, signal };
-    if (!isNativeProcessExited(message)) return Promise.resolve();
+function isProviderInLauncher(message) {
+    return typeof message === 'object' && message !== null
+        && message.type === 'terminal-provider-in-launcher';
+}
+
+function deliverProcessMessage(proc, message, failureMessage) {
     if (typeof proc.send !== 'function' || !proc.connected) return Promise.resolve();
     return new Promise((resolve) => {
         const failed = () => {
-            proc.stderr.write('Native process exit delivery failed (native_process_exit_delivery_failed)\n');
+            proc.stderr.write(failureMessage);
             resolve();
         };
         try {
@@ -23,4 +26,15 @@ function reportNativeProcessExited(proc, code, signal) {
     });
 }
 
-module.exports = { isNativeProcessExited, reportNativeProcessExited };
+function reportNativeProcessExited(proc, code, signal) {
+    const message = { type: 'terminal-native-exited', code, signal };
+    if (!isNativeProcessExited(message)) return Promise.resolve();
+    return deliverProcessMessage(proc, message, 'Native process exit delivery failed (native_process_exit_delivery_failed)\n');
+}
+
+function reportProviderInLauncher(proc) {
+    return deliverProcessMessage(proc, { type: 'terminal-provider-in-launcher' },
+        'Provider launch mode delivery failed (provider_launch_mode_delivery_failed)\n');
+}
+
+module.exports = { isNativeProcessExited, reportNativeProcessExited, isProviderInLauncher, reportProviderInLauncher };

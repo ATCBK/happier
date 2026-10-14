@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChildProcess, spawn } from 'node:child_process';
@@ -58,10 +58,10 @@ describe('claude sdk query exit handling', () => {
     }
   });
 
-  it.runIf(process.platform !== 'win32').each(['native-exit', 'wrapper-operation-error'] as const)('requires positive native exit proof when the legacy wrapper exits normally (%s)', async (outcome) => {
+  it.runIf(process.platform !== 'win32').each(['native-exit', 'javascript-in-launcher', 'wrapper-operation-error'] as const)('requires positive provider exit proof when the legacy wrapper exits normally (%s)', async (outcome) => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-query-native-proof-'));
     const pidPath = join(tmpRoot, 'native-pid');
-    const provider = writeExecutableShimSync({ dir: tmpRoot, fileName: 'provider', contents: `#!${process.execPath}
+    const provider = writeExecutableShimSync({ dir: tmpRoot, fileName: outcome === 'javascript-in-launcher' ? 'provider.cjs' : 'provider', contents: `#!${process.execPath}
       require('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
       console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'owned-session' }));
       process.on('SIGUSR1', () => process.exit(0));
@@ -96,10 +96,10 @@ describe('claude sdk query exit handling', () => {
     let returned: ReturnType<typeof q.return> | undefined;
     try {
       await vi.waitFor(() => { nativePid = Number(readFileSync(pidPath, 'utf8')); });
-      if (outcome === 'native-exit') process.kill(nativePid!, 'SIGUSR1');
+      if (outcome !== 'wrapper-operation-error') process.kill(nativePid!, 'SIGUSR1');
       expect((await exited)[1]).toBeNull();
       returned = q.return();
-      if (outcome === 'native-exit') {
+      if (outcome !== 'wrapper-operation-error') {
         await expect(withTimeout(returned, 5000, 'proven native exit')).resolves.toMatchObject({ done: true });
         expect(ledger.getActiveProviderTaskCount()).toBe(0);
       } else {
@@ -282,6 +282,61 @@ describe('claude sdk query exit handling', () => {
     }
   });
 
+  it.runIf(process.platform !== 'win32')('accepts clean provider exit through an extensionless symlink to JavaScript', async () => {
+    const { claudeRemote } = await import('../claudeRemote');
+    tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-legacy-js-symlink-'));
+    const script = join(tmpRoot, 'cli.js');
+    const cliPath = join(tmpRoot, 'claude');
+    const hookSettingsPath = join(tmpRoot, 'hooks.json');
+    writeFileSync(hookSettingsPath, '{}');
+    writeFileSync(script, `
+      console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'owned-session', pid: process.pid }));
+      process.stdin.once('data', () => {
+        console.log(JSON.stringify({ type: 'result', subtype: 'success' }));
+        process.exit(0);
+      });
+    `, { mode: 0o755 });
+    symlinkSync(script, cliPath);
+    const env = createEnvKeyScope(['HAPPIER_CLAUDE_PATH', 'HAPPIER_JS_RUNTIME_PATH']);
+    env.patch({ HAPPIER_CLAUDE_PATH: cliPath, HAPPIER_JS_RUNTIME_PATH: process.execPath });
+    const runtimeActivity = createSessionRuntimeActivity('supported');
+    const reports: SessionRuntimeActivityContribution[] = [];
+    await runtimeActivity.bindPublisher({ publish: async snapshot => { reports.push(snapshot); }, close: async () => {} });
+    const contributionHandle = runtimeActivity.agentRuntimeContributionHandle;
+    if (!contributionHandle) throw new Error('Expected supported runtime Activity handle');
+    const ledger = createClaudeProviderActivityLedger();
+    ledger.apply({ type: 'started', sessionId: 'owned-session', taskId: 'background-child' });
+    const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger, contributionHandle });
+    const providerExited = createDeferred<void>();
+    let initialRead = false;
+    try {
+      await claudeRemote({
+        path: tmpRoot, sessionId: null, transcriptPath: null, hookSettingsPath,
+        runtimeActivityAdapter: adapter,
+        nextMessage: async () => {
+          if (initialRead) { await providerExited.promise; return null; }
+          initialRead = true;
+          return { message: 'hi', mode: { permissionMode: 'default' } };
+        },
+        onReady: () => {}, onSessionFound: () => {},
+        onMessage: (message) => {
+          if (!('pid' in message) || typeof message.pid !== 'number') return;
+          const result = vi.mocked(spawn).mock.results.find(result => result.type === 'return' && result.value.pid === message.pid);
+          if (!result || result.type !== 'return') throw new Error('Expected the actual owned JavaScript provider');
+          if (result.value.exitCode !== null || result.value.signalCode !== null) providerExited.resolve();
+          else result.value.once('exit', () => providerExited.resolve());
+        },
+        isAborted: () => false,
+        canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+      });
+      expect(ledger.getActiveProviderTaskCount()).toBe(0);
+      expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+    } finally {
+      env.restore();
+      await runtimeActivity.dispose();
+    }
+  });
+
   it.each([false, true])('keeps a relinquished legacy query from clearing replacement tasks after failed cleanup (runtime failure: %s)', async (runtimeFails) => {
     const { claudeRemote } = await import('../claudeRemote');
     tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-legacy-late-exit-'));
@@ -342,7 +397,7 @@ describe('claude sdk query exit handling', () => {
     }
   });
 
-  it.runIf(process.platform !== 'win32')('keeps native provider tasks when only the legacy wrapper is killed', async () => {
+  it.runIf(process.platform !== 'win32').each(['direct', 'retargeted-symlink'])('keeps native provider tasks when only the legacy wrapper is killed (%s)', async (launchPathKind) => {
     const { claudeRemote } = await import('../claudeRemote');
     tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-legacy-native-wrapper-exit-'));
     const script = writeExecutableShimSync({ dir: tmpRoot, fileName: 'provider', contents: `#!${process.execPath}
@@ -354,22 +409,29 @@ describe('claude sdk query exit handling', () => {
     ` });
     const hookSettingsPath = join(tmpRoot, 'hooks.json');
     writeFileSync(hookSettingsPath, '{}');
+    const cliPath = launchPathKind === 'retargeted-symlink' ? join(tmpRoot, 'claude') : script;
+    if (cliPath !== script) symlinkSync(script, cliPath);
     const env = createEnvKeyScope(['HAPPIER_CLAUDE_PATH', 'HAPPIER_JS_RUNTIME_PATH']);
-    env.patch({ HAPPIER_CLAUDE_PATH: script, HAPPIER_JS_RUNTIME_PATH: process.execPath });
+    env.patch({ HAPPIER_CLAUDE_PATH: cliPath, HAPPIER_JS_RUNTIME_PATH: process.execPath });
     const ledger = createClaudeProviderActivityLedger();
     ledger.apply({ type: 'started', sessionId: 'owned-session', taskId: 'native-child' });
     const terminalObservation = createDeferred<void>();
     let awaitingExit = false;
-    const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger,
-      contributionHandle: {
-        report: async (snapshot) => { if (awaitingExit && snapshot.state === 'idle') terminalObservation.resolve(); },
-        markUnknown: async () => { if (awaitingExit) terminalObservation.resolve(); }, dispose: async () => {},
-      } });
+    const runtimeActivity = createSessionRuntimeActivity('supported');
+    await runtimeActivity.bindPublisher({
+      publish: async snapshot => { if (awaitingExit && snapshot.state !== 'active') terminalObservation.resolve(); },
+      close: async () => {},
+    });
+    const contributionHandle = runtimeActivity.agentRuntimeContributionHandle;
+    if (!contributionHandle) throw new Error('Expected supported runtime Activity handle');
+    const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger, contributionHandle });
     let initialRead = false;
     let nativePid: number | undefined;
+    const providerLaunched = createDeferred<void>();
     const spawnIndex = vi.mocked(spawn).mock.results.length;
+    let result: ReturnType<typeof claudeRemote> | undefined;
     try {
-      const result = claudeRemote({ path: tmpRoot, sessionId: null, transcriptPath: null, hookSettingsPath,
+      result = claudeRemote({ path: tmpRoot, sessionId: null, transcriptPath: null, hookSettingsPath,
         runtimeActivityAdapter: adapter,
         nextMessage: async () => {
           if (initialRead) return null;
@@ -379,21 +441,35 @@ describe('claude sdk query exit handling', () => {
         onReady: async () => {
           const wrapperResult = vi.mocked(spawn).mock.results[spawnIndex];
           if (wrapperResult?.type !== 'return' || !wrapperResult.value.pid) throw new Error('Expected actual wrapper PID');
+          if (cliPath !== script) {
+            const replacement = join(tmpRoot, 'cli.js');
+            writeFileSync(replacement, '', { mode: 0o755 });
+            unlinkSync(cliPath);
+            symlinkSync(replacement, cliPath);
+          }
           awaitingExit = true;
           process.kill(wrapperResult.value.pid, 'SIGKILL');
           await withTimeout(terminalObservation.promise, 5000, 'native wrapper exit observation');
-          if (nativePid === undefined) throw new Error('Expected actual native provider PID');
-          expect(isPidAlive(nativePid)).toBe(true);
-          expect(ledger.getActiveProviderTaskCount()).toBe(1);
         },
         onSessionFound: () => {}, onMessage: (message) => {
-          if ('pid' in message && typeof message.pid === 'number') nativePid = message.pid;
+          if ('pid' in message && typeof message.pid === 'number') {
+            nativePid = message.pid;
+            providerLaunched.resolve();
+          }
         }, isAborted: () => false, canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
       });
+      void result.catch(() => undefined);
+      await providerLaunched.promise;
+      await terminalObservation.promise;
+      if (nativePid === undefined) throw new Error('Expected actual native provider PID');
+      expect(isPidAlive(nativePid)).toBe(true);
+      expect(ledger.getActiveProviderTaskCount()).toBe(1);
       await expect(withTimeout(result, 5000, 'native wrapper exit with inherited streams open')).rejects.toMatchObject({ code: 'claude_native_provider_exit_unverified' });
     } finally {
       await killProcessTree({ pid: nativePid });
+      await result?.catch(() => undefined);
       env.restore();
+      await runtimeActivity.dispose();
     }
   });
 

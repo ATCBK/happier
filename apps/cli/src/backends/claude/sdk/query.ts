@@ -36,7 +36,7 @@ import { killProcessTree } from '@/agent/runtime/process/killProcessTree'
 import { logClaudeRuntimeAuthEnvDiagnostic } from '@/backends/claude/spawn/logClaudeRuntimeAuthEnvDiagnostic'
 import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers'
 import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath'
-import { isNativeProcessExited } from '../../../../scripts/native_process_exit.cjs'
+import { isNativeProcessExited, isProviderInLauncher } from '../../../../scripts/native_process_exit.cjs'
 
 /**
  * Query class manages Claude Code process interaction
@@ -439,8 +439,10 @@ export function query(config: {
     }) as ChildProcessWithoutNullStreams
     const managedChild = createManagedChildProcess(child)
     let nativeExited = false
+    let providerInLauncher = false
     child.on('message', (message: unknown) => {
         if (isNativeProcessExited(message)) nativeExited = true
+        if (isFirstPartyWrapper && isProviderInLauncher(message)) providerInLauncher = true
     })
     const processChannelClosedPromise = isFirstPartyWrapper && child.connected
         ? new Promise<void>((resolve) => { child.once('disconnect', resolve) })
@@ -531,6 +533,8 @@ export function query(config: {
     const processExitObservationPromise = managedChild.waitForTermination().then(async (event) => {
         if (event.type === 'spawn_error') return
         await processChannelClosedPromise
+        // An actual exit of a launcher that imported the provider is the provider's physical exit.
+        if (event.type === 'exited' || event.type === 'signaled') nativeExited ||= providerInLauncher
         const processTreeStopped = cleanupPromise
             ? await cleanupPromise.then((result) => result.rootObservedAlive, () => false)
             : false
