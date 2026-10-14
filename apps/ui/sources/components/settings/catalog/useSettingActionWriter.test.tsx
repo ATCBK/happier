@@ -15,6 +15,8 @@ import { useMachineSummarySetting } from '@/components/machines/summary/useMachi
 import { useMachinesIndexView } from '@/components/settings/machines/machinesIndexSettings';
 import { useMachineStorageViewSetting } from '@/components/machines/storage/useMachineStorageViewSetting';
 import { createMachineFixture, pressTestInstanceAsync } from '@/dev/testkit';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 
 const routerPush = vi.hoisted(() => vi.fn());
 
@@ -40,6 +42,42 @@ const originalState = storage.getState();
 afterEach(() => { standardCleanup(); storage.setState(originalState, true); });
 
 describe('declared setting Action writer', () => {
+    it('routes the mounted Machine connection choice through admitted keyed Settings Actions in the exact Home', async () => {
+        const preferences = { v: 1, flows: { machine_rpc: { direct: 'disabled' } },
+            byMachineId: { other: { flows: { machine_rpc: { direct: 'enabled' } } } } } as const;
+        const features = createRootLayoutFeaturesResponse();
+        for (const featureId of ['machines.rpc.directPeer', 'machines.transfer.directPeer', 'machines.tunnel.directPeer', 'machines.liveStream.directPeer'] as const) {
+            expect(tryWriteServerEnabledBitInPlace(features, featureId, true)).toBe(true);
+        }
+        const account = await createSecretSettingsTestHarness({ features, settings: settingsParse({
+            peerMediationPreferencesV1: preferences,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        try {
+            const { MachineDirectConnectionSection } = await import('@/components/settings/connections/DirectConnectionSettings');
+            const screen = await renderScreen(<MachineDirectConnectionSection serverId={account.scope.serverId} machineId="machine-a" machineName="Laptop" />);
+            const choose = async (choice: 'direct' | 'relay' | 'default') => {
+                await act(async () => { await pressTestInstanceAsync(screen.findByTestId(`machine-direct-connection:${choice}`)!); });
+            };
+            await choose('direct');
+            expect(account.persistedSettings.peerMediationPreferencesV1).toEqual(preferences);
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings, actionsSettingsV1: {
+                v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] },
+            } })); });
+            for (const choice of ['direct', 'relay', 'default'] as const) {
+                await choose(choice);
+                await vi.waitFor(() => expect(account.persistedSettings.peerMediationPreferencesV1.byMachineId['machine-a']?.flows.machine_rpc?.direct)
+                    .toBe(choice === 'default' ? undefined : choice === 'direct' ? 'enabled' : 'disabled'));
+                expect(account.persistedSettings.peerMediationPreferencesV1.flows).toEqual(preferences.flows);
+                expect(account.persistedSettings.peerMediationPreferencesV1.byMachineId.other).toEqual(preferences.byMachineId.other);
+            }
+            await act(async () => { screen.tree.update(<MachineDirectConnectionSection serverId="another-home" machineId="machine-a" machineName="Laptop" />); });
+            const before = account.settingsWrites.length;
+            await choose('direct');
+            expect(account.settingsWrites).toHaveLength(before);
+            expect(account.persistedSettings.peerMediationPreferencesV1.byMachineId['machine-a']).toBeUndefined();
+        } finally { standardCleanup(); await account.dispose(); }
+    });
     it('writes keyed Agent preferences through the public Account Action without replacing another target', async () => {
         const other = 'agent:happier.agent.claude/claude';
         const target = 'agent:happier.agent.codex/codex';
@@ -67,7 +105,7 @@ describe('declared setting Action writer', () => {
         } }) });
         const serverId = account.scope.serverId;
         const machine = createMachineFixture({ id: 'machine-a1', active: false, activeAt: 0,
-            metadata: { displayName: 'Machine A1', host: 'a.local', platform: 'darwin' } });
+            metadata: { ...createMachineFixture().metadata!, displayName: 'Machine A1', host: 'a.local', platform: 'darwin' } });
         try {
             routerPush.mockClear();
             storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] },

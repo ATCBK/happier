@@ -568,7 +568,7 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
                 machineId={props.machineId}
             />
             {providersEnabled && providerTargetKey ? (
-                <Item
+                <SettingAnchor setting={AGENT_SETTINGS.settings.defaultModel}><Item
                     testID="settings.agents.detail.defaultModel"
                     title={defaultModelTitle}
                     accessibilityLabel={(defaultSelection ? defaultModelChoice.presentation.accessibilityLabel : undefined)
@@ -579,7 +579,7 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
                     rightElement={defaultModelField}
                     disabled={!accountSettingsAvailable}
                     onPress={chooseDefaultModel}
-                />
+                /></SettingAnchor>
             ) : null}
             {defaultModelError ? (
                 <ProviderErrorItems error={defaultModelError.error} retry={defaultModelError.retry} />
