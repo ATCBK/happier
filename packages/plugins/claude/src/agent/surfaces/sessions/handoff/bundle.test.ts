@@ -416,10 +416,10 @@ describe('Claude handoff bundle leaf', () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-claude-plugin-handoff-exact-import-id-'));
         const targetPath = join(root, 'workspace');
         const configDir = join(root, '.claude-target');
-        const projectId = resolveClaudeProjectId(targetPath);
         const exactProviderSessionId = '  padded-session\n  ';
         const strippedSiblingSessionId = 'padded-session';
         await mkdir(targetPath, { recursive: true });
+        const projectId = resolveClaudeProjectId(targetPath);
         vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', configDir);
 
         const exactResult = await claudeHandoffSurface.importBundle({

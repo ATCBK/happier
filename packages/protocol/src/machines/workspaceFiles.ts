@@ -13,6 +13,8 @@ export const DaemonWorkspaceFileListRequestSchema = lazyZodSchema(() => z.object
   query: z.string().max(WORKSPACE_FILE_LIST_MAX_QUERY_CODE_UNITS).optional(),
   includeHidden: z.boolean().optional(),
   limit: z.number().int().positive().max(WORKSPACE_FILE_LIST_MAX_RESULTS).optional(),
+  /** Remaining caller operation budget at dispatch; expiry returns an incomplete page. */
+  budgetMs: z.number().int().nonnegative().safe().optional(),
 }).strict());
 export type DaemonWorkspaceFileListRequest = z.infer<typeof DaemonWorkspaceFileListRequestSchema>;
 

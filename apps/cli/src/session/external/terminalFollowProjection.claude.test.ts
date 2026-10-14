@@ -12,8 +12,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { projectRuntimeTranscriptEvent } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { createBoundedAgentExternalSessionsContribution } from './agentExternalSessionsInvocation';
 
-import { mapPluginExternalTranscriptItem } from './pluginExternalSessionsAdapter';
+import { mapPluginExternalTranscriptItem, mapPluginExternalTerminalSourceItem } from './pluginExternalSessionsAdapter';
 import { createExternalSessionTerminalFollowProjector } from './terminalFollowProjection';
 
 const unavailableManagedEndpointRead: AgentExternalSessionsManagedEndpointRead =
@@ -153,13 +154,31 @@ describe('Claude terminal follow projection', () => {
 
     it('admits Claude source-fact user rows during the initial replay phase', async () => {
         const seeded = await seedClaudeSession();
-        const initial = await seeded.contribution.pageTranscript({
+        const request = {
             ...invocation(),
             source: seeded.source,
             remoteSessionId: seeded.remoteSessionId,
-            direction: 'older',
+            direction: 'older' as const,
+            projection: 'terminal' as const,
             maxItems: 200,
+        };
+        const nativePage = await seeded.contribution.pageTranscript(request);
+        expect(nativePage).toMatchObject({ ok: true });
+        const bounded = createBoundedAgentExternalSessionsContribution({
+            contribution: seeded.contribution,
+            identity: { pluginId: 'happier.agent.claude', agentId: 'claude',
+                occurrenceId: 'claude-reader-fixture', contributionQualifiedId: 'happier.agent.claude/agents/claude',
+                sourceCustody: { kind: 'development', registeredRootId: 'claude-reader-fixture' } },
+            isCurrent: () => true,
+            retirementSignal: new AbortController().signal,
+            createInvocationExec: async () => unavailableInvocationExec,
         });
+        const terminalInitial = await bounded.pageTranscript(request);
+        expect(terminalInitial).toMatchObject({ ok: true });
+        if (!terminalInitial.ok) throw new Error(terminalInitial.code);
+        expect(terminalInitial.value.items.map(mapPluginExternalTerminalSourceItem))
+            .toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'source_observation' })]));
+        const initial = await seeded.contribution.pageTranscript({ ...request, projection: undefined });
         if (!initial.ok || !initial.value.tailCursor) {
             throw new Error('Expected an accepted Claude tail cursor');
         }

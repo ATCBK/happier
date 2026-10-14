@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstat, opendir, readdir, realpath, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { isCanonicalAbsolutePathInsideRoot } from '@happier-dev/plugin-sdk/fs';
 import { compareExternalSessionCandidatePrecedence } from '@happier-dev/plugin-sdk/sessions/external';
@@ -40,6 +40,8 @@ export class ClaudeCandidateSourceChangedError extends Error {
 export type ClaudeJsonlSessionScanPosition = Readonly<{
     projectId: string;
     sessionEntryOffset: number;
+    /** Captured recency boundary; later file writes must not move the cursor. */
+    recent?: Readonly<{ updatedAtMs: number; remoteSessionId: string }>;
 }>;
 
 export type ClaudeJsonlSessionIdSnapshot = Readonly<{
@@ -118,9 +120,9 @@ async function resolveResumeProjectGeneration(
 }
 
 /**
- * Reads one deterministic lexical scan chunk. It may materialize the bounded
- * directory-name set needed to resume, but it stats and projects only the
- * caller's candidate chunk; exact recency ordering remains the host index's job.
+ * Reads one deterministic lexical metadata chunk, statting only that chunk.
+ * Content search orders the native file metadata set by recency
+ * before reading bodies, so a large old project cannot hide recent work.
  */
 export async function pageClaudeJsonlSessionFiles(params: Readonly<{
     source: ClaudeExternalSessionSource;
@@ -129,6 +131,7 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
     scanPosition?: ClaudeJsonlSessionScanPosition | null;
     skip?: number;
     limit: number;
+    order?: 'recent';
     signal?: AbortSignal;
 }>): Promise<Readonly<{
     entries: readonly ClaudeJsonlSessionTraversalEntry[];
@@ -194,7 +197,7 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
     let nextScanPoint: ClaudeJsonlSessionScanPoint | null = null;
     for (const projectId of projectIds) {
         throwIfAborted(params.signal);
-        if (params.scanPosition && projectId.localeCompare(params.scanPosition.projectId) < 0) {
+        if (params.order !== 'recent' && params.scanPosition && projectId.localeCompare(params.scanPosition.projectId) < 0) {
             continue;
         }
         const projectPath = join(projectsDir, projectId);
@@ -207,6 +210,7 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
             throwIfAborted(params.signal);
             if (
                 params.scanPosition
+                && params.order !== 'recent'
                 && projectId === params.scanPosition.projectId
                 && sessionEntryOffset <= params.scanPosition.sessionEntryOffset
             ) {
@@ -218,8 +222,8 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
             const remoteSessionId = name.slice(0, -'.jsonl'.length);
             if (!isSafeClaudeJsonlPathSegment(remoteSessionId)) continue;
             const traversalKey = `${projectId}\u0000${remoteSessionId}`;
-            if (!params.scanPosition && traversalKey.localeCompare(afterTraversalKey) <= 0) continue;
-            if (skipped < skip) {
+            if (params.order !== 'recent' && !params.scanPosition && traversalKey.localeCompare(afterTraversalKey) <= 0) continue;
+            if (params.order !== 'recent' && skipped < skip) {
                 skipped += 1;
                 continue;
             }
@@ -229,7 +233,7 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
                 ...(params.signal ? { signal: params.signal } : {}),
             });
             if (!filePath) continue;
-            if (selected.length >= limit) {
+            if (params.order !== 'recent' && selected.length >= limit) {
                 hasMore = true;
                 break;
             }
@@ -259,6 +263,8 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
             entries.push({
                 ...entry,
                 updatedAtMs: Math.trunc(file.mtimeMs),
+                ...(params.order === 'recent' ? { scanPosition: { ...entry.scanPosition,
+                    recent: { updatedAtMs: Math.trunc(file.mtimeMs), remoteSessionId: entry.remoteSessionId } } } : {}),
             });
         } catch {
             throwIfAborted(params.signal);
@@ -276,6 +282,42 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
                 'Claude candidate source changed during the bounded scan chunk.',
             );
         }
+    }
+    if (params.order === 'recent') {
+        const position = params.scanPosition;
+        const anchor = position?.recent
+            ? entries.find(entry => entry.projectId === position.projectId
+                && entry.remoteSessionId === position.recent?.remoteSessionId)
+            : undefined;
+        if (position?.sessionEntryOffset && (!anchor || !position.recent)) {
+            throw new ClaudeCandidateSourceChangedError('Claude content-search resume point changed.');
+        }
+        const boundary = anchor && position?.recent ? { ...anchor, updatedAtMs: position.recent.updatedAtMs } : null;
+        const remaining = entries.sort(compareClaudeJsonlSessionPrecedence).filter(entry => !boundary
+            || compareClaudeJsonlSessionPrecedence(entry, boundary) > 0);
+        // Fingerprint the unvisited ordering evidence, not only the anchor.
+        // A previously unvisited file crossing above the frozen boundary then
+        // changes this evidence and invokes the existing cursor-reset contract.
+        // Writes to consumed files and newer unrelated insertions do not move it.
+        let remainingGeneration = createHash('sha256').update('claude-recent-remaining').digest('base64url');
+        for (let index = remaining.length - 1; index >= 0; index -= 1) {
+            const entry = remaining[index]!;
+            remaining[index] = { ...entry, sourceGeneration: remainingGeneration };
+            remainingGeneration = createHash('sha256').update(JSON.stringify([
+                entry.projectId, entry.remoteSessionId, entry.updatedAtMs, entry.sourceGeneration, remainingGeneration,
+            ])).digest('base64url');
+        }
+        const skippedRemaining = remaining.slice(skip);
+        const page = skippedRemaining.slice(0, limit);
+        const last = page.at(-1);
+        return {
+            entries: page,
+            hasMore: skippedRemaining.length > page.length,
+            sourceGeneration: remainingGeneration,
+            nextScanPoint: skippedRemaining.length > page.length && last
+                ? { scanPosition: last.scanPosition, sourceGeneration: last.sourceGeneration } : null,
+            scanned: page.length,
+        };
     }
     return {
         entries,
@@ -316,11 +358,10 @@ function compareClaudeJsonlSessionPrecedence(
 }
 
 /**
- * Canonicalizes the admitted Claude config root before resolving its `projects`
- * child. This preserves an intentionally symlinked configured root while
- * rejecting a symlink planted below it that redirects `projects` elsewhere —
- * including a retarget that stays inside the config root, which the physical
- * containment check alone would admit.
+ * The admitted config home owns its native `projects` entry. Connected-account
+ * shared state deliberately links that entry to the native account's projects.
+ * Resolve that storage root first; every project and file must remain physically
+ * inside it, regardless of whether the config home or state entry is linked.
  */
 async function resolveAuthorizedClaudeProjectsRoot(params: Readonly<{
     configDir: string;
@@ -330,20 +371,11 @@ async function resolveAuthorizedClaudeProjectsRoot(params: Readonly<{
     throwIfAborted(params.signal);
     if (!configRoot) return null;
 
-    // The config root itself may be a deliberate symlink (resolved above); the
-    // `projects` child may not be one. A symlinked child is a retarget no
-    // matter where it points, so it is rejected before `realpath` can launder
-    // it into an in-root physical path.
-    const projectsLink = await lstat(join(configRoot, 'projects')).catch(() => null);
-    throwIfAborted(params.signal);
-    if (!projectsLink || projectsLink.isSymbolicLink()) return null;
-
     const projectsRoot = await realpath(join(configRoot, 'projects')).catch(() => null);
     throwIfAborted(params.signal);
     if (
         !projectsRoot
         || projectsRoot === configRoot
-        || !isCanonicalAbsolutePathInsideRoot(configRoot, projectsRoot)
     ) {
         return null;
     }
@@ -365,6 +397,11 @@ export async function authorizeClaudeFilePath(params: Readonly<{
     filePath: string;
     signal?: AbortSignal;
 }>): Promise<string | null> {
+    // Exact lookup and directory enumeration must agree: a project alias is
+    // never a second native identity, even when its target stays in this root.
+    const project = await lstat(dirname(params.filePath)).catch(() => null);
+    throwIfAborted(params.signal);
+    if (!project?.isDirectory() || project.isSymbolicLink()) return null;
     const link = await lstat(params.filePath).catch(() => null);
     throwIfAborted(params.signal);
     if (!link?.isFile()) return null;

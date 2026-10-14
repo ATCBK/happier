@@ -116,7 +116,7 @@ describe('Claude External Session observation', () => {
         await expect(Promise.resolve(disposable.dispose())).resolves.toBeUndefined();
     });
 
-    it.each(['a transcript symlink', 'a project-directory symlink', 'a projects-root symlink'])(
+    it.each(['a transcript symlink', 'a project-directory symlink', 'a project-directory symlink beneath shared state'])(
         'does not describe or reconcile %s outside the authorized projects root',
         async (replacement) => {
             const fixture = await createTranscriptFixture();
@@ -139,8 +139,11 @@ describe('Claude External Session observation', () => {
                 await symlink(outsideDir, projectDir);
             } else {
                 const projectsDir = join(fixture.configDir, 'projects');
-                await rename(projectsDir, outsideDir);
-                await symlink(outsideDir, projectsDir);
+                const sharedProjectsDir = join(fixture.configDir, '..', 'shared-projects');
+                await rename(projectsDir, sharedProjectsDir);
+                await symlink(sharedProjectsDir, projectsDir, 'dir');
+                await rename(join(sharedProjectsDir, 'project-a'), outsideDir);
+                await symlink(outsideDir, join(sharedProjectsDir, 'project-a'), 'dir');
             }
 
             await expect(contribution.reconcileResource({
@@ -172,10 +175,15 @@ describe('Claude External Session observation', () => {
         },
     );
 
-    it('preserves a deliberately symlinked Claude config root while watching the physical transcript', async () => {
+    it.each(['config home', 'projects entry'])('preserves a linked %s while watching the physical transcript', async (linkedEntry) => {
         const fixture = await createTranscriptFixture();
         const configAlias = join(fixture.configDir, '..', 'claude-config-alias');
-        await symlink(fixture.configDir, configAlias);
+        if (linkedEntry === 'config home') {
+            await symlink(fixture.configDir, configAlias, 'dir');
+        } else {
+            await mkdir(configAlias);
+            await symlink(join(fixture.configDir, 'projects'), join(configAlias, 'projects'), 'dir');
+        }
         const identity = linkedSource({ configDir: configAlias });
         const contribution = createClaudeExternalSessionObservationContribution({
             env: { CLAUDE_CONFIG_DIR: configAlias },

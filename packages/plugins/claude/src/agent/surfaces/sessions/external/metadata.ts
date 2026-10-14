@@ -31,10 +31,12 @@ export type ClaudeTitleIndexState = Readonly<{
     fallbackTitle: string | null;
 }>;
 
-type ClaudeTitleAccumulator = Readonly<{
+export type ClaudeTitleAccumulator = Readonly<{
     customTitle: string | null;
     aiTitle: string | null;
     fallbackTitle: string | null;
+    customTitleSeen?: boolean;
+    aiTitleSeen?: boolean;
 }>;
 
 type ClaudeTranscriptIdentity = Readonly<{
@@ -134,10 +136,11 @@ function readTitleAccumulatorFromState(
     });
 }
 
-function applyClaudeTitleRecord(
+export function applyClaudeTitleRecord(
     current: ClaudeTitleAccumulator,
     value: unknown,
     remoteSessionId: string,
+    direction: 'forward' | 'backward' = 'forward',
 ): ClaudeTitleAccumulator {
     if (!isRecord(value)) return current;
     if (
@@ -147,7 +150,8 @@ function applyClaudeTitleRecord(
     ) {
         return Object.freeze({
             ...current,
-            customTitle: readTitleCandidate(value.customTitle),
+            customTitle: direction === 'backward' && current.customTitleSeen ? current.customTitle : readTitleCandidate(value.customTitle),
+            ...(direction === 'backward' ? { customTitleSeen: true } : {}),
         });
     }
     if (
@@ -157,10 +161,11 @@ function applyClaudeTitleRecord(
     ) {
         return Object.freeze({
             ...current,
-            aiTitle: readTitleCandidate(value.aiTitle),
+            aiTitle: direction === 'backward' && current.aiTitleSeen ? current.aiTitle : readTitleCandidate(value.aiTitle),
+            ...(direction === 'backward' ? { aiTitleSeen: true } : {}),
         });
     }
-    if (current.fallbackTitle !== null || value.type !== 'user') return current;
+    if ((direction === 'forward' && current.fallbackTitle !== null) || value.type !== 'user') return current;
     const message = isRecord(value.message) ? value.message : null;
     const fallbackTitle = coerceTextContent(message?.content);
     return fallbackTitle === null
@@ -168,7 +173,7 @@ function applyClaudeTitleRecord(
         : Object.freeze({ ...current, fallbackTitle });
 }
 
-function resolveTitle(accumulator: ClaudeTitleAccumulator): string | null {
+export function resolveClaudeTitle(accumulator: ClaudeTitleAccumulator): string | null {
     return accumulator.customTitle
         ?? accumulator.aiTitle
         ?? accumulator.fallbackTitle;
@@ -203,7 +208,7 @@ export async function readClaudeJsonlSessionTitleWithIndex(params: Readonly<{
             && previousState.ctimeNs === before.ctimeNs;
         if (unchanged && previousState) {
             return Object.freeze({
-                title: resolveTitle(previousState),
+                title: resolveClaudeTitle(previousState),
                 indexState: previousState,
             });
         }
@@ -268,7 +273,7 @@ export async function readClaudeJsonlSessionTitleWithIndex(params: Readonly<{
                 fallbackTitle: accumulator.fallbackTitle,
             });
             return Object.freeze({
-                title: resolveTitle(indexState),
+                title: resolveClaudeTitle(indexState),
                 indexState,
             });
         }

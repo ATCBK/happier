@@ -6,6 +6,7 @@ import { DaemonWorkspaceFileListRequestSchema, WORKSPACE_FILE_LIST_MAX_RESPONSE_
 import type { DaemonWorkspaceFileListResponse } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { isSafeRelativeWorkspacePath, workspaceFileExclusionArguments } from './workspaceFilePaths';
+import { logger } from '@/ui/logger';
 
 
 function escapeRipgrepGlob(input: string): string {
@@ -24,7 +25,8 @@ function buildWorkspaceFileListArguments(query: string | undefined, includeHidde
         '--no-config',
         '--files',
         ...(includeHidden ? ['--hidden'] : []),
-        '--null',
+        // Native line buffering flushes each filename before traversal completes.
+        '--line-buffered',
     ];
     const trimmed = query?.trim();
     if (trimmed) {
@@ -43,16 +45,17 @@ function selectBoundedPaths(input: Readonly<{
     stdoutTruncated: boolean;
     limit: number;
 }>): Readonly<{ paths: string[]; truncated: boolean }> {
-    const completeOutput = !input.stdoutTruncated || input.stdout.endsWith('\0');
-    const rawPaths = input.stdout.split('\0');
-    if (!completeOutput) rawPaths.pop();
-    if (rawPaths.at(-1) === '') rawPaths.pop();
+    const rawPaths = input.stdout.split('\n');
+    // A byte limit or deadline can bisect the final record. Even a normal exit
+    // cannot make an unterminated path a complete native filename record.
+    const trailingRecord = rawPaths.pop() ?? '';
 
     const paths: string[] = [];
     let serializedBytes = Buffer.byteLength(JSON.stringify({ ok: true, paths: [], truncated: false }), 'utf8');
-    let truncated = input.stdoutTruncated;
+    let truncated = input.stdoutTruncated || trailingRecord.length > 0;
     for (const rawPath of rawPaths) {
-        const normalized = rawPath.replace(/\\/g, '/').replace(/^\.\//u, '');
+        const path = process.platform === 'win32' ? rawPath.replace(/\r$/u, '') : rawPath;
+        const normalized = path.replace(/\\/g, '/').replace(/^\.\//u, '');
         if (!isSafeRelativeWorkspacePath(normalized)) {
             truncated = true;
             continue;
@@ -103,11 +106,22 @@ export function registerWorkspaceFileListHandler(
                     cwd: authorization.resolvedPath,
                     ...(context?.signal ? { signal: context.signal } : {}),
                     maxStdoutBytes: WORKSPACE_FILE_LIST_MAX_RESPONSE_UTF8_BYTES,
-                    // The typed operation never exposes diagnostics, so retain none of them.
-                    maxStderrBytes: 0,
+                    // Reuse the operation's payload boundary for native diagnostics;
+                    // only OS codes are retained in the file log, never paths/prose.
+                    maxStderrBytes: WORKSPACE_FILE_LIST_MAX_RESPONSE_UTF8_BYTES,
                     terminateOnStdoutLimit: true,
+                    ...(parsed.data.budgetMs === undefined ? {} : {
+                        deadlineAtMs: (context?.requestStartedAtMs ?? Date.now()) + parsed.data.budgetMs,
+                    }),
                 });
+                if (result.deadlineExceeded) logger.infoFile('[WORKSPACE FILE LIST] Budget exhausted');
                 if (result.exitCode === 127) return { ok: false, errorCode: 'ripgrep_unavailable' };
+                const osErrorCodes = [...new Set([...result.stderr.matchAll(/\(os error (\d+)\)/gu)]
+                    .map(match => Number(match[1])).filter(Number.isSafeInteger))].sort((a, b) => a - b);
+                const traversalIncomplete = result.exitCode === 2 && osErrorCodes.length > 0;
+                if (traversalIncomplete) logger.infoFile('[WORKSPACE FILE LIST] Traversal incomplete', {
+                    exitCode: result.exitCode, osErrorCodes,
+                });
                 const isEmptyResult = result.exitCode === 1 && result.stdout.length === 0;
                 const bounded = selectBoundedPaths({
                     stdout: result.stdout,
@@ -117,7 +131,7 @@ export function registerWorkspaceFileListHandler(
                     limit: parsed.data.limit ?? WORKSPACE_FILE_LIST_MAX_RESULTS,
                 });
                 if (result.exitCode !== 0 && !isEmptyResult && !result.stdoutTruncated) {
-                    if (result.exitCode !== 2 || bounded.paths.length === 0) {
+                    if (result.exitCode !== 2 || (bounded.paths.length === 0 && !traversalIncomplete)) {
                         return { ok: false, errorCode: 'ripgrep_failed', exitCode: result.exitCode };
                     }
                 }

@@ -152,6 +152,8 @@ const ExternalSessionsCandidatesListCanonicalRequestSchema = lazyZodSchema(() =>
   searchTerm: z.string().min(1).max(2000).optional(),
   searchMode: ExternalSessionsSearchModeSchema.optional(),
   searchTarget: ExternalSessionsSearchTargetSchema.optional(),
+  /** Remaining caller scan budget at dispatch; expiry returns a partial content page. */
+  budgetMs: z.number().int().nonnegative().safe().optional(),
   /**
    * Include the Agent's internal threads (approval reviewers, spawned sub-agents). Absent: only
    * top-level sessions, which is also what a daemon that predates the field lists.

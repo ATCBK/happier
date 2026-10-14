@@ -104,6 +104,34 @@ afterEach(async () => {
 });
 
 describe('bounded JSONL session scanner', () => {
+  it('retains newest-first consumed lines and diagnostics before a backward read yields', async () => {
+    const scanner = await import('./index.js');
+    const root = await mkdtemp(join(tmpdir(), 'happier-backward-progress-'));
+    tempDirs.add(root);
+    const filePath = join(root, 'transcript.jsonl');
+    const prefix = Buffer.from(jsonlLine({ text: 'older' }));
+    const body = Buffer.concat([prefix, Buffer.alloc(1024, 0x20), Buffer.from('\n'), Buffer.from([0xff, 0x0a]), Buffer.from(jsonlLine({ text: 'newest' }))]);
+    await writeFile(filePath, body);
+    const consumed: unknown[] = [];
+    const diagnostics: unknown[] = [];
+    let endOffsetBytes = body.length;
+    const yielded = new Error('host work yielded');
+    await expect(scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes: body.length, maxBytes: body.length, maxItems: body.length,
+      chunkBytes: 1024, onLine(line) { consumed.push(line.value); endOffsetBytes = line.startOffsetBytes; },
+      onDiagnostic(diagnostic) { diagnostics.push(diagnostic.code); },
+      fileSystem: { stat, async read(path, position, length) {
+        if (position === 0) throw yielded;
+        const handle = await open(path, 'r');
+        try { const buffer = Buffer.alloc(length); const { bytesRead } = await handle.read(buffer, 0, length, position); return buffer.subarray(0, bytesRead); }
+        finally { await handle.close(); }
+      } },
+    })).rejects.toBe(yielded);
+    expect(consumed).toEqual([{ text: 'newest' }]);
+    expect(diagnostics).toEqual(['malformed_source_utf8']);
+    const remaining = await scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes, maxBytes: body.length, maxItems: body.length });
+    expect(remaining.items.map(line => line.value)).toEqual([{ text: 'older' }]);
+    expect(remaining.reachedStart).toBe(true);
+  });
   it('projects and releases lines before reading the rest while retaining the same page frontier', async () => {
     const scanner = await import('./index.js');
     const first = jsonlLine({ text: 'first' });

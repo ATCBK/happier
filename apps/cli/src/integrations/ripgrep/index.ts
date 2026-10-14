@@ -11,11 +11,13 @@ import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree
 
 export interface RipgrepResult {
     exitCode: number
+    /** Raw bounded bytes decoded as UTF-8; consumers discard incomplete trailing records. */
     stdout: string
     stderr: string
     stdoutTruncated?: boolean
     stderrTruncated?: boolean
     stoppedEarly?: boolean
+    deadlineExceeded?: boolean
 }
 
 export interface RipgrepOptions {
@@ -27,6 +29,8 @@ export interface RipgrepOptions {
     /** Consume newline-delimited records at the process boundary; false stops the process tree. */
     onStdoutLine?: (line: string) => boolean | void
     collectStdout?: boolean
+    /** Supplied by the containing operation; returns captured partial output at expiry. */
+    deadlineAtMs?: number
 }
 
 function createRipgrepAbortError(): Error {
@@ -50,9 +54,15 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
     return new Promise((resolve, reject) => {
         let settled = false;
         let child: ReturnType<typeof spawn> | null = null;
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
+        let stdoutBytes = 0;
+        let stderrBytes = 0;
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
 
         const cleanup = () => {
             options?.signal?.removeEventListener('abort', onAbort);
+            if (deadlineTimer) clearTimeout(deadlineTimer);
         };
         const resolveOnce = (value: RipgrepResult) => {
             if (settled) return;
@@ -78,7 +88,24 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
         };
 
         options?.signal?.addEventListener('abort', onAbort, { once: true });
+        const armDeadline = () => {
+            if (options?.deadlineAtMs === undefined || settled) return;
+            const remainingMs = options.deadlineAtMs - Date.now();
+            if (remainingMs > 0) {
+                deadlineTimer = setTimeout(armDeadline, Math.min(2_147_483_647, remainingMs));
+                return;
+            }
+            if (child) void terminateProcessTree(child).catch(() => {});
+            // Completion is owned here, not by waiting for process-tree teardown.
+            // Only complete records in this bounded snapshot become domain hits.
+            resolveOnce({ exitCode: 1,
+                stdout: Buffer.concat(stdoutChunks, stdoutBytes).toString('utf8'),
+                stderr: Buffer.concat(stderrChunks, stderrBytes).toString('utf8'),
+                stdoutTruncated: true, stoppedEarly: true, deadlineExceeded: true });
+        };
+        armDeadline();
         void (async () => {
+            if (settled) return;
             const runtimeExecutable = await requireJavaScriptRuntimeExecutable({
                 isBunRuntime: isBun(),
                 targetLabel: 'ripgrep launcher',
@@ -93,10 +120,6 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
             });
             child = spawned;
 
-            const stdoutChunks: Buffer[] = [];
-            const stderrChunks: Buffer[] = [];
-            let stdoutBytes = 0;
-            let stderrBytes = 0;
             let stdoutTruncated = false;
             let stderrTruncated = false;
             let outputLimitTerminationStarted = false;
@@ -140,6 +163,7 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
             };
 
             spawned.stdout.on('data', (data) => {
+                if (settled) return;
                 const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
                 if (options?.collectStdout !== false) {
                     const appended = appendBounded(stdoutChunks, chunk, stdoutBytes, options?.maxStdoutBytes);
@@ -160,6 +184,7 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
             });
 
             spawned.stderr.on('data', (data) => {
+                if (settled) return;
                 const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
                 const appended = appendBounded(stderrChunks, chunk, stderrBytes, options?.maxStderrBytes);
                 stderrBytes = appended.bytes;

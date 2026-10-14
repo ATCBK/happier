@@ -169,6 +169,7 @@ describe('Codex terminal follow projection', () => {
             source: identity.value.source,
             remoteSessionId,
             direction: 'older',
+            projection: 'terminal',
             maxItems: 200,
         });
         if (!initial.ok || !initial.value.tailCursor) {

@@ -30,6 +30,11 @@ describe('ExternalSessionsAgentIdSchema', () => {
     expect(ExternalSessionsCandidatesListRequestSchema.parse(request)).toEqual(request);
     const contentRequest = { ...request, searchTarget: 'content', searchTerm: '  literal body  ' };
     expect(ExternalSessionsCandidatesListRequestSchema.parse(contentRequest)).toEqual(contentRequest);
+    expect(ExternalSessionsCandidatesListRequestSchema.parse({ ...contentRequest, budgetMs: 0 }))
+      .toEqual({ ...contentRequest, budgetMs: 0 });
+    expect(ExternalSessionsCandidatesListRequestSchema.parse({ ...contentRequest, budgetMs: 5 }))
+      .toEqual({ ...contentRequest, budgetMs: 5 });
+    expect(ExternalSessionsCandidatesListRequestSchema.safeParse({ ...contentRequest, budgetMs: -1 }).success).toBe(false);
     const response = { ok: true, candidates: [{ remoteSessionId: 'remote', updatedAtMs: 1, match: { snippet: 'body phrase', sourceItemId: 'item', messageIndex: 0 } }], contentCoverage: 'partial' };
     expect(ExternalSessionsCandidatesListResponseSchema.parse(response)).toMatchObject(response);
     expect(ExternalSessionsCandidatesListResponseSchema.safeParse({ ...response, contentCoverage: 'loaded' }).success).toBe(false);

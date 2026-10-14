@@ -69,7 +69,8 @@ export async function searchExternalSessionContent(params: Readonly<{
   ripgrep?: AgentExternalSessionsInvocation['ripgrep'];
   control: ExternalSessionContentSearchControl;
   decode: (matchText: (text: string) => string | null) => Promise<Readonly<{
-    records: readonly Readonly<{ id: string; snippet?: string }>[];
+    /** Streaming decoders may supply the ordinal without retaining preceding rows. */
+    records: readonly Readonly<{ id: string; snippet?: string; messageIndex?: number }>[];
     partial: boolean;
   }>>;
 }>): Promise<Readonly<{ match?: Readonly<{ snippet: string; sourceItemId: string; messageIndex: number }>; partial: boolean }>> {
@@ -98,7 +99,7 @@ export async function searchExternalSessionContent(params: Readonly<{
   for (let messageIndex = 0; messageIndex < projection.records.length; messageIndex += 1) {
     params.control.checkWork();
     const item = projection.records[messageIndex]!;
-    if (item.snippet !== undefined) return { match: { snippet: item.snippet, sourceItemId: item.id, messageIndex }, partial: projection.partial };
+    if (item.snippet !== undefined) return { match: { snippet: item.snippet, sourceItemId: item.id, messageIndex: item.messageIndex ?? messageIndex }, partial: projection.partial };
   }
   return { partial: projection.partial };
 }
