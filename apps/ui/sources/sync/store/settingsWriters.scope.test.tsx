@@ -71,16 +71,16 @@ describe('useApplySettings Account scope binding', () => {
         const writerB = hook.getCurrent();
 
         await act(async () => {
-            writerA({ analyticsOptOut: true });
-            writerB({ analyticsOptOut: false });
+            writerA({ sessionListSectionModeV1: 'activity' });
+            writerB({ sessionListSectionModeV1: 'single' });
         });
 
         expect(writerB).not.toBe(writerA);
-        expect(applySettings).toHaveBeenNthCalledWith(1, { analyticsOptOut: true }, {
+        expect(applySettings).toHaveBeenNthCalledWith(1, { sessionListSectionModeV1: 'activity' }, {
             expectedSettingsScope: { serverId: 'server-a', accountId: 'account-a' },
             source: 'ui',
         });
-        expect(applySettings).toHaveBeenNthCalledWith(2, { analyticsOptOut: false }, {
+        expect(applySettings).toHaveBeenNthCalledWith(2, { sessionListSectionModeV1: 'single' }, {
             expectedSettingsScope: { serverId: 'server-b', accountId: 'account-b' },
             source: 'ui',
         });
