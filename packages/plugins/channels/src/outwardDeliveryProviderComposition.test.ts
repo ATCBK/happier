@@ -35,6 +35,7 @@ import { deliverConversationOutwardDeliveryThroughProviderAction } from './outwa
 import { createCurrentConversationConnectionFixture } from './testkit/currentConnectionFixture.js';
 import { channelsOperationOnlyTargetedContributionsFixture } from './testkit/operationOnlyTargetedContributionsFixture.js';
 import { MemoryCollection } from './testkit/memoryCollection.js';
+import { isChannelStateJsonRecord } from './accountLocalBindingPolicy.js';
 
 const operations = ConversationProvidersContributionProtocolV1.operations;
 const fixtureJsonSchema = defineProtocolObject({}, {
@@ -44,7 +45,7 @@ const fixtureJsonSchema = defineProtocolObject({}, {
 /** The real Account DB boundary, with every production write schema-checked. */
 function collectionBoundary(schema: Parameters<typeof compilePluginJsonSchema>[0]) {
   const compiled = compilePluginJsonSchema(schema);
-  const collection = new MemoryCollection();
+  const collection = new MemoryCollection<Record<string, JsonValue>>();
   const writes: Record<string, JsonValue>[] = [];
   const put = collection.put.bind(collection);
   const batch = collection.batch.bind(collection);
@@ -245,10 +246,10 @@ describe('Channels chunk producer to registered native-handler fixture seam', ()
       },
     };
     // Credential materialization is the other genuine external host boundary.
-    const materialize: PluginServices['connectedAccounts']['materialize'] = async (_purpose, _request, options) => {
+    const materialize: PluginServices['connectedAccounts']['materialize'] = async (_purpose, _request, options): ReturnType<PluginServices['connectedAccounts']['materialize']> => {
       expect(options?.expectedAccount).toEqual(credentialRef);
-      return { kind: 'environment', env: telegram
-        ? { TELEGRAM_BOT_TOKEN: '123:bot-token' } : { DISCORD_BOT_TOKEN: 'discord-token' } };
+      if (telegram) return { kind: 'environment', env: { TELEGRAM_BOT_TOKEN: '123:bot-token' } };
+      return { kind: 'environment', env: { DISCORD_BOT_TOKEN: 'discord-token' } };
     };
     const connectedAccounts = { materialize } as unknown as PluginServices['connectedAccounts'];
     const setup = telegram ? setupTelegramChannels : setupDiscordChannels;
@@ -382,14 +383,11 @@ describe('Channels chunk producer to registered native-handler fixture seam', ()
         expect(nativeMessages[0]?.reply_parameters).toMatchObject({ message_id: 7 });
         expect(nativeMessages.slice(1).every(value => value.reply_parameters === undefined)).toBe(true);
       } else {
-        expect(nativeMessages.every(value => typeof value.message_reference === 'object'
-          && value.message_reference !== null && !Array.isArray(value.message_reference)
+        expect(nativeMessages.every(value => isChannelStateJsonRecord(value.message_reference)
           && value.message_reference.message_id === 'original-message')).toBe(true);
       }
-      expect(deliveries.writes.some(value => typeof value.payload === 'object' && value.payload !== null
-        && !Array.isArray(value.payload) && value.payload.state === 'attempting'
-        && typeof value.payload.content === 'object' && value.payload.content !== null
-        && !Array.isArray(value.payload.content) && value.payload.content.html === content.html)).toBe(true);
+      expect(deliveries.writes.some(value => isChannelStateJsonRecord(value.payload) && value.payload.state === 'attempting'
+        && isChannelStateJsonRecord(value.payload.content) && value.payload.content.html === content.html)).toBe(true);
       const last = deliveries.writes.at(-1);
       expect(last?.payload).toMatchObject({ state: 'delivered', providerMessageIds: nativeResults.flatMap(value =>
         value.kind === 'delivered' ? value.providerMessageIds : []) });

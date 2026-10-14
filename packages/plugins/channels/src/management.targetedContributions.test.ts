@@ -898,7 +898,13 @@ describe('checkpointed poll source custody', () => {
         },
       },
     };
-    const context = invocationContext({ stateCollection: collection });
+    const context = invocationContext({ stateCollection: collection,
+      // Source-origin settlement must refuse before crossing the host Action boundary.
+      actions: { async executeAdmittedTargetedOperationWithExecutionOrigin() {
+        throw new Error('Stale source custody must not execute a provider operation.');
+      } } as unknown as ActionsService,
+      targetedContributions: targetedContributionsFixture({ contributorImmutableGenerationId: providerSelection.contributor.sourceCustody.immutableGenerationId }),
+    });
     if (settlement === 'historyGap') {
       await expect(recordConversationCheckpointedPollHistoryGapForInvocation({
         ...input,

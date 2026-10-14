@@ -994,7 +994,7 @@ describe('Channels control-response outward custody', () => {
     expect(executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledWith(
       providerDeliveryAction, expect.objectContaining({ content: { text: 'xx' } }), expect.anything(),
     );
-    expect(store.rows.get(record.custodyId)?.obligation.content.text).toBe('x'.repeat(65));
+    expect(store.rows.get(record.custodyId)?.obligation.content?.text).toBe('x'.repeat(65));
   });
 
   it('constructs new Session projection custody from the canonical binding and its opaque delivery identity', async () => {
@@ -1220,7 +1220,8 @@ describe('Channels control-response outward custody', () => {
           materializationId: 'provider-replaced-before-handler',
         },
       } as const;
-      if (options.expectedExecutionOrigin?.materializationRef.materializationId
+      if (options.expectedExecutionOrigin === undefined || !('materializationRef' in options.expectedExecutionOrigin)
+        || options.expectedExecutionOrigin.materializationRef.materializationId
         !== currentExecutionOrigin.materializationRef.materializationId) {
         throw createPluginActionHandlerNotStartedError({
           code: 'plugin_action_handler_missing',

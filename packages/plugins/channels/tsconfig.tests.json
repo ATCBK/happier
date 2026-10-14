@@ -1,5 +1,7 @@
 {
-  "extends": "./tsconfig.json",
+  // This composed program imports Plugin UI implementation source. Its
+  // producer owns that source's JSX runtime, while this package owns test scope.
+  "extends": ["./tsconfig.json", "../../plugin-ui/tsconfig.json"],
   "compilerOptions": {
     "noEmit": true,
     "incremental": false,

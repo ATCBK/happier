@@ -94,6 +94,9 @@ const BINDINGS = jsonResource({
 
 function readResource(bindings: ResourceContent = BINDINGS): NonNullable<PluginUiTestkitHostHandlers['readResource']> {
   return async ({ resource }) => {
+    if (typeof resource !== 'string' && 'hostRead' in resource) {
+      throw new Error(`Unexpected host Resource: ${resource.hostRead}`);
+    }
     const localId = typeof resource === 'string' ? resource : resource.localId;
     if (localId === 'bindings-v1') return bindings;
     if (localId === 'connections-v1') return CONNECTIONS;
