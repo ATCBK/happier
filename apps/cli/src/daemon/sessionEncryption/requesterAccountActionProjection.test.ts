@@ -1,6 +1,7 @@
 import axios from 'axios';
 import nacl from 'tweetnacl';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ApiTokenGrantV1Schema } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
@@ -16,7 +17,9 @@ import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 
-afterEach(() => vi.restoreAllMocks());
+let channel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>>;
+beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
+afterEach(async () => { await channel.close(); vi.restoreAllMocks(); });
 
 const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-invocation', binding: {
   accountId: 'bob', principalId: 'bob', credentialId: 'pat', custodianAccountId: 'alice',
@@ -62,7 +65,7 @@ describe('admitted requester Action projection', () => {
       reads.mockClear(); posts.mockClear();
       expect(await carrier.requesterHttpProjection.isCurrent()).toBe(true);
       expect({ encryption: reads.mock.calls.filter(([url]) => String(url).endsWith('/currentness')).length,
-        verify: posts.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length }).toEqual({ encryption: 2, verify: 3 });
+        verify: posts.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length }).toEqual({ encryption: 0, verify: 3 });
       // A different Machine/local guard is a separate fact, even with the same
       // Account facet. It must still veto headers before any Home request.
       let installedCurrent = true;
@@ -136,8 +139,11 @@ describe('admitted requester Action projection', () => {
       const local = change === 'retirement' ? admitted.isCurrent() : null;
       await awaited;
       if (change === 'retirement') await admitted.dispose();
-      else currentness = { ...currentness, ...(change === 'mode' ? { mode: 'e2ee' as const, signingKeyFingerprint, contentKeyFingerprint }
-        : change === 'signing key' ? { signingKeyFingerprint: changedKeyFingerprint } : { contentKeyFingerprint: changedKeyFingerprint }) };
+      else {
+        currentness = { ...currentness, ...(change === 'mode' ? { mode: 'e2ee' as const, signingKeyFingerprint, contentKeyFingerprint }
+          : change === 'signing key' ? { signingKeyFingerprint: changedKeyFingerprint } : { contentKeyFingerprint: changedKeyFingerprint }) };
+        await channel.push('bob', currentness);
+      }
       release();
       expect(await headers).toBeNull();
       expect(await projection).toBeNull();

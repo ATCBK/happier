@@ -5,7 +5,7 @@ import { ExternalActionExecutionAuthorizationV1Schema,
   type ExternalActionExecutionAuthorizationBindingV1,
   type ExternalActionRequesterAccountProjectionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
-import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { acquireRequesterAccountEncryptionCurrentness, readRequesterAccountEncryptionCurrentness, sameRequesterAccountEncryptionCurrentness, isRequesterAccountEncryptionCurrentnessObserved } from './requesterAccountEncryptionCurrentness';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import type { AdmittedRequesterSessionBootstrap } from './requesterSessionCredentials';
@@ -69,7 +69,7 @@ async function projectAdmittedAccountCustody(
   if (!parsed.success) return null;
   try {
     if (!await bootstrap.isCurrent() || input.signal?.aborted) return null;
-    const currentness = await fetchAccountEncryptionCurrentness({ token: bootstrap.credentials.token,
+    const currentness = await readRequesterAccountEncryptionCurrentness({ accountId: stamp.accountId, token: bootstrap.credentials.token,
       serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
     const encryption = bootstrap.credentials.encryption;
     if (parsed.data.binding.accountEncryptionMode !== undefined
@@ -85,16 +85,16 @@ async function projectAdmittedAccountCustody(
     const isCurrent = async (): Promise<boolean> => {
       try {
         if (input.signal?.aborted || !isCustodyLive()) return false;
-        const next = await fetchAccountEncryptionCurrentness({ token: bootstrap.credentials.token,
+        const next = await readRequesterAccountEncryptionCurrentness({ accountId: stamp.accountId, token: bootstrap.credentials.token,
           serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
         // Account seq also advances for unrelated activity; encryption custody follows its own mode/key transition.
-        return next.mode === currentness.mode && next.updatedAt === currentness.updatedAt
-          && next.signingKeyFingerprint === currentness.signingKeyFingerprint
-          && next.contentKeyFingerprint === currentness.contentKeyFingerprint
+        return sameRequesterAccountEncryptionCurrentness(next, currentness)
           // Check the distinct bootstrap/Machine fact once, after the encryption
           // read; local retirement remains observable across either await.
           && !input.signal?.aborted && await bootstrap.isCurrent()
-          && !input.signal?.aborted && isCustodyLive();
+          && !input.signal?.aborted && isCustodyLive()
+          && isRequesterAccountEncryptionCurrentnessObserved({ accountId: stamp.accountId,
+            token: bootstrap.credentials.token, serverBaseUrl: bootstrap.serverHttpBaseUrl }, currentness);
       } catch { return false; }
     };
     // Loaded only when a real admitted invocation asks for private Account ports.
@@ -231,10 +231,13 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
   if (!parsed.success || parsed.data.binding.serverIdentityId !== input.serverIdentityId
     || input.signal?.aborted || !await input.isCurrent()) return null;
+  const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: parsed.data.binding.accountId,
+    token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl });
+  let admitted = false;
   let live = true;
   let references = 1;
   let ingressReleased = false;
-  const release = async () => { if (--references === 0) live = false; };
+  const release = async () => { if (--references === 0) { live = false; await observation.dispose(); } };
   const retain = () => {
     if (!live) throw new Error('requester_account_context_retired');
     references += 1;
@@ -245,7 +248,7 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   try {
     const [profile, currentness] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
       fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) }),
-      fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
+      readRequesterAccountEncryptionCurrentness({ accountId: parsed.data.binding.accountId, token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
         ...(input.signal ? { signal: input.signal } : {}) }),
     ]));
     if (profile.id !== parsed.data.binding.accountId || parsed.data.binding.accountEncryptionMode !== currentness.mode
@@ -319,8 +322,10 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     Object.defineProperty(projection, requesterActionContext, { value: context, enumerable: false });
     Object.freeze(projection);
     Object.freeze(carrier);
+    admitted = true;
     return context;
-  } catch { live = false; return null; }
+  } catch { return null; }
+  finally { if (!admitted) { live = false; await observation.dispose(); } }
 }
 
 /** Original own custody excludes delegated Session/Workflow requests and foreign Accounts. */
