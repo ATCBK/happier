@@ -220,10 +220,11 @@ async function withListeningServer() {
   };
 }
 
-async function withHappierHealthServer({ host = '127.0.0.1', healthDelayMs = 0 } = {}) {
+async function withHappierHealthServer({ host = '127.0.0.1', healthDelayMs = 0, onHealthResponse = null } = {}) {
   const server = http.createServer((req, res) => {
     if (req.url === '/health' || req.url === '/ready') {
       const respond = () => {
+        onHealthResponse?.();
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({ status: 'ok', service: 'happier-server' }));
@@ -433,7 +434,11 @@ test('readStackInfoSnapshot gives listener discovery a load-tolerant budget afte
   const stackName = 'dev-proxy-observation-budget';
   const baseDir = join(storageDir, stackName);
   const envPath = join(baseDir, 'env');
-  const listener = await withHappierHealthServer({ healthDelayMs: 120 });
+  let now = Date.now();
+  const listener = await withHappierHealthServer({
+    healthDelayMs: 120,
+    onHealthResponse: () => { now += 120; },
+  });
 
   await mkdir(baseDir, { recursive: true });
   await writeFile(
@@ -478,6 +483,10 @@ test('readStackInfoSnapshot gives listener discovery a load-tolerant budget afte
   const observationBudgets = [];
   const restore = withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: storageDir });
   try {
+    // Observe the exact budget against a controlled wall clock. Health work
+    // advances it, while incidental scheduling between scope creation and
+    // the first listener observation must not consume a fixture millisecond.
+    t.mock.method(Date, 'now', () => now);
     const out = await readStackInfoSnapshot({
       rootDir: process.cwd(),
       stackName,
