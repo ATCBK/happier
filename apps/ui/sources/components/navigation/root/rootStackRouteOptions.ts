@@ -1,0 +1,294 @@
+import { Platform } from 'react-native';
+import type { ExtendedStackNavigationOptions } from 'expo-router/build/layouts/StackClient';
+import { t } from '@/text';
+import { createFriendsStackScreenOptions, createInboxStackScreenOptions } from '@/utils/navigation/createSocialStackScreenOptions';
+import { resolveNewSessionSecretRequirementRoutePresentation } from '@/components/sessions/new/navigation/newSessionPresentation';
+
+type StackScreenOptions = ExtendedStackNavigationOptions;
+const MAIN_TAB_STACK_SCREEN_OPTIONS = { animation: 'none' } as const;
+
+/** Canonical root declarations, consumed by Expo and retained workspace destinations. */
+export function createRootStackRouteOptions(newSessionPresentationMode: 'auto' | 'screen' | 'modal'): Readonly<Record<string, StackScreenOptions>> {
+    const options = (() => {
+        const back = t('common.back');
+        const cancel = t('common.cancel');
+        const hiddenHeader: StackScreenOptions = { headerShown: false };
+        const blankBack: StackScreenOptions = {
+            headerTitle: '',
+            headerBackTitle: back,
+        };
+        const visibleBlankBack: StackScreenOptions = {
+            headerShown: true,
+            headerTitle: '',
+            headerBackTitle: back,
+        };
+        const visibleSessionHistory: StackScreenOptions = {
+            headerShown: true,
+            headerTitle: t('sessionHistory.title'),
+            headerBackTitle: back,
+        };
+
+        return {
+            index: {
+                headerShown: false,
+                headerTitle: '',
+                ...MAIN_TAB_STACK_SCREEN_OPTIONS,
+            },
+            inboxIndex: {
+                ...createInboxStackScreenOptions(t),
+                ...MAIN_TAB_STACK_SCREEN_OPTIONS,
+            },
+            friendsIndex: {
+                ...createFriendsStackScreenOptions(t),
+                ...MAIN_TAB_STACK_SCREEN_OPTIONS,
+            },
+            hiddenHeader,
+            settings: {
+                // Nested navigator; per-settings-screen headers are configured in `settings/_layout.tsx`.
+                // Settings is a destination on every form factor: the phone's tab, and the app rail's
+                // Settings on tablets and desktops, whose column holds its navigation (`AppShellColumn`).
+                headerShown: false,
+                ...MAIN_TAB_STACK_SCREEN_OPTIONS,
+            },
+            desktopActivityOverlay: {
+                headerShown: false,
+                contentStyle: {
+                    backgroundColor: 'transparent',
+                },
+            },
+            automationsIndex: {
+                headerShown: true,
+                headerTitle: t('navigation.automations'),
+                headerBackTitle: back,
+            },
+            automationsId: {
+                headerShown: true,
+                headerTitle: t('navigation.automation'),
+                headerBackTitle: back,
+            },
+            automationsNew: {
+                headerShown: true,
+                headerTitle: t('navigation.newAutomation'),
+                headerBackTitle: back,
+            },
+            automationsEdit: {
+                headerShown: true,
+                headerTitle: t('automations.edit.title'),
+                headerBackTitle: back,
+            },
+            workflowsIndex: {
+                // The library's PageHeader owns its identity and creation actions.
+                headerShown: false,
+                headerTitle: t('workflows.title'),
+                headerBackTitle: back,
+            },
+            boards: {
+                // Entity names live in the canvas; its kind/back chrome stays distinct.
+                headerShown: true,
+                headerTitle: t('boards.title'),
+                headerBackTitle: back,
+            },
+            workflowsDetail: {
+                headerShown: true,
+                // The editable name lives in the page; the chrome names the kind only.
+                headerTitle: t('workflows.page.chromeTitle'),
+                headerBackTitle: back,
+            },
+            workflowsRunDetail: {
+                headerShown: true,
+                headerTitle: t('workflows.run.title'),
+                headerBackTitle: back,
+            },
+            automationsSettings: {
+                headerShown: true,
+                headerTitle: t('automations.settings.title'),
+                headerBackTitle: back,
+            },
+            workflowsHistory: {
+                headerShown: true,
+                headerTitle: t('workflows.destination.history.title'),
+                headerBackTitle: back,
+            },
+            workflowsRunSettings: {
+                headerShown: true,
+                headerTitle: t('workflows.destination.runSettingsPage.title'),
+                headerBackTitle: back,
+            },
+            visibleBlankBack,
+            sessionRecent: visibleSessionHistory,
+            sessionArchived: visibleSessionHistory,
+            teamSessions: {
+                headerShown: true,
+                headerTitle: t('settings.sessions'),
+                headerBackTitle: back,
+            },
+            terminalIndex: {
+                headerTitle: t('navigation.connectTerminal'),
+            },
+            // The main sidebar's Plugins page: the same screens as Settings → Plugin marketplace,
+            // hosted as an app page.
+            pluginsIndex: {
+                headerShown: true,
+                headerTitle: t('settingsPlugins.surfaces.navigationTitle'),
+                headerBackTitle: back,
+            },
+            pluginsListing: {
+                headerShown: true,
+                headerTitle: t('settingsPlugins.detailTitle'),
+                headerBackTitle: back,
+            },
+            // An entity page: its own header names the plugin, so the native title stays empty.
+            pluginsDetail: visibleBlankBack,
+            changelog: {
+                headerShown: true,
+                headerTitle: t('navigation.whatsNew'),
+                headerBackTitle: back,
+            },
+            // Titled like its Settings route and catalog entry: one title for the Homes page.
+            server: {
+                headerShown: true,
+                headerTitle: t('settings.servers'),
+                headerBackTitle: back,
+            },
+            // The phone's Account & Homes page: the desktop account/Home popover's content.
+            accountHomes: {
+                headerShown: true,
+                headerTitle: t('accountPopover.pageTitle'),
+                headerBackTitle: back,
+            },
+            artifactsIndex: {
+                // The browser's PageHeader owns its identity and creation actions.
+                headerShown: false,
+                headerTitle: t('artifacts.title'),
+                headerBackTitle: back,
+            },
+            artifactsId: {
+                // The page header carries the artifact's own title; the native header is the way back.
+                headerShown: true,
+                headerTitle: t('artifacts.title'),
+                headerBackTitle: back,
+            },
+            artifactsNew: {
+                // The action/kind chrome is distinct from the editable entity name.
+                headerShown: true,
+                headerTitle: t('artifacts.new'),
+                headerBackTitle: cancel,
+            },
+            artifactsEdit: {
+                // Loading/refusal states have no editor PageHeader yet; keep Back reachable.
+                headerShown: true,
+                headerTitle: t('artifacts.edit'),
+                headerBackTitle: cancel,
+            },
+            friendsSearch: {
+                headerShown: true,
+                headerTitle: t('friends.addFriend'),
+                headerBackTitle: back,
+            },
+            userId: visibleBlankBack,
+            blankBack,
+            newPickSecretRequirement: {
+                headerShown: false,
+                presentation: resolveNewSessionSecretRequirementRoutePresentation({
+                    mode: newSessionPresentationMode,
+                    platformOs: Platform.OS,
+                }),
+            },
+            zenIndex: hiddenHeader,
+            zenNew: {
+                presentation: 'modal',
+                headerTitle: t('navigation.zenNewTask'),
+                headerBackTitle: cancel,
+            },
+            zenView: {
+                presentation: 'modal',
+                headerTitle: t('navigation.zenTaskDetails'),
+                headerBackTitle: back,
+            },
+        } satisfies Record<string, StackScreenOptions>;
+    })();
+    return {
+        'index': options.index,
+        'inbox/index': options.inboxIndex,
+        'friends/index': options.friendsIndex,
+        'oauth/[provider]': options.hiddenHeader,
+        'oauth/mcp/callback': options.hiddenHeader,
+        'settings': options.settings,
+        'dev': options.hiddenHeader,
+        'plugins/index': options.pluginsIndex,
+        'plugins/listing': options.pluginsListing,
+        'plugins/[pluginId]': options.pluginsDetail,
+        'desktop/activity-overlay': options.desktopActivityOverlay,
+        'automations/index': options.automationsIndex,
+        'automations/[id]': options.automationsId,
+        'automations/[id]/runs/[runId]': options.visibleBlankBack,
+        'automations/new': options.automationsNew,
+        'automations/edit': options.automationsEdit,
+        'automations/settings': options.automationsSettings,
+        'workflows/index': options.workflowsIndex,
+        // The phone collection owns its title; entity pages still need their way back.
+        'boards/index': { ...options.boards, headerShown: false },
+        'boards/[boardId]': options.boards,
+        'workflows/runs/[runId]': options.workflowsRunDetail,
+        'workflows/runs/index': options.workflowsHistory,
+        'workflows/settings': options.workflowsRunSettings,
+        'projects/[workspaceRefId]/terminal': options.hiddenHeader,
+        'projects/index': options.hiddenHeader,
+        'projects/[workspaceRefId]/index': options.hiddenHeader,
+        'projects/[workspaceRefId]/overview': options.hiddenHeader,
+        'projects/[workspaceRefId]/code': options.hiddenHeader,
+        'projects/[workspaceRefId]/changes': options.hiddenHeader,
+        'projects/[workspaceRefId]/scripts': options.hiddenHeader,
+        'projects/[workspaceRefId]/services': options.hiddenHeader,
+        'projects/[workspaceRefId]/context': options.hiddenHeader,
+        'session/recent': options.sessionRecent,
+        'session/archived': options.sessionArchived,
+        'teams/[teamId]/sessions': options.teamSessions,
+        'teams/[teamId]/sign-in': options.hiddenHeader,
+        'join/[token]': options.hiddenHeader,
+        'terminal/connect': options.hiddenHeader,
+        'terminal/index': options.terminalIndex,
+        'scan/terminal': options.hiddenHeader,
+        'scan/account': options.hiddenHeader,
+        'homes/sign-in': options.hiddenHeader,
+        'restore/index': options.hiddenHeader,
+        'restore/show-qr': options.hiddenHeader,
+        'restore/manual': options.hiddenHeader,
+        'restore/lost-access': options.hiddenHeader,
+        'auth/password/recover': options.hiddenHeader,
+        'auth/email/verify/[token]': options.hiddenHeader,
+        'auth/password/reset/[token]': options.hiddenHeader,
+        'changelog': options.changelog,
+        'server': options.server,
+        'home': options.visibleBlankBack,
+        'homes/index': options.accountHomes,
+        'artifacts/index': options.artifactsIndex,
+        'artifacts/[id]': options.artifactsId,
+        'artifacts/new': options.artifactsNew,
+        'artifacts/edit/[id]': options.artifactsEdit,
+        'friends/search': options.friendsSearch,
+        'user/[id]': options.userId,
+        'new/pick/machine': options.blankBack,
+        'new/pick/path': options.blankBack,
+        'new/pick/profile': options.blankBack,
+        'new/pick/server': options.blankBack,
+        'new/pick/profile-edit': options.blankBack,
+        'new/pick/secret-requirement': options.newPickSecretRequirement,
+        'zen/index': options.zenIndex,
+        'zen/new': options.zenNew,
+        'zen/view': options.zenView,
+        'workflows/[id]/index': options.workflowsDetail,
+        'workflows/edit': options.workflowsDetail,
+        'workflows/new': options.workflowsDetail,
+    } satisfies Record<string, StackScreenOptions>;
+}
+
+/** Resolve an exact leaf module, without lending a nested navigator's options to its index. */
+export function resolveRootStackRouteOptions(
+    options: Readonly<Record<string, StackScreenOptions>>,
+    moduleKey: string | undefined,
+): StackScreenOptions | undefined {
+    const name = moduleKey?.replace('./(app)/', '').replace(/\.tsx$/, '');
+    return name ? options[name] : undefined;
+}
+

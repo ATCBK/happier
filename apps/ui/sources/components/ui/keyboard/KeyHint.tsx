@@ -19,20 +19,6 @@ export type KeyHintProps = Readonly<{
     style?: StyleProp<ViewStyle>;
 }>;
 
-function resolveKeyHintTypography() {
-    const helpers = Typography as Readonly<{
-        keyHint?: () => object;
-        mono?: () => object;
-        tabular?: () => object;
-    }>;
-    return typeof helpers.keyHint === 'function'
-        ? helpers.keyHint()
-        : {
-            ...(helpers.mono?.() ?? {}),
-            ...(helpers.tabular?.() ?? {}),
-        };
-}
-
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
         minWidth: 22,
@@ -46,7 +32,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.pressedOverlay,
     },
     label: {
-        ...resolveKeyHintTypography(),
+        ...Typography.variant('micro', 'regular'),
+        ...Typography.mono(),
+        ...Typography.tabular(),
         color: theme.colors.text.secondary,
     },
     attentionContainer: {
@@ -58,7 +46,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.state.attention.background,
     },
     attentionLabel: {
-        ...resolveKeyHintTypography(),
+        ...Typography.variant('micro', 'regular'),
+        ...Typography.mono(),
+        ...Typography.tabular(),
         color: theme.colors.state.attention.foreground,
     },
     onFillLabel: { color: theme.colors.surface.base },

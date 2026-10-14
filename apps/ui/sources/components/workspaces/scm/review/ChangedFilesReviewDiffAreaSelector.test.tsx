@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { ChangedFilesReviewDiffAreaSelector } from './ChangedFilesReviewDiffAreaSelector';
+import { DEFAULT_THEME_STYLE_SCALES } from '@/theme/themeStyleScales';
 
 vi.mock('react-native', async () => vi.importActual('react-native-web'));
 vi.mock('react-native-unistyles', async () => {
@@ -18,7 +19,7 @@ vi.mock('react-native-reanimated', async () => {
 });
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const theme = { colors: { border: { default: '#ddd' }, surface: { inset: '#eee', base: '#fff' }, text: { primary: '#111' } } };
+const theme = { space: DEFAULT_THEME_STYLE_SCALES.space, colors: { border: { default: '#ddd' }, surface: { inset: '#eee', base: '#fff' }, text: { primary: '#111' } } };
 
 it('chooses a diff area from one menu and retains trailing actions for a single area', async () => {
     // jsdom has no layout; only the browser geometry boundary is supplied.

@@ -26,6 +26,8 @@ import {
 } from './buildUniversalSearchSections';
 import { buildUniversalSearchScopeKey } from './universalSearchResult';
 import type { UniversalSearchResult } from './universalSearchResult';
+import { describeConversationSearchCoverage } from './conversationSearchCoverage';
+import { synthesizeSelectionListRenderPlan } from '@/components/ui/selectionList/SelectionListRenderPlan';
 
 function input(
     overrides: Partial<BuildUniversalSearchSectionsInput> = {},
@@ -475,7 +477,8 @@ describe('buildUniversalSearchSections', () => {
         ];
         const sections = buildUniversalSearchSections(input({
             query: 'rollback',
-            transcript: { status: 'ready', resolverKey: 'home-b', resolve: async () => results },
+            transcript: { status: 'ready', resolverKey: 'home-b',
+                resolve: async () => ({ results, resultHint: 'Partial coverage' }) },
         }));
         const transcript = dynamicSections(sections).find((section) => section.id === 'transcript');
         expect(transcript?.resultFiltering).toBe('provider');
@@ -484,23 +487,53 @@ describe('buildUniversalSearchSections', () => {
         expect(resolved.options).toHaveLength(1);
         expect(resolved.options[0]?.id)
             .toBe(`transcript::${buildUniversalSearchScopeKey(['home-b'])}::m1`);
+        const plan = synthesizeSelectionListRenderPlan({
+            sections, inputValue: 'rollback', filterQuery: 'rollback',
+            dynamicSectionStates: new Map([['transcript', { status: 'success' as const, ...resolved }]]),
+        });
+        expect(plan.find(section => section.id === 'transcript'))
+            .toMatchObject({ options: resolved.options, resultHint: 'Partial coverage' });
+        expect(resolved.emptyHint).toBeUndefined();
     });
 
-    it('projects a source-owned bounded-coverage hint through the canonical section status', async () => {
+    it.each(['source', 'page'] as const)('keeps empty Messages coverage visible through the real section render owner (%s)', async (owner) => {
+        const coverage = describeConversationSearchCoverage({
+            machines: [{ machineId: 'machine-a', status: 'partial', standardSearchEnabled: true }],
+            machineName: () => 'Laptop',
+        });
         const sections = buildUniversalSearchSections(input({
             query: 'older work',
             transcript: {
                 status: 'ready',
                 resolverKey: 'daemon:home-a:machine-a',
-                resultHint: 'Local memory storage limits can make older coverage partial.',
-                resolve: async () => [],
+                ...(owner === 'source' ? { resultHint: coverage } : {}),
+                resolve: async () => owner === 'page' ? { results: [], resultHint: coverage } : [],
             },
         }));
 
         const transcript = dynamicSections(sections).find((section) => section.id === 'transcript');
         const resolved = await transcript!.resolve('older work', new AbortController().signal);
-        expect(resolved.resultHint)
-            .toBe('Local memory storage limits can make older coverage partial.');
+        const plan = synthesizeSelectionListRenderPlan({
+            sections, inputValue: 'older work', filterQuery: 'older work',
+            dynamicSectionStates: new Map([['transcript', { status: 'success' as const, ...resolved }]]),
+        });
+        expect(plan.find(section => section.id === 'transcript'))
+            .toMatchObject({ dynamicState: 'empty', options: [], hint: coverage });
+    });
+
+    it('preserves an explicit empty source status ahead of its coverage hint', async () => {
+        const sections = buildUniversalSearchSections(input({ query: 'older work', transcript: {
+            status: 'ready', resolverKey: 'exact-status',
+            resolve: async () => ({ results: [], emptyHint: 'Exact source status', resultHint: 'Partial coverage' }),
+        } }));
+        const transcript = dynamicSections(sections).find(section => section.id === 'transcript')!;
+        const resolved = await transcript.resolve('older work', new AbortController().signal);
+        const plan = synthesizeSelectionListRenderPlan({
+            sections, inputValue: 'older work', filterQuery: 'older work',
+            dynamicSectionStates: new Map([['transcript', { status: 'success' as const, ...resolved }]]),
+        });
+        expect(plan.find(section => section.id === 'transcript'))
+            .toMatchObject({ dynamicState: 'empty', options: [], hint: 'Exact source status' });
     });
 
     it('namespaces option ids by source so two providers cannot collide on the same row id', async () => {

@@ -166,12 +166,6 @@ vi.mock('@/constants/Typography', async (importOriginal) => {
             header: () => ({}),
             mono: () => ({}),
             tabular: () => ({}),
-            eyebrow: () => ({}),
-            rowTitle: () => ({}),
-            rowMeta: () => ({}),
-            pillLabel: () => ({}),
-            keyHint: () => ({}),
-            timestamp: () => ({}),
             logo: () => ({}),
         },
     };

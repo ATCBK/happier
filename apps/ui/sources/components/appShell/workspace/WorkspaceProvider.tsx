@@ -60,6 +60,8 @@ export function WorkspaceProvider(props: Readonly<{
      * Web destinations retain their workspace host when only the viewport changes.
      */
     phone?: boolean;
+    /** Authenticated public web flows may enter a destination before its shell is presented. */
+    entry?: boolean;
     /** A web shell awaiting onboarding teardown must not lend its editable routes to Expo. */
     deferred?: boolean;
     catalog: readonly CompactAppDestination[];
@@ -86,18 +88,19 @@ export function WorkspaceProvider(props: Readonly<{
         return `${pathname}${query.size ? `?${query}` : ''}`;
     })();
     const phone = props.phone === true && !props.enabled;
+    const entry = props.entry === true && Platform.OS === 'web';
     // Width changes presentation, never the owner or lifetime of an admitted web destination.
     const routeDestination = resolveDestinationRefFromHref(props.catalog, routeHref);
     // Deferred web admission precedes shell presentation during onboarding
     // teardown. Lending an editable body to Expo while the shell is absent
     // would consume its handoff before the retained host can take custody.
     // Native phones still lend their routes to the native stack.
-    const canHostRoutes = props.enabled || ((phone || props.deferred === true) && Platform.OS === 'web');
+    const canHostRoutes = props.enabled || entry || ((phone || props.deferred === true) && Platform.OS === 'web');
     const ownsHref = React.useCallback((href: string) => canHostRoutes
         && resolveDestinationRefFromHref(props.catalog, href) !== null, [canHostRoutes, props.catalog]);
     const ownsRoute = ownsHref(routeHref);
     const hostsMobileWeb = phone && Platform.OS === 'web' && ownsRoute;
-    const hostsRoute = props.enabled || hostsMobileWeb;
+    const hostsRoute = props.enabled || hostsMobileWeb || (entry && ownsRoute);
     const phoneTransport = phone && !hostsMobileWeb;
     const phoneTabHref = phone ? resolvePhoneWorkspaceTabHref(props.catalog, routeHref) : null;
     const [initialTab] = React.useState(() => {
@@ -119,8 +122,8 @@ export function WorkspaceProvider(props: Readonly<{
         scopeKey: string | null; titles: Readonly<Record<string, WorkspaceDestinationTitle>>;
     }>>({ scopeKey, titles: {} });
     const destinationTitles = publishedTitles.scopeKey === scopeKey ? publishedTitles.titles : NO_DESTINATION_TITLES;
-    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles });
-    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles };
+    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles });
+    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles };
     const publishDestinationTitle = React.useCallback((tabId: string, ref: DestinationRef, title: string | null) => {
         // The body may finish an effect after navigation. Its old identity must
         // never name the new destination retained under the same tab key.
@@ -339,16 +342,36 @@ export function WorkspaceProvider(props: Readonly<{
     }, [activateTab, closeTabs, owner.isReady, phone, phoneOnTab, props.catalog, runUiNavigation, runtime]);
 
     const openHref = React.useCallback((href: string, options?: WorkspaceOpenOptions) => {
+        const canEnter = () => entry && latest.current.entry && latest.current.scopeKey === scopeKey
+            && latest.current.phoneTransport === phoneTransport && runtime.browser !== null;
+        if (canEnter() && resolveDestinationRefFromHref(latest.current.catalog, href)) {
+            // Exact-Home refresh can finish while the scoped layout is still
+            // hydrating. Browser custody retains the intent; normal restoration
+            // admits that URL once ready, without lending it to Expo's index.
+            runNavigation(() => {
+                if (!canEnter()) return;
+                if (!latest.current.owner.isReady) runtime.browser?.enterHref(href, options?.replace === true);
+                else {
+                    runtime.initialized = true;
+                    runtime.adapter.openHref(href, options);
+                }
+            });
+            return true;
+        }
         if (!isCurrentUiOwner() || !latest.current.hostsRoute
             || !resolveDestinationRefFromHref(latest.current.catalog, href)) return false;
-        runUiNavigation(() => { runtime.adapter.openHref(href, options); });
+        runUiNavigation(() => {
+            runtime.initialized = true;
+            runtime.adapter.openHref(href, options);
+        });
         return true;
-    }, [isCurrentUiOwner, runUiNavigation, runtime]);
+    }, [entry, isCurrentUiOwner, phoneTransport, runUiNavigation, runtime, scopeKey]);
     const tabNavigations = React.useMemo(() => new Map<string, DestinationNavigation>(), [runtime]);
     const navigationForTab = React.useCallback((tabId: string): DestinationNavigation => {
         const existing = tabNavigations.get(tabId);
         if (existing) return existing;
         const navigate = (href: Parameters<typeof router.push>[0], replace: boolean) => {
+            if (!isCurrentUiOwner()) return;
             const resolved = resolveHref(href);
             if (!openHref(resolved, { tabId, replace })) {
                 runUiNavigation(() => replace ? latest.current.router.replace(href) : latest.current.router.push(href));

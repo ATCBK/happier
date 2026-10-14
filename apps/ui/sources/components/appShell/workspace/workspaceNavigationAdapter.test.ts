@@ -113,6 +113,51 @@ describe('workspace navigation adapter', () => {
         expect(h.active().target.params).toEqual({ id: 'A1', serverId: 'home-a', accountId: 'account-a' });
         expect(h.commits.at(-1)?.href).toBe('/session/A1?serverId=home-a&accountId=account-a');
     });
+    it('reuses a retained unqualified Session when the legacy workspace has no Account scope', () => {
+        const h = harness();
+        h.adapter.openHref('/session/legacy', { mode: 'newTab', reuseExisting: true });
+        const original = h.active().id;
+        h.adapter.openHref('/session/legacy', { mode: 'newTab', reuseExisting: true });
+        expect(h.active().id).toBe(original);
+        expect(Object.values(h.state().tabs).filter(tab => tab.target.params.id === 'legacy')).toHaveLength(1);
+    });
+    it('adopts a Session URL into its retained pane without discarding terminal presentation', () => {
+        const h = harness([], { serverId: 'home-a', accountId: 'account-a' });
+        h.adapter.setParams('A', { bottom: 'terminal' });
+        h.adapter.openHref('/inbox', { mode: 'newTab' });
+        expect(h.adapter.acceptUrl('/session/A1?serverId=home-a')).toBe(true);
+        expect(h.active()).toMatchObject({ id: 'A', target: { params: { bottom: 'terminal' } } });
+        expect(h.adapter.acceptUrl('/session/A1?serverId=home-a&right=files')).toBe(true);
+        expect(h.active().target.params.right).toBe('files');
+    });
+    it('returns from a pane-scoped Inbox router and Session list to the retained Session', () => {
+        const h = harness([], { serverId: 'home-a', accountId: 'account-a' });
+        h.adapter.setParams('A', { bottom: 'terminal' });
+        for (const source of ['/inbox', '/projects']) {
+            expect(h.adapter.openHref(source, { mode: 'newTab' })).toBe(true);
+            const sourceTabId = h.active().id;
+            expect(h.adapter.openHref('/session/A1?serverId=home-a', { tabId: sourceTabId })).toBe(true);
+            expect(h.active()).toMatchObject({ id: 'A', target: { params: { bottom: 'terminal' } } });
+            expect(Object.values(h.state().tabs).filter(tab => tab.target.kind === 'session')).toHaveLength(1);
+        }
+    });
+    it('keeps explicit-group Session previews in that group while intentional new tabs stay distinct', () => {
+        const h = harness();
+        h.adapter.openHref('/session/B1?serverId=home-b', { mode: 'splitRight',
+            availableSizePx: 1000, minimumFirstSizePx: 320, minimumSecondSizePx: 320 });
+        const groupId = h.state().focusedGroupId;
+        h.adapter.openHref('/session/A1?serverId=home-a', { mode: 'preview', groupId });
+        const second = h.active().id;
+        expect(second).not.toBe('A');
+        expect(h.state().focusedGroupId).toBe(groupId);
+        h.adapter.setParams(second, { bottom: 'terminal' });
+        h.adapter.openHref('/session/A1?serverId=home-a', { mode: 'preview', groupId });
+        expect(h.active().id).toBe(second);
+        expect(h.active().target.params.bottom).toBe('terminal');
+        h.adapter.openHref('/session/A1?serverId=home-a', { mode: 'newTab', groupId });
+        expect(h.active().id).not.toBe(second);
+        expect(h.active().id).not.toBe('A');
+    });
     it('publishes a destination edge as one admitted layout without exposing an intermediate centre tab', () => {
         const h = harness();
         h.adapter.initialize('/session/A1?serverId=home-a');

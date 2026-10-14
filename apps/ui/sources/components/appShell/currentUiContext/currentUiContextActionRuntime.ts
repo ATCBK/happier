@@ -82,12 +82,11 @@ export async function executeCurrentUiContextAction(
     // The ordinary Action executor has already admitted this strict input.
     const input = request.input as Readonly<{ commandId: string }>;
     const outcome = await port.invokeCurrentUiCommand?.({ commandId: input.commandId, signal: request.context.signal });
+    if (outcome?.ok) return { ok: true, result: outcome.result ?? null };
     const errorCode = outcome?.code === 'outcome_unknown' ? PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE
         : outcome?.errorCode ?? (outcome?.code === 'denied' ? 'permission_denied'
         : 'unsupported_action');
-    return outcome?.ok
-        ? { ok: true, result: outcome.result ?? null }
-        : { ok: false, errorCode, error: outcome?.code ?? 'current_ui_command_unavailable' };
+    return { ok: false, errorCode, error: outcome?.code ?? 'current_ui_command_unavailable' };
 }
 
 /** The generic executor borrows the mounted dispatcher, including its nested host services. */

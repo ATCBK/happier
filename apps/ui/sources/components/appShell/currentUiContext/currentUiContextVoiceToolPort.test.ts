@@ -94,7 +94,7 @@ function ModalStateProbe() {
 }
 
 /** Declared Action schemas the daemon answers per Action; never projected. */
-const actionSchemasByQualifiedId = new Map<string, Readonly<{ inputSchema: object; outputSchema?: object }>>();
+const actionSchemasByQualifiedId = new Map<string, Readonly<{ inputSchema?: object; outputSchema?: object }>>();
 
 beforeEach(async () => {
     actionSchemasByQualifiedId.clear();
@@ -179,14 +179,14 @@ const CLIENT_ACTION_TARGET = Object.freeze({
     platform: 'ios' as const,
 });
 const CLIENT_ACTION_GENERATION = 41;
-const CLIENT_ACTION_EXECUTION_ORIGIN: PluginMachineExecutionOriginV1 = Object.freeze({
+const CLIENT_ACTION_EXECUTION_ORIGIN = Object.freeze({
     serverIdentityId: 'srv_current_ui_client_action',
     materializationRef: Object.freeze({
         pluginId: CLIENT_ACTION_ID.pluginId,
         machineId: 'machine-current-ui-client-action',
         materializationId: 'materialization-current-ui-client-action',
     }),
-});
+}) satisfies PluginMachineExecutionOriginV1;
 const CLIENT_ACTION_HOST_ORIGIN = Object.freeze({
     machineId: CLIENT_ACTION_EXECUTION_ORIGIN.materializationRef.machineId,
     get serverId() { return clientHomeId; },
@@ -222,14 +222,14 @@ const CLIENT_ACTION_AUTHORIZATION = Object.freeze({
 });
 
 const PUBLIC_AUTHORING_CLIENT_ACTION_GENERATION = 52;
-const PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN: PluginMachineExecutionOriginV1 = Object.freeze({
+const PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN = Object.freeze({
     serverIdentityId: 'srv_public_authoring_client_action',
     materializationRef: Object.freeze({
         pluginId: 'examples.public-sdk-review-assistant',
         machineId: 'machine-public-authoring-client-action',
         materializationId: 'materialization-public-authoring-client-action',
     }),
-});
+}) satisfies PluginMachineExecutionOriginV1;
 const PUBLIC_AUTHORING_CLIENT_ACTION_HOST_ORIGIN = Object.freeze({
     machineId: PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN.materializationRef.machineId,
     get serverId() { return publicHomeId; },
@@ -948,6 +948,18 @@ describe('current UI context Voice tool port', () => {
                 expectedOccurrenceId: current.occurrenceId,
             }),
         }));
+    });
+
+    it('describes a current contributed Action without a declared input constraint', async () => {
+        const projection = createDaemonActionProjection();
+        actionSchemasByQualifiedId.set(`${ACTION_ID.pluginId}/${ACTION_ID.localId}`, {});
+        const port = createCurrentUiContextVoiceToolPort({
+            reader: { readCurrentUiContext: () => null, resolveCurrentUiCommand: () => null,
+                subscribe: () => () => {} },
+            readProjection: () => projection,
+            readNavigationBinding: () => null,
+        });
+        await expect(port.readCurrentContributedActionSchemas?.(ACTION_DISCOVERY_ID)).resolves.toEqual({ inputSchema: {} });
     });
 
     it('resolves the same localized Action title and input hints that UI presentation consumes', () => {

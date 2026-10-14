@@ -5,6 +5,7 @@ import { createWorkspaceEmptyTab, type WorkspaceAction, type WorkspaceState, typ
 import { isWorkspaceSingletonDestination } from './workspaceDestinationPolicy';
 import { createWorkspaceDestinationSplit } from './workspaceSplit';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 export type WorkspaceOpenOptions = Readonly<{
     mode?: 'preview' | 'newTab' | 'splitLeft' | 'splitRight' | 'splitUp' | 'splitDown';
@@ -51,7 +52,7 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
         const admitted = input.resolveOpenHref ? input.resolveOpenHref(href) : href;
         return admitted ? resolveDestinationRefFromHref(input.getCatalog(), admitted) : null;
     };
-    const findOpenDestination = (target: DestinationRef, state = input.getState()): WorkspaceOpenDestination | null => {
+    const findOpenDestination = (target: DestinationRef, state = input.getState(), groupId?: string): WorkspaceOpenDestination | null => {
         const catalog = input.getCatalog();
         const singleton = isWorkspaceSingletonDestination(catalog, target);
         const scope = input.getScope?.();
@@ -60,10 +61,11 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             // Missing qualifiers denote the current persisted workspace realm,
             // never an Account on an explicitly different Home.
             return { id: ref.params.id, serverId, accountId: ref.params.accountId
-                ?? (serverId === scope?.serverId ? scope?.accountId : undefined) };
+                ?? (areServerProfileIdentifiersEquivalent(serverId, scope?.serverId) ? scope?.accountId : undefined) };
         };
         const identity = target.kind === 'session' ? sessionIdentity(target) : null;
         const tab = Object.values(state.tabs).find(tab => {
+            if (groupId && !state.groups[groupId]?.tabIds.includes(tab.id)) return false;
             if (singleton) return tab.target.kind === target.kind;
             const href = hrefForDestinationRef(catalog, tab.target);
             const normalized = href ? resolveDestinationRefFromHref(catalog, href) : null;
@@ -72,7 +74,8 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             // to the retained view, and must not turn Go to it into a duplicate tab.
             if (!identity) return sameDestinationRef(normalized, target);
             const candidate = sessionIdentity(normalized);
-            return candidate.id === identity.id && candidate.serverId === identity.serverId
+            return candidate.id === identity.id && (candidate.serverId === identity.serverId
+                || areServerProfileIdentifiersEquivalent(candidate.serverId, identity.serverId))
                 && candidate.accountId === identity.accountId;
         });
         const group = tab ? Object.values(state.groups).find(group => group.tabIds.includes(tab.id)) : null;
@@ -136,14 +139,22 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             const openingGroupId = options.groupId ?? state.focusedGroupId;
             const mode = options.mode ?? 'preview';
             const admittedSingleton = singletonActions(state, target);
-            const reusable = options.reuseExisting && !options.tabId ? findOpenDestination(target) : null;
+            // A bare Session address is Go to it, including Expo URL adoption.
+            // Explicit presentation params and new-tab/split intents keep their
+            // existing destination policy; retained terminal chrome is not a new resource.
+            const sessionPreview = mode === 'preview' && target.kind === 'session' && options.reuseExisting !== false
+                && Object.keys(target.params).every(key => key === 'id' || key === 'serverId' || key === 'accountId');
+            // A mounted destination router supplies its SOURCE tabId. A bare
+            // Session address still focuses the retained resource across panes.
+            const reusable = (options.reuseExisting || sessionPreview) && (!options.tabId || sessionPreview)
+                ? findOpenDestination(target, state, options.reuseExisting ? undefined : options.groupId) : null;
             if (reusable && !admittedSingleton) {
                 const retained = state.tabs[reusable.tabId].target;
                 // Reuse retains pane state, but an explicitly selected Session
                 // address must qualify a legacy tab before it is projected again.
                 if (target.kind === 'session') {
                     const params = { ...retained.params,
-                        ...(target.params.serverId ? { serverId: target.params.serverId } : {}),
+                        ...(target.params.serverId ? { serverId: retained.params.serverId ?? target.params.serverId } : {}),
                         ...(target.params.accountId ? { accountId: target.params.accountId } : {}),
                     };
                     const qualified = { ...retained, params };

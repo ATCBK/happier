@@ -101,14 +101,14 @@ const CLIENT_ACTION_TARGET = Object.freeze({
     exportName: 'activate',
     platform: 'web' as const,
 });
-const CLIENT_ACTION_ORIGIN: PluginMachineExecutionOriginV1 = Object.freeze({
+const CLIENT_ACTION_ORIGIN = Object.freeze({
     serverIdentityId: 'srv_voice_client_action',
     materializationRef: Object.freeze({
         pluginId: CLIENT_ACTION_PLUGIN_ID,
         machineId: 'machine-1',
         materializationId: 'materialization-client-action',
     }),
-});
+}) satisfies PluginMachineExecutionOriginV1;
 const CLIENT_ACTION_AUTHORIZATION = Object.freeze({
     generation: Object.freeze({
         targetGeneration: String(CLIENT_ACTION_GENERATION),

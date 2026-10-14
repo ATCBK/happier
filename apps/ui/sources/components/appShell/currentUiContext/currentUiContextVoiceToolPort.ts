@@ -223,7 +223,7 @@ async function readCurrentContributedActionSchemas(
     });
     if (!read.supported || !read.result.ok) return null;
     return Object.freeze({
-        inputSchema: read.result.inputSchema,
+        inputSchema: read.result.inputSchema ?? {},
         ...(read.result.outputSchema === undefined ? {} : { outputSchema: read.result.outputSchema }),
     });
 }

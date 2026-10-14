@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { Href } from 'expo-router';
 
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import type { KeyboardShortcutHandlers } from '@/keyboard/runtime';
@@ -7,7 +8,7 @@ import { executeWorkspaceUiAction } from './workspaceActionRuntime';
 import type { WorkspaceState } from './workspaceState';
 
 /** Keyboard intent uses the same guarded Action owner as agent and menu operations. */
-export function useWorkspaceKeyboardShortcuts(active: boolean, getState: () => WorkspaceState, openApproval: (href: string) => void): void {
+export function useWorkspaceKeyboardShortcuts(active: boolean, getState: () => WorkspaceState, openApproval: (href: Href) => void): void {
     const current = React.useRef({ active, getState, openApproval });
     current.current = { active, getState, openApproval };
     const handlers = React.useMemo<KeyboardShortcutHandlers>(() => {

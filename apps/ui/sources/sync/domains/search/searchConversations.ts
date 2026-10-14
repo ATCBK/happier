@@ -119,6 +119,13 @@ export async function searchConversations(input: Readonly<{
     const listCandidates = mode === 'indexed' ? null
         : (await import('@/sync/ops/machineExternalSessions')).machineExternalSessionsCandidatesList;
     input.signal?.throwIfAborted();
+    const { cursor: rawCursor, ...query } = input.query;
+    const externalSource = query.externalSource;
+    const continuation = input.continuation ?? readQualifiedCursor(rawCursor);
+    const cursor = continuation ? undefined : rawCursor;
+    // A failed page has not consumed its cursor. Keep it available to
+    // every caller until the producing source returns a page or rejects it.
+    let pendingContinuation = continuation;
     const hits: ConversationSearchHit[] = [];
     const continuations: NonNullable<ConversationSearchResult['continuations']>[number][] = [];
     const sourcesResult: NonNullable<ConversationSearchResult['sources']>[number][] = [];
@@ -134,9 +141,10 @@ export async function searchConversations(input: Readonly<{
             return !isMemoryExternalTranscriptSearchHitV1(hit) || !completedStandardSources.some(source => source.machineId === row.machineId
                 && source.agentId === hit.source.agentId && source.sourceKey === hit.source.sourceKey);
         });
+        const remainingContinuations = pendingContinuation ? [pendingContinuation, ...continuations] : continuations;
         const result = { machines,
             ...(homeStatus ? { homeStatus } : {}), ...(sourcesResult.length ? { sources: [...sourcesResult] } : {}),
-            ...(continuations.length ? { continuations: [...continuations] } : {}), ...(resetSources.length ? { resetSources: [...resetSources] } : {}),
+            ...(remainingContinuations.length ? { continuations: [...remainingContinuations] } : {}), ...(resetSources.length ? { resetSources: [...resetSources] } : {}),
             ...(completedStandardSources.length ? { completedStandardSources: [...completedStandardSources] } : {}) };
         const authorized = input.authorize ? await input.authorize(currentHits) : currentHits;
         input.signal?.throwIfAborted();
@@ -157,10 +165,6 @@ export async function searchConversations(input: Readonly<{
         });
         return publication;
     };
-    const { cursor: rawCursor, ...query } = input.query;
-    const externalSource = query.externalSource;
-    const continuation = input.continuation ?? readQualifiedCursor(rawCursor);
-    const cursor = continuation ? undefined : rawCursor;
     // A raw daemon cursor has no cross-machine meaning. Public callers may use it
     // only with one explicit index; load-more hooks carry the producer identity.
     const usesHome = input.homeSessions && mode !== 'standard' && (!query.corpora || query.corpora.includes('sessions'));
@@ -218,7 +222,11 @@ export async function searchConversations(input: Readonly<{
                     });
                     input.signal?.throwIfAborted();
                     documents = 'unavailable';
-                    if (result?.ok) hits.push(...indexedRows(machine.id, result.hits.filter(isMemorySessionSearchHitV1)));
+                    if (result?.ok) {
+                        pendingContinuation = undefined;
+                        hits.push(...indexedRows(machine.id, result.hits.filter(isMemorySessionSearchHitV1)));
+                        if (result.nextCursor) continuations.push({ machineId: machine.id, cursor: result.nextCursor });
+                    }
                 }
                 if (indexed && query.query.trim()) {
                     const corpora = (query.corpora ?? ['sessions', 'external_transcripts']).filter(corpus =>
@@ -231,6 +239,7 @@ export async function searchConversations(input: Readonly<{
                         });
                         input.signal?.throwIfAborted();
                         if (result?.ok) {
+                            pendingContinuation = undefined;
                             nativeIndexedUsable = nativeReady && corpora.includes('external_transcripts');
                             if (nativeIndexedUsable && (!indexSources || (externalSource
                                 ? !indexSources.some(source => source.source.type === 'external_transcript'
@@ -283,11 +292,13 @@ export async function searchConversations(input: Readonly<{
                         ...(continuation ? { cursor: continuation.cursor } : {}) }, target);
                     input.signal?.throwIfAborted();
                     if (continuation && result.ok && result.cursorReset) {
+                        pendingContinuation = undefined;
                         resetSources.push({ machineId: machine.id, sourceKey: source.sourceKey });
                         result = await listCandidates(request, target);
                     }
                     input.signal?.throwIfAborted();
                     if (!result.ok) { machineStatus = 'partial'; continue; }
+                    pendingContinuation = undefined;
                     if (result.contentCoverage === 'complete' && !result.nextCursor && !result.preparation && !result.searchIncomplete) {
                         completedStandardSources.push({ machineId: machine.id, agentId: source.agentId, sourceKey: source.sourceKey });
                     }
@@ -314,6 +325,7 @@ export async function searchConversations(input: Readonly<{
     const homeWork = home?.then(async result => {
         input.signal?.throwIfAborted();
         if (result.ok) {
+            pendingContinuation = undefined;
             hits.push(...indexedRows(null, result.hits));
             if (result.nextCursor) continuations.push({ machineId: null, cursor: result.nextCursor });
             homeStatus = result.hasMore ? 'partial' : 'ok';

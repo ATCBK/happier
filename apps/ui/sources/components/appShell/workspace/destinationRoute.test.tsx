@@ -100,7 +100,9 @@ describe('destination route Stack declarations', () => {
     });
 
     it('draws a hosted phone header subtitle the same way the native stack header does', async () => {
-        const options = { headerTitle: 'happier', headerSubtitle: 'happier-dev/happier' };
+        // Project pages normally own their chrome. This synthetic subtitle scene
+        // explicitly opts into a stack header, as an actual leaf declaration can.
+        const options = { headerShown: true, headerTitle: 'happier', headerSubtitle: 'happier-dev/happier' };
         const screen = await renderScreen(<DestinationInstanceHost tabId="project-tab"
             ref={{ kind: 'project', params: { workspaceRefId: 'w1' } }}
             pathname="/projects/w1/overview" focused visible phone>

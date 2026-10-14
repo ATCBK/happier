@@ -315,6 +315,6 @@ export function shouldRouteSessionCockpitSurfacePressThroughUrl(input: Readonly<
     // projection, even when the selected tab already matches that intent.
     const path = input.pathname?.split(/[?#]/, 1)[0]?.replace(/\/+$/, '');
     if (path === `/session/${encodeURIComponent(input.sessionId)}`
-        && (input.paneUrlState?.details || input.paneUrlState?.rightTabId)) return true;
+        && (input.paneUrlState?.details || input.paneUrlState?.rightTabId || input.paneUrlState?.bottomTabId)) return true;
     return currentRoute.surface !== input.surface;
 }

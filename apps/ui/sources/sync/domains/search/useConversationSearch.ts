@@ -16,8 +16,13 @@ export function useConversationSearch(input: Readonly<{
     const machines = useMachineListForServer(input.accountLifetime?.scope.serverId ?? '');
     // Per-request admission belongs to the Account operation. A successful Retry
     // must not invalidate its own still-running search as it restores reachability.
-    const key = JSON.stringify([input.accountLifetime?.scope, input.query, input.machineIds, input.mode, input.providers, input.enabled, input.source, input.includeThreads,
-        machines?.map(machine => [machine.id, machine.active])]);
+    const selectedMachineIds = input.machineIds === undefined ? undefined : [...new Set(input.machineIds)].sort();
+    const intentKey = JSON.stringify([input.accountLifetime?.scope, input.query, selectedMachineIds, input.mode, input.providers,
+        input.enabled, input.source && [input.source.agentId, input.source.sourceKey, input.source.source, input.source.contentSearch], input.includeThreads]);
+    const availability = selectedMachineIds === undefined
+        ? (machines ?? []).map(machine => [machine.id, machine.active] as const).sort(([left], [right]) => left.localeCompare(right))
+        : selectedMachineIds.map(id => [id, machines?.find(machine => machine.id === id)?.active ?? false]);
+    const key = JSON.stringify([intentKey, availability]);
     const [revision, reload] = React.useReducer(value => value + 1, 0);
     const [state, setState] = React.useState<Readonly<{
         key: string; result: ConversationSearchResult | null; loading: boolean; error: unknown; cancelled?: boolean;
@@ -26,6 +31,7 @@ export function useConversationSearch(input: Readonly<{
     const publishedLifetime = React.useRef<ServerAccountScopeLifetime | null>(null);
     const currentInput = React.useRef(input);
     const explicitRetry = React.useRef(false);
+    const stopped = React.useRef<Readonly<{ intentKey: string; lifetime: ServerAccountScopeLifetime }> | null>(null);
     currentInput.current = input;
     React.useEffect(() => {
         const lifetime = input.accountLifetime;
@@ -37,6 +43,14 @@ export function useConversationSearch(input: Readonly<{
             return () => controller.abort();
         }
         const retirement = lifetime.onRetire(() => { controller.abort(); setState({ key, result: null, loading: false, error: null }); });
+        // Availability may change after Stop. Only a new search intent or the
+        // person's Retry can admit another scan under this Account lifetime.
+        if (stopped.current?.intentKey === intentKey && stopped.current.lifetime === lifetime) {
+            controller.abort();
+            setState(previous => ({ ...previous, key, loading: false, cancelled: true }));
+            return () => retirement.dispose();
+        }
+        stopped.current = null;
         setState({ key, result: null, loading: true, error: null });
         const retryUnreachableMachines = explicitRetry.current;
         explicitRetry.current = false;
@@ -69,6 +83,7 @@ export function useConversationSearch(input: Readonly<{
                 if (previous.key !== key || !previous.result) return previous;
                 const sameProducer = (value: typeof continuation) => value.machineId === continuation.machineId && value.sourceKey === continuation.sourceKey;
                 return { key, loading: false, error: null, result: { ...previous.result,
+                    ...(page.homeStatus !== undefined ? { homeStatus: page.homeStatus } : {}),
                     hits: mergeConversationSearchHits([...previous.result.hits.filter(row => {
                         if (row.mode === 'standard') return !page.resetSources?.some(source => row.machineId === source.machineId && row.sourceKey === source.sourceKey);
                         const hit = row.hit;
@@ -82,5 +97,9 @@ export function useConversationSearch(input: Readonly<{
         } catch (error) { if (!controller.signal.aborted) setState(previous => ({ ...previous, loading: false, error })); }
     }, [key]);
     return { ...(state.key === key && publishedLifetime.current === input.accountLifetime && input.accountLifetime?.isCurrent() ? state : { result: null, loading: false, error: null, cancelled: false }),
-        loadMore, reload: () => { explicitRetry.current = true; reload(); }, cancel: () => { request.current?.abort(); setState(previous => ({ ...previous, loading: false, cancelled: true })); } };
+        loadMore, reload: () => { stopped.current = null; explicitRetry.current = true; reload(); }, cancel: () => {
+            if (input.accountLifetime) stopped.current = { intentKey, lifetime: input.accountLifetime };
+            request.current?.abort();
+            setState(previous => ({ ...previous, loading: false, cancelled: true }));
+        } };
 }

@@ -39,7 +39,16 @@ const { createSessionScmReviewDetailsTab } = await import('@/components/sessions
 const { applySessionPaneUrlState, buildActiveDetailsRouteParams, parseSessionPaneUrlState } = await import(
     '@/components/sessions/panes/url/sessionPaneUrlState'
 );
+const { useSessionPaneUrlSync } = await import('@/components/sessions/panes/url/useSessionPaneUrlSync');
 const stayOnSurface = () => {};
+
+function PaneRouteSelection(props: Readonly<{ params: Record<string, string> }>) {
+    const pane = useAppPaneScope('session:resize-session');
+    const urlState = React.useMemo(() => parseSessionPaneUrlState(props.params), [props.params]);
+    useSessionPaneUrlSync({ enabled: true, browserMirrorsEnabled: false, scopeKey: 'session:resize-session',
+        pane, scopeState: pane.scopeState, urlState, setParams: null });
+    return null;
+}
 
 function CockpitSelection() {
     const pane = useAppPaneScope('session:resize-session');
@@ -60,6 +69,7 @@ it('carries an open comparison through pane selection, cockpit registration and 
     const tab = createSessionScmReviewDetailsTab({ comparison: { kind: 'workingTree', comparisonId: 'pending' }, view: 'walkthrough' });
     route.params = { ...buildActiveDetailsRouteParams([tab], tab.key), serverId: runtime.serverId };
     const expected = parseSessionPaneUrlState(route.params);
+    if (!expected) throw new Error('Expected a canonical comparison pane URL');
     const screen = await renderScreen(<runtime.Wrapper><MainAppTabStateProvider><SessionCockpitChromeRegistryProvider>
         <CockpitSelection /><MobileBottomChromeHost />
     </SessionCockpitChromeRegistryProvider></MainAppTabStateProvider></runtime.Wrapper>);
@@ -72,28 +82,38 @@ it('carries an open comparison through pane selection, cockpit registration and 
     await screen.unmount();
 });
 
-it('returns from a resized right-terminal route to Chat through the registered cockpit tab', async () => {
+it.each([
+    { pane: 'right', explicitChat: false },
+    { pane: 'bottom', explicitChat: false },
+    { pane: 'bottom', explicitChat: true },
+])('returns from a resized $pane-terminal route to Chat through the registered cockpit tab (explicit Chat: $explicitChat)', async ({ pane, explicitChat }) => {
     viewport.width = 390;
     route.replace.mockClear();
-    route.params = { serverId: runtime.serverId, right: 'terminal' };
+    route.params = { serverId: runtime.serverId, [pane]: 'terminal', ...(explicitChat ? { mobileSurface: 'chat' } : {}) };
     storage.setState(state => ({ settings: { ...state.settings, mobileWorkspaceExperienceV1: 'cockpit' } }));
     function TerminalSelection() {
         const register = useSessionCockpitChromeRegister();
-        const [surface, switchSurface] = React.useState<'chat' | 'terminal'>('terminal');
+        const [surface, switchSurface] = React.useState<'chat' | 'terminal'>(explicitChat ? 'chat' : 'terminal');
         React.useEffect(() => register({ sessionId: 'resize-session', serverId: runtime.serverId,
             activeSurface: surface, terminalTabAvailable: true, openDetailsTabCount: 0,
             switchSurface: next => switchSurface(next === 'terminal' ? 'terminal' : 'chat'),
         }), [register, surface]);
         return null;
     }
-    const screen = await renderScreen(<runtime.Wrapper><MainAppTabStateProvider><SessionCockpitChromeRegistryProvider>
-        <TerminalSelection /><MobileBottomChromeHost />
-    </SessionCockpitChromeRegistryProvider></MainAppTabStateProvider></runtime.Wrapper>);
+    const scene = () => <runtime.Wrapper><MainAppTabStateProvider><SessionCockpitChromeRegistryProvider>
+        <PaneRouteSelection params={route.params} /><TerminalSelection /><MobileBottomChromeHost />
+    </SessionCockpitChromeRegistryProvider></MainAppTabStateProvider></runtime.Wrapper>;
+    const screen = await renderScreen(scene());
+    expect(pane === 'bottom' ? runtime.pane.scopeState?.bottom.isOpen : runtime.pane.scopeState?.right.isOpen).toBe(true);
     await act(async () => screen.findByType(SessionCockpitTabBar).props.onSurfacePress('chat'));
     const url = new URL(String(route.replace.mock.calls.at(-1)?.[0]), 'https://happier.test');
     expect(url.pathname).toBe('/session/resize-session');
     expect(url.searchParams.get('serverId')).toBe(runtime.serverId);
     expect(url.searchParams.get('mobileSurface')).toBe('chat');
     expect(parseSessionPaneUrlState(Object.fromEntries(url.searchParams))).toBeNull();
+    route.params = Object.fromEntries(url.searchParams);
+    await act(async () => screen.update(scene()));
+    expect(runtime.pane.scopeState?.bottom.isOpen).toBe(false);
+    expect(runtime.pane.scopeState?.right.isOpen).toBe(false);
     await screen.unmount();
 });

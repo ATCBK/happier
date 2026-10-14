@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Href } from 'expo-router';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit';
@@ -43,7 +44,7 @@ function mountWorkspace(serverId: string) {
         onChange: () => {}, transport: { commit: href => { hrefs.push(href); } } });
     const execute = createWorkspaceActionAdapter({ getState: () => state, navigation, readCanvas: () => null, createId: () => `new:${++nextId}` });
     unregister = registerMountedWorkspaceAction(async request => execute(request.actionId, request.input));
-    return { state: () => state, hrefs, openApproval: (href: string) => { navigation.openHref(href, { mode: 'newTab' }); } };
+    return { state: () => state, hrefs, openApproval: (href: Href) => { navigation.openHref(href as string, { mode: 'newTab' }); } };
 }
 
 describe('workspace UI Action approval presentation', () => {
