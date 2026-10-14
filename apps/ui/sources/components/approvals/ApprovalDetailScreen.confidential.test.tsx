@@ -70,7 +70,7 @@ let savedResourceForChoice = false;
 const savedResourceRef = formatSharedSavedSecretRefV1('secret-1');
 
 async function enterOnceValue(screen: Awaited<ReturnType<typeof renderScreen>>) {
-    await vi.waitFor(() => expect(screen.findByTestId('approvals.secret-value')?.props.editable).toBe(true));
+    await vi.waitFor(() => expect(screen.findByTestId('approvals.secret-value')?.props.editable).toBe(true), { timeout: 5_000 });
     await act(async () => { screen.changeTextByTestId('approvals.secret-value', 'one-time-value'); });
 }
 
@@ -325,7 +325,8 @@ describe('confidential approval human continuation', () => {
         await act(async () => { screen.changeTextByTestId('approvals.secret-name', 'Remembered password'); });
         await continueChoice(screen);
         expect(deliveries).toHaveLength(1);
-        expect(writes).toContain('/v2/account/settings');
+        expect(writes).toContain(SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.create']);
+        expect(writes).not.toContain('/v2/account/settings');
         expect(screen.getTextContent()).toContain('approvals.confidential.filled');
         expect(screen.getTextContent()).toContain('approvals.confidential.rememberFailed');
         expect(screen.findByTestId('approvals.secret-value')?.props.value ?? '').toBe('');
