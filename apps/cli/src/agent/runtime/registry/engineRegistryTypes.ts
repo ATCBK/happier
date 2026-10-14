@@ -130,6 +130,7 @@ export type NativeAgentSessionInteractionHostBinding = Readonly<{
         | 'subscribeExecutionRunPendingTarget'
         | 'listExecutionRunPendingDeliveryStatuses'
         | 'blockExecutionRunPendingDelivery'
+        | 'getCommittedUserMessageSeq'
     >>;
     machineId: string;
     permissionHandler: Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'>;
