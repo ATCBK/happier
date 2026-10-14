@@ -149,12 +149,11 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
     try { resolvedScope = await args.readScope(); }
     catch (error) {
       args.signal?.throwIfAborted();
-      if (!entries.some(({ entry }) => entry.required)
-        && (!(error instanceof PromptStackPreparationError) || error.reason === 'unavailable')) {
-        return { blocks: [], admittedEntries: entries.map(({ entry, layer }) => ({
+      if (!(error instanceof PromptStackPreparationError) || error.reason === 'unavailable') {
+        throw new PromptStackPreparationError('unavailable', undefined, entries.map(({ entry, layer }) => ({
           entryId: entry.id, layer, scope: null, ref: { ...entry.ref },
           outcome: 'unavailable', reason: 'unavailable', revision: null,
-        })) };
+        })));
       }
       if (error instanceof PromptStackPreparationError) throw error;
       throw new PromptStackPreparationError('unavailable');
@@ -187,7 +186,7 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
     catch (error) {
       args.signal?.throwIfAborted();
       if (!entry.required && error instanceof PromptStackPreparationError
-        && (error.reason === 'not_found' || error.reason === 'unavailable')) {
+        && error.reason === 'not_found') {
         optionalReadFailure = error.reason;
         return null;
       }
