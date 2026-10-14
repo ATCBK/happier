@@ -870,6 +870,14 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
         return { screen, order };
     }
 
+    it('announces a partially selected change group as mixed', async () => {
+        const { screen } = await renderGroupedCommitTab({ selectionModeActive: true,
+            selectedRepositoryChangedFiles: [groupedFile('AGENTS.md')], onToggleGroupSelection: () => {} });
+        const control = screen.findHostByTestId('scm-change-group-select:elsewhere');
+        expect(control?.props.accessibilityState?.checked).toBe('mixed');
+        expect(control?.props['aria-checked']).toBe('mixed');
+    });
+
     it('groups All changes into this session first, then the rest of the repository', async () => {
         const { order } = await renderGroupedCommitTab();
 

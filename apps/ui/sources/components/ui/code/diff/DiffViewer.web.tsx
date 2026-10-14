@@ -11,6 +11,7 @@ import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback'
 import { isPierreDiffKillSwitchEnabled, supportsPierreRuntime } from './pierre/pierreRuntimeSupport.web';
 import { useInitialPresentationReadiness } from '@/components/ui/presentation/InitialPresentationReadinessContext';
 import { useEffectiveDiffWrapLines } from './diffPresentationStyle';
+import { ProseDiffViewer } from './prose/ProseDiffViewer';
 
 const PierreDiffViewer = retryableLazy(async () => {
     const renderer = await import('./pierre/PierreDiffViewer.web');
@@ -21,6 +22,9 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     const rendererMode = useSetting('filesDiffRendererMode');
     const initialPresentationReadiness = useInitialPresentationReadiness();
     const wrapLines = useEffectiveDiffWrapLines(props.wrapLines);
+
+    // Prose is its own face on every renderer: a reading layout, not a code diff.
+    if (props.mode === 'text' && props.face === 'prose') return <ProseDiffViewer {...props} />;
 
     const wantsPierre = rendererMode === 'pierre';
     const rangeInteractionRequired = typeof props.onPressLineRange === 'function'

@@ -21,6 +21,22 @@ describe('parseMarkdownBlock (tables)', () => {
     });
   });
 
+  it('treats escaped pipes as cell content while preserving preceding backslashes', () => {
+    const markdown = [
+      '| Pattern \\| name | Meaning |',
+      '| --- | --- |',
+      '| a \\| b | either |',
+      '| `a \\\\| b` | backslash and pipe |',
+      '',
+    ].join('\n');
+
+    expect(parseMarkdownBlock(markdown).find((block) => block.type === 'table')).toMatchObject({
+      type: 'table',
+      headers: ['Pattern | name', 'Meaning'],
+      rows: [['a | b', 'either'], ['`a \\| b`', 'backslash and pipe']],
+    });
+  });
+
   it('pads short rows to match the header column count', () => {
     const markdown = [
       '| A | B | C |',

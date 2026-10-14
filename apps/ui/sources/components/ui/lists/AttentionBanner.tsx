@@ -70,6 +70,7 @@ export const AttentionBanner = React.memo(function AttentionBanner(props: Readon
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
+    const textStyles = attentionBannerTextStyles;
     const tone = props.tone ?? 'warning';
     const palette = theme.colors.state[tone];
     const iconName: IconName = tone === 'neutral' ? 'info' : 'warning';
@@ -102,11 +103,11 @@ export const AttentionBanner = React.memo(function AttentionBanner(props: Readon
                 announce={props.announce ?? 'none'}
                 accessibilityLiveRegion={props.accessibilityLiveRegion}
                 icon={props.icon ?? <Icon name={iconName} size={ICON_SIZE.md} color={palette.foreground} />}
-                titleContent={<Text style={styles.title}>{props.title}</Text>}
-                descriptionContent={props.description ? <Text style={styles.description}>{props.description}</Text> : undefined}
+                titleContent={<Text style={textStyles.title}>{props.title}</Text>}
+                descriptionContent={props.description ? <Text style={textStyles.description}>{props.description}</Text> : undefined}
                 points={props.points}
                 renderPoint={(point, index) => (
-                    <Text style={[styles.description, styles.pointText]}>
+                    <Text style={[textStyles.description, styles.pointText]}>
                         {point.map((segment, segmentIndex) => typeof segment === 'string' ? segment : (
                             <Text key={segmentIndex} testID={`${props.testID}.point.${index}.code.${point.slice(0, segmentIndex).filter((part) => typeof part !== 'string').length}`}
                                 // A command never breaks inside itself; the line wraps around it.
@@ -171,7 +172,8 @@ function BannerButton(props: Readonly<{ action: AttentionBannerAction; testID: s
     );
 }
 
-const stylesheet = StyleSheet.create((theme) => ({
+/** The banner's title and description text, for a host notice composed on the same shared banner. */
+export const attentionBannerTextStyles = StyleSheet.create((theme) => ({
     title: {
         ...Typography.default('medium'),
         ...happierPageTextMetrics('rowTitle'),
@@ -183,6 +185,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
         marginTop: theme.space.s2,
     },
+}));
+
+const stylesheet = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         alignItems: 'center',

@@ -26,7 +26,7 @@ import { useItemDensityInputs } from '@/components/ui/lists/useResolvedItemDensi
 import { SafeIonicons } from '@/components/ui/icons/SafeIonicons';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import {
     ITEM_CHEVRON_SIZE,
     ITEM_ICON_BOX_SIZE,
@@ -60,6 +60,7 @@ import {
     resolveHappierPageRowFieldMaxWidth,
     HappierDivider,
     isHappierPageRowNarrow,
+    resolveHappierPageRowDetailLayout,
     isHappierPageRowAccessoryStacked,
     useHappierItemGroupItemBehavior,
     useHappierPageSection,
@@ -553,9 +554,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'column',
         alignItems: 'stretch',
     },
-    pressablePressed: {
-        backgroundColor: theme.colors.surface.pressed,
-    },
 }));
 
 export const Item = React.memo<ItemProps>((props) => {
@@ -569,7 +567,7 @@ export const Item = React.memo<ItemProps>((props) => {
     const isAndroid = Platform.OS === 'android';
     const isWeb = Platform.OS === 'web';
     const hoverBackgroundColor = theme.colors.surface.pressed;
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     
     const {
         testID,
@@ -918,22 +916,16 @@ export const Item = React.memo<ItemProps>((props) => {
         + (showAccessory ? ITEM_CHEVRON_SIZE[resolvedIconDensity] + theme.space.s4 : 0);
     // A page section reserves the leading column for all its rows when any row has an icon or mark.
     const reservesLeadingColumn = useSectionLeadingColumn(isPageRow && (icon != null || leftElement != null));
-    // The row's own padding and leading mark take width from the line too: a short label's column is its
-    // natural width plus them, or a wide value squeezes the label into wrapping ("Advance/d" at 390).
-    const rowChromePx = 2 * (pageRowInsetPx ?? PAGE_LIST_METRICS.rowPaddingHorizontalPx)
-        + (reservesLeadingColumn || (isPageRow && (icon != null || leftElement != null))
-            ? (iconBoxSize ?? PAGE_LIST_METRICS.rowLeadingColumnPx) + PAGE_LIST_METRICS.rowLeadingGapPx
-            : 0);
-    const labelColumnPx = measuresTitle && titleNaturalWidthPx !== null
-        ? Math.min(PAGE_LIST_METRICS.sectionTextMinWidthPx, titleNaturalWidthPx + detailTrailingPx + rowChromePx)
-        : PAGE_LIST_METRICS.sectionTextMinWidthPx;
-    const detailBeneath = measuresDetail && rowWidthPx !== null && detailWidthPx !== null
-        && rowWidthPx - detailWidthPx - PAGE_LIST_METRICS.rowLeadingGapPx < labelColumnPx;
-    // A short label leaves the value more than the half-row share it gets on a wide row.
-    const detailInlineMaxWidthPx = measuresDetail && !detailBeneath && rowWidthPx !== null
-        && labelColumnPx < PAGE_LIST_METRICS.sectionTextMinWidthPx
-        ? rowWidthPx - (labelColumnPx - detailTrailingPx) - PAGE_LIST_METRICS.rowLeadingGapPx - theme.space.s8
-        : null;
+    const { beneath: detailBeneath, inlineMaxWidthPx: detailInlineMaxWidthPx } = resolveHappierPageRowDetailLayout({
+        rowWidthPx: measuresDetail ? rowWidthPx : null,
+        detailWidthPx,
+        titleNaturalWidthPx: measuresTitle ? titleNaturalWidthPx : null,
+        rowInsetPx: pageRowInsetPx ?? PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+        leadingColumnWidthPx: reservesLeadingColumn || (isPageRow && (icon != null || leftElement != null))
+            ? iconBoxSize ?? PAGE_LIST_METRICS.rowLeadingColumnPx : 0,
+        trailingWidthPx: detailTrailingPx,
+        detailGapPx: theme.space.s8,
+    });
     const handleDetailLayout = React.useCallback((event: LayoutChangeEvent) => {
         const widthPx = event.nativeEvent.layout.width;
         if (!Number.isFinite(widthPx) || widthPx <= 0) return;

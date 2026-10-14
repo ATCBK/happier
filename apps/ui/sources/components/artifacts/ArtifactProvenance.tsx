@@ -6,6 +6,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { HappierProvenanceChip } from '@happier-dev/plugin-ui/presentation';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { useMachineDisplayNamesById, useSessionDisplayNameSource } from '@/sync/store/hooks';
 import { t } from '@/text';
@@ -108,8 +109,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     session: {
         flexShrink: 1,
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     chipText: {
@@ -117,8 +117,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     machine: {
         flexShrink: 0,
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
 }));

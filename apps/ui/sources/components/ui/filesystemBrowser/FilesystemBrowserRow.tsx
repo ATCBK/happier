@@ -109,7 +109,7 @@ export function FilesystemBrowserRow(props: FilesystemBrowserRowProps): React.Re
             variant="plain"
             size={24}
             accessibilityRole="checkbox"
-            checked={props.selection.state === 'checked'}
+            checked={props.selection.state === 'mixed' ? 'mixed' : props.selection.state === 'checked'}
             selectedBackground={false}
             disabled={props.selection.disabled}
             accessibilityLabel={props.selection.accessibilityLabel}

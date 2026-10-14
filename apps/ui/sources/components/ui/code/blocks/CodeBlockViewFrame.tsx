@@ -1,14 +1,12 @@
 import * as React from 'react';
-import { Platform, Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
 import { HorizontalOverflowScrollView } from '@/components/ui/scroll/HorizontalOverflowScrollView';
-import { t } from '@/text';
 import { resolveCodeMonoFontFamily } from '../codeTypography';
-import { Icon } from '@/components/ui/icons/Icon';
-import { useHappierCodeBlockBehavior } from '@happier-dev/plugin-ui/presentation';
+import { CopyIconButton, COPY_ICON_BUTTON_WIDTH } from '@/components/ui/copy/CopyIconButton';
+import { resolveHappierCodeBlockLayout } from '@happier-dev/plugin-ui/presentation';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
 
 export type CodeBlockViewFrameProps = Readonly<{
@@ -25,17 +23,15 @@ export type CodeBlockViewFrameProps = Readonly<{
     children: React.ReactNode;
 }>;
 
-/** The overlaid copy button's padding, icon and border, as drawn by `styles.copyButton`/`copyButtonOverlay`. */
+/** The overlaid copy button's padding, icon and border, as drawn by `CopyIconButton`/`copyButtonOverlay`. */
 const COPY_BUTTON_OVERLAY_OFFSET = 8;
-const COPY_BUTTON_ICON_SIZE = 14;
-const COPY_BUTTON_PADDING_X = 8;
 const COPY_BUTTON_BORDER = 1;
 /**
  * How far the code's viewport stops short of the block's right edge while the copy button is overlaid,
  * so a command scrolls or wraps beside the button instead of running under it.
  */
 export const CODE_BLOCK_OVERLAY_COPY_INSET = COPY_BUTTON_OVERLAY_OFFSET
-    + COPY_BUTTON_PADDING_X * 2 + COPY_BUTTON_ICON_SIZE + COPY_BUTTON_BORDER * 2;
+    + COPY_ICON_BUTTON_WIDTH + COPY_BUTTON_BORDER * 2;
 
 export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
     code,
@@ -51,16 +47,12 @@ export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
     children,
 }) => {
     const { theme } = useUnistyles();
-    const isWeb = Platform.OS === 'web';
-    const [isHovered, setIsHovered] = React.useState(false);
-    const writeClipboard = React.useCallback(() => Clipboard.setStringAsync(code), [code]);
-    const behavior = useHappierCodeBlockBehavior({
+    const behavior = resolveHappierCodeBlockLayout({
         language,
         showHeaderRow,
         showCopyButton,
         hasHeaderLeft: Boolean(headerLeft),
         hasHeaderRight: Boolean(headerRight),
-        onCopy: writeClipboard,
     });
     const shouldRenderHeaderRow = behavior.shouldRenderHeaderRow;
     const shouldOverlayCopyButton = behavior.shouldOverlayCopyButton;
@@ -70,25 +62,13 @@ export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
     const besideOverlaidCopy = showCopyButton && shouldOverlayCopyButton ? styles.besideOverlaidCopy : null;
 
     const copyButton = showCopyButton ? (
-        <Pressable
+        <CopyIconButton
+            text={code}
             style={[
-                styles.copyButton,
                 shouldOverlayCopyButton ? styles.copyButtonOverlay : null,
                 shouldOverlayCopyButton ? { backgroundColor: theme.colors.surface.elevated, borderColor: theme.colors.border.default } : null,
-                (isWeb && isHovered) ? styles.copyButtonHovered : null,
             ]}
-            onPress={behavior.copy}
-            onHoverIn={isWeb ? () => setIsHovered(true) : undefined}
-            onHoverOut={isWeb ? () => setIsHovered(false) : undefined}
-            accessibilityRole="button"
-            accessibilityLabel={t('common.copy')}
-        >
-            <Icon
-                name={behavior.copied ? 'check' : 'copy'}
-                size={COPY_BUTTON_ICON_SIZE}
-                color={behavior.copied ? (theme.colors.state.success.foreground ?? theme.colors.text.secondary) : theme.colors.text.secondary}
-            />
-        </Pressable>
+        />
     ) : null;
 
     const header = shouldRenderHeaderRow ? (
@@ -177,22 +157,12 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: 8,
     },
-    copyButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: COPY_BUTTON_PADDING_X,
-        paddingVertical: 6,
-        borderRadius: 8,
-    },
     copyButtonOverlay: {
         position: 'absolute',
         top: COPY_BUTTON_OVERLAY_OFFSET,
         right: COPY_BUTTON_OVERLAY_OFFSET,
         zIndex: 10,
         borderWidth: COPY_BUTTON_BORDER,
-    },
-    copyButtonHovered: {
-        opacity: 0.85,
     },
     codePadding: {
         paddingHorizontal: 12,

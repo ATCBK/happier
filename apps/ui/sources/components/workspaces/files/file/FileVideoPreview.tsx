@@ -123,6 +123,6 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center', justifyContent: 'center', padding: theme.space.s16, gap: theme.space.s12,
         backgroundColor: theme.colors.surface.inset,
     },
-    label: { color: theme.colors.text.secondary, textAlign: 'center', ...Typography.default() },
-    error: { color: theme.colors.state.danger.foreground, textAlign: 'center', ...Typography.default() },
+    label: { color: theme.colors.text.secondary, textAlign: 'center', ...Typography.variant('body') },
+    error: { color: theme.colors.state.danger.foreground, textAlign: 'center', ...Typography.variant('body') },
 }));

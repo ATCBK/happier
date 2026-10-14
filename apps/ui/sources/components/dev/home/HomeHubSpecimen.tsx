@@ -177,7 +177,7 @@ export function HomeHubSpecimen(props: Readonly<{ machines: boolean; firstRun?: 
     );
 
     return (
-        <ItemList testID="dev-home">
+        <ItemList testID="dev-home" pageColumn="dashboard">
             <PageHeader
                 title={t('homeIndex.greetingAfternoon', { name: 'Leeroy' })}
                 titleProminence={phone ? 'hero' : 'page'}

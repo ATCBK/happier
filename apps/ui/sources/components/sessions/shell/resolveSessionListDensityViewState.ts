@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+import { resolveHappierTypeScale } from '@happier-dev/plugin-ui/presentation/typeScale';
 import {
     SESSION_LIST_ROW_HEIGHT_COMPACT,
     SESSION_LIST_ROW_HEIGHT_DEFAULT,
@@ -16,19 +18,28 @@ export const SESSION_LIST_ROW_CORNER_RADIUS = 12;
  */
 export const SESSION_LIST_ROW_SELECTION_RADIUS = 8;
 
-export const SESSION_LIST_ROW_TITLE_TEXT_METRICS = {
-    default: { fontSize: 14, lineHeight: 18 },
-    compact: { fontSize: 14, lineHeight: 18 },
-    minimal: { fontSize: 12, lineHeight: 16 },
-    // One rhythm with the phone launcher rows above it (lab xrail P1: 15 px); the row keeps the 44 pt touch floor.
-    minimalNativePhone: { fontSize: 15, lineHeight: 20 },
+const SESSION_LIST_ROW_TITLE_TYPE_ROLES = {
+    default: 'label',
+    compact: 'label',
+    minimal: 'meta',
+    // One rhythm with the phone launcher rows above it; the row keeps the native touch floor.
+    minimalNativePhone: 'heading',
 } as const;
 
-export const SESSION_LIST_ROW_STATUS_TEXT_METRICS = {
-    default: { fontSize: 12, lineHeight: 16 },
-    compact: { fontSize: 11, lineHeight: 14 },
-    minimal: { fontSize: 11, lineHeight: 14 },
+const SESSION_LIST_ROW_STATUS_TYPE_ROLES = {
+    default: 'meta',
+    compact: 'micro',
+    minimal: 'micro',
 } as const;
+
+function resolveRoleTextMetrics(role: Parameters<typeof resolveHappierTypeScale>[0]) {
+    const { weight: _weight, ...metrics } = resolveHappierTypeScale(role, Platform.OS);
+    return metrics;
+}
+
+export function resolveSessionListRowStatusTextMetrics(density: SessionListRowDensity) {
+    return resolveRoleTextMetrics(SESSION_LIST_ROW_STATUS_TYPE_ROLES[density]);
+}
 
 export const SESSION_LIST_ROW_IDENTITY_METRICS = {
     default: { slotSize: 48, agentLogoSize: 37 },
@@ -45,11 +56,11 @@ export function resolveSessionListItemDensity(density: SessionListRowDensity): '
 export function resolveSessionListRowTitleTextMetrics(params: Readonly<{
     density: SessionListRowDensity;
     readableNativePhoneMinimal: boolean;
-}>): Readonly<{ fontSize: number; lineHeight: number }> {
-    if (params.density === 'minimal' && params.readableNativePhoneMinimal) {
-        return SESSION_LIST_ROW_TITLE_TEXT_METRICS.minimalNativePhone;
-    }
-    return SESSION_LIST_ROW_TITLE_TEXT_METRICS[params.density];
+}>) {
+    const role = params.density === 'minimal' && params.readableNativePhoneMinimal
+        ? SESSION_LIST_ROW_TITLE_TYPE_ROLES.minimalNativePhone
+        : SESSION_LIST_ROW_TITLE_TYPE_ROLES[params.density];
+    return resolveRoleTextMetrics(role);
 }
 
 export function resolveSessionListRowIdentityMetrics(params: Readonly<{

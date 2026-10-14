@@ -15,7 +15,13 @@ declare global {
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-installMarkdownCommonModuleMocks();
+installMarkdownCommonModuleMocks({
+    storage: () => vi.importActual('@/sync/domains/state/storage'),
+});
+
+const clipboard = vi.hoisted(() => ({ setStringAsync: vi.fn(async (_text: string) => true) }));
+// The platform clipboard is an external boundary.
+vi.mock('expo-clipboard', () => clipboard);
 
 async function mockPlatform(os: 'android' | 'web') {
     // The canonical boundary mock is shared by the real renderers. Changing its
@@ -42,6 +48,16 @@ async function renderTable(markdown: string, onLinkPress?: (url: string) => bool
 }
 
 describe('MarkdownView (tables)', () => {
+    it('copies the rendered table as Markdown with alignment and escaped pipes', async () => {
+        await mockPlatform('android');
+        clipboard.setStringAsync.mockClear();
+        const screen = await renderTable('| Left | Right |\n| :--- | ---: |\n| a \\| b | value |\n| short |');
+        const button = screen.findByTestId('markdown-table-copy');
+        expect(button).not.toBeNull();
+        await pressTestInstanceAsync(button!, 'table copy');
+        expect(clipboard.setStringAsync).toHaveBeenCalledWith('| Left | Right |\n| :--- | ---: |\n| a \\| b | value |\n| short |  |');
+    });
+
     it('renders tables inside a gesture-handler ScrollView so horizontal scrolling works reliably on Android', async () => {
         await mockPlatform('android');
 

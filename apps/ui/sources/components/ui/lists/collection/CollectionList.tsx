@@ -153,6 +153,8 @@ export function CollectionListGroupLabel(props: Readonly<{
     mark?: React.ReactNode;
     /** One small control or state at the label's end (a group's "+"). */
     trailing?: React.ReactNode;
+    /** `menu`: the label heads menu-role rows (a popover or sheet) and starts on their text edge. */
+    presentation?: 'list' | 'menu';
     testID?: string;
 }>) {
     const { testID, ...label } = props;

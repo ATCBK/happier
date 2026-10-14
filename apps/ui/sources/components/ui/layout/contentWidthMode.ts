@@ -24,10 +24,12 @@ export function resolveContentMaxWidthForMode(mode: unknown): number {
 /**
  * How wide a configuration page's column may grow. `reading` (every page by default) is a reading
  * measure, so sheets do not stretch into long rows on a wide window; `wide` is for a page whose body
- * is a grid or a dashboard. The column holds the sheets and their 16px inset on each side, so its
- * sheets are the approved lab's 760px / 1000px page less its 44px sides. A page column is a fixed
- * role: the content-width preference does not narrow it (`useLayoutMaxWidth`).
+ * is a grid or a library; `dashboard` is a dashboard's card grid (Home's widgets under its composer,
+ * which itself stays on `reading`). The column holds the sheets and their 16px inset on each side, so
+ * the reading and wide sheets are the approved lab's 760px / 1000px page less its 44px sides. A page
+ * column is a fixed role: the content-width preference neither narrows nor widens it
+ * (`useLayoutMaxWidth`); a narrower pane fits it to the pane.
  */
-export type PageColumn = 'reading' | 'wide';
+export type PageColumn = 'reading' | 'wide' | 'dashboard';
 
 export const PAGE_COLUMN_MAX_WIDTH_PX = HAPPIER_PAGE_METRICS.columnMaxWidthPx satisfies Record<PageColumn, number>;

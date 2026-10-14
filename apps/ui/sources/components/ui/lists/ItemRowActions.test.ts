@@ -38,6 +38,9 @@ vi.mock('phosphor-react-native/src/icons/Star', () => ({
     StarIcon: () => vendorIconState.renderText ? '.' : React.createElement('Svg'),
 }));
 
+// Prepare the real owner outside a case's deadline; its cold source import also loads the host UI graph.
+const { ItemRowActions: CurrentItemRowActions } = await import('./ItemRowActions');
+
 describe('ItemRowActions', () => {
     let restoreWebGlobals: (() => void) | undefined;
     beforeEach(() => {
@@ -299,6 +302,26 @@ describe('ItemRowActions', () => {
 
         expect(onEdit).toHaveBeenCalledTimes(1);
         expect(screen.findAllByTestId('edit')).toHaveLength(0);
+    });
+
+    it('closes a controlled overflow through its current owner after that owner changes', async () => {
+        const originalOwner = vi.fn();
+        const currentOwner = vi.fn();
+        const edit = vi.fn();
+        const props = { title: 'Profile', overflowOnly: true,
+            overflowTriggerTestID: 'controlled-overflow',
+            actions: [{ id: 'edit', title: 'Edit profile', icon: 'pencil-simple', onPress: edit }] } satisfies import('./ItemRowActions').ItemRowActionsProps;
+        const screen = await renderScreen(React.createElement(CurrentItemRowActions, {
+            ...props, overflowOpen: false, onOverflowOpenChange: originalOwner,
+        }));
+        await screen.update(React.createElement(CurrentItemRowActions, {
+            ...props, overflowOpen: true, onOverflowOpenChange: currentOwner,
+        }));
+        await screen.pressByTestIdAsync('edit');
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(edit).toHaveBeenCalledOnce();
+        expect(currentOwner).toHaveBeenCalledWith(false);
+        expect(originalOwner).not.toHaveBeenCalled();
     });
 
     it('opens its ⋯ menu below the trigger as a non-blocking menu: the page is neither blurred nor dimmed and no caret points back', async () => {

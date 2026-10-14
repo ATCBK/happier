@@ -85,7 +85,7 @@ export const StorageCollectToggle = React.memo(function StorageCollectToggle(
     <HappierPressable
       testID={props.testID}
       accessibilityRole="checkbox"
-      checked={glyph === 'checked'}
+      checked={glyph === 'mixed' ? 'mixed' : glyph === 'checked'}
       accessibilityLabel={props.label}
       disabled={disabled}
       onPressIn={() => animate(0.94)}

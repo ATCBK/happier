@@ -11,7 +11,7 @@ import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInterac
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Icon } from '@/components/ui/icons/Icon';
 import type { FocusReturnTarget } from '@/keyboard/focusReturn';
-import { resolveHappierFocusRingVisible } from '@happier-dev/plugin-ui/presentation';
+import { resolveHappierFocusRingVisible, useHappierItemOverflowState } from '@happier-dev/plugin-ui/presentation';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 
 export interface ItemRowActionsProps {
@@ -112,14 +112,9 @@ export function ItemRowActions(props: ItemRowActionsProps) {
             : windowWidth;
     const compact = props.overflowOnly === true
         || widthForCompact < (props.compactThreshold ?? ITEM_ROW_ACTIONS_COMPACT_THRESHOLD_PX);
-    const [uncontrolledShowOverflow, setUncontrolledShowOverflow] = React.useState(false);
-    const showOverflow = props.overflowOpen ?? uncontrolledShowOverflow;
-    const onOverflowOpenChange = props.onOverflowOpenChange;
-    const setShowOverflow = React.useCallback((next: boolean | ((current: boolean) => boolean)) => {
-        const resolved = typeof next === 'function' ? next(showOverflow) : next;
-        if (props.overflowOpen === undefined) setUncontrolledShowOverflow(resolved);
-        onOverflowOpenChange?.(resolved);
-    }, [onOverflowOpenChange, props.overflowOpen, showOverflow]);
+    const { open: showOverflow, setOpen: setShowOverflow } = useHappierItemOverflowState({
+        open: props.overflowOpen, onOpenChange: props.onOverflowOpenChange,
+    });
     const overflowAnchorRef = React.useRef<View>(null);
     const onOverflowTriggerKeyDown = React.useCallback((event: OverflowTriggerKeyEvent) => {
         if (event.target !== event.currentTarget || !props.onOverflowTriggerKeyDown?.(event.key)) return;
@@ -155,7 +150,7 @@ export function ItemRowActions(props: ItemRowActionsProps) {
         // InteractionManager can be delayed by long/continuous interactions (scroll, gestures).
         // Use an immediate fallback so the action still runs promptly.
         runAfterInteractionsWithFallback(fn, { fallbackDelayMs: 0 });
-    }, []);
+    }, [setShowOverflow]);
 
     const overflowActionItems = React.useMemo((): ActionListItem[] => {
         return overflowActions.map((action) => {

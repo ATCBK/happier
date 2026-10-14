@@ -3,6 +3,7 @@ import { getWidgetSizeFootprintV1 } from '@happier-dev/protocol/widgets';
 
 import { CardGrid, CardGridCell } from '@/components/ui/cardGrid/CardGrid';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { PageColumnProvider } from '@/components/ui/lists/listPresentation';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 
 import { isHomeHubCardSection, type HomeHubSection } from './layout/homeHubLayout';
@@ -104,10 +105,14 @@ function CardRow(props: Readonly<{ slot: Extract<Slot, { kind: 'cards' }>; rende
     );
 }
 
+/** Home's composer section: it keeps the reading column wherever it is placed. */
+export const HOME_HUB_COMPOSER_SECTION_ID = 'start';
+
 /**
- * Home's sections below the header, on one column: every block shares the page column's edges
- * (the composer's width), grids fill that width, and consecutive cards (widgets, Latest runs) form
- * two-up rows. A card left alone in its row (alone in the run, or beside a full-width card) takes the whole
+ * Home's sections below the header, on Home's `dashboard` page column: every block shares that
+ * column's edges, wider than the composer (lab `.at-wsec`), grids fill that width, and consecutive cards
+ * (widgets, Latest runs) form two-up rows. The composer keeps the reading column, centred, wherever
+ * the person placed it. A card left alone in its row (alone in the run, or beside a full-width card) takes the whole
  * row rather than leaving a hole. Home and
  * its `/dev/home` fixture both lay out through this one owner.
  */
@@ -117,11 +122,13 @@ export function HomeHubSectionList(props: Readonly<{
 }>) {
     return (
         <>
-            {buildSlots(props.sections).map((slot) => (
-                slot.kind === 'single'
-                    ? <React.Fragment key={slot.key}>{props.renderSection(slot.entry.section, slot.entry.index, { ownsRow: false })}</React.Fragment>
-                    : <CardRow key={slot.key} slot={slot} renderSection={props.renderSection} />
-            ))}
+            {buildSlots(props.sections).map((slot) => {
+                if (slot.kind === 'cards') return <CardRow key={slot.key} slot={slot} renderSection={props.renderSection} />;
+                const block = props.renderSection(slot.entry.section, slot.entry.index, { ownsRow: false });
+                return slot.entry.section.id === HOME_HUB_COMPOSER_SECTION_ID
+                    ? <PageColumnProvider key={slot.key} value="reading">{block}</PageColumnProvider>
+                    : <React.Fragment key={slot.key}>{block}</React.Fragment>;
+            })}
         </>
     );
 }

@@ -89,7 +89,7 @@ function useHomeHubAccountStore() {
                     const id = snapshot.approval.artifactId;
                     publishPresentationNotice({ key: `home-layout-approval:${id}`, severity: 'info',
                         message: t('approvals.waitingForYou'), undo: { label: t('approvals.review'),
-                            run: () => { if (isCurrent()) router.push(buildApprovalHref(id, scope.serverId) as never); } } });
+                            run: () => { if (isCurrent()) router.push(buildApprovalHref(id, scope.serverId)); } } });
                     approvalRead.invalidate();
                 }
             });
