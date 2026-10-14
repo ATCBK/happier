@@ -58,8 +58,7 @@ export function RunWorkNotifyOperation(props: Readonly<{
             };
             const match = (set: WorkflowTriggerSetV1) => {
                 const then = set.target ? readTriggerThen(set.target) : null;
-                if (!set.enabled || set.health !== 'available' || then?.kind !== 'notifyMe'
-                    || (!props.selectedOutput && then.message !== message)) return null;
+                if (!set.enabled || set.health !== 'available' || then?.kind !== 'notifyMe') return null;
                 return set.triggers.find((trigger) => trigger.kind === 'runLifecycle' && trigger.enabled
                     && trigger.status.state === 'waiting' && trigger.remainingOccurrences !== 0
                     && trigger.condition === condition && matchesSource(trigger.source))?.id ?? null;

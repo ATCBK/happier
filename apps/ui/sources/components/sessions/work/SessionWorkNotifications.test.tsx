@@ -16,6 +16,7 @@ import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntim
 import type { SessionTriggersRead } from '@/components/workflows/triggers/useSessionTriggers';
 import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 
 // Load the real Account/Action graph during collection, not inside the assertion
 // deadline; no service or catalog beneath the component is replaced.
@@ -216,12 +217,40 @@ function ownerFixture(
     acceptCreate,
     acceptRemove,
     rows,
+    actions,
     source: () => source,
     removedId: () => removedId,
   };
 }
 
 describe('Session Work notification operation', () => {
+  it.each(['turn', 'attention'] as const)('retains and cancels the saved %s notification after a language change', async mode => {
+    const previousLanguage = getPreferredLanguage();
+    const owner = ownerFixture();
+    owner.acceptCreate();
+    owner.acceptRemove();
+    try {
+      setPreferredLanguageFromSettings('en');
+      await preloadTranslations();
+      const screen = await renderScreen(<SessionWorkNotifyOperation sessionId="session-one" sourceTurnId="turn-one"
+        read={owner.read} execute={owner.execute} />);
+      await screen.pressByTestIdAsync(`notify-${mode}:session-one`);
+      expect(screen.findByTestId(`notify-${mode}-armed:session-one`)).not.toBeNull();
+      const saved = await owner.actions.sessionList({ sessionId: 'session-one' });
+      await screen.unmount();
+      const english = t(mode === 'turn' ? 'sessionWork.notify.turnFinished' : 'sessionWork.notify.needsYou');
+      setPreferredLanguageFromSettings('fr');
+      await preloadTranslations();
+      expect(t(mode === 'turn' ? 'sessionWork.notify.turnFinished' : 'sessionWork.notify.needsYou')).not.toBe(english);
+      const restored = await renderScreen(<SessionWorkNotifyOperation sessionId="session-one" sourceTurnId="turn-one"
+        read={{ ...owner.read, sets: saved.sets }} execute={owner.execute} />);
+      expect(restored.findByTestId(`notify-${mode}-armed:session-one`)).not.toBeNull();
+      await restored.pressByTestIdAsync(`notify-${mode}-cancel:session-one`);
+      expect([...owner.rows.values()].flatMap(row => row.triggers)).toHaveLength(0);
+      expect(owner.rows.size).toBe(1);
+    } finally { setPreferredLanguageFromSettings(previousLanguage); await preloadTranslations(); }
+  });
+
   it('acknowledges only the committed trigger and keeps cancellation pending until removal is acknowledged', async () => {
     const owner = ownerFixture();
     const screen = await renderScreen(
@@ -355,6 +384,30 @@ describe('Session Work notification operation', () => {
 });
 
 describe('Run Work notification operation', () => {
+  it.each(['terminal', 'needs_attention'] as const)('retains and cancels a saved Run %s notification after a language change', async condition => {
+    const previousLanguage = getPreferredLanguage();
+    const owner = ownerFixture();
+    owner.acceptCreate();
+    owner.acceptRemove();
+    const source = { kind: 'workflow_run' as const, runId: 'workflow-one' };
+    const project = { machineId: 'machine-one', directory: '/workspace' };
+    try {
+      setPreferredLanguageFromSettings('en'); await preloadTranslations();
+      const screen = await renderScreen(<RunWorkNotifyOperation source={source} project={project} read={owner.runRead} execute={owner.execute} />);
+      await screen.pressByTestIdAsync(`notify-run-${condition}:workflow-one`);
+      expect(screen.findByTestId(`notify-run-${condition}-armed:workflow-one`)).not.toBeNull();
+      const saved = await owner.actions.list({ scope: 'account_inline' });
+      await screen.unmount();
+      setPreferredLanguageFromSettings('fr'); await preloadTranslations();
+      const restored = await renderScreen(<RunWorkNotifyOperation source={source} project={project}
+        read={{ ...owner.runRead, sets: saved.sets }} execute={owner.execute} />);
+      expect(restored.findByTestId(`notify-run-${condition}-armed:workflow-one`)).not.toBeNull();
+      await restored.pressByTestIdAsync(`notify-run-${condition}-cancel:workflow-one`);
+      expect([...owner.rows.values()].flatMap(row => row.triggers)).toHaveLength(0);
+      expect(owner.rows.size).toBe(1);
+    } finally { setPreferredLanguageFromSettings(previousLanguage); await preloadTranslations(); }
+  });
+
   it('refuses registration when the selected saved result is not the Run owner result', async () => {
     const owner = ownerFixture({ runOutputState: 'complete' });
     owner.acceptCreate();

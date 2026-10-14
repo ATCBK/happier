@@ -27,6 +27,7 @@ export function createWorkflowRunSummaryFixture(overrides: SummaryOverrides = {}
     return WorkflowRunSummaryV1Schema.parse({ sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null,
         id: 'run-1',
         origin: origin ?? { kind: 'automation', automationId: 'automation-1' },
+        ...((origin?.kind ?? 'automation') === 'automation' ? { automationScopeSessionId: null } : {}),
         state: 'running',
         revision: 1,
         machineId: 'machine-1',
