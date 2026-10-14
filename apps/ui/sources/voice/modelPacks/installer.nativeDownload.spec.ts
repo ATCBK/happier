@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DownloadOptions, DownloadPauseState, DownloadProgressData, FileSystemDownloadResult } from 'expo-file-system/legacy';
 
 import { ensureModelPackInstalled } from '@/voice/modelPacks/installer.native';
+import { settleWithFakeClock, useInstallerFakeClock } from '@/voice/modelPacks/installerFakeClock.testHarness';
 
 type NativeTask = {
   downloadAsync(): Promise<FileSystemDownloadResult | undefined>;
@@ -145,6 +146,7 @@ describe('native model pack file downloads', () => {
     nativeBoundary.createDownloadResumable.mockReset();
     nativeBoundary.platform.OS = 'android';
   });
+  afterEach(() => { vi.useRealTimers(); });
 
   it.each(['android', 'ios'] as const)('downloads files outside JS and releases native resources on %s', async (platform) => {
     nativeBoundary.platform.OS = platform;
@@ -165,6 +167,8 @@ describe('native model pack file downloads', () => {
   it('rejects a non-success HTTP result and removes the native-downloaded file', async () => {
     const harness = await createHarness({ status: 404 });
     await expect(harness.install(new AbortController().signal)).rejects.toThrow('model_pack_download_failed:404');
+    // A missing asset is permanent; only transient transfer failures are retried.
+    expect(harness.nativeUrls).toHaveLength(1);
     expect(harness.files.has(harness.fileUri)).toBe(false);
     expect(harness.files.has(harness.metaUri)).toBe(false);
     expect(harness.lifecycle).toMatchObject({ subscribed: false, retainedNativeTask: false });
@@ -172,7 +176,10 @@ describe('native model pack file downloads', () => {
 
   it('removes partial output and releases native resources after a transport failure', async () => {
     const harness = await createHarness({ failure: new Error('native_transport_failed') });
-    await expect(harness.install(new AbortController().signal)).rejects.toThrow('native_transport_failed');
+    useInstallerFakeClock();
+    await expect(settleWithFakeClock(harness.install(new AbortController().signal))).rejects.toThrow('native_transport_failed');
+    // Transport failures are transient on mobile networks, so the file is retried before the pack fails.
+    expect(harness.nativeUrls.length).toBeGreaterThan(1);
     expect(harness.files.has(harness.fileUri)).toBe(false);
     expect(harness.files.has(harness.metaUri)).toBe(false);
     expect(harness.lifecycle).toMatchObject({ subscribed: false, retainedNativeTask: false });
@@ -183,7 +190,8 @@ describe('native model pack file downloads', () => {
     const harness = await createHarness({ setupFailure: originalError });
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      await expect(harness.install(new AbortController().signal)).rejects.toBe(originalError);
+      useInstallerFakeClock();
+      await expect(settleWithFakeClock(harness.install(new AbortController().signal))).rejects.toBe(originalError);
       expect(warning.mock.calls.flat()).toContain(harness.cleanupError);
       expect(harness.files.has(harness.metaUri)).toBe(false);
       expect(harness.lifecycle).toMatchObject({ subscribed: false, retainedNativeTask: false });

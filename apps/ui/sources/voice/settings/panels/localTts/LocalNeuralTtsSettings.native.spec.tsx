@@ -65,10 +65,6 @@ vi.mock('./useLocalNeuralKokoroVoiceCatalog.native', () => ({
   useLocalNeuralKokoroVoiceCatalog: () => [{ id: 'af_heart', title: 'Heart' }],
 }));
 
-vi.mock('@/voice/kokoro/assets/kokoroAssetSets', () => ({
-  getKokoroAssetSetOptions: () => [{ id: 'dummy', title: 'Dummy', subtitle: '' }],
-}));
-
 vi.mock('@/voice/output/KokoroTtsController', () => ({
   speakKokoroText: vi.fn(),
 }));

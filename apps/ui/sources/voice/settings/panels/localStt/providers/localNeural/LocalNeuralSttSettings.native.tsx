@@ -129,6 +129,8 @@ export function LocalNeuralSttSettings(props: {
 
   const clearAssets = React.useCallback(async () => {
     if (!effectivePackId) return;
+    // Removing files under an in-flight install or update would leave a pack recorded with files missing.
+    if (modelStatus === 'downloading') return;
     const ok = await Modal.confirm(
       t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmTitle'),
       t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmBody'),
@@ -138,7 +140,7 @@ export function LocalNeuralSttSettings(props: {
     await removeModelPack({ packId: effectivePackId });
     setInstalled(false);
     setModelStatus('idle');
-  }, [effectivePackId]);
+  }, [effectivePackId, modelStatus]);
 
   const checkForUpdates = React.useCallback(async () => {
     if (!effectivePackId) return;
@@ -208,12 +210,15 @@ export function LocalNeuralSttSettings(props: {
         t('settingsVoice.local.localNeuralStt.alerts.updatedBody'),
       );
     } catch (error) {
-      if (abortController.signal.aborted) return;
-      setModelStatus('error');
-      await Modal.alert(
-        t('settingsVoice.local.localNeuralStt.alerts.updateFailedTitle'),
-        t('settingsVoice.local.localNeuralStt.alerts.updateFailedBody', { message: String((error as any)?.message ?? error) }),
-      );
+      if (!abortController.signal.aborted) {
+        await Modal.alert(
+          t('settingsVoice.local.localNeuralStt.alerts.updateFailedTitle'),
+          t('settingsVoice.local.localNeuralStt.alerts.updateFailedBody', { message: String((error as any)?.message ?? error) }),
+        );
+      }
+      // A failed or cancelled update leaves the installed pack in place; report what is on disk.
+      setModelStatus('idle');
+      await refreshInstalled();
     } finally {
       prepareAbortRef.current = null;
       setProgress(null);

@@ -31,7 +31,7 @@ export function createTimeoutPromise(timeoutMs: number): Promise<never> {
   });
 }
 
-function cacheBustUrl(url: string): string {
+export function cacheBustUrl(url: string): string {
   const trimmed = url.trim();
   if (!trimmed) return trimmed;
   const suffix = `happierCacheBust=${Date.now()}`;

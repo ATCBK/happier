@@ -10,11 +10,14 @@ import { installLocalTtsCommonModuleMocks } from './localTtsTestHelpers';
 const modalAlertSpy = vi.fn();
 const prepareKokoroTtsSpy = vi.fn();
 const getModelPackInstallSummarySpy = vi.fn();
+const checkModelPackUpdateAvailableSpy = vi.fn();
+const ensureModelPackInstalledSpy = vi.fn();
 
 installLocalTtsCommonModuleMocks({
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({
+            confirmResult: true,
             spies: {
                 alert: modalAlertSpy,
             },
@@ -27,8 +30,8 @@ vi.mock('@/voice/kokoro/runtime/synthesizeKokoroWav', () => ({
 }));
 
 vi.mock('@/voice/modelPacks/installer.native', () => ({
-  checkModelPackUpdateAvailable: vi.fn(),
-  ensureModelPackInstalled: vi.fn(),
+  checkModelPackUpdateAvailable: (...args: any[]) => checkModelPackUpdateAvailableSpy(...args),
+  ensureModelPackInstalled: (...args: any[]) => ensureModelPackInstalledSpy(...args),
   getModelPackInstallSummary: (...args: any[]) => getModelPackInstallSummarySpy(...args),
   removeModelPack: vi.fn(),
 }));
@@ -37,12 +40,17 @@ vi.mock('@/voice/modelPacks/formatBuildLabel', () => ({
   formatModelPackBuildLabel: () => null,
 }));
 
+type HookState = { prepareModel: () => Promise<void>; cancelPrepare: () => void; checkForUpdates: () => void; modelStatus: string };
+
 function createHarness(
-  useHook: (props: { packId: string; manifestUrl: string | null; networkTimeoutMs: number }) => { prepareModel: () => Promise<void> },
+  useHook: (props: { packId: string; manifestUrl: string | null; networkTimeoutMs: number }) => HookState,
 ) {
   return function Harness(props: { packId: string; manifestUrl: string | null; networkTimeoutMs: number }) {
     const state = useHook(props);
-    return React.createElement('Harness', { onPrepare: state.prepareModel });
+    return React.createElement('Harness', {
+      onPrepare: state.prepareModel, onCancel: state.cancelPrepare, onCheckForUpdates: state.checkForUpdates,
+      modelStatus: state.modelStatus,
+    });
   };
 }
 
@@ -71,5 +79,56 @@ describe('useLocalNeuralModelPackState (native)', () => {
 
     expect(modalAlertSpy).toHaveBeenCalled();
     expect(String(modalAlertSpy.mock.calls[0]?.[1] ?? '')).toContain('kokoro_native_module_unavailable');
+  });
+
+  it('reports the still-installed pack as ready after a failed update', async () => {
+    const installedSummary = { installed: true, packDirUri: 'file:///packs', manifest: null };
+    getModelPackInstallSummarySpy.mockResolvedValue(installedSummary);
+    checkModelPackUpdateAvailableSpy.mockResolvedValueOnce({
+      installed: true, updateAvailable: true, installedManifest: null, remoteManifest: null,
+    });
+    ensureModelPackInstalledSpy.mockRejectedValueOnce(new Error('model_pack_download_failed:503'));
+
+    const { useLocalNeuralModelPackState } = await import('./useLocalNeuralModelPackState.native');
+    const Harness = createHarness(useLocalNeuralModelPackState);
+    const tree = (await renderScreen(React.createElement(Harness, {
+      packId: 'dummy-pack', manifestUrl: 'https://example.com/manifest.json', networkTimeoutMs: 1000,
+    }))).tree;
+    await act(async () => {});
+    expect(tree.findByType('Harness').props.modelStatus).toBe('ready');
+
+    await act(async () => {
+      invokeTestInstanceHandler(tree.findByType('Harness'), 'onCheckForUpdates');
+    });
+    await act(async () => {});
+
+    expect(String(modalAlertSpy.mock.calls.at(-1)?.[0] ?? '')).toContain('updateFailed');
+    expect(tree.findByType('Harness').props.modelStatus).toBe('ready');
+  });
+
+  it('leaves the downloading state when a download is cancelled so it can be retried', async () => {
+    prepareKokoroTtsSpy.mockImplementationOnce((opts: { signal: AbortSignal }) => new Promise((_, reject) => {
+      opts.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    }));
+
+    const { useLocalNeuralModelPackState } = await import('./useLocalNeuralModelPackState.native');
+    const Harness = createHarness(useLocalNeuralModelPackState);
+    const tree = (await renderScreen(React.createElement(Harness, {
+      packId: 'dummy-pack', manifestUrl: 'https://example.com/manifest.json', networkTimeoutMs: 1000,
+    }))).tree;
+    await act(async () => {});
+
+    await act(async () => {
+      invokeTestInstanceHandler(tree.findByType('Harness'), 'onPrepare');
+    });
+    expect(tree.findByType('Harness').props.modelStatus).toBe('downloading');
+
+    await act(async () => {
+      invokeTestInstanceHandler(tree.findByType('Harness'), 'onCancel');
+    });
+    await act(async () => {});
+
+    expect(tree.findByType('Harness').props.modelStatus).toBe('idle');
+    expect(modalAlertSpy).not.toHaveBeenCalled();
   });
 });

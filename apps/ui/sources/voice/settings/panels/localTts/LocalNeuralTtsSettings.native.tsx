@@ -8,7 +8,7 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import type { VoiceLocalTtsSettings } from '@/sync/domains/settings/voiceLocalTtsSettings';
-import { getKokoroAssetSetOptions } from '@/voice/kokoro/assets/kokoroAssetSets';
+import { getKokoroNativeModelPackOptions, resolveKokoroNativeModelPackId } from '@/voice/kokoro/assets/kokoroAssetSets';
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
 import { isKokoroRuntimeSupported } from '@/voice/kokoro/runtime/kokoroSupport';
 import { speakKokoroText } from '@/voice/output/KokoroTtsController';
@@ -28,12 +28,11 @@ export function LocalNeuralTtsSettings(props: {
 }) {
   const { theme } = useUnistyles();
   const [openMenu, setOpenMenu] = React.useState<null | 'assetSet' | 'voiceId' | 'speed'>(null);
-  const DEFAULT_KOKORO_ASSET_SET_ID = 'kokoro-82m-v1.0-onnx-q8-wasm';
 
   const effectiveVoiceId = props.cfgKokoro.voiceId ?? 'af_heart';
   const effectiveSpeed = props.cfgKokoro.speed ?? 1;
-  const effectiveAssetSetId = props.cfgKokoro.assetId ?? DEFAULT_KOKORO_ASSET_SET_ID;
-  const assetSets = React.useMemo(() => getKokoroAssetSetOptions().filter((s) => s.id), []);
+  const effectiveAssetSetId = resolveKokoroNativeModelPackId(props.cfgKokoro.assetId);
+  const assetSets = React.useMemo(() => getKokoroNativeModelPackOptions(), []);
   const runtimeSupported = React.useMemo(() => isKokoroRuntimeSupported(), []);
 
   const manifestUrl = React.useMemo(() => resolveModelPackManifestUrl({ packId: effectiveAssetSetId }), [effectiveAssetSetId]);

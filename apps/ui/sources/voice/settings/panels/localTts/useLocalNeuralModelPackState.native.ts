@@ -74,7 +74,12 @@ export function useLocalNeuralModelPackState(params: {
       setModelStatus('ready');
       await refreshInstallState();
     } catch (error) {
-      if (prepareAbortRef.current?.signal?.aborted) return;
+      if (prepareAbortRef.current?.signal?.aborted) {
+        // A cancelled download keeps verified files; report what is on disk so it can be retried.
+        setModelStatus('idle');
+        await refreshInstallState();
+        return;
+      }
       setModelStatus('error');
       await Modal.alert(t('common.error'), error instanceof Error ? error.message : String(error));
     } finally {
@@ -177,12 +182,15 @@ export function useLocalNeuralModelPackState(params: {
           t('settingsVoice.local.kokoro.alerts.updatedBody'),
         );
       } catch (error) {
-        if (abortController.signal.aborted) return;
-        await Modal.alert(
-          t('settingsVoice.local.kokoro.alerts.updateFailedTitle'),
-          t('settingsVoice.local.kokoro.alerts.updateFailedBody', { message: String((error as any)?.message ?? error) }),
-        );
-        setModelStatus('error');
+        if (!abortController.signal.aborted) {
+          await Modal.alert(
+            t('settingsVoice.local.kokoro.alerts.updateFailedTitle'),
+            t('settingsVoice.local.kokoro.alerts.updateFailedBody', { message: String((error as any)?.message ?? error) }),
+          );
+        }
+        // A failed or cancelled update leaves the installed pack in place; report what is on disk.
+        setModelStatus('idle');
+        await refreshInstallState();
       } finally {
         prepareAbortRef.current = null;
         setDownloadProgress(null);
