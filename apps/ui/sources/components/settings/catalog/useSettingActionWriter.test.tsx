@@ -82,6 +82,10 @@ describe('declared setting Action writer', () => {
             await act(async () => { await apply!({ useProfiles: undefined }); });
             expect(account.persistedSettings.useProfiles).toBe(false);
             expect(account.settingsWrites).toHaveLength(writes);
+            account.setRejectSettingsWrites(true);
+            await act(async () => { await apply!({ useProfiles: true }); });
+            expect(account.persistedSettings.useProfiles).toBe(false);
+            expect(storage.getState().settings.useProfiles).toBe(false);
         } finally { standardCleanup(); await account.dispose(); }
     });
     it('preserves JSON values, equivalent aliases and incumbent sparse writes without reviving a retired ingress', async () => {
