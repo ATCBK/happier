@@ -193,6 +193,7 @@ export type PluginTestkitOptions = Readonly<{
 }>;
 
 export type PluginTestkitInvokeActionOptions = Readonly<{
+    /** Handler context only; direct invocation does not run production host admission policy. */
     surface?: PluginInvocationSurface;
     sessionId?: string;
     /**
