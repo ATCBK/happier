@@ -31,9 +31,9 @@ export function SessionViewerPresentedElsewhere(
       <SurfaceStateCard
         kind="empty"
         iconName={props.source === 'computer' ? 'desktop' : 'globe'}
-        title={t('computerUse.viewer.presentedElsewhereTitle')}
-        reason={t('computerUse.viewer.presentedElsewhereBody')}
-        action={{ label: t('computerUse.viewer.dockView'), onPress: dock }}
+        title={t('computerUse.presentation.presentedElsewhereTitle')}
+        reason={t('computerUse.presentation.presentedElsewhereBody')}
+        action={{ label: t('computerUse.presentation.dockView'), onPress: dock }}
       />
     </View>
   );

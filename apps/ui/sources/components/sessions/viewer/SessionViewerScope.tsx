@@ -52,7 +52,7 @@ export function SessionViewerScope(
         paneRef.current.openDetailsTab(
           createComputerScreenDetailsTab({
             machineId: computerMachineId,
-            title: t('computerUse.viewer.tabFallback'),
+            title: t('computerUse.presentation.tabFallback'),
           }),
           { intent: 'default' },
         );

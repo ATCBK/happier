@@ -342,18 +342,18 @@ export function ComputerTargetPicker(props: Readonly<{
                     kind={noScreen || unsupported ? 'unavailable' : 'error'}
                     iconName={noScreen || unsupported ? 'desktop' : undefined}
                     title={repairDriver
-                        ? t(recovery?.cause === 'driver_missing' ? 'computerUse.viewer.driverMissing' : 'computerUse.viewer.driverInvalid')
+                        ? t(recovery?.cause === 'driver_missing' ? 'computerUse.presentation.driverMissing' : 'computerUse.presentation.driverInvalid')
                         : noScreen
                         ? t('computerUse.picker.noScreenTitle', { machine: machineName })
                         : unsupported
                             ? t('computerUse.picker.unsupportedTitle', { machine: machineName })
                             : t('computerUse.picker.failedTitle', { machine: machineName })}
-                    reason={repairDriver ? t('computerUse.viewer.driverRepairBody') : noScreen
+                    reason={repairDriver ? t('computerUse.presentation.driverRepairBody') : noScreen
                         ? t('computerUse.picker.noScreenBody')
                         : unsupported ? t('computerUse.picker.unsupportedBody') : t('computerUse.picker.failedBody')}
                     diagnosticCode={state.code}
                     action={noScreen || unsupported ? undefined : repairDriver
-                        ? props.onRepairDriver ? { label: t('computerUse.viewer.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
+                        ? props.onRepairDriver ? { label: t('computerUse.presentation.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
                         : { label: t('computerUse.picker.tryAgain'), onPress: props.onRetry }}
                 />
             </View>

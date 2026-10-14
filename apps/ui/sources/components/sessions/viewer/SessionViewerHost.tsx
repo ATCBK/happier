@@ -359,7 +359,7 @@ function MountedSessionViewerHost(
           onRectChange={onRectChange}
           onModeChange={onModeChange}
           accessibilityLabel={resolveSessionViewerWatchingLabel(source, machine.name)}
-          resizeLabel={t('computerUse.viewer.resizeView')}
+          resizeLabel={t('computerUse.presentation.resizeView')}
           pointer={
             Platform.OS === 'web' ? COMPANION_WEB_POINTER_BINDING : undefined
           }

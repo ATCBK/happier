@@ -50,10 +50,10 @@ export function resolveSessionViewerWatchingLabel(
 ): string {
   const sourceLabel = t(
     source === 'computer'
-      ? 'computerUse.viewer.sourceComputer'
-      : 'computerUse.viewer.sourceBrowser',
+      ? 'computerUse.presentation.sourceComputer'
+      : 'computerUse.presentation.sourceBrowser',
   );
   return machineName
-    ? t('computerUse.viewer.watchingA11y', { source: sourceLabel, machine: machineName })
-    : t('computerUse.viewer.watchingSourceA11y', { source: sourceLabel });
+    ? t('computerUse.presentation.watchingA11y', { source: sourceLabel, machine: machineName })
+    : t('computerUse.presentation.watchingSourceA11y', { source: sourceLabel });
 }

@@ -148,10 +148,10 @@ export type ComputerScreenPicture = Readonly<{
 export function resolveComputerAgentTitle(props: Pick<ComputerScreenViewerProps, 'presence' | 'agent' | 'agentActing' | 'access' | 'appName' | 'targetTitle'>): string | undefined {
     if (props.presence.kind !== 'agent') return undefined;
     const agentName = props.agent.name;
-    const agentTarget = props.appName ?? props.targetTitle ?? t('computerUse.viewer.tabFallback');
+    const agentTarget = props.appName ?? props.targetTitle ?? t('computerUse.presentation.tabFallback');
     return props.agentActing
-        ? t('computerUse.viewer.agentUsing', { agent: agentName, target: agentTarget })
-        : t(props.access === 'see' ? 'computerUse.viewer.agentCanSee' : 'computerUse.viewer.agentCanUse', { agent: agentName, target: agentTarget });
+        ? t('computerUse.presentation.agentUsing', { agent: agentName, target: agentTarget })
+        : t(props.access === 'see' ? 'computerUse.presentation.agentCanSee' : 'computerUse.presentation.agentCanUse', { agent: agentName, target: agentTarget });
 }
 
 /** Screen capture is not granted on the machine, so the picture is the permission card. */
@@ -171,7 +171,7 @@ export function resolveComputerPresenceCapsule(
         presence: props.presence,
         agent: props.agent,
         agentTitle: resolveComputerAgentTitle(props),
-        agentNote: props.inputDenied ? t('computerUse.viewer.controlNotAllowed') : undefined,
+        agentNote: props.inputDenied ? t('computerUse.presentation.controlNotAllowed') : undefined,
         checking: props.checking,
         onTakeControl: props.inputDenied ? undefined : props.onTakeControl,
         onHandBack: props.onHandBack,
@@ -237,31 +237,31 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     const needsCapture = recovery?.action === 'capture';
     const needsDriverRepair = recovery?.action === 'repair_driver';
     const hasRecovery = recovery != null && (props.failure != null || recovery.cause !== 'failed');
-    const target = props.targetTitle ?? t('computerUse.viewer.tabFallback');
+    const target = props.targetTitle ?? t('computerUse.presentation.tabFallback');
     const machine = props.machineName ?? '';
     const agentName = props.agent.name;
-    const recoveryTitle = recovery?.cause === 'driver_missing' ? t('computerUse.viewer.driverMissing')
-        : recovery?.cause === 'driver_invalid' ? t('computerUse.viewer.driverInvalid')
-        : recovery?.cause === 'geometry_changed' ? t('computerUse.viewer.geometryChanged')
-        : recovery?.cause === 'input_unknown' ? t('computerUse.viewer.inputUnknown')
+    const recoveryTitle = recovery?.cause === 'driver_missing' ? t('computerUse.presentation.driverMissing')
+        : recovery?.cause === 'driver_invalid' ? t('computerUse.presentation.driverInvalid')
+        : recovery?.cause === 'geometry_changed' ? t('computerUse.presentation.geometryChanged')
+        : recovery?.cause === 'input_unknown' ? t('computerUse.presentation.inputUnknown')
         : recovery?.cause === 'headless' ? t('computerUse.picker.noScreenTitle', { machine })
         : recovery?.cause === 'unsupported' ? t('computerUse.picker.unsupportedTitle', { machine })
         : recovery?.cause === 'machine_mismatch' ? t('computerUse.picker.otherMachineTitle', { machine })
-        : recovery?.cause === 'offline' ? t('computerUse.viewer.offlineTitle', { machine })
+        : recovery?.cause === 'offline' ? t('computerUse.presentation.offlineTitle', { machine })
         : recovery?.cause === 'access_removed' || recovery?.cause === 'permission_denied' ? t('errors.permissionDenied')
-        : recovery?.cause === 'source_lost' ? t('computerUse.viewer.endedTitle', { target })
-        : t('computerUse.viewer.unavailableTitle');
-    const recoveryReason = needsDriverRepair ? t('computerUse.viewer.driverRepairBody')
+        : recovery?.cause === 'source_lost' ? t('computerUse.presentation.endedTitle', { target })
+        : t('computerUse.presentation.unavailableTitle');
+    const recoveryReason = needsDriverRepair ? t('computerUse.presentation.driverRepairBody')
         : recovery?.cause === 'headless' ? t('computerUse.picker.noScreenBody')
         : recovery?.cause === 'unsupported' ? t('computerUse.picker.unsupportedBody')
         : recovery?.cause === 'machine_mismatch' ? t('computerUse.picker.otherMachineBody')
-        : recovery?.cause === 'offline' ? t('computerUse.viewer.offlineBody')
-        : recovery?.cause === 'source_lost' ? t('computerUse.viewer.endedBody', { agent: agentName })
+        : recovery?.cause === 'offline' ? t('computerUse.presentation.offlineBody')
+        : recovery?.cause === 'source_lost' ? t('computerUse.presentation.endedBody', { agent: agentName })
         : recoveryTitle;
     const recoveryPermission = recovery?.permission;
     const checkAgain = (onPress: () => void) => ({ label: t('computerUse.permission.checkAgain'), onPress, busy: props.checking, disabled: props.checking });
     const recoveryAction = needsDriverRepair
-        ? props.onRepairDriver ? { label: t('computerUse.viewer.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
+        ? props.onRepairDriver ? { label: t('computerUse.presentation.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
         : recovery?.action === 'choose_source' ? { label: t('computerUse.request.choose'), onPress: props.onChooseWindow }
         : recovery?.action === 'open_settings' ? props.onOpenSettings && recoveryPermission
             ? { label: t('computerUse.permission.openPrivacy', { machine }), onPress: () => props.onOpenSettings?.(recoveryPermission) } : undefined
@@ -310,8 +310,8 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
         <View style={stylesheet.centered} testID={`${testID}-offline`}>
             <SurfaceStateCard
                 kind="unavailable"
-                title={t('computerUse.viewer.offlineTitle', { machine })}
-                reason={t('computerUse.viewer.offlineBody')}
+                title={t('computerUse.presentation.offlineTitle', { machine })}
+                reason={t('computerUse.presentation.offlineBody')}
                 action={checkAgain(props.onRefresh ?? props.onCheckAgain)}
             />
         </View>
@@ -320,8 +320,8 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
             <SurfaceStateCard
                 kind="empty"
                 iconName="browsers"
-                title={t('computerUse.viewer.notSharedTitle')}
-                reason={t('computerUse.viewer.notSharedBody', { agent: agentName })}
+                title={t('computerUse.presentation.notSharedTitle')}
+                reason={t('computerUse.presentation.notSharedBody', { agent: agentName })}
                 action={{ label: t('computerUse.request.choose'), onPress: props.onChooseWindow }}
             />
         </View>
@@ -330,8 +330,8 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
             <SurfaceStateCard
                 kind="loading"
                 title={machine
-                    ? t('computerUse.viewer.openingTitle', { target, machine })
-                    : t('computerUse.viewer.connectingTitle', { target })}
+                    ? t('computerUse.presentation.openingTitle', { target, machine })
+                    : t('computerUse.presentation.connectingTitle', { target })}
             />
         </View>
     ) : surfaceState === 'ended' ? (
@@ -339,8 +339,8 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
             <SurfaceStateCard
                 kind="unavailable"
                 iconName="browsers"
-                title={t('computerUse.viewer.endedTitle', { target })}
-                reason={t('computerUse.viewer.endedBody', { agent: agentName })}
+                title={t('computerUse.presentation.endedTitle', { target })}
+                reason={t('computerUse.presentation.endedBody', { agent: agentName })}
                 action={{ label: t('computerUse.request.choose'), onPress: props.onChooseWindow }}
             />
         </View>
@@ -349,8 +349,8 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
             <SurfaceStateCard
                 kind="unavailable"
                 iconName="eye-slash"
-                title={t('computerUse.viewer.unavailableTitle')}
-                reason={t('computerUse.viewer.unavailableBody', { agent: agentName })}
+                title={t('computerUse.presentation.unavailableTitle')}
+                reason={t('computerUse.presentation.unavailableBody', { agent: agentName })}
                 diagnosticCode={playerState?.diagnostic?.reasonCode}
             />
         </View>
@@ -362,7 +362,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                     input={props.stream.input}
                     viewport={viewport}
                     content={pageRect}
-                    label={t('computerUse.viewer.inputA11y', { target })}
+                    label={t('computerUse.presentation.inputA11y', { target })}
                     testID={`${testID}-input`}
                 />
             ) : null}
@@ -371,8 +371,8 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 <BrowserFrameStatusCapsule
                     testID={`${testID}-stalled`}
                     text={pausedAtMs
-                        ? t('computerUse.viewer.paused', { time: formatFrameTime(pausedAtMs) })
-                        : t('computerUse.viewer.stalled')}
+                        ? t('computerUse.presentation.paused', { time: formatFrameTime(pausedAtMs) })
+                        : t('computerUse.presentation.stalled')}
                     busy={playerState.phase === 'reconnecting'}
                     action={onRetryStream && playerState.phase !== 'reconnecting'
                         ? { label: t('common.retry'), onPress: onRetryStream }
@@ -392,9 +392,9 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 />
                 <View style={stylesheet.barText}>
                     <Text style={stylesheet.barTitle} numberOfLines={1} testID={`${testID}-title`}>
-                        {props.shared ? target : t('computerUse.viewer.notSharedTitle')}
+                        {props.shared ? target : t('computerUse.presentation.notSharedTitle')}
                     </Text>
-                    {machine ? <Text style={stylesheet.barMeta} numberOfLines={1}>{t('computerUse.viewer.onMachine', { machine })}</Text> : null}
+                    {machine ? <Text style={stylesheet.barMeta} numberOfLines={1}>{t('computerUse.presentation.onMachine', { machine })}</Text> : null}
                 </View>
                 {props.shared ? (
                     <DropdownMenu
@@ -415,7 +415,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                             <IconButton
                                 testID={`${testID}-more`}
                                 variant="plain"
-                                accessibilityLabel={t('computerUse.viewer.moreA11y')}
+                                accessibilityLabel={t('computerUse.presentation.moreA11y')}
                                 iconName="dots-three"
                                 iconSize={ICON_SIZE.md}
                                 onPress={toggle}

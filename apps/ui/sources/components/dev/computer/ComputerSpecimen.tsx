@@ -176,7 +176,7 @@ function WatchSource(props: Readonly<{ presence: keyof typeof PRESENCE }>) {
     });
     const published = React.useMemo(() => ({
         presence, agent: AGENT, onTakeControl: NOOP, onHandBack: NOOP, onCheckAgain: NOOP,
-        agentTitle: presence.kind === 'agent' ? t('computerUse.viewer.agentUsing', { agent: AGENT.name, target: TITLE }) : undefined,
+        agentTitle: presence.kind === 'agent' ? t('computerUse.presentation.agentUsing', { agent: AGENT.name, target: TITLE }) : undefined,
     }), [presence]);
     usePublishSessionViewerPresence('computer', published);
     return null;
@@ -209,7 +209,7 @@ function WatchFrame(props: Readonly<{ presence: keyof typeof PRESENCE; phone: bo
                     onRectChange={NOOP}
                     onModeChange={NOOP}
                     controlsAlwaysVisible
-                    accessibilityLabel={t('computerUse.viewer.watchingA11y', { source: t('computerUse.viewer.sourceComputer'), machine: MACHINE })}
+                    accessibilityLabel={t('computerUse.presentation.watchingA11y', { source: t('computerUse.presentation.sourceComputer'), machine: MACHINE })}
                     controls={<SessionViewerControls sessionId="specimen-session" serverId={null} source="computer" />}
                     footer={<SessionViewerPresenceFooter source="computer" compact={props.phone} />}
                 >

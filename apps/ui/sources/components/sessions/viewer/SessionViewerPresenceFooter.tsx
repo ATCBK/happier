@@ -28,7 +28,7 @@ export function SessionViewerPresenceFooter(
     <BrowserPresenceCapsule
       {...presence}
       agentTitle={machine.name
-        ? t('computerUse.viewer.agentWorkingOn', { agent: presence.agent.name, machine: machine.name })
+        ? t('computerUse.presentation.agentWorkingOn', { agent: presence.agent.name, machine: machine.name })
         : presence.agentTitle}
       placement="inline"
       compact={props.compact}
