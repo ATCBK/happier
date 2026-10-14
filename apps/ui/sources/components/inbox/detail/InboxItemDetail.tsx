@@ -17,23 +17,9 @@ import { SessionPeekDetailsView } from '@/components/sessions/work/SessionPeekDe
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { WorkflowsGate } from '@/components/workflows/gating/WorkflowsGate';
 import { WorkflowRunScreen } from '@/components/workflows/screens/WorkflowRunScreen';
-import { createActivitySurfaceSessionRoute } from '@/activity/actions/activitySurfaceTargets';
-import { createWorkflowInvocationRoute, createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { t } from '@/text';
 
-import type { InboxItemFocus } from '../inboxItemFocus';
-
-/** The selected item's own page, which "open" leaves for: the same place a phone pushes. */
-export function resolveInboxItemPageRoute(focus: InboxItemFocus): string {
-  switch (focus.kind) {
-    case 'session':
-      return createActivitySurfaceSessionRoute(focus.id, focus.serverId);
-    case 'workflow_run':
-      return focus.invocationId ? createWorkflowInvocationRoute(focus.id, focus.invocationId) : createWorkflowRunRoute(focus.id);
-    case 'approval':
-      return `/inbox/approvals/${encodeURIComponent(focus.id)}${focus.serverId ? `?serverId=${encodeURIComponent(focus.serverId)}` : ''}`;
-  }
-}
+import { resolveInboxItemPageRoute, type InboxItemFocus } from '../inboxItemFocus';
 
 function describeOpenPage(focus: InboxItemFocus): string {
   switch (focus.kind) {

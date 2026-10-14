@@ -6,7 +6,7 @@ import { HappierListDetailLayout, useHappierMaterialColorResolver } from '@happi
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { InboxContent, type InboxView as InboxContentView } from '@/components/inbox/InboxContent';
-import { createInboxItemRoute, type InboxItemFocus } from '@/components/inbox/inboxItemFocus';
+import { createInboxItemRoute, resolveInboxItemPageRoute, type InboxItemFocus } from '@/components/inbox/inboxItemFocus';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
 import { countInboxNeedsYou, countInboxUpdates } from '@/components/inbox/inboxCounts';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -53,7 +53,8 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
     // step), with the view control under it and no purpose line; the tabs and groups say what it holds.
     // Wide layouts have no navigation title either: the page header carries it beside the control.
     const phone = !useIsTablet();
-    // `/inbox?item=` (a Boards card): open on Needs you with that item's row selected.
+    // `/inbox?item=` (a Boards card): open on Needs you with that item's row selected; where the list is
+    // the whole page, the item's own page opens instead (`OpenFocusedItemPage`).
     const focusedItem = props.focusedItem ?? null;
     const [view, setView] = React.useState<InboxContentView>('needs_you');
     React.useEffect(() => {
@@ -106,10 +107,29 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
                     headerTransparent
                 />
             )}
-            {phone ? renderList(undefined) : <InboxListDetail focusedItem={focusedItem} renderList={renderList} />}
+            {phone ? (
+                <>
+                    {renderList(undefined)}
+                    {focusedItem ? <OpenFocusedItemPage focus={focusedItem} /> : null}
+                </>
+            ) : <InboxListDetail focusedItem={focusedItem} renderList={renderList} />}
         </View>
     );
 });
+
+/**
+ * Where the list is the whole page (a phone, or a window too narrow for the detail beside it), a link
+ * to an item (`/inbox?item=`, from a Boards card or Artifacts) lands on that item's own page, the same
+ * place a tapped row pushes. Replacing the Inbox entry keeps Back on the page the link came from.
+ */
+function OpenFocusedItemPage(props: Readonly<{ focus: InboxItemFocus }>) {
+    const router = useRouter();
+    const href = resolveInboxItemPageRoute(props.focus);
+    React.useEffect(() => {
+        router.replace(href as never);
+    }, [href, router]);
+    return null;
+}
 
 /**
  * Lab `inbox-I1`: the list beside the selected item, selection held by the route's `item` parameter
@@ -145,7 +165,12 @@ const InboxListDetail = React.memo(function InboxListDetail(props: Readonly<{
             stackedPane="list"
             // The hairline separates the list from an open item; a list alone has nothing to separate from.
             listStyle={props.focusedItem ? { borderRightWidth: 1, borderRightColor: theme.colors.border.default } : undefined}
-            list={(layout) => props.renderList(layout?.mode === 'split' ? select : undefined)}
+            list={(layout) => (
+                <>
+                    {props.renderList(layout?.mode === 'split' ? select : undefined)}
+                    {layout?.mode === 'stacked' && props.focusedItem ? <OpenFocusedItemPage focus={props.focusedItem} /> : null}
+                </>
+            )}
             detail={props.focusedItem ? (
                 <React.Suspense fallback={<PaneLoadingFallback />}>
                     <InboxItemDetail focus={props.focusedItem} onClose={close} />
