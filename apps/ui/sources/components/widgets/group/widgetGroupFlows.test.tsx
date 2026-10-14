@@ -211,6 +211,10 @@ describe('a saved group in Add', () => {
     expect(outcome).toContain('widgetFrame.groupAddsFollowing');
     expect(outcome).toContain('happier');
     expect(outcome).toContain('Release check');
+    // Several answers are already on screen above the line: it names the group, not the first of them.
+    const several = setup.describeOutcome?.({ draft: { bindings: {}, width: 'half' }, values: ['All time', '1 selected', 'Best available cost'] });
+    expect(several).toContain('Release check');
+    expect(several).not.toContain('All time');
   });
 });
 
