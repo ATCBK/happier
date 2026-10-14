@@ -295,12 +295,15 @@ const PluginHostAccessAuthorizationClassByCapabilityV2 = {
   'cooperativeDisclosure' | 'hostResourceSelection' | 'presentIntentOrOs'
 >;
 export const PLUGIN_HOST_ACCESS_CAPABILITY_CATALOG_V2 = Object.freeze(
-  PluginHostAccessRequestVariantsV2.map((schema) => Object.freeze({
-    capability: schema.shape.capability.value,
-    authorizationClass: PluginHostAccessAuthorizationClassByCapabilityV2[schema.shape.capability.value],
-    schema,
-    reviewProjectionField: 'normalizedScope' as const,
-  })),
+  PluginHostAccessRequestVariantsV2.map((schema) => {
+    const capability = schema.shape.capability._zod.def.values[0]!;
+    return Object.freeze({
+      capability,
+      authorizationClass: PluginHostAccessAuthorizationClassByCapabilityV2[capability],
+      schema,
+      reviewProjectionField: 'normalizedScope' as const,
+    });
+  }),
 );
 
 export const PluginManifestHostAccessV2Schema = lazyZodSchema(() => z._default(z.strictObject({
