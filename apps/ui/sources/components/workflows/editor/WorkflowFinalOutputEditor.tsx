@@ -54,6 +54,7 @@ export function WorkflowFinalOutputEditor(props: Readonly<{
                 }}
                 footer={selected === undefined ? null : <FieldItem label={t('workflows.finalOutput.fieldPath')}>
                     <WorkflowResultFieldPathInput
+                        draft={props.draft}
                         testID={`${props.testIDPrefix}-final-output-path`}
                         reference={selected}
                         onChange={props.onChange}

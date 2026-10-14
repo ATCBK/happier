@@ -122,11 +122,11 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.pressedOverlay,
     },
     incomplete: {
-        ...Typography.default('regular'),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     editAction: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.button.secondary.tint,
     },
     /** The node's one quiet line: what it returns, or that it is the final output. */

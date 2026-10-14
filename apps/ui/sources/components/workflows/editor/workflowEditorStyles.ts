@@ -293,13 +293,13 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     /** A heading's quiet facts beside its name (lab `.uwe-ch .tx`: "Side by side · 3 lanes"). */
     /** The meta yields first when the line is short: the name keeps its words (N1). */
     headingMeta: {
-        ...Typography.default('regular'),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         flexShrink: 3,
         minWidth: 0,
     },
     headingName: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
@@ -332,7 +332,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /** The editable name's box is its text; its line (`headingButton`) carries the touch floor. */
     headingNameInput: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
         flexShrink: 1,
         minWidth: 0,
@@ -356,15 +356,15 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     metaText: {
-        ...Typography.default('regular'),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     metaAction: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.button.secondary.tint,
     },
     issueText: {
-        ...Typography.default('regular'),
+        ...Typography.variant('body'),
         color: theme.colors.text.destructive,
     },
     /**
@@ -377,7 +377,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         paddingBottom: theme.space.s4,
     },
     groupSummary: {
-        ...Typography.default('regular'),
+        ...Typography.variant('body'),
         color: theme.colors.text.tertiary,
     },
     /**
@@ -396,7 +396,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /** A quiet action on a block's footer line ("Add input", "Add named results"). */
     footAction: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     addRow: {
@@ -446,7 +446,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.border.default,
     },
     addLabel: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     /**
@@ -542,7 +542,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /** The label reads at the value's size, quiet (lab S6 `.uwe-kr`), so a card keeps the prompt cards' rhythm. */
     actionFieldLabel: {
-        ...Typography.default('regular'),
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.secondary,
     },
     /** "Required" on an unset field: a quiet marker on the label's line, not a second label. */
@@ -552,7 +552,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /** A bound literal as the document reads it. */
     actionFieldText: {
-        ...Typography.default('regular'),
+        ...Typography.variant('body'),
         color: theme.colors.text.primary,
     },
     /**
@@ -587,7 +587,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         maxWidth: '100%',
     },
     inlineValue: {
-        ...Typography.default('regular'),
+        ...Typography.variant('label', 'regular'),
         ...Typography.tabular(),
         color: theme.colors.text.primary,
         backgroundColor: theme.colors.input.background,

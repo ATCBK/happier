@@ -19,7 +19,7 @@ const styles = StyleSheet.create((theme) => ({
         gap: theme.space.s12,
     },
     explanation: {
-        ...Typography.default('regular'),
+        ...Typography.variant('reading'),
         color: theme.colors.text.secondary,
     },
     issueList: {
@@ -32,7 +32,7 @@ const styles = StyleSheet.create((theme) => ({
         borderBottomColor: theme.colors.border.default,
     },
     issueMessage: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     issuePath: {
@@ -53,11 +53,11 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: theme.space.s8,
     },
     secondaryActionText: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.button.secondary.tint,
     },
     primaryActionText: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.link,
     },
 }));

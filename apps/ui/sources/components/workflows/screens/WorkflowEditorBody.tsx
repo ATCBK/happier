@@ -246,7 +246,7 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: 'transparent',
     },
     actionLabel: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     phoneViewSwitch: {

@@ -20,6 +20,7 @@ const execute = vi.hoisted(() => vi.fn());
 const routerPush = vi.hoisted(() => vi.fn());
 const machineRpcAck = vi.hoisted(() => vi.fn());
 const nativeAlert = vi.hoisted(() => vi.fn<typeof import('react-native')['Alert']['alert']>());
+const windowSize = vi.hoisted(() => ({ width: 800, height: 900 }));
 // Physical Socket.IO ACKs only; the scoped RPC, daemon projection and Action owners remain real.
 vi.mock('socket.io-client', async (importOriginal) => {
     const actual = await importOriginal<typeof import('socket.io-client')>();
@@ -35,7 +36,7 @@ vi.mock('socket.io-client', async (importOriginal) => {
 // Native Alert is the platform boundary. The real manager owns confirmation
 // settlement and the real provider retains any custom modal custody.
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative'))
-    .createReactNativeNativeMock({ platformOS: 'ios' }, { Alert: { alert: nativeAlert } }));
+    .createReactNativeNativeMock({ platformOS: 'ios' }, { Alert: { alert: nativeAlert }, Dimensions: { get: () => windowSize } }));
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/workflows', router: { push: routerPush } }).module);
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
@@ -647,7 +648,7 @@ describe('workflow library summaries and filter', () => {
         expect(await action.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true, result: { view: 'all', searchQuery: '' } });
     });
 
-    it('offers Running beside Triggered from the one summaries read, and shows only workflows with an unfinished run', async () => {
+    it.each(['succeeded', 'interrupted', 'paused'] as const)('offers Running from the shared summaries without treating a %s run as working', async (inactiveState) => {
         const row = (definitionId: string, title: string) => ({ kind: 'workflow-definition.v1', definitionId, revision: { headerVersion: 1, bodyVersion: 1 },
             metadata: { title }, ownerAccountId: 'account-a', access: 'owner', contentStatus: 'available', stepCount: 2, triggers: [], nextRunAt: null });
         execute.mockImplementation(async (actionId: string) => {
@@ -656,8 +657,8 @@ describe('workflow library summaries and filter', () => {
             if (actionId === 'workflow.run.summaries') return { ok: true, result: { remainingSourceArtifactIds: [], summaries: [
                 { sourceArtifactId: '10000000-0000-4000-8000-000000000011', recent: [{ runId: 'run-live', state: 'running' }],
                     lastRun: { runId: 'run-live', state: 'running', createdAt: '2026-10-11T08:00:00.000Z', finishedAt: null }, needsYouCount: 0, needsYouRunId: null },
-                { sourceArtifactId: '10000000-0000-4000-8000-000000000012', recent: [{ runId: 'run-done', state: 'succeeded' }],
-                    lastRun: { runId: 'run-done', state: 'succeeded', createdAt: '2026-10-10T08:00:00.000Z', finishedAt: '2026-10-10T08:05:00.000Z' }, needsYouCount: 0, needsYouRunId: null },
+                { sourceArtifactId: '10000000-0000-4000-8000-000000000012', recent: [{ runId: 'run-done', state: inactiveState }],
+                    lastRun: { runId: 'run-done', state: inactiveState, createdAt: '2026-10-10T08:00:00.000Z', finishedAt: inactiveState === 'succeeded' ? '2026-10-10T08:05:00.000Z' : null }, needsYouCount: 0, needsYouRunId: null },
             ] } };
             if (actionId === 'workflow.run.list') return { ok: true, result: { runs: [], metadataByRunId: {} } };
             return { ok: false, errorCode: 'unexpected', error: 'unexpected' };
@@ -670,6 +671,29 @@ describe('workflow library summaries and filter', () => {
         await screen.tree.pressByTestIdAsync('workflows-home:filter:running');
         expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000011')).not.toBeNull();
         expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000012')).toBeNull();
+    });
+
+    it.each([[390, false], [800, true]] as const)('lays a row out for a %ipx window whether or not navigation chrome shows a title (run strip: %s)', async (width, showsStrip) => {
+        windowSize.width = width;
+        const id = '10000000-0000-4000-8000-000000000031';
+        execute.mockImplementation(async (actionId: string) => {
+            if (actionId === 'workflow.definition.list') return { ok: true, result: { definitions: [{
+                kind: 'workflow-definition.v1', definitionId: id, revision: { headerVersion: 1, bodyVersion: 1 },
+                metadata: { title: 'Release notes' }, ownerAccountId: 'account-a', access: 'owner', contentStatus: 'available',
+                stepCount: 2, triggers: [], nextRunAt: null }] } };
+            if (actionId === 'workflow.run.summaries') return { ok: true, result: { remainingSourceArtifactIds: [], summaries: [{
+                sourceArtifactId: id, recent: [{ runId: 'run-1', state: 'succeeded' }], lastRun: null, needsYouCount: 0, needsYouRunId: null }] } };
+            if (actionId === 'workflow.run.list') return { ok: true, result: { runs: [], metadataByRunId: {} } };
+            return { ok: false, errorCode: 'unexpected', error: 'unexpected' };
+        });
+        try {
+            // No NavigationTitleChromeProvider: a fresh narrow load without phone chrome is still a phone-sized window.
+            const screen = await renderScreen(<WorkflowsLibraryHome />, { wrapper: Wrapper });
+            await vi.waitFor(() => expect(screen.findHostByTestId(`workflows-home:row:${id}`)).not.toBeNull());
+            expect(screen.findHostByTestId(`workflows-home:row:${id}:strip`) !== null).toBe(showsStrip);
+        } finally {
+            windowSize.width = 800;
+        }
     });
 
     it('paints count and shared trigger wording, and filters attached triggers without losing manual workflows', async () => {

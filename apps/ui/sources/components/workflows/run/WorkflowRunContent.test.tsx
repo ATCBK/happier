@@ -1055,7 +1055,8 @@ describe('WorkflowRunContent', () => {
             machineName: 'Build box', machineReachable: false,
             invocations: [invocation], invocationProgressById: openedLeafProgress('stopping'),
         });
-        expect(screen.getTextContent()).toContain('workflows.run.stopWhenMachineReconnects');
+        // One message per state: the page header owns the Stop cause; the physical step keeps only its mark.
+        expect(screen.getTextContent().split('workflows.run.stopWhenMachineReconnects')).toHaveLength(2);
         expect(screen.getTextContent()).not.toContain('workflows.invocationState.cancel_requested');
         expect(screen.getTextContent()).not.toContain('workflows.run.stopping');
         expect(screen.findByTestId('workflow-run-needs-you')).toBeNull();

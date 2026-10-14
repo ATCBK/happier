@@ -134,7 +134,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     outcomeSentence: {
-        ...Typography.default('regular'),
+        ...Typography.variant('reading'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
@@ -147,7 +147,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         color: theme.colors.state.danger.foreground,
     },
     provenance: {
-        ...Typography.default('regular'),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     actions: {
@@ -190,19 +190,19 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         borderRadius: theme.borderRadius.md,
     },
     action: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.button.secondary.tint,
     },
     /** A link to where finished or running work lives ("Open conversation"): present, never loud. */
     quietAction: {
-        ...Typography.default('regular'),
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.secondary,
     },
     section: {
         gap: theme.space.s8,
     },
     sectionLabel: {
-        ...Typography.default('regular'),
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.secondary,
     },
     /** A body section's heading ("Needs you"), in the row-title role. */
@@ -217,7 +217,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
     },
     /** A changing count, tabular so it cannot shift the label beside it. */
     sectionCount: {
-        ...Typography.default('regular'),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.secondary,
     },
@@ -227,7 +227,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     detailKey: {
-        ...Typography.default('regular'),
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.secondary,
     },
     detailValue: {
@@ -237,7 +237,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
     },
     /** A value that is prose (a text result, a typed answer) reads as text; mono stays for structured values. */
     detailProse: {
-        ...Typography.default('regular'),
+        ...Typography.variant('reading'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
@@ -247,7 +247,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         pointerEvents: 'none',
     },
     metric: {
-        ...Typography.default('regular'),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.secondary,
     },

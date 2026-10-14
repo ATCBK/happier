@@ -25,11 +25,11 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'flex-start',
     },
     title: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     body: {
-        ...Typography.default('regular'),
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));

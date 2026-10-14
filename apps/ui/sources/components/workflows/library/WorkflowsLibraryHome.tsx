@@ -16,7 +16,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
-import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
+import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -108,7 +108,7 @@ export function WorkflowsLibraryHome(props: Readonly<{ includeAccountTriggers?: 
     const router = useRouter();
     const openAgent = useWorkflowAgentAuthoring();
     const columnOwnsCreation = useWorkflowsColumnOwnsCreation();
-    const phone = useNavigationTitleChromeShowsTitle();
+    const phone = useViewportClass() === 'compact';
     const library = useWorkflowDefinitionLibrary();
     const focused = useIsFocused();
     React.useEffect(() => {
@@ -362,7 +362,7 @@ function useLibraryRowActions(row: LibraryRow): CollectionRowActions {
     const needsYouRunId = summary?.needsYouRunId ?? null;
     // A phone recomposes the row like the Sessions list's (lab `convo-N6b`): the state word stays on the
     // title line and the history strip, a wide-screen enrichment, is left out rather than wrapped beneath.
-    const phone = useNavigationTitleChromeShowsTitle();
+    const phone = useViewportClass() === 'compact';
     const showStrip = !phone && summary !== undefined && summary.recent.length > 0;
     return {
         busy: commands?.deleting.has(row.key) === true,
@@ -572,7 +572,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingBottom: theme.space.s20,
     },
     importPrompt: {
-        ...Typography.default(),
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));

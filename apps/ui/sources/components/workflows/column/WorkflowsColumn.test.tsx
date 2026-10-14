@@ -185,12 +185,15 @@ describe('WorkflowsColumn', () => {
             if (actionId === 'workflow.definition.list') return Promise.resolve({ ok: true, result: { definitions: [
                 definition('waits', 'Prepare the release'), definition('works', 'Review each file'),
                 definition('rests', 'Fix a failing test'), definition('never', 'Triage new issues'),
+                definition('interrupted', 'Quiet habit'), definition('paused', 'Daily summary'),
             ] } });
             if (actionId === 'workflow.run.summaries') return Promise.resolve({ ok: true, result: { remainingSourceArtifactIds: [], summaries: [
                 { sourceArtifactId: 'waits', lastRun: lastRun('run-w', 'running'), recent: [{ runId: 'run-w', state: 'running' }], needsYouCount: 1, needsYouRunId: 'run-w' },
                 { sourceArtifactId: 'works', lastRun: lastRun('run-r', 'running'), recent: [{ runId: 'run-r', state: 'running' }], needsYouCount: 0, needsYouRunId: null },
                 { sourceArtifactId: 'rests', lastRun: lastRun('run-c', 'succeeded'), recent: [{ runId: 'run-c', state: 'succeeded' }], needsYouCount: 0, needsYouRunId: null },
                 { sourceArtifactId: 'never', lastRun: null, recent: [], needsYouCount: 0, needsYouRunId: null },
+                { sourceArtifactId: 'interrupted', lastRun: lastRun('run-i', 'interrupted'), recent: [{ runId: 'run-i', state: 'interrupted' }], needsYouCount: 0, needsYouRunId: null },
+                { sourceArtifactId: 'paused', lastRun: lastRun('run-p', 'paused'), recent: [{ runId: 'run-p', state: 'paused' }], needsYouCount: 0, needsYouRunId: null },
             ] } });
             return answer(actionId, input);
         });
@@ -206,6 +209,8 @@ describe('WorkflowsColumn', () => {
         expect(row('works').detail).toBe('workflows.destination.sections.running');
         expect(row('works').titleAccessory).toBeFalsy();
         expect(row('rests').detail).toContain('time.daysAgoShort');
+        expect(row('interrupted').detail).toContain('time.daysAgoShort');
+        expect(row('paused').detail).toContain('time.daysAgoShort');
         expect(row('never').detail).toBeUndefined();
     });
     it('states a failed library in the one in-list state line, whose Try again retries the read', async ({ onTestFinished }) => {

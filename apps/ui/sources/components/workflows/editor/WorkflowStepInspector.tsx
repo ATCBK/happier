@@ -50,7 +50,7 @@ const styles = StyleSheet.create((theme) => ({
         gap: theme.space.s12,
     },
     scopeLabel: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     /**
@@ -66,22 +66,22 @@ const styles = StyleSheet.create((theme) => ({
         paddingVertical: theme.space.s4,
     },
     fieldName: {
-        ...Typography.default('regular'),
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.primary,
     },
     resetTarget: {
         marginLeft: 'auto',
     },
     inheritedBadge: {
-        ...Typography.default('regular'),
+        ...Typography.variant('micro'),
         color: theme.colors.text.tertiary,
     },
     overrideBadge: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     resetAction: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.button.secondary.tint,
     },
     control: {

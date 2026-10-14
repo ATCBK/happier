@@ -18,7 +18,7 @@ import { useWorkflowsDestinationAccess } from '@/components/workflows/gating/wor
 import { AccountTriggersSection } from '@/components/workflows/triggers/AccountTriggersSection';
 import { useWorkflowDefinitionLibrary, type WorkflowLibraryDefinition } from '@/components/workflows/library/workflowLibraryReads';
 import { useWorkflowLibrarySummaries, type WorkflowLibraryRunSummary } from '@/components/workflows/library/useWorkflowLibrarySummaries';
-import { isTerminalWorkflowRunState } from '@/components/work/status/resolveWorkStatusTone';
+import { hasWorkingWorkflowLibraryRun } from '@/components/workflows/library/workflowRunStrip';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { formatTriggerSetSummary } from '@/components/workflows/triggers/formatTriggerSummary';
 import { createWorkflowDefinitionRoute } from '@/sync/domains/workflows/workflowRunRoute';
@@ -161,7 +161,7 @@ function readDefinitionLife(summary: WorkflowLibraryRunSummary | undefined):
     Readonly<{ kind: 'needsYou' | 'running' | 'quiet' }> | Readonly<{ kind: 'rested'; age: string }> {
     if (summary === undefined) return { kind: 'quiet' };
     if (summary.needsYouRunId !== null) return { kind: 'needsYou' };
-    if (summary.recent.some((run) => !isTerminalWorkflowRunState(run.state))) return { kind: 'running' };
+    if (hasWorkingWorkflowLibraryRun(summary)) return { kind: 'running' };
     const createdAt = summary.lastRun === null ? Number.NaN : Date.parse(summary.lastRun.createdAt);
     return Number.isFinite(createdAt) ? { kind: 'rested', age: formatRelativeTimeShort(createdAt, Date.now()) } : { kind: 'quiet' };
 }

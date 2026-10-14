@@ -5,7 +5,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Item } from '@/components/ui/lists/Item';
-import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
+import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { openSessionGoalControl } from '@/components/sessions/workState/openSessionGoalControl';
 import { resolveSessionRoutePathForSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
@@ -33,7 +33,7 @@ function BuiltinRow({ entry, showDivider }: Readonly<{ entry: BuiltinWorkflowCat
     const count = t('workflows.examples.stepCount', { count: countWorkflowStepsV1(entry.definition.blocks) });
     // A phone keeps the description's full width beside the chevron (only a chevron sits right of a label there);
     // the size is on the built-in's own page.
-    const phone = useNavigationTitleChromeShowsTitle();
+    const phone = useViewportClass() === 'compact';
     return <Item testID={`workflow-builtins:${entry.id}`} title={tLoose(entry.titleKey)} subtitle={tLoose(entry.descriptionKey)} detail={phone ? undefined : count}
         detailTestID={`workflow-builtins:${entry.id}:count`} showDivider={showDivider} showChevron
         icon={<WorkflowPurposeGlyph purpose={entry.purpose} />}

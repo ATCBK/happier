@@ -62,12 +62,12 @@ const styles = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
     },
     value: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
     unresolved: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.placeholder,
         flexShrink: 1,
     },

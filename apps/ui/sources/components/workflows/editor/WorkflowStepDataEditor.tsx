@@ -9,6 +9,12 @@ import { WorkflowLoopOutcomeV1Schema } from '@happier-dev/protocol/workflows/wor
 import type { WorkflowAuthoredResultReference, WorkflowReferenceScope, WorkflowValueReference } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import type { WorkflowActionFieldBindingV1 } from '@happier-dev/protocol/workflows/workflowLeafV1';
 import type { WorkflowResultContract, WorkflowStep } from '@happier-dev/protocol/workflows/workflowV1';
+import {
+    projectWorkflowResultFields,
+    type WorkflowResultField,
+    type WorkflowResultFieldType,
+    type WorkflowResultListItemType,
+} from '@happier-dev/protocol/workflows/workflowResultFieldsV1';
 
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text, TextInput } from '@/components/ui/text/Text';
@@ -63,8 +69,53 @@ function parseWorkflowResultFieldPath(value: string): (string | number)[] {
         : value.split('.').filter(Boolean).map(part => /^(0|[1-9][0-9]*)$/u.test(part) ? Number(part) : part);
 }
 
-/** A result's field path keeps its raw edit ("summary.") while the draft echoes parsed segments. */
+const WHOLE_RESULT = 'whole';
+const OTHER_PATH = 'other';
+
+/**
+ * A result's field path. When the producer declares named fields (04 §6.1) the
+ * field is chosen from them ("Whole result", each field, "Another path…");
+ * otherwise, or for another path, the raw path keeps its edit ("summary.")
+ * while the draft echoes parsed segments.
+ */
 export function WorkflowResultFieldPathInput(props: Readonly<{
+    reference: WorkflowAuthoredResultReference;
+    onChange: (reference: WorkflowAuthoredResultReference) => void;
+    testID: string;
+    style?: React.ComponentProps<typeof TextInput>['style'];
+    draft?: WorkflowEditorDraft;
+}>): React.ReactElement {
+    const producer = props.draft === undefined ? null : findWorkflowBlock(props.draft, props.reference.producer.blockId);
+    const projection = producer !== null && (producer.kind === 'step' || producer.kind === 'wait')
+        ? projectWorkflowResultFields(producer.result) : null;
+    const fields = projection?.kind === 'fields' ? projection.fields : [];
+    const [otherPath, setOtherPath] = React.useState(false);
+    const path = props.reference.path;
+    const namedField = path.length === 1 && typeof path[0] === 'string' && fields.some((field) => field.name === path[0]) ? path[0] : null;
+    const selectedId = otherPath ? OTHER_PATH : path.length === 0 ? WHOLE_RESULT : namedField ?? OTHER_PATH;
+    const raw = <WorkflowResultRawPathInput {...props} />;
+    if (fields.length === 0) return raw;
+    return <>
+        <WorkflowFieldSelect
+            testID={`${props.testID}-field`}
+            label={workflowResultFieldText('field')}
+            items={[
+                { id: WHOLE_RESULT, testID: `${props.testID}-field-whole`, title: workflowResultFieldText('wholeResult') },
+                ...fields.map((field) => ({ id: field.name, testID: `${props.testID}-field-${field.name}`, title: field.name, subtitle: formatWorkflowResultFieldType(field) })),
+                { id: OTHER_PATH, testID: `${props.testID}-field-other`, title: workflowResultFieldText('otherPath') },
+            ]}
+            selectedId={selectedId}
+            onSelect={(id) => {
+                setOtherPath(id === OTHER_PATH);
+                if (id === OTHER_PATH) return;
+                props.onChange({ ...props.reference, path: id === WHOLE_RESULT ? [] : [id] });
+            }}
+        />
+        {selectedId === OTHER_PATH ? raw : null}
+    </>;
+}
+
+function WorkflowResultRawPathInput(props: Readonly<{
     reference: WorkflowAuthoredResultReference;
     onChange: (reference: WorkflowAuthoredResultReference) => void;
     testID: string;
@@ -395,10 +446,54 @@ function formatWorkflowResultFieldWord(name: string): string {
     return /^[a-z][A-Za-z\d_\-.]*$/u.test(name) ? words.toLocaleLowerCase() : words;
 }
 
+export const WORKFLOW_RESULT_FIELD_TYPE_LABEL_KEY = {
+  boolean: 'typeBoolean',
+  text: 'typeText',
+  number: 'typeNumber',
+  choice: 'typeChoice',
+  list: 'typeList',
+} as const satisfies Record<WorkflowResultFieldType, string>;
+const ITEMS_LABEL_KEY = {
+  text: 'itemsText',
+  number: 'itemsNumber',
+  boolean: 'itemsBoolean',
+} as const satisfies Record<WorkflowResultListItemType, string>;
+
+export function workflowResultFieldText(key: string, params?: Record<string, string | number>): string {
+  return t(
+    `workflows.page.inspector.resultFields.${key}` as never,
+    params as never,
+  );
+}
+
+/** "Yes/No", "Choice", "List of text": the type a field returns, in words. */
+export function formatWorkflowResultFieldType(
+  field: WorkflowResultField,
+): string {
+  return field.type === 'list'
+    ? workflowResultFieldText('listOf', { items: workflowResultFieldText(ITEMS_LABEL_KEY[field.itemType ?? 'text']) })
+    : workflowResultFieldText(WORKFLOW_RESULT_FIELD_TYPE_LABEL_KEY[field.type]);
+}
+
+/** The Result row's one line: "Named fields · fixed Yes/No, notes Text". */
+export function formatWorkflowNamedResultSummary(
+  result: WorkflowResultContract | undefined,
+): string | null {
+  const projection = projectWorkflowResultFields(result);
+  if (projection.kind !== 'fields' || projection.fields.length === 0)
+    return null;
+  return workflowResultFieldText('summary', {
+    fields: projection.fields
+      .map((field) => `${field.name} ${formatWorkflowResultFieldType(field)}`)
+      .join(', '),
+  });
+}
+
+
 /** What a result contract returns, in the footer and in Step options' Result row. */
 export function formatWorkflowResultSummary(result: WorkflowResultContract | undefined): string {
     if (result === undefined || result.kind === 'text') return t('workflows.page.blocks.returnsText');
-    if (result.kind === 'json') return t('workflows.page.inspector.returnsStructured');
+    if (result.kind === 'json') return formatWorkflowNamedResultSummary(result) ?? t('workflows.page.inspector.returnsStructured');
     return t('workflows.page.inspector.returnsDecision');
 }
 
@@ -577,6 +672,7 @@ export function WorkflowValueReferenceEditor(props: Readonly<{
             )}
             {resultReference === undefined ? null : (
                 <WorkflowResultFieldPathInput
+                    draft={props.draft}
                     testID={`${rowId}-path`}
                     style={[workflowEditorStyles.inlineValue, workflowEditorStyles.pathValue]}
                     reference={resultReference}

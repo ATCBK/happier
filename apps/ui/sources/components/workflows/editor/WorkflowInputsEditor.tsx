@@ -26,10 +26,10 @@ import { workflowEditorStyles } from './workflowEditorStyles';
 const styles = StyleSheet.create((theme) => ({
     root: { gap: theme.space.s8 },
     heading: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
-    title: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
+    title: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary },
     // The section's quiet trailing action ("+ Add input"), on the title's line at its end.
     addTarget: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, paddingHorizontal: theme.space.s4 },
-    add: { ...Typography.default('semiBold'), color: theme.colors.text.secondary },
+    add: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.secondary },
     row: {
         gap: theme.space.s8,
         paddingVertical: theme.space.s12,
@@ -40,7 +40,7 @@ const styles = StyleSheet.create((theme) => ({
     nameField: { flexGrow: 1, flexBasis: 140, minWidth: 0 },
     defaultInput: { flex: 1, minWidth: 0 },
     required: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
-    requiredLabel: { ...Typography.default('regular'), color: theme.colors.text.primary },
+    requiredLabel: { ...Typography.variant('label', 'regular'), color: theme.colors.text.primary },
     defaultField: { flexGrow: 1, flexBasis: 200, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
 }));
 

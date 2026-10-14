@@ -692,7 +692,7 @@ export const en = {
         subtreeDenied: 'An agent can only start work in its own session or in sessions it leads.',
         roleTargetUnavailable: 'This role cannot be used here.',
         accountRolesUnavailableTitle: 'Account roles unavailable',
-        accountRolesUnavailable: 'Happier could not read your Account role settings. Try again.',
+        accountRolesUnavailable: 'Happier could not read your Account role settings.',
         roleRunsAsMismatch: 'This role runs in a way this step cannot use. Choose another role or change how the step runs.',
         policyDeniedField: 'Your agent settings do not allow the requested setting for work an agent starts.',
         permissionExceedsCeiling: 'This needs more permission than the agent that started it has.',

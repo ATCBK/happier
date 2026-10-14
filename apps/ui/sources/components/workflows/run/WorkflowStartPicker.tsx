@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { BUILTIN_WORKFLOW_CATALOG_V1 } from '@happier-dev/protocol/workflows/builtins/catalog';
-import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
+import { workflowInputTitle, type WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 import type { WorkflowRunStartRequestV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { SelectionList, type SelectionListStep } from '@/components/ui/selectionList';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -40,7 +40,7 @@ export function WorkflowStartPicker(props: Readonly<{
     })), [library.pluginWorkflows]);
     const asks = React.useCallback((definition: WorkflowDefinitionV1) => definition.inputs.length === 0
         ? t('workflows.start.noInputs')
-        : t('workflows.start.asksFor', { names: definition.inputs.map((input) => input.name).join(', ') }), []);
+        : t('workflows.start.asksFor', { names: definition.inputs.map((input) => workflowInputTitle(input)).join(', ') }), []);
     const rootStep = React.useMemo<SelectionListStep>(() => ({
         id: 'workflow-start-picker', inputPlaceholder: t('workflows.start.search'),
         sections: [

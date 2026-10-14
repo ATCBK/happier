@@ -79,7 +79,7 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.border.default,
     },
     label: {
-        ...Typography.default('regular'),
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.primary,
         flexShrink: 1,
     },
@@ -87,7 +87,7 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
     },
     ordinal: {
-        ...Typography.default('regular'),
+        ...Typography.variant('micro'),
         ...Typography.tabular(),
         color: theme.colors.text.tertiary,
     },
@@ -112,15 +112,15 @@ const styles = StyleSheet.create((theme) => ({
         gap: theme.space.s4,
     },
     footerAction: {
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.button.secondary.tint,
     },
     footerNote: {
-        ...Typography.default('regular'),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     empty: {
-        ...Typography.default('regular'),
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
         paddingVertical: theme.space.s12,
     },

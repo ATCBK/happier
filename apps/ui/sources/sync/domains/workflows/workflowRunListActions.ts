@@ -95,6 +95,25 @@ export async function listWorkflowRuns(params: Readonly<{
         ...(result.invocationProvenance ? { invocationProvenance: result.invocationProvenance } : {}) };
 }
 
+/** Complete membership for a demanded relation, following the server's response-byte continuations. */
+export async function listAllWorkflowRuns(params: Readonly<{
+    filter: WorkflowRunListFilter;
+    signal: AbortSignal;
+}>): Promise<Pick<WorkflowRunListPage, 'runs' | 'metadataByRunId'>> {
+    const runs: WorkflowRunSummaryV1[] = [];
+    const metadataByRunId: Record<string, WorkflowRunPrivateMetadataV1 | null> = {};
+    let cursor: string | undefined;
+    do {
+        params.signal.throwIfAborted();
+        const page = await listWorkflowRuns({ ...params, ...(cursor === undefined ? {} : { cursor }) });
+        params.signal.throwIfAborted();
+        runs.push(...page.runs);
+        Object.assign(metadataByRunId, page.metadataByRunId);
+        cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    return { runs, metadataByRunId };
+}
+
 /** FIN §4.8: memory is the starter's newest accepted Run, not another preference store. */
 export async function readWorkflowRunRolePrefill(params: Readonly<{
     sourceArtifactId: string;
