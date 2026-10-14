@@ -1,33 +1,12 @@
 import type { Prisma } from "@prisma/client";
-import {
-    PluginAccountPluginIntentV1Schema,
-    PluginCollectionCandidatePreparationErrorV1Schema,
-    PluginCollectionCandidatePreparationRetireRequestV1Schema,
-    PluginCollectionCandidatePreparationRetireResultV1Schema,
-    PluginCollectionCandidatePreparationSourcePageRequestV1Schema,
-    PluginCollectionCandidatePreparationSourcePageResultV1Schema,
-    PluginCollectionCandidatePreparationStageRequestV1Schema,
-    PluginCollectionCandidatePreparationStageResultV1Schema,
-    PluginCollectionContractRefV1Schema,
-    PluginCollectionProjectionV1Schema,
-    buildPluginDomainAccountChangeEntityId,
-    computeCanonicalDomainSeparatedDigest,
-    decodeBase64,
-    encodeBase64,
-    isPluginCollectionOptionalPrivateSchemaAdditionV1,
-    measurePluginCollectionCandidatePreparationStageRequestEncodedBytesV1,
-    resolvePluginCollectionMigrationChainV1,
-    PluginUiArtifactDigestV1Schema,
-    normalizePluginAccountCollectionContractsV1,
-    type NormalizedPluginAccountCollectionContractV1,
-    type PluginCollectionCandidatePreparationBindingV1,
-    type PluginCollectionCandidatePreparationRetireResultV1,
-    type PluginCollectionCandidatePreparationSourcePageResultV1,
-    type PluginCollectionCandidatePreparationStageResultV1,
-    type PluginCollectionContractRefV1,
-    type PluginCollectionProjectionV1,
-    type PluginCollectionQuotaDimensionV1,
-} from "@happier-dev/protocol";
+import { PluginAccountPluginIntentV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
+import { PluginCollectionCandidatePreparationErrorV1Schema, PluginCollectionCandidatePreparationRetireRequestV1Schema, PluginCollectionCandidatePreparationRetireResultV1Schema, PluginCollectionCandidatePreparationSourcePageRequestV1Schema, PluginCollectionCandidatePreparationSourcePageResultV1Schema, PluginCollectionCandidatePreparationStageRequestV1Schema, PluginCollectionCandidatePreparationStageResultV1Schema, PluginCollectionProjectionV1Schema, isPluginCollectionSchemaWideningV1, measurePluginCollectionCandidatePreparationStageRequestEncodedBytesV1, normalizePluginAccountCollectionContractsV1, type NormalizedPluginAccountCollectionContractV1, type PluginCollectionCandidatePreparationBindingV1, type PluginCollectionCandidatePreparationRetireResultV1, type PluginCollectionCandidatePreparationSourcePageResultV1, type PluginCollectionCandidatePreparationStageResultV1, type PluginCollectionProjectionV1, type PluginCollectionQuotaDimensionV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
+import { PluginCollectionContractRefV1Schema, type PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
+import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
+import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
+import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { resolvePluginCollectionMigrationChainV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
+import { PluginUiArtifactDigestV1Schema } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { z } from "zod";
 import semver from "semver";
 import { createReleaseLessDeclarationV1, readCurrentReleaseLessDeclarationV1, type ReleaseLessDeclarationV1 } from "@/app/plugins/availability/currentDeclaration";
@@ -995,7 +974,7 @@ function buildCandidatePromotionRows(input: Readonly<{
  * metadata updates back with it. Payload, revision, projections, index
  * entries, and relations remain untouched.
  */
-async function adoptOptionalPrivateSchemaContractIdentityInTx(input: Readonly<{
+async function adoptCompatibleSchemaContractIdentityInTx(input: Readonly<{
     tx: Tx;
     accountId: string;
     encryptionMode: "plain" | "e2ee";
@@ -1214,7 +1193,7 @@ export async function promotePluginCollectionCandidatePreparationInTx(input: Rea
             throw error;
         }
         if (liveRowCount === 0) continue;
-        if (isPluginCollectionOptionalPrivateSchemaAdditionV1({
+        if (isPluginCollectionSchemaWideningV1({
             source: source.contract,
             target: target.contract,
         })) {
@@ -1242,7 +1221,7 @@ export async function promotePluginCollectionCandidatePreparationInTx(input: Rea
                 }
                 lastRowId = rows[rows.length - 1]!.id;
             }
-            await adoptOptionalPrivateSchemaContractIdentityInTx({
+            await adoptCompatibleSchemaContractIdentityInTx({
                 tx: input.tx,
                 accountId: input.accountId,
                 encryptionMode: fence.account.currentness.encryptionMode,
