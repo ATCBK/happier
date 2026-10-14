@@ -271,6 +271,7 @@ const DIRECT_EPHEMERAL_POLICIES = Object.freeze([
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_COMPOSER_REFERENCE_SEARCH, 'Daemon-local generation-leased composer-reference picker search returns bounded candidates through the canonical registered reference; no durable resolved context, server persistence, or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ, 'Daemon-local read of the current contributions to one mounted plugin target; no server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ, 'Daemon-local generation-leased plugin resource snapshot read for a mounted plugin UI surface; no server persistence or cross-device fanout.'),
+  directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_CAPTURE_SOURCE_READ, 'Exact-Machine, occurrence-bound capture viewing metadata discovery; capture approval and stream admission remain at their existing owners, with no durable mutation or server fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_STORED_IMAGE_READ, 'Exact plugin occurrence Session READ-scoped image disclosure; no server persistence or mutation.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_OPEN, 'Daemon-local plugin resource invalidation subscription open; establishes one bounded daemon-side observer and returns its current digest without server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_NEXT, 'Daemon-local plugin resource invalidation long-poll; returns one bounded signal carrying no resource bytes, without server persistence or cross-device fanout.'),
@@ -838,8 +839,13 @@ function withSharedMachineAccess(policy: MachineRpcRoutePolicyV1): MachineRpcRou
 }
 
 export const MACHINE_RPC_ROUTE_POLICIES = Object.freeze([
+  ...serverRequiredRows([
+    RPC_METHODS.DAEMON_AGENTS_INSTALL_START, RPC_METHODS.DAEMON_AGENTS_INSTALL_READ,
+    RPC_METHODS.DAEMON_AGENTS_INSTALL_CANCEL, RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST,
+  ], 'auth', 'Agent install jobs retain authenticated exact-Machine routing; configured definitions and job visibility require current requester Account admission, while reviewed install/update/uninstall effects remain owned by their public Actions.'),
   serverRequired(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, 'ambiguous',
     'Contribution registry projection admits cross-device Session creation and plugin surfaces; a Machine loopback advertisement does not establish client reachability, so read through the authenticated Home without an uncertain direct attempt.'),
+  serverRequired(RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE, 'auth', 'Reverse contributed-Action execution reaches the answering UI through authenticated Home ingress; exact occurrence admission, Action policy and approval remain at the canonical front door.'),
   serverRequired(RPC_METHODS.DAEMON_CONNECTED_SERVICE_POOL_SELECTION_GET, 'auth',
     'Pool selection observes the custodian Account group and private quota evidence through the current exact-Machine owner; shared Machine Use does not grant access to that Account data.'),
   ...serverRequiredRows([
@@ -914,6 +920,8 @@ export const MACHINE_RPC_ROUTE_POLICIES = Object.freeze([
   serverRequired(SESSION_RPC_METHODS.SESSION_INPUT_CANCEL_EXACT_TURN_V1, 'durable_session_write', 'Exact-turn cancellation mutates the live Session runtime and remains bound to server-authoritative Session access.', SESSION_SERVER_REQUIRED_SCOPE),
   serverRequired(SESSION_RPC_METHODS.SESSION_GUARD_NOTICE, 'durable_session_write', 'Guard notices commit Session metadata and transcript receipts through the current owner on the authenticated exact-Session route.', SESSION_SERVER_REQUIRED_SCOPE),
   serverRequired(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1, 'auth', 'Native Agent tool calls execute inside the live Session authority boundary and stay on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
+  serverRequired(SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1, 'auth', 'Daemon catalog invalidation is an exact Session-owner freshness signal; it grants no executable admission and stays on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
+  serverRequired(SESSION_RPC_METHODS.SESSION_PROVIDER_CLI_ATTACH_PREPARE, 'auth', 'Native CLI attachment prepares live terminal custody under exact Session-owner authority and stays on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
   ...serverRequiredRows(PLUGIN_PERMISSION_GRANT_METHODS, 'auth', 'Plugin permission grant reads and mutations are authorization policy state and stay server-routed.'),
   ...serverRequiredRows(REVIEW_COMMENT_METHODS, 'server_persistence', 'Review comment reads and mutations operate on durable review-comment state and stay server-routed.'),
   ...serverRequiredRows(SESSION_AUTH_CONTROL_METHODS, 'auth', 'Session connected-service auth runtime controls expose or mutate authentication state and stay server-routed.', SESSION_SERVER_REQUIRED_SCOPE),

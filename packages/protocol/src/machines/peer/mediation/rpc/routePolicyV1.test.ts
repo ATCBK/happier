@@ -19,6 +19,15 @@ async function importRpcPolicy() {
 }
 
 describe('MachineRpcRoutePolicyV1', () => {
+  it('classifies Agent install job transports without promoting native mutations to direct routes', async () => {
+    const { resolveMachineRpcRoutePolicy } = await import('./routePolicyV1');
+    for (const method of [RPC_METHODS.DAEMON_AGENTS_INSTALL_START, RPC_METHODS.DAEMON_AGENTS_INSTALL_CANCEL,
+      RPC_METHODS.DAEMON_AGENTS_INSTALL_READ, RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST]) {
+      expect(resolveMachineRpcGovernance(method)).toEqual({ rpcClassification: 'internal_only' });
+      expect(resolveMachineRpcRoutePolicy(method)).toMatchObject({ routeClass: 'server_required',
+        rpcClassification: 'internal_only', scope: { accountRequired: true, machineRequired: true, serverRequired: true } });
+    }
+  });
   it('spends only an exact Found root on the existing download transport', async () => {
     const { resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
     for (const actionId of ['skills.found.read', 'skills.found.adopt'] as const) {
