@@ -2052,6 +2052,29 @@ describe('ConnectedServiceRefreshCoordinator', () => {
         ? { isMaterializedHomeStale: vi.fn(async () => true) }
         : undefined,
     );
+    const purposeSnapshot = resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
+      agentId: 'claude',
+      bindings: ConnectedServiceBindingsV2IngressSchema.parse({
+        v: 2,
+        bindingsByServiceId: {
+          'happier.agent.claude/claude-subscription': {
+            source: 'connected',
+            selection: 'profile',
+            profileId: 'work',
+          },
+        },
+      }),
+      contributions: getResolvedContributionRegistry(),
+    });
+    if (!purposeSnapshot) throw new Error('fixture purpose snapshot unavailable');
+    const disposePurposeBinding = vi.fn();
+    const activatePurposeBindings = vi.fn(() => ({
+      subjectId: 'operation:successor-daemon-credential-projection',
+      isCurrent: () => true,
+      resolvePurposeBinding: () => purposeSnapshot.bindings[0] ?? null,
+      listPurposeBindings: () => purposeSnapshot.bindings,
+      dispose: disposePurposeBinding,
+    }));
     const onAuthUpdated = vi.fn();
     const coordinator = createRefreshCoordinator({
       api,
@@ -2062,6 +2085,8 @@ describe('ConnectedServiceRefreshCoordinator', () => {
       refreshWindowMs: 60_000,
       refreshLeaseMs: 30_000,
       now: () => now,
+      resolveQualifiedPurposeBindingSnapshot: async () => purposeSnapshot,
+      activatePurposeBindings,
       onAuthUpdated,
     });
 
@@ -2083,8 +2108,17 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     expect(materializer).toHaveBeenCalledWith(expect.objectContaining({
       rootDir: expect.any(String),
       recordsByServiceId: expect.any(Map),
-      purposeBindingSessionId: 'happy-session-1',
+      exactPurposeBindingSubjectId: 'operation:successor-daemon-credential-projection',
     }));
+    expect(activatePurposeBindings).toHaveBeenCalledWith(expect.objectContaining({
+      subject: expect.objectContaining({
+        kind: 'operation',
+        sessionId: 'happy-session-1',
+      }),
+      purposes: purposeSnapshot.purposes,
+      bindings: purposeSnapshot.bindings,
+    }));
+    expect(disposePurposeBinding).toHaveBeenCalledTimes(1);
     expect(onAuthUpdated).toHaveBeenCalledWith(expect.objectContaining({
       binding: { serviceId: 'claude-subscription', profileId: 'work' },
       affectedTargets: [expect.objectContaining({ pid: 123, agentId: 'claude' })],
