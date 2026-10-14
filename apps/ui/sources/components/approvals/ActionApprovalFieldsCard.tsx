@@ -11,7 +11,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
-import { useSessionListRenderableWithServerScope } from '@/sync/domains/state/storage';
+import { useArtifact, useProjectAccountRows, useServerScopedMachine, useSessionListRenderableWithServerScope } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
@@ -22,6 +22,12 @@ import { readAccountProviderDeclarations } from '@/providers/catalog/accountProv
 import { presentProviderConnectionIdentity } from '@/providers/connection/presentation';
 import { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
 import { builtInSettingUiDeclaration } from '@/components/settings/catalog/settingDeclarations';
+import { useMcpServerCatalogForServer } from '@/components/settings/mcpServers/useMcpServersSettings';
+import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
+import { useAgentCatalogIdentities } from '@/agents/registry/useSessionAgentCatalogIdentity';
+import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
+import { BUILT_IN_REGISTRY_SOURCES_V1 } from '@happier-dev/protocol/registries';
 
 type ApprovalFieldRow = ApprovalActionFieldsPresentation['rows'][number];
 type ApprovalValueRow = Extract<ApprovalFieldRow, { kind: 'value' }>;
@@ -113,7 +119,8 @@ function ApprovalValueItem(props: Readonly<{
     anatomy?: 'page';
 }>) {
     const { row } = props;
-    const literal = row.valueFormat === 'boolean' ? t(row.value === 'true' ? 'common.yes' : 'common.no') : row.value;
+    const literal = row.valueFormat === 'unavailable' ? t('common.unavailable')
+        : row.valueFormat === 'boolean' ? t(row.value === 'true' ? 'common.yes' : 'common.no') : row.value;
     const reading = useApprovalReferenceReading(row.reference, literal, props.serverId);
     const title = nameApprovalReferenceLabel(row.title, row.reference, reading.named);
     if (props.anatomy !== 'page') {
@@ -144,8 +151,44 @@ function useApprovalReferenceReading(reference: ApprovalReference | undefined, l
     const serverId = reference?.kind === 'session' ? reference.serverId ?? approvalServerId : approvalServerId;
     const name = useApprovalSessionName(serverId, reference?.kind === 'session' ? reference.id : '');
     const viewer = useAccountSettingsScope();
+    const ownHome = isSameApprovalHome(viewer?.serverId, approvalServerId);
+    const skill = useArtifact(reference?.kind === 'skill' && ownHome ? reference.id : '');
+    const machine = useServerScopedMachine(approvalServerId, reference?.kind === 'machine' ? reference.id : '');
+    const mcp = useMcpServerCatalogForServer(reference?.kind === 'mcpServer' ? approvalServerId : null, reference?.kind === 'mcpServer');
+    const registries = usePromptLibraryCatalogValue('registry-sources', reference?.kind === 'registrySource' && ownHome ? viewer : null);
+    const projects = useProjectAccountRows();
+    const agents = useAgentCatalogIdentities({ agentIds: reference?.kind === 'agent' ? [reference.id] : [], machineId: null,
+        serverId: reference?.kind === 'agent' ? approvalServerId : null });
     const providerCatalog = useProviderCatalogForServer(reference?.kind === 'providerConnection' ? approvalServerId : null);
     const declarations = readAccountProviderDeclarations();
+    if (reference?.kind === 'skill') {
+        const title = ownHome && skill?.header?.kind === 'prompt_bundle.v2'
+            && skill.header.bundleSchemaId === 'skills.skill_md_v1' ? skill.title ?? skill.header.title : null;
+        return { text: title ?? reference.id, named: Boolean(title) };
+    }
+    if (reference?.kind === 'machine') {
+        const title = getMachineDisplayName(machine) ?? reference.id;
+        return { text: reference.workspaceRoot ? `${formatPathRelativeToHome(reference.workspaceRoot)} · ${title}` : `${t('contextBar.machine')} ${title}`, named: Boolean(machine) };
+    }
+    if (reference?.kind === 'mcpServer') {
+        const server = mcp.value?.servers.find(row => row.id === reference.id);
+        return { text: server?.name ?? reference.id, named: Boolean(server) };
+    }
+    if (reference?.kind === 'registrySource') {
+        const source = registries.value?.sources.find(row => row.id === reference.id)
+            ?? BUILT_IN_REGISTRY_SOURCES_V1.find(row => row.id === reference.id);
+        return { text: source?.title ?? reference.id, named: Boolean(source) };
+    }
+    if (reference?.kind === 'project') {
+        const title = ownHome && projects && projects.scope.accountId === viewer?.accountId
+            && isSameApprovalHome(projects.scope.serverId, approvalServerId)
+            ? projects.organizations.find(row => row.key.projectKey === reference.id)?.value.label : null;
+        return { text: title ?? reference.id, named: Boolean(title) };
+    }
+    if (reference?.kind === 'agent') {
+        const title = agents.map(row => row.entry.title).join(', ');
+        return { text: title || reference.id, named: Boolean(title) };
+    }
     if (reference?.kind === 'setting') {
         const setting = builtInSettingUiDeclaration(reference.id);
         return { text: t(setting.titleKey), named: true };
@@ -363,24 +406,22 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.elevated,
-        padding: 16,
-        gap: 12,
+        padding: theme.space.s16,
+        gap: theme.space.s12,
     },
     sectionTitle: {
-        fontSize: 14,
-        fontWeight: '700',
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     rows: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     row: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     label: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        fontWeight: '600',
     },
     value: {
         fontSize: 14,
@@ -388,20 +429,18 @@ const styles = StyleSheet.create((theme) => ({
         lineHeight: 20,
     },
     structuredAnswers: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     entries: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     entry: {
         flexDirection: 'row',
         alignItems: 'baseline',
-        gap: 8,
+        gap: theme.space.s8,
     },
     entryGroup: {
-        fontSize: 13,
-        lineHeight: 20,
-        fontWeight: '600',
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     entryLabel: {
@@ -439,21 +478,17 @@ const styles = StyleSheet.create((theme) => ({
         flex: 0,
     },
     structuredAnswer: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     question: {
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
-        lineHeight: 20,
-        fontWeight: '600',
     },
     unrepresentable: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     unrepresentableTitle: {
-        fontSize: 14,
-        lineHeight: 20,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.state.danger.foreground,
     },
     unrepresentableBody: {
