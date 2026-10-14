@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ProviderAccountUsageRecordIdSchema, ProviderAccountUsageSnapshotV1Schema, ProviderAccountUsageHistoryCursorV1Schema, ProviderAccountUsageHistoryWitnessV1Schema } from './providerAccountUsagePrimitives.js';
 import { QualifiedConnectedServiceUsageSourceV4Schema, QualifiedProviderAccountUsageRecordResponseV4Schema } from './qualifiedConnectedAccountProjectionsV4.js';
@@ -6,47 +6,51 @@ import { ProviderAccountUsagePaceV1Schema, ProviderAccountUsageUnusedCapacityV1S
 import { UsagePacingTargetsV1Schema } from '../account/settings/usagePacingPreferencesV1.js';
 import { PendingResetStartReadinessV1Schema } from '../sessions/pending/pendingResetStartReadinessV1.js';
 import { PendingResetStartsReadResultV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
+import { ProviderAccountUsagePageProjectionDemandV1Schema, PackedProviderAccountUsagePageProjectionV1Schema } from './providerAccountUsagePageProjection.js';
 
 // New operation envelopes and their nested range/cursor identities are closed.
 // pageSize is caller-selected paging, with no retention horizon or invented cap.
-export const ProviderAccountUsageHistoryRangeV1Schema = lazyZodSchema(() => z.object({
-  startAtMs: z.number().int().nonnegative(),
-  endAtMs: z.number().int().nonnegative(),
-}).strict().refine(range => range.endAtMs > range.startAtMs, { message: 'History range must have a positive duration' }));
-export const ProviderAccountUsageHistoryRequestV1Schema = lazyZodSchema(() => z.object({
+export const ProviderAccountUsageHistoryRangeV1Schema = lazyZodSchema(() => z.strictObject({
+  startAtMs: z.number().check(z.int(), z.nonnegative()),
+  endAtMs: z.number().check(z.int(), z.nonnegative()),
+}).check(z.refine(range => range.endAtMs > range.startAtMs, { message: 'History range must have a positive duration' })));
+export const ProviderAccountUsageHistoryRequestV1Schema = lazyZodSchema(() => z.strictObject({
   range: ProviderAccountUsageHistoryRangeV1Schema,
-  pageSize: z.number().int().positive(),
-  cursor: ProviderAccountUsageHistoryCursorV1Schema.optional(),
-}).strict());
+  pageSize: z.number().check(z.int(), z.positive()),
+  cursor: z.optional(ProviderAccountUsageHistoryCursorV1Schema),
+}));
 export const QualifiedProviderAccountUsageHistoryRequestV4Schema = lazyZodSchema(() => z.union([
-  z.object({ recordId: ProviderAccountUsageRecordIdSchema, history: ProviderAccountUsageHistoryRequestV1Schema }).strict(),
-  z.object({ recordId: ProviderAccountUsageRecordIdSchema, witness: ProviderAccountUsageHistoryWitnessV1Schema }).strict(),
+  z.strictObject({ recordId: ProviderAccountUsageRecordIdSchema, history: ProviderAccountUsageHistoryRequestV1Schema }),
+  z.strictObject({ recordId: ProviderAccountUsageRecordIdSchema, witness: ProviderAccountUsageHistoryWitnessV1Schema }),
+  z.strictObject({ recordId: ProviderAccountUsageRecordIdSchema, projection: ProviderAccountUsagePageProjectionDemandV1Schema }),
 ]));
-export const QualifiedProviderAccountUsageHistoryResponseV4Schema = lazyZodSchema(() => z.object({
-  entries: z.array(z.object({ id: z.string().min(1), observedAtMs: z.number().int().nonnegative(), record: QualifiedProviderAccountUsageRecordResponseV4Schema }).strict()),
-  nextCursor: ProviderAccountUsageHistoryCursorV1Schema.nullable(),
-}).strict());
-export const OpenedProviderAccountUsageHistoryPageV1Schema = lazyZodSchema(() => z.object({
-  entries: z.array(z.object({ id: z.string().min(1), observedAtMs: z.number().int().nonnegative(), snapshot: ProviderAccountUsageSnapshotV1Schema }).strict()),
-  nextCursor: ProviderAccountUsageHistoryCursorV1Schema.nullable(),
-}).strict());
-export const ConnectedServiceQuotaGetInputV1Schema = lazyZodSchema(() => z.object({
+export const QualifiedProviderAccountUsageHistoryResponseV4Schema = lazyZodSchema(() => z.strictObject({
+  entries: z.array(z.strictObject({ id: z.string().check(z.minLength(1)), observedAtMs: z.number().check(z.int(), z.nonnegative()), record: QualifiedProviderAccountUsageRecordResponseV4Schema })),
+  nextCursor: z.nullable(ProviderAccountUsageHistoryCursorV1Schema),
+}));
+export const OpenedProviderAccountUsageHistoryPageV1Schema = lazyZodSchema(() => z.strictObject({
+  entries: z.array(z.strictObject({ id: z.string().check(z.minLength(1)), observedAtMs: z.number().check(z.int(), z.nonnegative()), snapshot: ProviderAccountUsageSnapshotV1Schema })),
+  nextCursor: z.nullable(ProviderAccountUsageHistoryCursorV1Schema),
+}));
+export const ConnectedServiceQuotaGetInputV1Schema = lazyZodSchema(() => z.strictObject({
   source: QualifiedConnectedServiceUsageSourceV4Schema,
-  history: ProviderAccountUsageHistoryRequestV1Schema.optional(),
-}).strict());
+  history: z.optional(ProviderAccountUsageHistoryRequestV1Schema),
+  projection: z.optional(ProviderAccountUsagePageProjectionDemandV1Schema),
+}).check(z.refine(value => !(value.history && value.projection), { message: 'Choose exact history or the page projection' })));
 export const ProviderAccountUsageWaitingWorkV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('available'), entries: z.array(z.object({ sessionId: z.string().min(1), localId: z.string().min(1), recordId: ProviderAccountUsageRecordIdSchema, meterId: z.string().min(1), readiness: PendingResetStartReadinessV1Schema }).strict()), unboundEntries: PendingResetStartsReadResultV1Schema.shape.unboundEntries }).strict(),
-  z.object({ status: z.literal('unavailable'), reason: z.enum(['unsupported', 'authority_unavailable', 'read_failed']) }).strict(),
+  z.strictObject({ status: z.literal('available'), entries: z.array(z.strictObject({ sessionId: z.string().check(z.minLength(1)), localId: z.string().check(z.minLength(1)), recordId: ProviderAccountUsageRecordIdSchema, meterId: z.string().check(z.minLength(1)), readiness: PendingResetStartReadinessV1Schema })), unboundEntries: PendingResetStartsReadResultV1Schema.shape.unboundEntries }),
+  z.strictObject({ status: z.literal('unavailable'), reason: z.enum(['unsupported', 'authority_unavailable', 'read_failed']) }),
 ]));
-export const ConnectedServiceQuotaGetResultV1Schema = lazyZodSchema(() => z.object({
+export const ConnectedServiceQuotaGetResultV1Schema = lazyZodSchema(() => z.strictObject({
   source: QualifiedConnectedServiceUsageSourceV4Schema,
-  current: ProviderAccountUsageSnapshotV1Schema.nullable(),
-  history: OpenedProviderAccountUsageHistoryPageV1Schema.optional(),
-  pace: z.array(z.object({ meterId: z.string().min(1), value: ProviderAccountUsagePaceV1Schema }).strict()),
-  unusedCapacity: ProviderAccountUsageUnusedCapacityV1Schema.optional(),
+  current: z.nullable(ProviderAccountUsageSnapshotV1Schema),
+  history: z.optional(OpenedProviderAccountUsageHistoryPageV1Schema),
+  pageProjection: z.optional(PackedProviderAccountUsagePageProjectionV1Schema),
+  pace: z.array(z.strictObject({ meterId: z.string().check(z.minLength(1)), value: ProviderAccountUsagePaceV1Schema })),
+  unusedCapacity: z.optional(ProviderAccountUsageUnusedCapacityV1Schema),
   targets: UsagePacingTargetsV1Schema,
   waitingWork: ProviderAccountUsageWaitingWorkV1Schema,
-}).strict());
+}));
 
 export type ProviderAccountUsageHistoryRequestV1 = z.infer<typeof ProviderAccountUsageHistoryRequestV1Schema>;
 export type ProviderAccountUsageHistoryWitnessV1 = z.infer<typeof ProviderAccountUsageHistoryWitnessV1Schema>;

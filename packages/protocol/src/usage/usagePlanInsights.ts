@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import type { UsageQuery } from '../inputs/usageQuery.js';
 import { ConnectedServiceQuotaGetResultV1Schema, type ConnectedServiceQuotaGetResultV1 } from '../connect/providerAccountUsageHistorySchemasV1.js';
@@ -6,64 +6,65 @@ import { projectProviderAccountSubscriptionMonetaryFacts } from '../connect/acco
 import { sameQualifiedConnectedAccountRef } from '../connect/qualifiedConnectedAccountPersistence.js';
 import { deriveProviderAccountUsageHeadroom, hasProviderAccountUsageWitnessedReset, resolveProviderAccountUsagePaceWindow } from '../connect/deriveProviderAccountUsagePace.js';
 import { isConnectedServiceQuotaObservationFresh } from '../connect/quotaObservationTime.js';
+import { getProviderAccountUsageQuotaHistoryV1 } from '../connect/providerAccountUsagePageProjection.js';
 import type { UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import type { UsageHowYouWork } from './resolveUsageHowYouWork.js';
 import { resolveUsageBucketBounds, resolveUsageCalendarDateStart } from './usageCalendar.js';
 import { resolveUsageCostBasis, type UsageCostBasis } from './usageCostFacts.js';
 
-const InsufficientSchema = lazyZodSchema(() => z.object({ status: z.literal('insufficient_basis'), reason: z.string().min(1) }).strict());
-const NonNegative = lazyZodSchema(() => z.number().finite().nonnegative());
+const InsufficientSchema = lazyZodSchema(() => z.strictObject({ status: z.literal('insufficient_basis'), reason: z.string().check(z.minLength(1)) }));
+const NonNegative = lazyZodSchema(() => z.number().check(z.nonnegative()));
 const PriceMultipleSchema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('available'), multiple: NonNegative,
+  z.strictObject({ status: z.literal('available'), multiple: NonNegative,
     priceKind: z.enum(['entered', 'list', 'paid']), priceAmount: NonNegative, currency: z.literal('USD'),
-    priceAsOfMs: z.number().int().nonnegative(), priceSource: z.string().min(1),
-    period: z.object({ startAtMs: z.number().int().nonnegative(), endAtMs: z.number().int().nonnegative() }).strict(),
-    method: z.literal('observed_api_equivalent_divided_by_period_price') }).strict(),
+    priceAsOfMs: z.number().check(z.int(), z.nonnegative()), priceSource: z.string().check(z.minLength(1)),
+    period: z.strictObject({ startAtMs: z.number().check(z.int(), z.nonnegative()), endAtMs: z.number().check(z.int(), z.nonnegative()) }),
+    method: z.literal('observed_api_equivalent_divided_by_period_price') }),
   InsufficientSchema,
 ]));
 const AccountValueSchema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('available'), kind: z.literal('api_equivalent'), amountUsd: NonNegative, currency: z.literal('USD'),
-    period: z.object({ startMs: z.number().int().nonnegative().optional(), endMs: z.number().int().nonnegative().optional() }).strict(),
-    coverage: z.enum(['complete', 'partial']), pricedContributionCount: z.number().int().positive(),
-    unpricedContributionCount: z.number().int().nonnegative(), unknownAccountContributionCount: z.number().int().nonnegative(),
-    pricingSources: z.array(z.string().min(1)), priceMultiple: PriceMultipleSchema }).strict(),
+  z.strictObject({ status: z.literal('available'), kind: z.literal('api_equivalent'), amountUsd: NonNegative, currency: z.literal('USD'),
+    period: z.strictObject({ startMs: z.optional(z.number().check(z.int(), z.nonnegative())), endMs: z.optional(z.number().check(z.int(), z.nonnegative())) }),
+    coverage: z.enum(['complete', 'partial']), pricedContributionCount: z.number().check(z.int(), z.positive()),
+    unpricedContributionCount: z.number().check(z.int(), z.nonnegative()), unknownAccountContributionCount: z.number().check(z.int(), z.nonnegative()),
+    pricingSources: z.array(z.string().check(z.minLength(1))), priceMultiple: PriceMultipleSchema }),
   InsufficientSchema,
 ]));
-const WindowSchema = lazyZodSchema(() => z.object({ meterId: z.string().min(1), label: z.string().min(1), asOfMs: z.number().int().nonnegative() }).strict());
+const WindowSchema = lazyZodSchema(() => z.strictObject({ meterId: z.string().check(z.minLength(1)), label: z.string().check(z.minLength(1)), asOfMs: z.number().check(z.int(), z.nonnegative()) }));
 const WeatherSchema = lazyZodSchema(() => z.union([
-  WindowSchema.safeExtend({ status: z.literal('available'), outlook: z.enum(['within_even_pace', 'ahead_of_even_pace']),
-    projectedUsedFraction: NonNegative, sampleCount: z.number().int().positive(), resetAtMs: z.number().int().nonnegative(),
-    method: z.literal('witnessed_linear_pace'), coverage: z.literal('observed_samples'), qualification: z.enum(['confirmed', 'estimated']) }).strict(),
-  WindowSchema.merge(InsufficientSchema).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(WindowSchema, { status: z.literal('available'), outlook: z.enum(['within_even_pace', 'ahead_of_even_pace']),
+    projectedUsedFraction: NonNegative, sampleCount: z.number().check(z.int(), z.positive()), resetAtMs: z.number().check(z.int(), z.nonnegative()),
+    method: z.literal('witnessed_linear_pace'), coverage: z.literal('observed_samples'), qualification: z.enum(['confirmed', 'estimated']) })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)((<A extends z.ZodMiniObject, B extends z.ZodMiniObject>(a: A, b: B) => z.core.util.merge(a, b) as z.ZodMiniObject<z.core.util.Extend<A['shape'], B['shape']>, B['_zod']['config']>)(WindowSchema, InsufficientSchema)),
 ]));
 const ModelHeadroomSchema = lazyZodSchema(() => z.union([
-  WindowSchema.safeExtend({ status: z.literal('available'), modelId: z.string().min(1), remainingFraction: z.number().finite().min(0).max(1),
-    resetAtMs: z.number().int().nonnegative(), method: z.literal('model_specific_quota_meter'), coverage: z.literal('current_meter'), qualification: z.enum(['confirmed', 'estimated']) }).strict(),
-  WindowSchema.merge(InsufficientSchema).safeExtend({ modelId: z.string().min(1).nullable() }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(WindowSchema, { status: z.literal('available'), modelId: z.string().check(z.minLength(1)), remainingFraction: z.number().check(z.minimum(0), z.maximum(1)),
+    resetAtMs: z.number().check(z.int(), z.nonnegative()), method: z.literal('model_specific_quota_meter'), coverage: z.literal('current_meter'), qualification: z.enum(['confirmed', 'estimated']) })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend((<A extends z.ZodMiniObject, B extends z.ZodMiniObject>(a: A, b: B) => z.core.util.merge(a, b) as z.ZodMiniObject<z.core.util.Extend<A['shape'], B['shape']>, B['_zod']['config']>)(WindowSchema, InsufficientSchema), { modelId: z.nullable(z.string().check(z.minLength(1))) })),
 ]));
 const PricePerResetSchema = lazyZodSchema(() => z.union([
-  WindowSchema.safeExtend({ status: z.literal('available'), amount: NonNegative, currency: z.string().regex(/^[A-Z]{3}$/),
-    priceKind: z.enum(['entered', 'list', 'paid']), priceAmount: NonNegative, priceAsOfMs: z.number().int().nonnegative(),
-    priceSource: z.string().min(1), period: z.object({ startAtMs: z.number().int().nonnegative(), endAtMs: z.number().int().nonnegative() }).strict(),
-    recordedResetCount: z.number().int().positive(), coverage: z.literal('recorded_subset'),
-    method: z.literal('period_price_divided_by_recorded_resets') }).strict(),
-  WindowSchema.merge(InsufficientSchema).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(WindowSchema, { status: z.literal('available'), amount: NonNegative, currency: z.string().check(z.regex(/^[A-Z]{3}$/)),
+    priceKind: z.enum(['entered', 'list', 'paid']), priceAmount: NonNegative, priceAsOfMs: z.number().check(z.int(), z.nonnegative()),
+    priceSource: z.string().check(z.minLength(1)), period: z.strictObject({ startAtMs: z.number().check(z.int(), z.nonnegative()), endAtMs: z.number().check(z.int(), z.nonnegative()) }),
+    recordedResetCount: z.number().check(z.int(), z.positive()), coverage: z.literal('recorded_subset'),
+    method: z.literal('period_price_divided_by_recorded_resets') })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)((<A extends z.ZodMiniObject, B extends z.ZodMiniObject>(a: A, b: B) => z.core.util.merge(a, b) as z.ZodMiniObject<z.core.util.Extend<A['shape'], B['shape']>, B['_zod']['config']>)(WindowSchema, InsufficientSchema)),
 ]));
 const RecordedWeekSchema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('available'), startMs: z.number().int().nonnegative(), endMs: z.number().int().nonnegative(),
-    timeZoneOffsetMinutes: z.number().int(), recordedActiveDays: z.number().int().min(0).max(7), recordedEvents: z.number().int().nonnegative(),
-    observedBusyMs: NonNegative.nullable(), observedWaitMs: NonNegative.nullable(), asOfMs: z.number().int().nonnegative().nullable(),
+  z.strictObject({ status: z.literal('available'), startMs: z.number().check(z.int(), z.nonnegative()), endMs: z.number().check(z.int(), z.nonnegative()),
+    timeZoneOffsetMinutes: z.number().check(z.int()), recordedActiveDays: z.number().check(z.int(), z.minimum(0), z.maximum(7)), recordedEvents: z.number().check(z.int(), z.nonnegative()),
+    observedBusyMs: z.nullable(NonNegative), observedWaitMs: z.nullable(NonNegative), asOfMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
     coverage: z.enum(['complete_recorded_history', 'partial']), accountingCoverage: z.enum(['complete', 'partial']),
-    intervalCoverage: z.enum(['complete_for_supplied_facts', 'partial', 'unknown']), method: z.literal('recorded_calendar_week'), humanPresence: z.literal('unknown') }).strict(),
+    intervalCoverage: z.enum(['complete_for_supplied_facts', 'partial', 'unknown']), method: z.literal('recorded_calendar_week'), humanPresence: z.literal('unknown') }),
   InsufficientSchema,
 ]));
 
 /** Read-only facts on the existing Usage result. Every envelope is closed; no input or authority is added. */
-export const UsagePlanInsightsSchema = lazyZodSchema(() => z.object({
-  accounts: z.array(z.object({ source: ConnectedServiceQuotaGetResultV1Schema.shape.source,
-    value: AccountValueSchema, weather: z.array(WeatherSchema), pricePerReset: z.array(PricePerResetSchema), modelHeadroom: z.array(ModelHeadroomSchema) }).strict()),
+export const UsagePlanInsightsSchema = lazyZodSchema(() => z.strictObject({
+  accounts: z.array(z.strictObject({ source: ConnectedServiceQuotaGetResultV1Schema.shape.source,
+    value: AccountValueSchema, weather: z.array(WeatherSchema), pricePerReset: z.array(PricePerResetSchema), modelHeadroom: z.array(ModelHeadroomSchema) })),
   recordedWeek: RecordedWeekSchema,
-}).strict());
+}));
 export type UsagePlanInsights = z.infer<typeof UsagePlanInsightsSchema>;
 
 function accountValue(read: ConnectedServiceQuotaGetResultV1, input: Parameters<typeof projectUsagePlanInsights>[0],
@@ -111,7 +112,7 @@ function accountInsights(read: ConnectedServiceQuotaGetResultV1, input: Paramete
   const weather: UsagePlanInsights['accounts'][number]['weather'] = [];
   const modelHeadroom: UsagePlanInsights['accounts'][number]['modelHeadroom'] = [];
   const pricePerReset: UsagePlanInsights['accounts'][number]['pricePerReset'] = [];
-  const observations = [...(read.history?.entries.map(entry => entry.snapshot) ?? []), ...(current ? [current] : [])]
+  const observations = [...(getProviderAccountUsageQuotaHistoryV1(read)?.entries.map(entry => entry.snapshot) ?? []), ...(current ? [current] : [])]
     .filter(snapshot => snapshot.state === 'loaded_data' && snapshot.recordId === current?.recordId)
     .sort((left, right) => left.observedAtMs - right.observedAtMs);
   for (const meter of current?.meters ?? []) {
