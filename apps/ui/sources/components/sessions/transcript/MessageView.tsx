@@ -665,16 +665,28 @@ function RuntimeIssueRow(props: Readonly<{
   sessionId: string;
   serverId?: string | null;
 }>) {
+  const transcriptSource = useSessionTranscriptSource();
+  const find = useTranscriptFindRow(props.message.id);
+  const findSourceRanges = find?.blocks.find((block) => block.id === 'text')?.sourceRanges;
   const event = React.useMemo<AgentEvent>(() => ({ type: 'message', message: props.message.text }), [props.message.text]);
   return (
-    <TranscriptEventRow
-      event={event}
-      tone="failure"
-      messageId={props.message.id}
-      sessionId={props.sessionId}
-      serverId={props.serverId}
-      createdAt={props.message.createdAt}
-    />
+    <TranscriptJumpAttention
+      sessionAddress={transcriptSource.sessionId === props.sessionId ? normalizeSessionAddress(transcriptSource.serverId, props.sessionId) : null}
+      routeMessageId={buildMessageRouteId(props.message)}
+      seq={resolveTranscriptMessageSeq(props.message)}
+      radius={TRANSCRIPT_EVENT_ROW_HIGHLIGHT_RADIUS}
+      style={styles.eventHighlightSurface}
+    >
+      <TranscriptEventRow
+        event={event}
+        tone="failure"
+        findSourceRanges={findSourceRanges}
+        messageId={props.message.id}
+        sessionId={props.sessionId}
+        serverId={props.serverId}
+        createdAt={props.message.createdAt}
+      />
+    </TranscriptJumpAttention>
   );
 }
 

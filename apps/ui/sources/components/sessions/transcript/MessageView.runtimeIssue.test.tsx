@@ -1,4 +1,6 @@
 import React from 'react';
+import { act } from 'react-test-renderer';
+import { View } from 'react-native';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createReducer, reducer } from '@happier-dev/session-core/reducer';
@@ -6,11 +8,14 @@ import { normalizeRawMessage } from '@happier-dev/session-core/raw';
 import type { Message } from '@happier-dev/session-core/messages';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { renderWithSessionTranscriptSource as renderScreen } from '@/dev/testkit/sessionTranscriptSource';
+import { createTestSessionTranscriptSource, renderWithSessionTranscriptSource as renderScreen } from '@/dev/testkit/sessionTranscriptSource';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
+import { TranscriptFindProvider } from './find/TranscriptFindContext';
+import { applyTranscriptJumpHighlightForJumpResult, clearTranscriptJumpHighlight, TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS } from './navigation/transcriptJumpHighlightStore';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 installMessageViewCommonModuleMocks({
     reactNative: async () => {
@@ -25,35 +30,16 @@ installMessageViewCommonModuleMocks({
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key: string) => key });
     },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: { useSetting: createUseSettingMock({ fallback: () => null }), useSession: () => null },
-        });
-    },
 });
 
-vi.mock('@/components/markdown/MarkdownView', () => ({
-    MarkdownView: (props: any) => React.createElement('MarkdownView', props),
-}));
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: any) => React.createElement('Text', props, props.children),
-    TextInput: (props: any) => React.createElement('TextInput', props, props.children),
-}));
-vi.mock('@/components/sessions/linkedFiles/extractWorkspaceFileMentions', () => ({
-    extractWorkspaceFileMentions: () => [],
-}));
-vi.mock('@/components/sessions/transcript/references/StructuredReferencesRow', () => ({
-    StructuredReferencesRow: () => null,
-}));
-vi.mock('@/utils/sessions/discardedCommittedMessages', () => ({
-    isCommittedMessageDiscarded: () => false,
-}));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
-vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons', Octicons: 'Octicons' }));
-vi.mock('@/sync/sync', () => ({ sync: { submitMessage: vi.fn(), sendMessage: vi.fn() } }));
+vi.mock('@expo/vector-icons', async () => {
+    const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
+    return createExpoVectorIconsMock();
+});
 
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 await import('./MessageView');
 
 const FAILURE_TEXT = 'custom-acp turn failed: Internal error: Cannot connect to API: Unable to connect. Is the computer able to access the url?';
@@ -72,7 +58,9 @@ function projectPersistedRows(rows: readonly Readonly<{ id: string; data: Record
 const runtimeMeta = { source: 'runtime', runtimeIssueCode: 'acp_turn_failed', runtimeIssueSource: 'agent_session_error' };
 
 describe('MessageView runtime failure rows', () => {
-    afterEach(() => {
+    afterEach(async () => {
+        await act(() => clearTranscriptJumpHighlight());
+        vi.useRealTimers();
         standardCleanup();
     });
 
@@ -87,9 +75,11 @@ describe('MessageView runtime failure rows', () => {
 
         const screen = await renderScreen(<MessageView message={failure!} metadata={null} sessionId="s1" />);
         expect(screen.findByTestId('transcript-event-runtime-issue')).not.toBeNull();
-        expect(screen.findAllByType('MarkdownView' as any)).toHaveLength(0);
+        const { MarkdownView } = await import('@/components/markdown/MarkdownView');
+        expect(screen.findAllByType(MarkdownView)).toHaveLength(0);
         expect(screen.getTextContent()).toContain(FAILURE_TEXT);
-        expect(screen.findAllByType('Icon' as any).some((icon: any) => icon.props.name === 'warning')).toBe(true);
+        const { Icon } = await import('@/components/ui/icons/Icon');
+        expect(screen.findAllByType(Icon).some(icon => icon.props.name === 'warning')).toBe(true);
     });
 
     it('renders an input rejection the same way', async () => {
@@ -109,5 +99,77 @@ describe('MessageView runtime failure rows', () => {
         ]);
         const screen = await renderScreen(<MessageView message={messages[0]!} metadata={null} sessionId="s1" />);
         expect(screen.findByTestId('transcript-event-runtime-issue')).toBeNull();
+    });
+
+    it('highlights counted failure and rejection matches, moves the current mark, and clears marks when Find closes', async () => {
+        const { MessageView } = await import('./MessageView');
+        const { createTranscriptFindModel } = await import('./find/useTranscriptFind');
+        const messages = projectPersistedRows([
+            { id: 'failure', data: { type: 'message', message: FAILURE_TEXT }, meta: runtimeMeta },
+            { id: 'rejection', data: { type: 'message', message: 'custom-acp input rejected: Cannot connect to API' },
+                meta: { ...runtimeMeta, runtimeIssueCode: 'acp_input_rejected' } },
+        ]);
+        expect(messages.map(message => message.kind)).toEqual(['agent-text', 'agent-text']);
+        const model = createTranscriptFindModel({
+            readCorpus: () => ({ messages, history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } }),
+            loadPage: null, jumpToTarget: async target => ({ status: 'scrolled', target }), reveal: async () => {},
+        });
+        const screen = await renderScreen(<TranscriptFindProvider store={model.rowStore}>
+            {messages.map(message => <View key={message.id} testID={`issue:${message.realID}`}>
+                <MessageView message={message} metadata={null} sessionId="s1" />
+            </View>)}
+        </TranscriptFindProvider>, createTestSessionTranscriptSource({ messages }));
+        const markedText = (id: string, testID: string) => screen.findHostByTestId(`issue:${id}`)!
+            .findAll(node => typeof node.type === 'string' && node.props.testID === testID)
+            .map(node => node.children.join('')).join('');
+        try {
+            await act(async () => { model.setQuery('Cannot connect to API'); await model.settled(); });
+            expect(model.status).toMatchObject({ current: 1, total: 2 });
+            expect(markedText('failure', 'find-match-current')).toBe('Cannot connect to API');
+            expect(markedText('rejection', 'find-match-all')).toBe('Cannot connect to API');
+            await act(async () => { model.step(1); await model.settled(); });
+            expect(markedText('failure', 'find-match-current')).toBe('');
+            expect(markedText('failure', 'find-match-all')).toBe('Cannot connect to API');
+            expect(markedText('rejection', 'find-match-current')).toBe('Cannot connect to API');
+            await act(() => model.close());
+            expect(screen.findAllHostsByTestId('find-match-current')).toHaveLength(0);
+            expect(screen.findAllHostsByTestId('find-match-all')).toHaveLength(0);
+        } finally {
+            await screen.unmount();
+            model.dispose();
+        }
+    });
+
+    it('shows landing attention only for the addressed failure or rejection, including seq fallback, and expires it', async () => {
+        const { MessageView } = await import('./MessageView');
+        const messages = projectPersistedRows([
+            { id: 'failure', data: { type: 'message', message: FAILURE_TEXT }, meta: runtimeMeta },
+            { id: 'rejection', data: { type: 'message', message: 'custom-acp input rejected: Cannot connect to API' },
+                meta: { ...runtimeMeta, runtimeIssueCode: 'acp_input_rejected' } },
+        ]);
+        const screen = await renderScreen(<>
+            {messages.map(message => <View key={message.id} testID={`issue:${message.realID}`}>
+                <MessageView message={message} metadata={null} sessionId="s1" serverId="prop-home" />
+            </View>)}
+        </>, createTestSessionTranscriptSource({ sessionId: 's1', serverId: 'home-a', messages }));
+        const rings = (id: string) => screen.findHostByTestId(`issue:${id}`)!
+            .findAll(node => typeof node.type === 'string' && node.props.testID === 'transcript-jump-highlight');
+        vi.useFakeTimers();
+        await act(() => applyTranscriptJumpHighlightForJumpResult({ serverId: 'home-b', sessionId: 's1' }, {
+            status: 'scrolled', target: { kind: 'route-message-id', routeMessageId: 'server:failure' },
+        }));
+        expect(screen.findAllHostsByTestId('transcript-jump-highlight')).toHaveLength(0);
+        await act(() => applyTranscriptJumpHighlightForJumpResult({ serverId: 'home-a', sessionId: 's1' }, {
+            status: 'scrolled', target: { kind: 'route-message-id', routeMessageId: 'server:failure' },
+        }));
+        expect(rings('failure')).toHaveLength(1);
+        expect(rings('rejection')).toHaveLength(0);
+        await act(() => applyTranscriptJumpHighlightForJumpResult({ serverId: 'home-a', sessionId: 's1' }, {
+            status: 'window-rendered', target: { kind: 'seq', seq: 2 }, windowId: 'issues',
+        }));
+        expect(rings('failure')).toHaveLength(0);
+        expect(rings('rejection')).toHaveLength(1);
+        await act(() => vi.advanceTimersByTime(TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS));
+        expect(screen.findAllHostsByTestId('transcript-jump-highlight')).toHaveLength(0);
     });
 });
