@@ -183,7 +183,10 @@ describe('opaque browser bundle boundary', () => {
             for (const mode of ['none', 'origins', 'open', 'shareOff'] as const) {
                 await withPage(async page => {
                     const requests: string[] = [];
-                    for (const hostname of ['approved.invalid', 'other.invalid']) {
+                    // An opaque srcdoc origin does not make CSP 'self' harmless:
+                    // also probe the embedding origin, beyond the remote sites.
+                    const hostnames = ['approved.invalid', 'other.invalid', new URL(hostUrl).hostname];
+                    for (const hostname of hostnames) {
                         await page.route(`https://${hostname}/**`, async route => {
                             requests.push(route.request().url());
                             const path = new URL(route.request().url()).pathname;
@@ -217,7 +220,7 @@ describe('opaque browser bundle boundary', () => {
                                 new FontFace('RemoteFont', 'url(' + origin + '/font.ttf)').load().then(() => true, () => false),
                             ]); return results;
                         };
-                        Promise.all(['approved.invalid', 'other.invalid'].map(probe)).then(results => document.body.dataset.network = JSON.stringify(results));
+                        Promise.all(['approved.invalid', 'other.invalid', 'happier-host.invalid'].map(probe)).then(results => document.body.dataset.network = JSON.stringify(results));
                     </script>`] }), requestedCapabilities };
                     await page.evaluate(async ({ input, viewer, mode, requestedCapabilities }) => {
                         const api = Reflect.get(globalThis, '__E2__');
@@ -230,7 +233,7 @@ describe('opaque browser bundle boundary', () => {
                     }, { input, viewer, mode, requestedCapabilities });
                     const frame = page.frames().find(candidate => candidate !== page.mainFrame())!;
                     await frame.waitForFunction(() => document.body.dataset.network);
-                    const expected = mode === 'open' ? [true, true] : mode === 'origins' ? [true, false] : [false, false];
+                    const expected = mode === 'open' ? [true, true, true] : mode === 'origins' ? [true, false, false] : [false, false, false];
                     expect(JSON.parse(await frame.evaluate(() => document.body.dataset.network!))).toEqual(expected.map(allowed => Array(5).fill(allowed)));
                     expect(requests.length).toBe(expected.filter(Boolean).length * 5);
                     expect(await frame.evaluate(() => Reflect.get(window, 'origin'))).toBe('null');
