@@ -17,7 +17,7 @@ import { useCompanionNativePanGesture } from './useCompanionNativePanGesture';
 export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProps): React.ReactElement {
     const nativeRef = useAnimatedRef<View>();
     const noDragRegions = useCompanionNoDragRegions();
-    const { rect, availableRect, avoidRects, aspectRatio, chromeHeight, minWidth, bodyRect } = props;
+    const { rect, availableRect, avoidRects, aspectRatio, chromeHeight, minWidth, bodyRect, moveInput } = props;
     const enabled = props.mode === 'floating';
     const width = useSharedValue(rect.width);
     const height = useSharedValue(rect.height);
@@ -34,7 +34,7 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
     }), [availableRect, rect.width, rect.height]);
     const pan = useCompanionNativePanGesture({
         enabled,
-        admissionKey: props.moveInput,
+        admissionKey: moveInput,
         bounds,
         initialPoint: { x: rect.x, y: rect.y },
         noDragRegions,
@@ -51,7 +51,7 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
             const grip = HAPPIER_FLOATING_FRAME_METRICS.gripSize * 2;
             if (x < 0 || x > width.value || y < 0 || y > height.value) return false;
             if (x <= grip && y >= bodyBottom - grip && y <= bodyBottom) return false;
-            return props.moveInput === 'surface' || y < bodyTop || y > bodyBottom;
+            return moveInput === 'surface' || y < bodyTop || y > bodyBottom;
         },
         releaseMotion: props.releaseMotion,
         motionPolicy: props.reducedMotion ? 'snap' : 'animate',
@@ -72,17 +72,18 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
             else props.onModeChange('docked');
         },
     });
+    const { translateX, translateY } = pan;
     // Movement and resize are two bindings over the same companion pan/lifecycle owner, just as
     // web uses two companion pointer sessions. Resize never projects a throw or publishes frames.
     const resize = useCompanionNativePanGesture({
-        enabled, admissionKey: props.moveInput,
+        enabled, admissionKey: `${moveInput}:${rect.x}:${rect.y}`,
         initialPoint: { x: rect.width, y: 0 },
         bounds: { minX: 0, maxX: availableRect.width, minY: 0, maxY: 0 },
         noDragRegions: [],
         canStartAt: () => {
             'worklet';
-            resizeRight.value = pan.translateX.value + width.value;
-            resizeY.value = pan.translateY.value;
+            resizeRight.value = translateX.value + width.value;
+            resizeY.value = translateY.value;
             return true;
         },
         resolveDragPoint: ({ start, translation }) => {
@@ -95,22 +96,22 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
             });
             width.value = next.width;
             height.value = next.height;
-            pan.translateX.value = next.x;
-            pan.translateY.value = next.y;
+            translateX.value = next.x;
+            translateY.value = next.y;
             return { x: next.width, y: 0 };
         },
         releaseMotion: props.releaseMotion,
         motionPolicy: 'snap', positionPublication: 'release',
         onDragRelease: () => {
             const placement = resolveFloatingFrameRect({
-                rect: { x: pan.translateX.value, y: pan.translateY.value, width: width.value, height: height.value },
+                rect: { x: translateX.value, y: translateY.value, width: width.value, height: height.value },
                 availableRect, avoidRects, aspectRatio, chromeHeight, minWidth,
             });
             if (!placement.fits) { props.onModeChange('docked'); return; }
             width.value = placement.rect.width;
             height.value = placement.rect.height;
-            pan.translateX.value = placement.rect.x;
-            pan.translateY.value = placement.rect.y;
+            translateX.value = placement.rect.x;
+            translateY.value = placement.rect.y;
             props.onRectChange(placement.rect, { kind: 'settle' });
         },
     });
@@ -121,9 +122,9 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
         width: width.value, height: Math.max(0, height.value - chromeHeight),
     }));
     const motion = React.useMemo(() => ({
-        x: pan.translateX, y: pan.translateY, anchorX: rect.x, anchorY: rect.y,
+        x: translateX, y: translateY, anchorX: rect.x, anchorY: rect.y,
         width, height, chromeHeight, overlay: portalActive ? overlay : null, onPortalActiveChange: setPortalActive,
-    }), [pan.translateX, pan.translateY, rect.x, rect.y, width, height, chromeHeight, overlay, portalActive]);
+    }), [translateX, translateY, rect.x, rect.y, width, height, chromeHeight, overlay, portalActive]);
 
     return <RetainedPresentationNativeMotionContext.Provider value={props.mode === 'docked' ? null : motion}>
         <GestureDetector gesture={pan.gesture}>

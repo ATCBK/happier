@@ -22,12 +22,41 @@ import {
     createRetainedPresentationSlotsStore,
     RetainedPresentationSlotBinder,
     RetainedPresentationSlotsProvider,
+    RetainedPresentationNativeMotionContext,
+    type RetainedPresentationNativeMotion,
 } from '@/components/ui/presentation/retainedPresentationSlots';
 import { NativeFloatingFrame } from './NativeFloatingFrame';
 
 beforeEach(() => { measurements.pageX = 40; measurements.pageY = 50; });
 
 describe('native FloatingFrame binding', () => {
+    it('abandons an active resize on control takeover and restores the controlled size', async () => {
+        const onRectChange = vi.fn();
+        const motion: { current: RetainedPresentationNativeMotion | null } = { current: null };
+        function Picture() {
+            motion.current = React.useContext(RetainedPresentationNativeMotionContext);
+            return <View />;
+        }
+        const frame = (moveInput: 'surface' | 'chrome') => <FloatingFrame
+            mode="floating" rect={{ x: 40, y: 50, width: 200, height: 165 }}
+            availableRect={{ x: 0, y: 0, width: 800, height: 600 }} aspectRatio={1.6}
+            moveInput={moveInput} nativeBinding={NativeFloatingFrame} controls={<View />}
+            accessibilityLabel="Viewer" onRectChange={onRectChange} onModeChange={vi.fn()}><Picture /></FloatingFrame>;
+        const screen = await renderScreen(frame('surface'));
+        const gesture = screen.findAllByType('GestureDetector')[1].props.gesture as TestGestureChain;
+        await act(async () => {
+            gesture.__handlers.onBegin({ absoluteX: 50, absoluteY: 205 });
+            gesture.__handlers.onUpdate({ translationX: -30, translationY: 0 });
+        });
+        await screen.update(frame('chrome'));
+        await act(async () => {
+            gesture.__handlers.onEnd({ translationX: -30, translationY: 0 }, false);
+            gesture.__handlers.onFinalize({}, false);
+        });
+        expect(onRectChange).not.toHaveBeenCalled();
+        expect([motion.current!.width!.value, motion.current!.height!.value]).toEqual([200, 165]);
+        await screen.unmount();
+    });
     it('resizes a controlled retained body from its portal grip without remounting or publishing each frame', async () => {
         const store = createRetainedPresentationSlotsStore();
         const onRectChange = vi.fn();
