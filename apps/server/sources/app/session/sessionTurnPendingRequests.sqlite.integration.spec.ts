@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
-import { applySessionTurnMutation } from "./sessionWriteService";
+import { applySessionTurnMutation, updateSessionAgentState } from "./sessionWriteService";
 
 describe("terminal session turns clear pending request projection on SQLite", () => {
     let harness: LightSqliteHarness;
@@ -31,7 +31,11 @@ describe("terminal session turns clear pending request projection on SQLite", ()
         },
     });
 
-    it("keeps pending requests while the latest turn runs and clears them when it ends", async () => {
+    it.each([
+        ["complete", "completed"],
+        ["cancel", "cancelled"],
+        ["end_session", "cancelled"],
+    ] as const)("keeps pending requests while running and clears them on %s", async (action, status) => {
         const account = await db.account.create({ data: { publicKey: `pk-${randomUUID()}` } });
         const pendingRequestObservedAt = new Date(150);
         const session = await db.session.create({
@@ -70,14 +74,14 @@ describe("terminal session turns clear pending request projection on SQLite", ()
                 v: 1,
                 sessionId: session.id,
                 mutationId: `complete-${randomUUID()}`,
-                action: "complete",
+                action,
                 turnId,
                 observedAt: 200,
             },
         })).resolves.toMatchObject({
             ok: true,
             didApply: true,
-            latestTurnStatus: "completed",
+            latestTurnStatus: status,
             pendingRequestProjection: {
                 pendingPermissionRequestCount: 0,
                 pendingUserActionRequestCount: 0,
@@ -90,4 +94,38 @@ describe("terminal session turns clear pending request projection on SQLite", ()
             pendingRequestObservedAt: null,
         });
     });
+    it("preserves newer pending requests when enriching a completed latest turn", async () => {
+        const account = await db.account.create({ data: { publicKey: `pk-${randomUUID()}` } });
+        const session = await db.session.create({
+            data: { accountId: account.id, tag: `tag-${randomUUID()}`, metadata: "{}" },
+        });
+        const turnId = `turn-${randomUUID()}`;
+        for (const [action, observedAt] of [["begin", 100], ["complete", 200]] as const) {
+            await expect(applySessionTurnMutation({
+                actorUserId: account.id,
+                mutation: { v: 1, sessionId: session.id, mutationId: randomUUID(), action, turnId, observedAt },
+            })).resolves.toMatchObject({ ok: true, didApply: true });
+        }
+        await expect(updateSessionAgentState({
+            actorUserId: account.id,
+            sessionId: session.id,
+            expectedVersion: 0,
+            agentStateCiphertext: "{}",
+            pendingPermissionRequestCount: 1,
+            pendingUserActionRequestCount: 1,
+        })).resolves.toMatchObject({ ok: true });
+        const pending = await readPendingRequestProjection(session.id);
+        const result = await applySessionTurnMutation({
+            actorUserId: account.id,
+            mutation: {
+                v: 1, sessionId: session.id, mutationId: randomUUID(),
+                action: "append_transcript_anchors", turnId, observedAt: 300,
+                transcriptAnchors: { assistantMessageSeqs: [1] },
+            },
+        });
+        expect(result).toMatchObject({ ok: true, didApply: true });
+        expect(result).not.toHaveProperty("pendingRequestProjection");
+        await expect(readPendingRequestProjection(session.id)).resolves.toEqual(pending);
+    });
+
 });

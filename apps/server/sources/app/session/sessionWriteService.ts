@@ -44,6 +44,7 @@ import {
 } from "./attention/sessionAttentionFacts";
 import {
     applySessionTurnMutationToTurns,
+    resolveTerminalStatus,
     type SessionTurnNoOpReason,
 } from "./turns/applySessionTurnMutation";
 import type { PrimaryTurnMaterializedProjection } from "./turns/materializePrimaryTurnProjection";
@@ -188,7 +189,7 @@ export function resolveReadyProjectionEventType(params: Readonly<{
         : undefined;
 }
 
-function selectSessionActivityBadgeInputs() {
+export function selectSessionActivityBadgeInputs() {
     return {
         seq: true,
         // Not a badge input: `resolveSessionUnreadSinceWrite` decides the edge against the *stored*
@@ -519,7 +520,7 @@ export type EnsureSessionEditAccessResult =
     | { ok: false; error: "session-not-found" | "forbidden" };
 
 // Pending request counts ride on best-effort agent-state writes, while the turn status is durable.
-// Once the latest turn is terminal no request can still be waiting on it, so its end clears them.
+// A durable lifecycle end of the latest turn clears its pending request projection.
 const TERMINAL_TURN_PENDING_REQUEST_PROJECTION = {
     pendingPermissionRequestCount: 0,
     pendingUserActionRequestCount: 0,
@@ -758,7 +759,7 @@ export async function applySessionTurnMutationInTx(params: Readonly<{
     });
     const pendingRequestProjection = decision.apply
         && decision.materialized.latestTurnId === decision.changedTurn.turnId
-        && isTerminalTurnStatus(decision.materialized.latestTurnStatus)
+        && resolveTerminalStatus(params.mutation.action) !== null
         ? TERMINAL_TURN_PENDING_REQUEST_PROJECTION
         : null;
 

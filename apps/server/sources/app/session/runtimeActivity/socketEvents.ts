@@ -14,6 +14,8 @@ import {
     type SessionRuntimeIssueV1,
 } from '@happier-dev/protocol';
 
+import type { TerminalTurnPendingRequestProjection } from '@/app/session/sessionWriteService';
+
 import type { SessionParticipantCursor } from '@/app/session/changeTracking/markSessionParticipantsChanged';
 import type { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
 import { resolvePresenceTimeoutConfig } from '@/app/presence/timeout';
@@ -66,6 +68,7 @@ export type PublishRuntimeActivitySnapshotProjection = (params: Readonly<{
     latestTurnStatusObservedAt?: number | null;
     lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
     badgeAttentionChanged?: boolean;
+    pendingRequestProjection?: TerminalTurnPendingRequestProjection;
     participantCursor: SessionParticipantCursor;
 }>) => Promise<void>;
 
@@ -90,6 +93,7 @@ export function registerSessionRuntimeActivitySnapshotSocketEvent(params: Readon
         latestTurnStatusObservedAt?: number | null;
         lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
         badgeAttentionChanged?: boolean;
+        pendingRequestProjection?: TerminalTurnPendingRequestProjection;
     }>): Promise<void> => {
         await Promise.all(published.participantCursors.map(async (participantCursor) => {
             await params.publish({
@@ -104,6 +108,9 @@ export function registerSessionRuntimeActivitySnapshotSocketEvent(params: Readon
                     ? { latestTurnStatusObservedAt: published.latestTurnStatusObservedAt }
                     : {}),
                 ...('lastRuntimeIssue' in published ? { lastRuntimeIssue: published.lastRuntimeIssue } : {}),
+                ...(published.pendingRequestProjection
+                    ? { pendingRequestProjection: published.pendingRequestProjection }
+                    : {}),
                 ...(typeof published.badgeAttentionChanged === 'boolean'
                     ? { badgeAttentionChanged: published.badgeAttentionChanged }
                     : {}),
@@ -239,6 +246,7 @@ export function registerSessionRuntimeActivitySnapshotSocketEvent(params: Readon
                     activeAt: result.activeAt,
                     ...(result.projection ? { projection: result.projection } : {}),
                     ...(result.turnProjection ?? {}),
+                    badgeAttentionChanged: result.badgeAttentionChanged,
                 });
             }
             acknowledge?.(SessionRuntimeActivityCloseAckSchema.parse({
@@ -345,6 +353,7 @@ export function registerSessionRuntimeActivitySnapshotSocketEvent(params: Readon
                 activeAt: result.activeAt,
                 ...(result.projection ? { projection: result.projection } : {}),
                 ...(result.turnProjection ?? {}),
+                badgeAttentionChanged: result.badgeAttentionChanged,
             });
         } catch (error) {
             warn(

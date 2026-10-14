@@ -10,6 +10,7 @@ import {
     type ClientConnection,
     eventRouter,
 } from "@/app/events/eventRouter";
+import type { TerminalTurnPendingRequestProjection } from "@/app/session/sessionWriteService";
 import type { SessionParticipantCursor } from "@/app/session/changeTracking/markSessionParticipantsChanged";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 
@@ -25,6 +26,7 @@ export async function publishSessionPublisherLifecycleUpdate(params: Readonly<{
     latestTurnStatusObservedAt?: number | null;
     lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
     badgeAttentionChanged?: boolean;
+    pendingRequestProjection?: TerminalTurnPendingRequestProjection;
     skipSenderAccountId?: string;
     skipSenderConnection?: ClientConnection;
 }>): Promise<void> {
@@ -52,6 +54,7 @@ export async function publishSessionPublisherLifecycleUpdate(params: Readonly<{
                         ? { latestTurnStatusObservedAt: params.latestTurnStatusObservedAt }
                         : {}),
                     ...("lastRuntimeIssue" in params ? { lastRuntimeIssue: params.lastRuntimeIssue } : {}),
+                    ...params.pendingRequestProjection,
                 },
             ),
             recipientFilter: { type: "all-interested-in-session", sessionId: params.sessionId },

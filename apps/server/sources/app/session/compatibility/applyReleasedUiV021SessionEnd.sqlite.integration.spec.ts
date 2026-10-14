@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { db } from "@/storage/db";
 import { applySessionTurnMutation } from "@/app/session/sessionWriteService";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+
+import { eventRouter } from "@/app/events/eventRouter";
 
 import { applyReleasedUiV021SessionEnd } from "./applyReleasedUiV021SessionEnd";
 
@@ -32,6 +34,9 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
                 tag: `tag-${randomUUID()}`,
                 metadata: "{}",
                 active: true,
+                pendingPermissionRequestCount: 1,
+                pendingUserActionRequestCount: 1,
+                pendingRequestObservedAt: new Date(1_000),
                 lastActiveAt: new Date(1_000),
                 runtimeActivityState: "active",
                 runtimeActivityActiveCount: 1,
@@ -56,6 +61,7 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
             sessionId: session.id,
             observedAt: 2_000,
         })).resolves.toEqual({ status: "rejected", reason: "unauthorized" });
+        const emittedUpdates = vi.spyOn(eventRouter, "emitUpdate");
         await expect(applyReleasedUiV021SessionEnd({
             accountId: owner.id,
             sessionId: session.id,
@@ -67,6 +73,17 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
             observedAt: 2_000,
         })).resolves.toEqual({ status: "unchanged" });
 
+        expect(emittedUpdates).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({
+                body: expect.objectContaining({
+                    latestTurnStatus: "cancelled",
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    pendingRequestObservedAt: null,
+                }),
+            }),
+        }));
+        emittedUpdates.mockRestore();
         await expect(db.session.findUniqueOrThrow({
             where: { id: session.id },
             select: {

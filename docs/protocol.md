@@ -81,6 +81,9 @@ Field names below match on-wire payloads.
   - `body`: `{ t: "update-session", id, metadata?, agentState? }`
   - `metadata`: `{ value, version }` or null
   - `agentState`: `{ value, version }` or null
+  - Optional pending-request projections use `pendingPermissionRequestCount`, `pendingUserActionRequestCount`, and nullable `pendingRequestObservedAt`.
+  - Development correction for #191: an applied terminal lifecycle mutation for the latest turn clears these fields in the same transaction as its turn status. Turn and publisher-close updates carry the committed zero counts and null timestamp to interested participants, including released-UI Stop. Transcript-anchor, provider-id, and rollback updates do not clear newer requests merely because the turn is already terminal.
+  - Agent-state delivery remains best-effort in 0.2. A lost clear within a running turn or a later positive agent-state write can still leave stale counts; this correction does not impose an ordering contract across the two transports.
 
 - `delete-session`
   - `body`: `{ t: "delete-session", sid }`

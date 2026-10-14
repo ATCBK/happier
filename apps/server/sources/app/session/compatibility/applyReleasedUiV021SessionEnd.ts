@@ -147,6 +147,7 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
             active: false,
             latestTurnStatus,
             lastRuntimeIssue,
+            ...turn?.pendingRequestProjection,
         });
         return {
             status: "applied" as const,
@@ -157,6 +158,7 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
             activityChanged: activity.status === "applied",
             activityProjection: nextProjection,
             turnChanged: turn?.didApply === true,
+            pendingRequestProjection: turn?.pendingRequestProjection,
             latestTurnId: turn?.latestTurnId ?? session.latestTurnId,
             latestTurnStatus,
             latestTurnStatusObservedAt,
@@ -190,13 +192,11 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
                         latestTurnStatus: result.latestTurnStatus,
                         latestTurnStatusObservedAt: result.latestTurnStatusObservedAt,
                         lastRuntimeIssue: result.lastRuntimeIssue,
+                        ...result.pendingRequestProjection,
                     } : {}),
                 },
             ),
             recipientFilter: { type: "all-interested-in-session", sessionId: params.sessionId },
-            ...(accountId === params.accountId && params.connection
-                ? { skipSenderConnection: params.connection }
-                : {}),
         });
     }));
     await refreshSessionParticipantBadgePushes({

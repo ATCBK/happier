@@ -55,6 +55,10 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
 
     it('writes through the exact registered socket and emits every participant cursor once', async () => {
         const seeded = await seed();
+        await db.session.update({
+            where: { id: seeded.sessionId },
+            data: { pendingUserActionRequestCount: 1 },
+        });
         const handlers = new Map<string, Handler>();
         const socket = {
             on: vi.fn((event: string, handler: Handler) => { handlers.set(event, handler); }),
@@ -111,6 +115,7 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
         expect(publishedValues).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 active: false,
+                badgeAttentionChanged: true,
                 activeAt: expect.any(Number),
                 projection: expect.objectContaining({ state: 'unknown', activeCount: 0, revision: 2 }),
             }),
@@ -147,6 +152,10 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
             },
         })).resolves.toMatchObject({ ok: true, didApply: true });
 
+        await db.session.update({
+            where: { id: seeded.sessionId },
+            data: { pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 1, pendingRequestObservedAt: new Date() },
+        });
         const handlers = new Map<string, Handler>();
         const socket = {
             on: vi.fn((event: string, handler: Handler) => { handlers.set(event, handler); }),
@@ -184,17 +193,29 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
                 latestTurnId: true,
                 latestTurnStatus: true,
                 thinking: true,
+                pendingPermissionRequestCount: true,
+                pendingUserActionRequestCount: true,
+                pendingRequestObservedAt: true,
             },
         })).resolves.toEqual({
             latestTurnId: turnId,
             latestTurnStatus: 'cancelled',
             thinking: false,
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+            pendingRequestObservedAt: null,
         });
         expect(publishedValues).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 latestTurnId: turnId,
                 latestTurnStatus: 'cancelled',
                 latestTurnStatusObservedAt: expect.any(Number),
+                badgeAttentionChanged: true,
+                pendingRequestProjection: {
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    pendingRequestObservedAt: null,
+                },
             }),
         ]));
     });

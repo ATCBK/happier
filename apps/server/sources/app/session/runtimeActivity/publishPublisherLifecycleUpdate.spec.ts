@@ -66,12 +66,22 @@ describe("publishSessionPublisherLifecycleUpdate", () => {
             participantCursors: [{ accountId: "owner", cursor: 20 }],
             active: false,
             activeAt: 130,
+            pendingRequestProjection: {
+                pendingPermissionRequestCount: 0,
+                pendingUserActionRequestCount: 0,
+                pendingRequestObservedAt: null,
+            },
         });
 
         expect(emitUpdate).toHaveBeenCalledWith(expect.objectContaining({
             payload: expect.objectContaining({
                 seq: 20,
-                body: expect.objectContaining({ active: false, activeAt: 130 }),
+                body: expect.objectContaining({
+                    active: false, activeAt: 130,
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    pendingRequestObservedAt: null,
+                }),
             }),
         }));
     });
