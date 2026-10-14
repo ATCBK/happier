@@ -179,16 +179,28 @@ export function createExternalSessionFollowHostOperation(params: Readonly<{
                 );
             const {
                 providerOps,
-                resource,
+                resource: resolvedResource,
                 occurrenceId,
             } = resolved;
-            if (occurrenceId !== request.occurrenceId) {
+            if (!request.providerOps && occurrenceId !== request.occurrenceId) {
                 return unavailable('plugin_generation_retired');
             }
             const observation = await resolveExternalSessionObservationLinkInput({
                 linked: loaded.session,
                 sessionId: request.sessionId,
             });
+            // A runner-carried codec is admitted by its exact service binding;
+            // that binding id is not the daemon observer's plugin occurrence.
+            // Native observation and scoped-follow custody stay with the
+            // canonical daemon resource, retaining both retirement signals.
+            const resource = request.providerOps && observation ? {
+                linkGeneration: loaded.session.linkGeneration,
+                occurrenceId: observation.resource.occurrenceId,
+                retirementSignal: AbortSignal.any([
+                    ...(request.retirementSignal ? [request.retirementSignal] : []),
+                    ...(observation.resource.retirementSignal ? [observation.resource.retirementSignal] : []),
+                ]),
+            } : resolvedResource;
             const canObserveTranscript =
                 canAttemptCanonicalExternalSessionLiveFollow({
                     observation,
@@ -209,6 +221,7 @@ export function createExternalSessionFollowHostOperation(params: Readonly<{
             const combinedSignal = AbortSignal.any([
                 ...(request.options.signal ? [request.options.signal] : []),
                 ...(request.retirementSignal ? [request.retirementSignal] : []),
+                ...(resource.retirementSignal ? [resource.retirementSignal] : []),
             ]);
             let delivery = Promise.resolve();
             const emit = (event: HostExternalTranscriptFollowEvent): Promise<void> => {

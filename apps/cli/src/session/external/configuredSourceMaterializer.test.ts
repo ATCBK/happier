@@ -62,6 +62,9 @@ import { applyConnectedServiceStateSharingDescriptor } from '@/daemon/connectedS
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExternalSessionSourceSurface } from '@/session/actions/externalSessions/providerOpsResolution';
+import { loadLinkedExternalSessionFromRaw } from '@/api/session/external/takeover/loadLinkedExternalSession';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createExternalSessionSourceKeyOwnerFromAgentProjection } from '@/plugins/projection/registry/externalSessionSources';
 
 import {
   createConfiguredPluginExternalSessionsAdapter as createConfiguredPluginExternalSessionsAdapterOwner,
@@ -312,6 +315,7 @@ function providerOpsFromRealContribution(
     resolveLinkIdentity: surface.resolveLinkIdentity,
     pageTranscript: surface.pageTranscript,
     readAfterTranscript: surface.readAfterTranscript,
+    canonicalizeLinkedSession: surface.canonicalizeLinkedSession,
   };
 }
 
@@ -1357,6 +1361,24 @@ describe('configured external-session source materializer', () => {
       followProviderSession: async (request, listener) => {
         const target = await resolveTarget();
         if (target.status === 'unavailable') return target;
+        // startDaemon's installed follow owner re-admits the hosted Session
+        // through this loader before any provider page. Do not bypass that
+        // boundary with a direct pageTranscript call or drop the real linked
+        // identity normalizer from the execution surface.
+        const hosted = await loadLinkedExternalSessionFromRaw({
+          credentials: { token: 'hosted-test-account', encryption: null }, accountEncryptionMode: 'plain',
+          rawSession: createSessionRecordFixture({ id: 'claude-activity', encryptionMode: 'plain',
+            currentStorageState: 'hosted', metadata: JSON.stringify({ machineId: 'machine-1', path: cwd,
+              flavor: 'claude', claudeSessionId: remoteSessionId }) }),
+          expectedIdentity: { agentId: 'claude', machineId: 'machine-1', remoteSessionId, source: target.source },
+        }, {
+          resolveExternalSessionProviderOps: async () => ops,
+          resolveExternalSessionSourceKeyOwner: async (agentId, source) => createExternalSessionSourceKeyOwnerFromAgentProjection({
+            agents: [{ id: 'claude', richDefinition: { provenance: 'first_party',
+              definition: readManifestAgentContribution(CLAUDE_PLUGIN_MANIFEST, 'claude') } }],
+          }, agentId, source),
+        });
+        if (!hosted.ok) return { status: 'unavailable', code: hosted.errorCode };
         const page = await ops.pageTranscript!({ source: target.source, remoteSessionId,
           direction: request.replay === 'fresh' ? 'newer' : 'older', projection: 'terminal', maxItems: 200, maxBytes: 524_288 });
         if (!page.tailCursor) throw new Error('Expected an ordered source baseline');
