@@ -40,6 +40,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { act } from 'react-test-renderer';
 import * as platformDigest from '@/platform/digest';
 import { projectUsagePlans } from '@/components/settings/usage/widgets/plans/usagePlansModel';
+import { usageCoverageSummary } from '@/components/settings/usage/widgets/usageBodyKit';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 
 const scmTransport = vi.hoisted(() => vi.fn());
@@ -868,7 +869,9 @@ describe('usage query captured Resource adapter', () => {
     const snapshot = { v: 1 as const, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
       providerId: 'codex', accountSubject: { kind: 'providerSubject' as const, id: 'provider-work' },
       observedAtMs: now, fetchedAtMs: now, staleAfterMs: 60_000, source: 'providerHttp' as const,
-      confidence: 'confirmed' as const, state: 'loaded_empty' as const, meters: [] };
+      confidence: 'confirmed' as const, state: 'loaded_data' as const, meters: [{ meterId: 'current', label: 'Current',
+        used: 40, limit: 100, remaining: 60, utilizationPct: 40, unit: 'requests', status: 'ok' as const,
+        resetsAt: now + 1000, windowDurationMs: 1000, details: {} }] };
     const quota = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: now, staleAfterMs: 60_000,
       planLabel: null, accountLabel: null, meters: [] };
     ProviderAccountUsageSnapshotV1Schema.parse(snapshot);
@@ -956,16 +959,24 @@ describe('usage query captured Resource adapter', () => {
       expect(fullRead?.unusedCapacity).toMatchObject({ historyStatus: 'returned_page', windows: [{ value: {
         status: 'available', method: 'terminal_observation', qualification: 'confirmed', sampleCount: 2 } }] });
       expect(fullRead?.unusedCapacity?.windows[0]?.value).toHaveProperty('unusedAmount', expect.closeTo(30));
+      const settledSlice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+      const settledPlans = projectUsagePlans(settledSlice.quota ?? [], now, settledSlice.pools, settledSlice.sources);
+      expect(settledPlans.tightest?.window.remainingFraction).toBe(0.6);
       holdLaterHistory = true;
       accountingResponse = { ...value, totals: { ...value.totals, eventCount: 2 } };
       const refreshingHistory = entry.refresh();
       await expect.poll(() => {
         const slice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0];
-        return slice?.accounting?.totals.eventCount === 2 && slice.quota?.[0]?.history?.entries.length === 1;
+        return slice?.accounting?.totals.eventCount === 2 && heldHistoryResponse !== undefined;
       }).toBe(true);
       expect(entry.getSnapshot().pending).toBe('refresh');
-      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0]).toMatchObject({ current: snapshot,
-        history: { nextCursor: { id: 'first' } }, unusedCapacity: { historyStatus: 'partial' } });
+      const refreshingSlice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+      expect.soft(refreshingSlice.sources.filter(state => state.source.startsWith('quota')))
+        .toEqual(settledSlice.sources.filter(state => state.source.startsWith('quota')));
+      expect.soft(projectUsagePlans(refreshingSlice.quota ?? [], now, refreshingSlice.pools, refreshingSlice.sources).tightest)
+        .toEqual(settledPlans.tightest);
+      expect.soft(usageCoverageSummary(refreshingSlice, ['quota'])).toBe(usageCoverageSummary(settledSlice, ['quota']));
+      expect(refreshingSlice.quota?.[0]).toEqual(settledSlice.quota?.[0]);
       holdLaterHistory = false;
       laterHistory.resolve(heldHistoryResponse!);
       await refreshingHistory;

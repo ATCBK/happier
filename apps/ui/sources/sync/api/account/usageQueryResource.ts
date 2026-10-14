@@ -247,12 +247,21 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
         endAtMs: Math.max(...periods.map(period => period.endMs ?? nowMs)) };
     if (range.endAtMs <= range.startAtMs) return { status: 'unknown', errorCode: 'quota_query_range_empty' };
     const retainedBySource = new Map(opened.value?.map(value => [createCanonicalJsonSigningInput(value.source), value]));
+    for (const value of previous?.results.flatMap(result => result.quota ?? []) ?? []) {
+        const key = createCanonicalJsonSigningInput(value.source);
+        const observed = retainedBySource.get(key);
+        if (!observed?.current || observed.current.recordId === value.current?.recordId) retainedBySource.set(key, value);
+    }
     const progressValues = scope.sources.map(({ source }) => retainedBySource.get(createCanonicalJsonSigningInput(source)) ?? null);
     // Account reads settle independently. Keep their qualified identity even
     // when a failed read has no current facts to disclose.
-    const sources: UsageQuerySourceState[] = scope.sources.map(({ source }) => ({
-        source: `quota:${createCanonicalJsonSigningInput(source)}`, status: 'pending',
-    }));
+    const settledBySource = new Map(previous?.results.flatMap(result => result.sources)
+        .filter(state => state.source.startsWith('quota:') && state.status !== 'pending' && state.status !== 'not_loaded')
+        .map(state => [state.source, state]));
+    const sources: UsageQuerySourceState[] = scope.sources.map(({ source }, index) => {
+        const key = `quota:${createCanonicalJsonSigningInput(source)}`;
+        return progressValues[index] && settledBySource.get(key) || { source: key, status: 'pending' };
+    });
     const failures = new Map<number, string>();
     const projectQuota = (status: 'available' | 'partial' | 'stale' | 'error'): OpenedQuotaRead => {
         const value = progressValues.filter((row): row is ConnectedServiceQuotaGetResultV1 => row !== null);
@@ -267,6 +276,13 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
     };
     const publishProgress = (index: number, value: ConnectedServiceQuotaGetResultV1 | null, settled = false): void => {
         requireCurrent(context, signal);
+        // Warm reads retain their last settled facets until this source answers. Cold
+        // reads still publish each admitted page; denials/errors take the path below.
+        if (!settled && !failures.has(index) && retainedBySource.has(createCanonicalJsonSigningInput(scope.sources[index]!.source))
+            && settledBySource.has(sources[index]!.source)) {
+            onProgress?.(projectQuota('partial'));
+            return;
+        }
         progressValues[index] = value;
         const failure = failures.get(index);
         sources[index] = { source: sources[index]!.source,
