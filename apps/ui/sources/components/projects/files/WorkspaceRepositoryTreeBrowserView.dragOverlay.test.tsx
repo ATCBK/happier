@@ -101,6 +101,7 @@ describe('WorkspaceRepositoryTreeBrowserView (drag overlay)', () => {
                 : { kind: 'native' as const, lifecycleAvailable: nativeLifecycleAvailable };
             const finiteTransferApplicationSupported = isMachineDaemonFiniteTransferApplicationSupported(machine?.daemonState);
             const preselection = resolveMachineCarrierPreselection({ applicationCarrierEligibility, host, targetEndpoint: endpoint,
+                irohApplicationSupported: true,
                 finiteTransferApplicationSupported, serverFeatures: features.status === 'ready' ? features.features : null });
             admission = { account, machineOnline: machine ? isMachineOnline(machine) : false,
                 machine: machine ? { active: machine.active, activeAt: machine.activeAt, kind: machine.kind,

@@ -38,6 +38,7 @@ import {
 import { readSpawnSessionRpcTimeoutMsFromEnv } from '../domains/session/spawn/spawnSessionRpcTimeout';
 import { storage } from '../domains/state/storage';
 import { readMachineDaemonCliVersionForServerScope } from '../domains/machines/readMachineDaemonCliVersionForServerScope';
+import { apiSocket } from '../api/session/apiSocket';
 import { isPlainObject, normalizeSpawnSessionResult } from './_shared';
 import { isSocketIoAckTimeoutError } from '@happier-dev/sync-client';
 import { mergeMachineMetadataForVersionMismatch } from './machineMetadataMerge';

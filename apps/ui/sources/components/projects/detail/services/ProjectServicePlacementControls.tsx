@@ -522,13 +522,14 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
           subtitle={hint}
           showChevron={compact && portable}
           accessoryLayout="adaptive"
-          disabled={disabled}
+          // A primary-only service has nothing to choose: its row is a plain statement, not a dimmed control.
+          disabled={portable && disabled}
           accessibilityExpanded={pickerOpen}
-          onPress={() => {
+          {...(portable ? { onPress: () => {
             // Re-observe the binding before a lifecycle-sensitive choice.
             refresh();
             setPickerOpen(true);
-          }}
+          } } : {})}
           {...(compact || !portable
             ? { detail: value ?? undefined }
             : {
@@ -552,21 +553,23 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
           action={{ label: t('common.retry'), testID: `${testID}.custody.retry`, onPress: refresh }}
         />
       ) : null}
-      <SegmentedChoiceItem<'primary' | 'fail'>
-        testIDPrefix={`${testID}.fallback`}
-        title={t('projectServices.whenUnavailable')}
-        accessoryLayout={compact ? 'stacked' : 'adaptive'}
-        disabled={!placement.canSaveNextStart || moving || !portable}
-        value={ready?.placement.unavailable ?? 'fail'}
-        options={[
-          { id: 'primary', label: t('projectServices.fallbackPrimary') },
-          { id: 'fail', label: t('projectServices.fallbackFail') },
-        ]}
-        onChange={(unavailable) => {
-          if (!ready || unavailable === ready.placement.unavailable) return;
-          void placement.save({ ...ready.placement, unavailable });
-        }}
-      />
+      {portable ? (
+        <SegmentedChoiceItem<'primary' | 'fail'>
+          testIDPrefix={`${testID}.fallback`}
+          title={t('projectServices.whenUnavailable')}
+          accessoryLayout={compact ? 'stacked' : 'adaptive'}
+          disabled={!placement.canSaveNextStart || moving}
+          value={ready?.placement.unavailable ?? 'fail'}
+          options={[
+            { id: 'primary', label: t('projectServices.fallbackPrimary') },
+            { id: 'fail', label: t('projectServices.fallbackFail') },
+          ]}
+          onChange={(unavailable) => {
+            if (!ready || unavailable === ready.placement.unavailable) return;
+            void placement.save({ ...ready.placement, unavailable });
+          }}
+        />
+      ) : null}
       {notice ? <AttentionBanner testID={`${testID}.notice`} tone="neutral" title={notice} /> : null}
       {move?.phase === 'resolving' ? (
         <AttentionBanner testID={`${testID}.move.resolving`} tone="neutral" title={t('machinePools.resolvingTarget')}

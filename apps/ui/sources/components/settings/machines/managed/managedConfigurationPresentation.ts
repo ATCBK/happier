@@ -10,7 +10,7 @@ import type { BillingCapabilitiesV1 } from '@happier-dev/protocol/machines/manag
 import { t } from '@/text';
 import { describeRetention, describeRetentionPolicy, formatRetentionDuration } from './managedRetentionPresentation';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
-import type { PluginLocalizedStringV2 } from '@happier-dev/protocol/plugins/contributions/publicTypes';
+import type { PluginLocalizedStringV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { presentQualifiedConnectedAccountTarget, type QualifiedConnectedAccountTargetPresentation } from '@/sync/domains/connectedServices/qualifiedConnectedAccountTargetPresentation';
 import type { MachineEnvironmentV1 } from '@happier-dev/protocol/machines/managed/machineEnvironmentV1';

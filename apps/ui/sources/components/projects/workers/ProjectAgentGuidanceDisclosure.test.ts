@@ -70,6 +70,12 @@ describe('describeProjectAgentGuidance', () => {
     expect(text).toContain('projectWorkers.policyUnavailable');
   });
 
+  it('states the default target once instead of once per script', () => {
+    const text = describeProjectAgentGuidance(guidance('refused'), 'happier');
+    expect(text.match(/projectWorkers\.defaultSummary/g)?.length).toBe(1);
+    expect(text).not.toMatch(/^(test|typecheck|lint): /m);
+  });
+
   it('distinguishes actual empty declarations from an unavailable read', () => {
     expect(describeProjectAgentGuidance({ ...guidance('refused'), scripts: [] }, 'happier'))
       .toContain('projectWorkers.guideNoScripts');
@@ -92,7 +98,11 @@ describe('describeProjectAgentGuidance', () => {
         explanation: 'not_accepting', lastCleanSyncAtMs: null } } };
     const text = describeProjectAgentGuidance(facts, 'happier');
     expect(text).toContain('worker-b');
-    expect(text).toContain('test: projectWorkers.defaultSummary {"destination":"worker-b"}');
+    // The default is said once; only the overridden script names its own target.
+    expect(text.match(/projectWorkers\.defaultSummary \{"destination":"[^"]*"\}/g)?.length).toBe(2);
+    expect(text).toContain('test: worker-b');
+    expect(text).not.toContain('typecheck: ');
+    expect(text).not.toContain('lint: ');
     expect(text.split('happier project compute exec -- <argv>')[1])
       .toContain('projectWorkers.defaultSummary {"destination":"worker-b"}');
     expect(text).toContain('projectWorkers.notAccepting');

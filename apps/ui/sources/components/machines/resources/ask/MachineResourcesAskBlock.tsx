@@ -17,7 +17,7 @@ import { useMachineTabFacts } from '@/components/machines/page/useMachineTabFact
 import { useMachineResourceSummary } from '@/sync/domains/machines/resources/useMachineResourceSummary';
 import { useMachineResourcesPolicy } from '@/sync/domains/machines/resources/useMachineResourcesPolicy';
 import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
@@ -92,15 +92,10 @@ export const MachineResourcesAskBlock = React.memo(
         reported,
       ],
     );
-    const lastReportSuggestions = React.useMemo(
-      // Notify me currently delivers immediately; it cannot register a machine-return notification.
-      // Do not offer that operation as a composer fill or an inert notification tile.
-      () => suggestions.filter((suggestion) => suggestion.kind !== 'notifyWhenBack'),
-      [suggestions],
-    );
     const fillGlobalComposer = React.useCallback((suggestion: HomeComposerSuggestionFill) => {
       const lifetime = captureActiveServerAccountScopeLifetime();
-      const outcome = lifetime && seedAndOpenNewSession({
+      const scope = selectActiveServerAccountScopeForServer(lifetime?.scope ?? null, props.serverId);
+      const outcome = lifetime && scope && seedAndOpenNewSession({
         seed: { prompt: suggestion.prompt },
         scope: lifetime.scope,
         isCurrent: lifetime.isCurrent,
@@ -112,7 +107,7 @@ export const MachineResourcesAskBlock = React.memo(
       if (!outcome || outcome.kind !== 'opened') {
         Modal.alert(t('common.error'), t('errors.operationFailed'));
       }
-    }, [router]);
+    }, [props.serverId, router]);
 
     return (
       <ItemGroup
@@ -136,7 +131,7 @@ export const MachineResourcesAskBlock = React.memo(
             />
           ) : (
             <HubComposerSuggestionList
-              suggestions={lastReportSuggestions}
+              suggestions={suggestions}
               onFill={fillGlobalComposer}
             />
           )}

@@ -109,7 +109,7 @@ export const StoragePileDock = React.memo(function StoragePileDock(
       onUndo={() => cleanup.undo()}
       onEmptyNow={async () => {
                 if (bar.kind !== 'held') return;
-                if (await confirmStorageEmpty({ count: bar.count, amount: formatMachineBytes(bar.inTrashBytes, 'storage') })) await cleanup.emptyNow(true);
+                if (await confirmStorageEmpty({ count: bar.count, amount: bar.inTrashBytes === null ? '—' : formatMachineBytes(bar.inTrashBytes, 'storage') })) await cleanup.emptyNow(true);
             }}
       onDone={cleanup.dismiss}
     />

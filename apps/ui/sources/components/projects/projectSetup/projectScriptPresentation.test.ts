@@ -26,6 +26,8 @@ describe('finite Script row facts', () => {
         for (const phase of ['preparing', 'copying', 'setup'] as const) {
             const preparing = presentProjectRun(run({ domainRef: command, progress: { kind: 'phase', phase, label: phase } }), 'Builder', 'idle');
             expect(preparing).toMatchObject({ phase, queueAhead: null, startedAt: null });
+            // The stage is the status text; repeating it as a log tail would say it twice.
+            expect(preparing.tail).toBeNull();
             expect(preparing.text).not.toContain('projects.scripts.run.running');
         }
         const uncertain = presentProjectRun(run({ state: 'accepted', domainRef: command, progress: { kind: 'phase', phase: 'queued', queueAhead: 0, label: 'Queued' }, observation: { kind: 'outcome_uncertain' } }), 'Builder', 'idle');

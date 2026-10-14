@@ -12,6 +12,7 @@ import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { t } from '@/text';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type ProcessConfirmFact = Readonly<{
   label: string;
@@ -197,7 +198,7 @@ export function showProcessConfirmDialog(
         title: content.title,
         testID: `${content.testID}-modal`,
         phonePresentation: 'sheet',
-        dimensions: { width: 460, maxHeightRatio: 0.86, size: 'md' },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.86, size: 'md' },
       },
       closeOnBackdrop: true,
     });
@@ -240,7 +241,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   note: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
 }));

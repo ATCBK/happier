@@ -17,15 +17,13 @@ import { useSessionActionOperations } from '@/sync/domains/actionOperations/useA
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useServerCredentialAccountScopeBindings, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { useServerScopedMachine } from '@/sync/store/hooks';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 
 import { rememberProjectSetupConsent } from './projectSetupConsentDecision';
 import { ProjectSetupReviewFacts } from './ProjectSetupReview';
+import { useProjectSetupMachine } from './useProjectSetupMachine';
 
 type Decision = 'untilChanged';
-const SESSION_EFFECT_MANIFEST = { version: 1 } as const;
 
 /**
  * The session asks (lab `s-setup` ASK, plan 20s3 / D18): every live finite command this Session's
@@ -132,9 +130,6 @@ export const ProjectSetupConsentReviewCard = React.memo(
       scope: ServerAccountScope;
       decided: Decision | null;
       canApprovePermissions: boolean;
-      signal?: AbortSignal;
-      testID?: string;
-      onDeclined?: () => void;
       onDecided: (
         operation: ActionOperationProjection,
         decision: Decision,
@@ -149,27 +144,19 @@ export const ProjectSetupConsentReviewCard = React.memo(
         : null;
     const review = operation.snapshot.setupReview ?? null;
     // Setup runs on the actual target the operation was admitted to.
-    const machine = useServerScopedMachine(
+    const { machineName, sharedRunAs } = useProjectSetupMachine(
       attachment?.serverId ?? null,
-      attachment?.machineId ?? '',
+      attachment?.machineId ?? null,
     );
-    const machineName =
-      getMachineDisplayName(machine) ?? attachment?.machineId ?? '';
-    const sharedRunAs = machine?.isShared
-      ? (machine.metadata?.username ?? null)
-      : null;
     const stop = useActionOperationStopControl(
       props.decided === null ? operation : null,
     );
     const [deciding, setDeciding] = React.useState(false);
-    const testID = props.testID ?? `project-setup-session-review:${operation.snapshot.operationId}`;
-    React.useEffect(() => {
-      if (!stop.pending && stop.feedback !== null) props.onDeclined?.();
-    }, [props.onDeclined, stop.feedback, stop.pending]);
+    const testID = `project-setup-session-review:${operation.snapshot.operationId}`;
 
     const allow = React.useCallback(async () => {
       const workspace = attachment?.sourceWorkspace;
-      if (!review || !workspace || deciding || props.signal?.aborted) return;
+      if (!review || !workspace || deciding) return;
       setDeciding(true);
       try {
         const result = await rememberProjectSetupConsent({
@@ -177,9 +164,7 @@ export const ProjectSetupConsentReviewCard = React.memo(
           workspace,
           operation,
           reviewedEffectDigest: review.reviewedEffectDigest,
-          signal: props.signal,
         });
-        if (props.signal?.aborted) return;
         if (result.kind === 'remembered') onDecided(operation, 'untilChanged');
         else
           Modal.alert(
@@ -189,7 +174,7 @@ export const ProjectSetupConsentReviewCard = React.memo(
               : t('approvals.decisionError'),
           );
       } catch {
-        if (!props.signal?.aborted) Modal.alert(t('common.error'), t('approvals.decisionError'));
+        Modal.alert(t('common.error'), t('approvals.decisionError'));
       } finally {
         setDeciding(false);
       }
@@ -200,7 +185,6 @@ export const ProjectSetupConsentReviewCard = React.memo(
       operation,
       review,
       scope,
-      props.signal,
     ]);
     const title = t('projects.authoring.sessionAsk', { machine: machineName });
     if (props.decided) {
@@ -259,7 +243,7 @@ export const ProjectSetupConsentReviewCard = React.memo(
           ) : (
             <ApprovalDecisionFooter
               testIDPrefix={testID}
-              disabled={!props.canApprovePermissions || props.signal?.aborted === true}
+              disabled={!props.canApprovePermissions}
               approveDisabled={!attachment?.sourceWorkspace}
               isDeciding={deciding || stop.pending}
               approveLabel={t('projects.authoring.allowUntilChanged')}
@@ -274,7 +258,6 @@ export const ProjectSetupConsentReviewCard = React.memo(
       >
         <ProjectSetupReviewFacts
           testID={testID}
-          manifest={SESSION_EFFECT_MANIFEST}
           reviewedEffect={review.reviewedEffect}
           machineName={machineName}
           sharedRunAs={sharedRunAs}

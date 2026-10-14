@@ -12,6 +12,8 @@ const boundary = vi.hoisted(() => ({
 }));
 const documentBoundary = new EventTarget();
 Object.defineProperty(documentBoundary, 'visibilityState', { get: () => boundary.visibility });
+// Visibility is the DOM boundary under test; this native harness has no mounted web root.
+Object.defineProperty(documentBoundary, 'getElementById', { value: () => null });
 vi.mock('react-native', async () => {
     const { createReactNativeAppStateEmitter, createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     boundary.appState = createReactNativeAppStateEmitter('active');

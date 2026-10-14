@@ -1,12 +1,11 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { happierPageRowDividerWidth, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import type { ProjectManifestV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { SurfaceCard } from '@/components/ui/cards/SurfaceCard';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Text } from '@/components/ui/text/Text';
@@ -21,6 +20,13 @@ import {
 } from './projectSetupEffectPresentation';
 
 export type ProjectSetupScope = 'thisTime' | 'untilChanged';
+
+/** The one-time choice is the default everywhere a setup review is decided; remembering is opt-in. */
+export const DEFAULT_PROJECT_SETUP_SCOPE: ProjectSetupScope = 'thisTime';
+
+export function projectSetupRunLabel(machineName: string, sharedRunAs: string | null): string {
+  return sharedRunAs ? t('projects.scripts.setup.runOn', { machine: machineName }) : t('projects.scripts.setup.run');
+}
 
 type EffectLine = Readonly<{
   key: string;
@@ -122,11 +128,15 @@ function describeSetupProvenance(presentation: ProjectSetupReviewPresentation | 
   return [at ? ` ${at}` : '', ` · ${state}`].join('');
 }
 
-/** Safe review anatomy shared by the page and Session; the producer projection is the sole parser. */
+/** A review of a reviewed effect alone (approval page and card, Session ask): no manifest is read. */
+const REVIEWED_EFFECT_ONLY_MANIFEST: ProjectManifestV1 = { version: 1 };
+
+/** Safe review anatomy shared by the page, Session and approvals; the producer projection is the sole parser. */
 export const ProjectSetupReviewFacts = React.memo(function ProjectSetupReviewFacts(
   props: Readonly<{
     testID: string;
-    manifest: ProjectManifestV1;
+    /** Omitted when the review is the producer's reviewed effect alone (approvals, Session ask). */
+    manifest?: ProjectManifestV1;
     machineName: string;
     /** A teammate's shared Machine: name the OS user it runs as (D6/D24). */
     sharedRunAs: string | null;
@@ -137,7 +147,7 @@ export const ProjectSetupReviewFacts = React.memo(function ProjectSetupReviewFac
 ) {
   const { theme } = useUnistyles();
   const effect = React.useMemo(
-    () => listProjectSetupEffect(props.manifest, props.reviewedEffect),
+    () => listProjectSetupEffect(props.manifest ?? REVIEWED_EFFECT_ONLY_MANIFEST, props.reviewedEffect),
     [props.manifest, props.reviewedEffect],
   );
   const provenance = React.useMemo(
@@ -146,20 +156,12 @@ export const ProjectSetupReviewFacts = React.memo(function ProjectSetupReviewFac
   );
   return (
     <View style={styles.facts}>
-      <SurfaceCard padding="none" style={styles.effect}>
-        {effect.map((line, index) => (
+      <View style={styles.effect}>
+        {effect.map((line) => (
           <View
             key={line.key}
             testID={`${props.testID}.effect:${line.key}`}
-            style={[
-              styles.effectRow,
-              index > 0
-                ? {
-                    borderTopColor: theme.colors.border.subtle,
-                    borderTopWidth: happierPageRowDividerWidth(),
-                  }
-                : null,
-            ]}
+            style={styles.effectRow}
           >
             <Text
               style={[
@@ -187,7 +189,7 @@ export const ProjectSetupReviewFacts = React.memo(function ProjectSetupReviewFac
             </Text>
           </View>
         ))}
-      </SurfaceCard>
+      </View>
       <View style={styles.provenance}>
         <Icon name="file-text" size={14} color={theme.colors.text.tertiary} />
         <Text
@@ -253,6 +255,38 @@ export const ProjectSetupReviewFacts = React.memo(function ProjectSetupReviewFac
   );
 });
 
+/** This time | Until it changes, with the consequence of the current choice (lab `s-scripts` SETUP). */
+export const ProjectSetupScopeChoice = React.memo(function ProjectSetupScopeChoice(
+  props: Readonly<{ testID: string; scope: ProjectSetupScope; onChange: (scope: ProjectSetupScope) => void }>,
+) {
+  const { theme } = useUnistyles();
+  const tabs = React.useMemo(() => [
+    { id: 'thisTime' as const, label: t('projects.scripts.setup.thisTime') },
+    { id: 'untilChanged' as const, label: t('projects.scripts.setup.untilChanged') },
+  ], []);
+  return (
+    <View style={styles.scope}>
+      <SegmentedTabBar
+        role="radiogroup"
+        accessibilityLabel={t('projects.scripts.setup.approve')}
+        tabs={tabs}
+        activeTabId={props.scope}
+        onSelectTab={props.onChange}
+        segmentSizing="content"
+        testIDPrefix={`${props.testID}.scope`}
+      />
+      <Text
+        accessibilityLiveRegion="polite"
+        style={[styles.body, { color: theme.colors.text.secondary }]}
+      >
+        {props.scope === 'thisTime'
+          ? t('projects.scripts.setup.consequenceThisTime')
+          : t('projects.scripts.setup.consequenceUntilChanged')}
+      </Text>
+    </View>
+  );
+});
+
 /** The page owns trust scope and Run; Session retains its canonical approval and Stop owners. */
 export const ProjectSetupReview = React.memo(function ProjectSetupReview(
   props: Readonly<{
@@ -269,36 +303,14 @@ export const ProjectSetupReview = React.memo(function ProjectSetupReview(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const [scope, setScope] = React.useState<ProjectSetupScope>(props.initialScope ?? 'untilChanged');
-  const tabs = React.useMemo(() => [
-    { id: 'thisTime' as const, label: t('projects.scripts.setup.thisTime') },
-    { id: 'untilChanged' as const, label: t('projects.scripts.setup.untilChanged') },
-  ], []);
+  const [scope, setScope] = React.useState<ProjectSetupScope>(props.initialScope ?? DEFAULT_PROJECT_SETUP_SCOPE);
   return (
     <View testID={props.testID} style={styles.review}>
       <Text style={[styles.body, { color: theme.colors.text.secondary }]}>
         {t('projects.scripts.setup.lead', { machine: props.machineName })}
       </Text>
       <ProjectSetupReviewFacts {...props} />
-      <View style={styles.scope}>
-        <SegmentedTabBar
-          role="radiogroup"
-          accessibilityLabel={t('projects.scripts.setup.approve')}
-          tabs={tabs}
-          activeTabId={scope}
-          onSelectTab={setScope}
-          segmentSizing="content"
-          testIDPrefix={`${props.testID}.scope`}
-        />
-        <Text
-          accessibilityLiveRegion="polite"
-          style={[styles.body, { color: theme.colors.text.secondary }]}
-        >
-          {scope === 'thisTime'
-            ? t('projects.scripts.setup.consequenceThisTime')
-            : t('projects.scripts.setup.consequenceUntilChanged')}
-        </Text>
-      </View>
+      <ProjectSetupScopeChoice testID={props.testID} scope={scope} onChange={setScope} />
       <View style={styles.actions}>
         <RoundButton
           size="small"
@@ -309,13 +321,7 @@ export const ProjectSetupReview = React.memo(function ProjectSetupReview(
         />
         <RoundButton
           size="small"
-          title={
-            props.sharedRunAs
-              ? t('projects.scripts.setup.runOn', {
-                  machine: props.machineName,
-                })
-              : t('projects.scripts.setup.run')
-          }
+          title={projectSetupRunLabel(props.machineName, props.sharedRunAs)}
           testID={`${props.testID}.run`}
           loading={props.pending}
           disabled={props.pending}
@@ -342,15 +348,9 @@ const styles = StyleSheet.create(() => ({
   meta: { ...Typography.default(), ...happierPageTextMetrics('meta') },
   mono: { ...Typography.mono(), ...happierPageTextMetrics('rowDescription') },
   grow: { flex: 1, minWidth: 0 },
-  effect: {
-    overflow: 'hidden',
-  },
-  effectRow: {
-    flexDirection: 'row',
-    gap: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
+  // Content only: the parent owns any surface, so the steps read like the Where/Files/As rows.
+  effect: { gap: 4 },
+  effectRow: { flexDirection: 'row', gap: 12 },
   effectLabel: {
     ...Typography.default(),
     ...happierPageTextMetrics('meta'),

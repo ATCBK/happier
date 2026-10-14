@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -167,7 +168,7 @@ export function showLeftBehindReview(
         testID: 'machine-processes-review-modal',
         phonePresentation: 'sheet',
         bodyScroll: 'auto',
-        dimensions: { width: 560, maxHeightRatio: 0.86, size: 'md' },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.86, size: 'md' },
       },
       closeOnBackdrop: true,
     });
@@ -193,7 +194,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   note: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
 }));

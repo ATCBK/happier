@@ -41,7 +41,7 @@ export function listReviewedSetupCommands(
   if (!Array.isArray(commands) || commands.length === 0) return null;
   return commands.map((command) => {
     if (typeof command === 'string') return command;
-    if (!command || typeof command !== 'object') return String(command);
+    if (!command || typeof command !== 'object') return '';
     const record = command as Record<string, unknown>;
     const args = Array.isArray(record.args)
       ? record.args.filter((arg): arg is string => typeof arg === 'string')
@@ -53,9 +53,10 @@ export function listReviewedSetupCommands(
         ? (record.source as Record<string, unknown>)
         : null;
     if (executable !== null) return formatProjectInvocation({ tool: executable, args });
+    if (record.kind === 'command' && typeof record.command === 'string') return record.command;
     if (typeof source?.command === 'string') return source.command;
     return typeof source?.target === 'string'
       ? formatProjectInvocation({ tool: source.target, args })
       : '';
-  });
+  }).filter(command => command.trim().length > 0);
 }

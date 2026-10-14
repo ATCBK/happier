@@ -233,7 +233,7 @@ describe('Project setup through ordinary authoring', () => {
         if (opened.kind !== 'opened') throw new Error('Draft refused');
         const draft = readNewSessionDraftProjectionFromRepository({ scope: { serverId, accountId: 'account-a' }, draftId: opened.draftId })?.draft;
         expect(draft?.input).toContain(t('projects.authoring.scriptsCount', { count: 1 }));
-        expect(draft?.input).toContain('test:');
+        expect(draft?.input).not.toContain('test:');
         expect(draft?.input).not.toContain(t('projects.scripts.foundIn', { files: '' }));
         expect(draft?.input).not.toContain('undefined');
     });
@@ -446,7 +446,7 @@ describe('Project setup through ordinary authoring', () => {
         const facts = await currentGuidance(workspace);
         expect(draft.input).not.toContain('{');
         expect(draft.input).toContain('package.json');
-        expect(draft.input).toContain('protoc');
+        expect(draft.input).not.toContain('protoc');
         expect(draft.input).not.toContain(preference.destination.machineId);
         if (statusMode === 'read_only') expect(facts).toEqual(readonlyGuidance);
         expect(facts).toMatchObject({

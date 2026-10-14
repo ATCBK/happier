@@ -5,6 +5,8 @@ export interface MachineDisplayMetadata {
     host?: string | null;
     homeDir?: string | null;
     platform?: string | null;
+    /** The machine's published CPU architecture (platform fit for registry agents). */
+    arch?: string | null;
     agentInventory?: MachineMetadata['agentInventory'];
 }
 
@@ -36,6 +38,7 @@ export function buildMachineDisplayMetadata(metadata: MachineMetadata | null | u
         host: typeof metadata.host === 'string' ? metadata.host : null,
         homeDir: typeof metadata.homeDir === 'string' ? metadata.homeDir : null,
         platform: typeof metadata.platform === 'string' ? metadata.platform : null,
+        ...(typeof metadata.arch === 'string' ? { arch: metadata.arch } : {}),
         ...(metadata.agentInventory ? { agentInventory: metadata.agentInventory } : {}),
     };
 }
@@ -108,6 +111,7 @@ function areMachineDisplayValuesEqual(
         && (previous.metadata?.host ?? null) === (next.metadata?.host ?? null)
         && (previous.metadata?.homeDir ?? null) === (next.metadata?.homeDir ?? null)
         && (previous.metadata?.platform ?? null) === (next.metadata?.platform ?? null)
+        && (previous.metadata?.arch ?? null) === (next.metadata?.arch ?? null)
         && JSON.stringify(previous.metadata?.agentInventory ?? null) === JSON.stringify(next.metadata?.agentInventory ?? null);
 }
 

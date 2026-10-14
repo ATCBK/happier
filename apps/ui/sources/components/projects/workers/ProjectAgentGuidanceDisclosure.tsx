@@ -89,6 +89,15 @@ export function describeProjectAgentGuidance(
     targetLines.push('status' in preferences && preferences.status === 'locked'
       ? t('projectWorkers.settingsLocked') : t('common.retry'));
   }
+  // Where a script goes is the checkout default, said once; only a script the person overrode names its own.
+  const overrides = 'status' in preferences && preferences.status === 'ready' ? preferences.preference.scriptOverrides : {};
+  const isOverridden = (name: string) => Object.hasOwn(overrides, name);
+  const defaulted = scripts.find(script => !isOverridden(script.name) && script.resolution.status === 'resolved');
+  const scriptTargetLines = [
+    ...(defaulted ? [t('projectWorkers.defaultSummary', { destination: resolutionLabel(defaulted.resolution) })] : []),
+    ...scripts.filter(script => isOverridden(script.name))
+      .map(script => `${script.name}: ${resolutionLabel(script.resolution)}`),
+  ];
   const adHoc = guidance.adHoc.resolution;
   return [
     `# ${t('projectWorkers.guideHeader', { project })}`,
@@ -100,7 +109,7 @@ export function describeProjectAgentGuidance(
       : []),
     ...(guidance.scripts === null ? [t('projectWorkers.guideUnavailable'), t('common.retry')]
       : scripts.length === 0 ? [t('projectWorkers.guideNoScripts')] : []),
-    ...scripts.map(script => `${script.name}: ${t('projectWorkers.defaultSummary', { destination: resolutionLabel(script.resolution) })}`),
+    ...scriptTargetLines,
     ...targetLines,
     '',
     `${t('projectWorkers.guideRunOne')}  ${RUN_COMMAND}`,

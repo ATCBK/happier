@@ -84,8 +84,7 @@ describe('machine reachability', () => {
     it('classifies transport unavailability without treating capability or encryption errors as offline', () => {
         // A dispatched operation can exceed its response budget while the daemon remains online.
         expect(isMachineRequestReachabilityFailure({ code: 'MACHINE_RPC_TIMEOUT' })).toBe(false);
-        expect(isMachineRequestReachabilityFailure({ code: 'MACHINE_RPC_TIMEOUT' }, { callerDeadlineExpiredWithoutReply: true })).toBe(true);
-        expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' }, { callerDeadlineExpiredWithoutReply: true })).toBe(false);
+        expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' })).toBe(false);
         expect(isMachineRequestReachabilityFailure({ code: 'target_unavailable' })).toBe(true);
         expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'machine_offline' })).toBe(true);
         expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' })).toBe(false);

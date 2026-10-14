@@ -49,7 +49,7 @@ export function managedCreationState(machine: ManagedMachineV1, context: Managed
     const pendingIntent = machine.submittedNativeEffect?.intent;
     if ((pendingIntent === 'start' || pendingIntent === 'resume') && machine.observation?.power !== 'running'
         || pendingIntent === 'suspend' && machine.observation?.power !== 'suspended') {
-        return { kind: 'powerPending', provider: context.provider ?? t('common.unknown'), state: t(`managedMachines.actions.${pendingIntent}`) };
+        return { kind: 'powerPending', provider: context.provider ?? t('common.machine'), state: t(`managedMachines.actions.${pendingIntent}`) };
     }
     if (machine.observation?.power === 'stopped') return machine.observation.storage === 'retained'
         ? { kind: 'stoppedStorage' } : { kind: 'storageUnknown' };

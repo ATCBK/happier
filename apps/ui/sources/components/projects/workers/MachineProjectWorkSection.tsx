@@ -40,7 +40,11 @@ type ReadyPolicy = Extract<ProjectWorkerActionOutputV1<'machines.worker.policy.g
 
 /** The Machine's own finite work policy, read and changed through `machines.worker.policy.*` (30s1). */
 export function useMachineWorkerPolicy(serverId: string, machineId: string) {
+  const machine = useServerScopedMachine(serverId, machineId);
   const setting = useObservedWorkerSetting<ReadyPolicy, ReadyPolicy['policy'], ProjectWorkerActionOutputV1<'machines.worker.policy.set'>>({
+    // The metadata port needs the discovered row's storage/encryption context. Credentials
+    // can arrive first; wait for that producer rather than retaining a premature refusal.
+    enabled: machine !== null && machine !== undefined,
     serverId,
     scopeKey: JSON.stringify(['machines.worker.policy', serverId, machineId]),
     read: (accountId) =>
@@ -116,7 +120,7 @@ function RunningHereRow(
       icon={<RunGlyph glyph={presentation.glyph} />}
       showChevron={false}
       rightElement={
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
           {presentation.live && presentation.startedAt ? (
             <RunClock startedAt={presentation.startedAt} />
           ) : null}

@@ -26,7 +26,6 @@ import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { executeProjectWorkerActionV1 } from '@/sync/ops/actions/projectWorkerActions';
 import { t } from '@/text';
-import { useViewportClass } from '@/utils/platform/useViewportClass';
 
 import { useObservedWorkerSetting } from './useObservedWorkerSetting';
 import { describeObservedWorkerSettingNotice } from './observedWorkerSettingNotice';
@@ -146,8 +145,9 @@ function withoutOverride(
 type ScriptOverride = 'default' | 'primary' | 'workers';
 
 /**
- * One portable script's override (lab PREFS / PREFSp): Default | This machine | Workers, all visible on
- * wide screens; on a phone the row shows its value with a chevron and opens the same three choices.
+ * One portable script's override (lab PREFS): Default | This machine | Workers, all visible. The segmented
+ * row is adaptive, so on a phone the same control moves beneath its label (a select for three short
+ * options is a dropdown the page rules forbid).
  */
 function ScriptOverrideRow(props: Readonly<{
   testID: string;
@@ -157,39 +157,19 @@ function ScriptOverrideRow(props: Readonly<{
   value: ScriptOverride;
   onChange: (next: ScriptOverride) => void;
 }>) {
-  const compact = useViewportClass() === 'compact';
-  const [open, setOpen] = React.useState(false);
-  const options = [
-    { id: 'default' as const, label: t('projectWorkers.overrideDefault') },
-    { id: 'primary' as const, label: t('projectWorkers.primary') },
-    { id: 'workers' as const, label: t('projectWorkers.overrideWorkers') },
-  ];
-  if (!compact) {
-    return (
-      <SegmentedChoiceItem<ScriptOverride>
-        testIDPrefix={props.testID}
-        title={props.name}
-        subtitle={props.subtitle}
-        disabled={props.disabled}
-        value={props.value}
-        options={options}
-        onChange={props.onChange}
-      />
-    );
-  }
   return (
-    <DropdownMenu
-      testID={props.testID}
-      open={open}
-      onOpenChange={setOpen}
-      items={options.map((option) => ({ id: option.id, title: option.label, testID: `${props.testID}:${option.id}` }))}
-      selectedId={props.value}
-      search={false}
-      itemTrigger={{ title: props.name, subtitle: props.subtitle, showSelectedSubtitle: false, itemProps: { disabled: props.disabled } }}
-      onSelect={(id) => {
-        setOpen(false);
-        props.onChange(id as ScriptOverride);
-      }}
+    <SegmentedChoiceItem<ScriptOverride>
+      testIDPrefix={props.testID}
+      title={props.name}
+      subtitle={props.subtitle}
+      disabled={props.disabled}
+      value={props.value}
+      options={[
+        { id: 'default', label: t('projectWorkers.overrideDefault') },
+        { id: 'primary', label: t('projectWorkers.primary') },
+        { id: 'workers', label: t('projectWorkers.overrideWorkers') },
+      ]}
+      onChange={props.onChange}
     />
   );
 }

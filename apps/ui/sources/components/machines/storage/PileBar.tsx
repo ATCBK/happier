@@ -92,7 +92,7 @@ export const PileBar = React.memo(function PileBar(
             : '';
   const total =
     bar.kind === 'held'
-      ? amount(bar.inTrashBytes)
+      ? bar.inTrashBytes === null ? '—' : amount(bar.inTrashBytes)
       : bar.kind === 'checking'
         ? amount(bar.freesBytes)
         : bar.kind === 'ready'

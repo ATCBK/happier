@@ -188,6 +188,8 @@ describe('useMachineTerminalSession', () => {
         };
         const first = await createView('borrowed-view-one');
         const second = await createView('borrowed-view-two');
+        expect(first.getCurrent().readOnly).toBe(true);
+        expect(second.getCurrent().readOnly).toBe(true);
         await act(async () => {
             first.getCurrent().onReady(80, 24);
             first.getCurrent().onInput('echo forbidden\r');

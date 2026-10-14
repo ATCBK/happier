@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 
 import { createPartialServerProfilesModuleMock, type ServerProfileMockProfile } from '@/dev/testkit/mocks/serverProfiles';
+import { buildMachineDisplayRenderableFromMachine } from '../../domains/machines/machineDisplayRenderable';
 import { resolveMachineSessionListIndexImpact as resolveMachineSessionIndexImpactFromHelper } from './machineSessionListIndexImpact';
 import type { MachineMetadata } from '../../domains/state/storageTypes';
+import type { StorageState } from '../types';
+import type { createMachinesDomain as createMachinesDomainFactory } from './machines';
 
 const {
     mmkvStore,
@@ -60,17 +64,13 @@ function makeMachineMetadata(partial?: Partial<MachineMetadata>): MachineMetadat
     };
 }
 
-function createHarness(createMachinesDomain: any, initialState: any) {
-    let state: any = initialState;
-
-    const get = () => state;
-    const set = (updater: any) => {
-        const next = typeof updater === 'function' ? updater(state) : updater;
-        state = { ...state, ...next };
-    };
-
-    const domain = createMachinesDomain({ get, set } as any);
-    return { get, domain };
+// Legacy scenario fixtures provide only the surrounding domains used by this suite.
+function createHarness(createMachinesDomain: typeof createMachinesDomainFactory, initialState: any) {
+    const store = createStore<StorageState>()((set, get) => ({
+        ...createMachinesDomain<StorageState>({ set, get }),
+        ...initialState,
+    }));
+    return { get: store.getState, domain: store.getState() };
 }
 
 function mockMachineDomainBoundaries(profiles: readonly ServerProfileMockProfile[] = DEFAULT_SERVER_PROFILES): void {
@@ -446,7 +446,7 @@ describe('machines domain: sessionListIndex rebuild gating', () => {
             active: true,
             activeAt: 2,
             revokedAt: null,
-            metadata: { displayName: 'Server A Machine' },
+            metadata: makeMachineMetadata({ displayName: 'Server A Machine' }),
             metadataVersion: 1,
             daemonState: null,
             daemonStateVersion: 0,
@@ -690,7 +690,7 @@ describe('machines domain: sessionListIndex rebuild gating', () => {
                 sessionListInactiveGroupingV1: 'date' as const,
             },
             sessionListRowsByServerId: {
-                server_a: {
+                srv_server_a: {
                     s1: {
                         id: 's1',
                         seq: 1,
@@ -708,7 +708,7 @@ describe('machines domain: sessionListIndex rebuild gating', () => {
                     },
                 },
             },
-            ordinarySessionListMembershipByServerId: { server_a: ['s1'] },
+            ordinarySessionListMembershipByServerId: { srv_server_a: ['s1'] },
             sessionListIndexByServerId: {},
             concurrentSessionListCacheByServerId: {},
             machines: {},
@@ -737,8 +737,9 @@ describe('machines domain: sessionListIndex rebuild gating', () => {
         ], false, { sourceServerId: 'localhost-12345' });
 
         expect(get().machines.m1).toBeTruthy();
-        expect(Array.isArray(get().sessionListIndexByServerId['server_a'])).toBe(true);
-        expect(get().machineListByServerId['localhost-12345']?.map((machine: any) => machine.id)).toEqual(['m1']);
+        expect(Array.isArray(get().sessionListIndexByServerId['srv_server_a'])).toBe(true);
+        expect(get().machineListByServerId['srv_server_a']?.map((machine) => machine.id)).toEqual(['m1']);
+        expect(get().machineListByServerId['localhost-12345']).toBeUndefined();
     });
 
     it('rebuilds the active-server sessionListIndex when project header machine display changes', async () => {
@@ -1272,22 +1273,7 @@ describe('machines domain: sessionListIndex rebuild gating', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        const display = {
-            id: 'm-stable',
-            updatedAt: 1,
-            active: true,
-            activeAt: 1,
-            revokedAt: null,
-            replacedByMachineId: null,
-            replacedAt: null,
-            replacementReason: null,
-            replacementSource: null,
-            replacementActorUserId: null,
-            installationId: null,
-            contentPublicKeyFingerprint: null,
-            metadataVersion: 1,
-            metadata: { displayName: 'Stable', host: 'host.local', homeDir: '/home/u' },
-        };
+        const display = buildMachineDisplayRenderableFromMachine(machine);
         const initialState = {
             sessions: {},
             settings: {
@@ -1351,18 +1337,25 @@ describe('machines domain: sessionListIndex rebuild gating', () => {
                 machineListByServerId: {},
                 machineListStatusByServerId: {},
                 profile: { id: 'account_a' },
+                profileScope: { serverId: 'server_a', accountId: 'account_a' },
             };
 
         const { domain } = createHarness(createMachinesDomain, initialState);
 
-        domain.applyMachines([machine]);
-        domain.applyMachines([{ ...machine, updatedAt: 2, activeAt: 2 }]);
+        domain.applyMachines([machine], true);
+        domain.applyMachines([{
+            ...machine,
+            updatedAt: 2,
+            activeAt: 2,
+            metadataVersion: 2,
+            metadata: makeMachineMetadata({ displayName: 'Renamed' }),
+        }], true);
 
         expect(scheduleMachineDisplayWarmCacheSaveSpy).toHaveBeenCalledTimes(2);
         expect(scheduleMachineDisplayWarmCacheSaveSpy).toHaveBeenLastCalledWith(expect.objectContaining({
             accountId: 'account_a',
             machineDisplays: expect.objectContaining({
-                'm-debounce': expect.objectContaining({ activeAt: 2 }),
+                'm-debounce': expect.objectContaining({ activeAt: 2, metadata: expect.objectContaining({ displayName: 'Renamed' }) }),
             }),
         }));
     });

@@ -75,12 +75,12 @@ describe('Script output before a terminal exists', () => {
         name="Build" badge={null} command="build" portable operation={operation}
         idleText="Not run" pending={false} failureCode={null} compact={false} onRun={() => {}} />);
       await screen.pressByTestIdAsync('script');
-      const output = screen.findAllByTestId('script.noOutput').find((node) => typeof node.props.title === 'string');
-      const title = output?.props.title as string | undefined;
-      expect(title).toContain(phase === 'queued' ? 'projectWorkers.queuedOn'
-        : phase === 'copying' ? 'projectWorkers.copying' : 'projectWorkers.preparing');
-      expect(title).toContain('machine=target-machine');
-      if (phase === 'queued') expect(title).toContain('count=2');
+      // The stage reads once, in the row's status; the expanded body adds nothing that restates it.
+      const stage = phase === 'queued' ? 'projectWorkers.queuedOn' : phase === 'copying' ? 'projectWorkers.copying' : 'projectWorkers.preparing';
+      expect(screen.getTextContent().split(stage).length - 1).toBe(1);
+      expect(screen.getTextContent()).toContain('machine=target-machine');
+      if (phase === 'queued') expect(screen.getTextContent()).toContain('count=2');
+      expect(screen.findAllByTestId('script.noOutput')).toHaveLength(0);
       expect(screen.getTextContent()).not.toContain('projects.scripts.output.empty');
       await screen.unmount();
     }

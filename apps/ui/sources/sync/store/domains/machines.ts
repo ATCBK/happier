@@ -30,6 +30,7 @@ import {
 import { areStoredMachineSemanticsEqual, hasMachineContributionRegistryProjectionChanged, hasMachineDaemonStateAdvanced } from './areStoredMachinesEqual';
 import { applyWorkspaceSyncRuntimeEvent } from '../../domains/sessionHandoff/applyWorkspaceSyncRuntimeEvent';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 import type { StoreGet, StoreSet } from './_shared';
 
@@ -50,6 +51,7 @@ export type MachinesDomain = {
 
 export type ApplyMachinesOptions = Readonly<{
     sourceServerId?: string | null;
+    sourceAccountId?: string | null;
 }>;
 
 type MachineUpdateObserver = (serverId: string, machineIds: readonly string[]) => void;
@@ -73,6 +75,7 @@ type MachinesDomainDependencies = Readonly<{
     ordinarySessionListMembershipByServerId: Readonly<Record<string, readonly string[] | undefined>>;
     getProjectForSession?: (sessionId: string) => { key?: { machineId?: string | null; rootPath?: string | null } | null } | null;
     profile: { id: string };
+    profileScope?: ServerAccountScope | null;
     settings: Settings;
     sessionListIndexByServerId: Readonly<Record<string, SessionListIndexItem[] | null | undefined>>;
 }>;
@@ -89,13 +92,14 @@ function readOrdinaryRowsForServer(
 }
 
 function scheduleActiveWarmMachineCacheSave(
-    state: Pick<MachinesDomain & MachinesDomainDependencies, 'machineDisplayById' | 'profile'>,
+    state: Pick<MachinesDomain & MachinesDomainDependencies, 'machineDisplayById' | 'profileScope'>,
 ): void {
     const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
-    if (!activeServerId) return;
+    const scope = state.profileScope;
+    if (!activeServerId || !scope || !areServerProfileIdentifiersEquivalent(scope.serverId, activeServerId)) return;
     scheduleMachineDisplayWarmCacheSave({
         serverId: activeServerId,
-        accountId: state.profile?.id,
+        accountId: scope.accountId,
         machineDisplays: state.machineDisplayById ?? {},
     });
 }
@@ -211,6 +215,7 @@ function resolveServerIdsForMachineTransferRouteInvalidation(
 
 export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDependencies>({
     set,
+    get,
 }: {
     set: StoreSet<S>;
     get: StoreGet<S>;
@@ -234,6 +239,12 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
         applyMachines: (machines, replace = false, options) => {
             const activeServerId = normalizeMachineServerId(getActiveServerSnapshot().serverId);
             const sourceServerId = normalizeMachineServerId(options?.sourceServerId) || activeServerId;
+            const sourceAccountId = normalizeNonEmptyString(options?.sourceAccountId);
+            if (sourceAccountId && areServerProfileIdentifiersEquivalent(sourceServerId, activeServerId)) {
+                const scope = get().profileScope;
+                if (!scope || !areServerProfileIdentifiersEquivalent(scope.serverId, sourceServerId)
+                    || scope.accountId !== sourceAccountId) return;
+            }
             set((state) => {
                 const shouldUpdateActiveProjection = !sourceServerId || areServerProfileIdentifiersEquivalent(sourceServerId, activeServerId);
                 const currentScopedMachines = sourceServerId
@@ -320,11 +331,11 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                         event: machine.daemonState?.workspaceSync,
                     });
                 }
-                if (!shouldUpdateActiveProjection && sourceServerId && Array.isArray(scopedMachines)
+                if (!shouldUpdateActiveProjection && sourceServerId && sourceAccountId && Array.isArray(scopedMachines)
                     && scopedMachines !== currentScopedMachines) {
                     scheduleMachineListDisplayWarmCacheSave({
                         serverId: sourceServerId,
-                        accountId: state.profile.id,
+                        accountId: sourceAccountId,
                         machines: scopedMachines,
                     });
                 }

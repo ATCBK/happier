@@ -6,6 +6,7 @@ import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { resolveProjectRoutePathForSurface } from '@/components/workspaceCockpit/project/projectCockpitState';
+import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
 import { resolveProjectTerminalScope } from '@/components/projects/detail/projectTerminalScope';
 import { buildProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
 import { t } from '@/text';
@@ -19,7 +20,7 @@ export function MachineProjectTerminalsSection(props: Readonly<{ machineId: stri
     if (!roots.length) return null;
     return <ItemGroup title={t('settings.terminal')}>
         {roots.map(ref => <Item key={ref.id} testID={`machine-project-terminal-${ref.id}`}
-            title={ref.label ?? ref.rootPath} subtitle={ref.rootPath} onPress={() => {
+            title={resolveWorkspaceRefDisplayName(ref)} subtitle={ref.rootPath} onPress={() => {
                 const lifetime = captureActiveServerAccountScopeLifetime();
                 const admitted = resolveProjectTerminalScope(buildProjectPaneScopeId(ref.id, ref.serverId), {
                     serverId: ref.serverId, workspaceId: ref.id, machineId: ref.machineId, rootPath: ref.rootPath,

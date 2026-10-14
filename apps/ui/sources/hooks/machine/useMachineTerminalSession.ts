@@ -938,6 +938,7 @@ export function useMachineTerminalSession(params: Readonly<{
 
     return {
         status,
+        readOnly: params.readOnly === true,
         terminalId: terminalIdRef.current,
         error,
         detectedUrl,

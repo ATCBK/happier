@@ -56,10 +56,12 @@ export function deriveMachineResourceSuggestions(facts: MachineResourceSuggestio
     if (!facts.online) {
         // The block's description already says the machine is offline: its tiles do not repeat the cause.
         const reason = '';
+        const notifyTitle = t('machineResources.askSuggestions.prompts.notifyWhenBack', { machine: machine.name });
         return [
             make('lastReport', t('machineResources.askSuggestions.prompts.lastReport', { machine: machine.name }), reason),
             make('lastStorageReport', t('machineResources.askSuggestions.prompts.lastStorageReport', { machine: machine.name }), reason),
-            make('notifyWhenBack', t('machineResources.askSuggestions.prompts.notifyWhenBack', { machine: machine.name }), reason),
+            make('notifyWhenBack', notifyTitle, reason,
+                `${notifyTitle}. ${t('machineResources.askSuggestions.prompts.notifyWhenBackConsent', { machine: machine.name })}\nsettings.set ${JSON.stringify({ anchor: 'notifications.machineOffline', key: machine.machineId, value: true })}`),
         ];
     }
 

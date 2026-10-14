@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import React from 'react';
 import { ViewStyle, Linking, Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -248,7 +249,7 @@ function LegacyProfileEditFormReady({
             chrome: {
                 kind: 'card',
                 title: t('profiles.previewMachine.title'),
-                dimensions: { width: 560, maxHeightRatio: 0.85, size: 'md' as const },
+                dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.85, size: 'md' as const },
             },
         });
     }, [MachinePreviewModalWrapper, previewMachineId, previewMachineRouteParams, router]);

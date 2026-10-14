@@ -14,19 +14,34 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
-import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { parseToken } from '@/utils/auth/parseToken';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import { ProjectWorkerStatusResultV1Schema } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS, ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema,
     ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
 const inspectionTransport = vi.hoisted(() => ({ accounts: [] as string[], answer: null as unknown,
     workerAnswer: null as unknown, hold: null as Promise<void> | null }));
+
+// Passive inspection uses the original Account's external Action ingress even on its own Machine.
+async function inspectActionResponse(path: string, init?: RequestInit): Promise<Response | null> {
+    if (path !== '/v1/actions/projects.inspect') return null;
+    const envelope = ExternalActionRequestEnvelopeV1Schema.parse(typeof init?.body === 'string' ? JSON.parse(init.body) : null);
+    const request = PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS['projects.inspect'].parse(envelope.input);
+    expect(envelope.target).toEqual({ kind: 'machine', machineId: request.workspace.machineId });
+    const bearer = new Headers(init?.headers).get('Authorization')?.slice('Bearer '.length);
+    if (!bearer) throw new Error('Inspection must carry its captured Account');
+    inspectionTransport.accounts.push(parseToken(bearer));
+    const answer = ProjectDefinitionInspectOutputSchema.parse(inspectionTransport.answer);
+    await inspectionTransport.hold;
+    return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect',
+        requestId: envelope.requestId, execution: { ok: true, result: answer } }));
+}
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
@@ -60,25 +75,26 @@ afterEach(() => { standardCleanup(); actionOperationStore.reset(); inspectionTra
 
 describe('Scripts canonical operation subscriptions', () => {
     it.each([
-        { delivery: 'direct', reason: 'not_accepting' }, { delivery: 'approved', reason: 'not_accepting' },
-        { delivery: 'direct', reason: 'worker_copy_missing' }, { delivery: 'approved', reason: 'worker_copy_missing' },
-    ] as const)('retains typed no-worker fallback facts without accepting or automatically running on primary ($delivery, $reason)', async ({ delivery, reason }) => {
-        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        { policy: 'direct', reason: 'not_accepting' }, { policy: 'ask-first', reason: 'not_accepting' },
+        { policy: 'direct', reason: 'worker_copy_missing' }, { policy: 'ask-first', reason: 'worker_copy_missing' },
+    ] as const)('retains typed no-worker fallback facts without approval, acceptance, or automatic primary execution ($policy, $reason)', async ({ policy, reason }) => {
         const disposeExecutor = await installRealActionExecutorModuleLoader();
         const dispatched: unknown[] = [];
         const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account', encryptionMode: 'plain' });
-        const serverIdentityId = delivery === 'direct' ? 'srv_script_worker_refusal' : 'srv_script_worker_refusal_approved';
+        const serverIdentityId = policy === 'direct' ? 'srv_script_worker_refusal' : 'srv_script_worker_refusal_ask_first';
         const actionSettings = { actionsSettingsV1: { v: 1, actions: {
-            'projects.script.run': { approvalRequiredSurfaces: delivery === 'approved' ? ['ui'] : [] },
+            'projects.script.run': { approvalRequiredSurfaces: policy === 'ask-first' ? ['ui'] : [] },
         } } };
         const refusalCode = reason === 'worker_copy_missing' ? reason : 'choice_required';
         const targetMachineId = reason === 'worker_copy_missing' ? 'worker-machine' : 'source-machine';
         const connection = await restoreServerAccountForTest({
-            serverUrl: delivery === 'direct' ? 'https://script-worker-refusal.test' : 'https://script-worker-refusal-approved.test',
+            serverUrl: policy === 'direct' ? 'https://script-worker-refusal.test' : 'https://script-worker-refusal-ask-first.test',
             serverIdentityId, accountId: 'account',
             credentials: { token: createAccountTokenForTests('account', { currentAccount: true }) },
             request: async (url, init) => {
                 const path = new URL(String(url)).pathname;
+                const inspection = await inspectActionResponse(path, init);
+                if (inspection) return inspection;
                 if (path === '/v1/machines') return Response.json([...new Set(['source-machine', targetMachineId])]
                     .map(id => createPlainMachineRowFixture({ id, accountId: 'account' })));
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
@@ -142,43 +158,18 @@ describe('Scripts canonical operation subscriptions', () => {
             });
             unmountHook = hook.unmount;
             await vi.waitFor(() => expect(hook.getCurrent().ready).toBe(true));
-            if (delivery === 'approved') {
-                // The product creates and settles this Artifact. No terminal record or approval
-                // authority is assembled here: Inbox approval replays the original missing choice.
-                let pendingRun: Promise<void> | undefined;
-                act(() => { pendingRun = hook.getCurrent().run('build', { kind: 'named', name: 'build' }); });
-                await vi.waitFor(() => expect(hook.getCurrent().approvalId).not.toBeNull());
-                const approvalId = hook.getCurrent().approvalId;
-                if (!approvalId) throw new Error('Expected the real Script approval');
-                expect(ApprovalRequestV2Schema.parse(JSON.parse(artifacts.readPlainBody(approvalId) ?? 'null'))).toMatchObject({
-                    status: 'open', actionId: 'projects.script.run', actionArgs: { workspace, selection: { kind: 'named', name: 'build' } },
-                });
-                expect(hook.getCurrent().pendingKeys.build).toBe(true);
-                expect(hook.getCurrent().failure).toBeNull();
-                expect(actionOperationStore.getSnapshot().operationsByKey.size).toBe(0);
-                expect(dispatched).toEqual([]);
-                await act(async () => {
-                    await expect(decideApprovalAsInbox(workspace.serverId, approvalId, 'approve')).resolves.toMatchObject({
-                        ok: true, result: { status: 'failed' },
-                    });
-                });
-                expect(ApprovalRequestV2Schema.parse(JSON.parse(artifacts.readPlainBody(approvalId) ?? 'null'))).toMatchObject({
-                    status: 'failed', execution: { ok: false, errorCode: refusalCode, details: workerRefusal },
-                });
-                await vi.waitFor(() => expect(hook.getCurrent().failure).toMatchObject({ key: 'build', code: refusalCode, workerRefusal }));
-                await act(async () => { await pendingRun; });
-            } else {
-                await act(async () => { await hook.getCurrent().run('build', { kind: 'named', name: 'build' }); });
-            }
+            // The real placement owner refuses before an unsigned proposal can create approval custody.
+            await act(async () => { await hook.getCurrent().run('build', { kind: 'named', name: 'build' }); });
             expect(hook.getCurrent().failure).toMatchObject({ key: 'build', code: refusalCode });
             expect(hook.getCurrent().failure).toMatchObject({ workerRefusal });
             expect(hook.getCurrent().pendingKeys.build).toBeUndefined();
             expect(hook.getCurrent().consent).toBeNull();
             expect(hook.getCurrent().approvalId).toBeNull();
+            expect(artifacts.list()).toEqual([]);
             expect(actionOperationStore.getSnapshot().operationsByKey.size).toBe(0);
             expect(dispatched).toEqual([]);
             expect(onChanged).not.toHaveBeenCalled();
-            if (delivery === 'direct') {
+            if (policy === 'direct') {
                 // This is renewed explicit user intent, not an automatic fallback after the refusal.
                 await act(async () => { await hook.getCurrent().run('build', { kind: 'named', name: 'build' }, { kind: 'primary' }); });
                 expect(dispatched).toEqual([{ workspace, selection: { kind: 'named', name: 'build' }, choice: { kind: 'primary' } }]);
@@ -245,8 +236,11 @@ describe('Scripts canonical operation subscriptions', () => {
         const disposeExecutor = await installRealActionExecutorModuleLoader();
         const connection = await restoreServerAccountForTest({
             serverUrl: 'https://script-definition-scope.test', serverIdentityId: 'srv_script_definition_scope', accountId: 'account',
+            credentials: { token: createAccountTokenForTests('account', { currentAccount: true }) },
             request: async (url, init) => {
                 const path = new URL(String(url)).pathname;
+                const inspection = await inspectActionResponse(path, init);
+                if (inspection) return inspection;
                 if (path === '/v1/machines') {
                     const bearer = new Headers(init?.headers).get('Authorization')?.slice('Bearer '.length);
                     if (!bearer) throw new Error('Machine census must carry its captured Account');
@@ -259,13 +253,16 @@ describe('Scripts canonical operation subscriptions', () => {
             },
         });
         const lateRead = createDeferred<void>();
+        const changedRead = createDeferred<void>();
         try {
             const workspace: WorkspaceAddressV1 = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), machineId: 'source-machine', workspaceId: 'source-workspace', rootPath: '/source' };
             const answerFor = (command: string) => {
-                const manifest = { version: 1 as const, scripts: { build: { source: { kind: 'command' as const, command } } } };
-                return { definition: { basis: { kind: 'present' as const, hash: 'a'.repeat(64) }, document: { status: 'valid' as const,
+                const manifest = { version: 1 as const, workspace: { setup: [{ kind: 'command' as const, command: 'echo setup' }] },
+                    scripts: { build: { source: { kind: 'command' as const, command } } } };
+                return ProjectDefinitionInspectOutputSchema.parse({ definition: { basis: { kind: 'present' as const, hash: 'a'.repeat(64) }, document: { status: 'valid' as const,
                     bytes: JSON.stringify(manifest), original: manifest, manifest, diagnostics: [] } },
-                    detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete' as const, diagnostics: [] }, importCandidates: [] };
+                    detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete' as const, diagnostics: [] }, importCandidates: [],
+                    setupReadiness: { kind: 'current', reviewedEffectDigest: 'proven-effect', completedAtMs: 123 } });
             };
             inspectionTransport.answer = answerFor('previous-account-command');
             const homes = [workspace.serverId];
@@ -280,13 +277,27 @@ describe('Scripts canonical operation subscriptions', () => {
                 expect(read && 'error' in read ? read.error : null, `Initial inspection; RPC Accounts: ${inspectionTransport.accounts.join(',')}`).toBeNull();
                 expect(read).toMatchObject({ value: { definition: { document: { manifest: { scripts: { build: { source: { command: 'previous-account-command' } } } } } } } });
             });
-            inspectionTransport.hold = lateRead.promise;
+            inspectionTransport.answer = ProjectDefinitionInspectOutputSchema.parse({ ...answerFor('previous-account-command'),
+                setupReadiness: { kind: 'needsReview', code: 'project_setup_effect_changed' } });
+            inspectionTransport.hold = changedRead.promise;
+            const proven = hook.getCurrent().read;
             await act(async () => { hook.getCurrent().retry(); });
             await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account']));
+            expect(hook.getCurrent().read).toMatchObject({ refreshing: true, value: {
+                setupReadiness: { kind: 'current', reviewedEffectDigest: 'proven-effect', completedAtMs: 123 },
+            } });
+            const refreshing = hook.getCurrent().read;
+            expect(refreshing && 'value' in refreshing ? refreshing.value : undefined).toBe(proven && 'value' in proven ? proven.value : undefined);
+            await act(async () => { changedRead.resolve(); });
+            await vi.waitFor(() => expect(hook.getCurrent().read).toMatchObject({ value: { setupReadiness: {
+                kind: 'needsReview', code: 'project_setup_effect_changed',
+            } } }));
+            inspectionTransport.hold = lateRead.promise;
+            await act(async () => { hook.getCurrent().retry(); });
+            await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account', 'account']));
             inspectionTransport.answer = answerFor('replacement-account-command');
             const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-            const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'next-account' })).toString('base64url')}.signature` };
-            vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue(credentials);
+            const credentials = { token: createAccountTokenForTests('next-account', { currentAccount: true }) };
             await act(async () => { await TokenStorage.setCredentialsForServerUrl(connection.home.serverUrl, { serverId: connection.home.id }, credentials); });
             expect(hook.getCurrent().read).toBeNull();
             await vi.waitFor(() => expect(inspectionTransport.accounts).toContain('next-account'));
@@ -294,7 +305,7 @@ describe('Scripts canonical operation subscriptions', () => {
             lateRead.resolve();
             await vi.waitFor(() => expect(hook.getCurrent().read).toMatchObject({ value: { definition: { document: { manifest: { scripts: { build: { source: { command: 'replacement-account-command' } } } } } } } }));
             await hook.unmount();
-        } finally { lateRead.resolve(); await connection.dispose(); disposeExecutor(); }
+        } finally { changedRead.resolve(); lateRead.resolve(); await connection.dispose(); disposeExecutor(); }
     });
 
     it('shows another client\'s accepted Script before launch, keeps its dismissed completion, and retires disclosure with Account', async () => {
@@ -338,8 +349,7 @@ describe('Scripts canonical operation subscriptions', () => {
             await act(async () => { actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [terminal] }); actionOperationStore.dismissRecentSucceeded(); });
             expect(hook.getCurrent()?.snapshot.state).toBe('succeeded');
             const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-            const nextCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'next-account' })).toString('base64url')}.signature` };
-            vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue(nextCredentials);
+            const nextCredentials = { token: createAccountTokenForTests('next-account', { currentAccount: true }) };
             await act(async () => { expect(await TokenStorage.setCredentialsForServerUrl(connection.home.serverUrl, { serverId: connection.home.id }, nextCredentials)).toBe(true); });
             await vi.waitFor(() => expect(hook.getCurrent()).toBeNull());
             await act(async () => { actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [{ ...snapshot, operationId: 'replacement-script', scope: { ...snapshot.scope, accountId: 'next-account' } }] }); });

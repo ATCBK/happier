@@ -35,7 +35,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useLayoutMaxWidth, useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { renderPageHeaderText } from '@/components/ui/layout/PageHeader';
-import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
+import { projectSetupReadinessLine } from './projectSetupReadinessLine';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -472,11 +472,7 @@ function DeclaredScripts(
             memoryDemand={resolveProjectMemoryDemandV1(declaration.memoryDemand, props.manifest.workspace?.memoryDemand)}
             initialManagedConfiguration={props.initialManagedConfiguration}
             onOpenWorkerSettings={props.onOpenWorkers ?? undefined}
-            idleText={
-              setupReady
-                ? t('projects.scripts.run.notRun')
-                : t('projects.scripts.run.waitsForSetup')
-            }
+            idleText={setupReady ? t('projects.scripts.run.notRun') : ''}
             showDivider={index < scripts.length - 1}
           />
         ))
@@ -651,8 +647,9 @@ function SetupRow(
       : failed
         ? t('projects.scripts.setup.failed')
         : props.readiness?.kind === 'current'
-          ? `${t('projects.scripts.setup.readySince', { time: formatAsOfTime(props.readiness.completedAtMs) })} · ${stepCount}`
-          : presentation.text;
+          ? `${projectSetupReadinessLine(props.readiness)} · ${stepCount}`
+          // Setup states once what the script rows below wait for; the rows themselves stay quiet.
+          : projectSetupReadinessLine(props.readiness ?? null) ?? presentation.text;
   const pending = props.controller.pendingKeys.setup === true;
   const attachment = props.operation?.snapshot.domainRef?.kind === 'projectCommand' ? props.operation.snapshot.domainRef : null;
   const openOutput = () => {
@@ -683,7 +680,7 @@ function SetupRow(
       loading={pending}
       disabled={pending}
       title={
-        props.operation
+        props.operation || props.readiness?.kind === 'current'
           ? t('projects.scripts.setup.runAgain')
           : t('projects.scripts.setup.run')
       }
@@ -1325,18 +1322,18 @@ function useSetupOpening(
 
 const styles = StyleSheet.create((theme) => ({
   phoneEditor: { flex: 1, minHeight: 0 },
-  body: { gap: 12 },
-  phoneEdit: { alignSelf: 'flex-start', marginTop: 10, marginBottom: 8 },
-  setupTail: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  setupBanner: { marginHorizontal: 16, marginBottom: 12 },
+  body: { gap: theme.space.s12 },
+  phoneEdit: { alignSelf: 'flex-start', marginTop: theme.space.s10, marginBottom: theme.space.s8 },
+  setupTail: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 },
+  setupBanner: { marginHorizontal: theme.space.s16, marginBottom: theme.space.s12 },
   inlineTitle: { ...Typography.default(), ...happierPageTextMetrics('rowTitle') },
   inlineMeta: { ...Typography.default(), ...happierPageTextMetrics('rowDescription') },
   strong: { ...Typography.default('semiBold') },
   column: { width: '100%', alignSelf: 'center' },
   groupTitle: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start' },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  actionsPhone: { gap: 8, marginTop: 8 },
-  found: { gap: 4 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8, marginTop: theme.space.s8 },
+  actionsPhone: { gap: theme.space.s8, marginTop: theme.space.s8 },
+  found: { gap: theme.space.s4 },
   foundText: {
     ...Typography.default(),
     ...happierPageTextMetrics('sectionDescription'),
@@ -1345,14 +1342,14 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.default(),
     ...happierPageTextMetrics('sectionDescription'),
     paddingHorizontal: PAGE_LIST_METRICS.pageTextInsetPx,
-    paddingVertical: 8,
+    paddingVertical: theme.space.s8,
   },
   mono: { ...Typography.mono() },
-  badge: { marginLeft: 8 },
+  badge: { marginLeft: theme.space.s8 },
   groupMeta: {
     ...Typography.default(),
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.tertiary,
-    marginLeft: 8,
+    marginLeft: theme.space.s8,
   },
 }));

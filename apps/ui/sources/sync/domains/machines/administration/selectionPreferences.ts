@@ -43,8 +43,6 @@ export const MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 = Object.freeze({
     plugins: 'plugins.home',
     agents: 'agents',
     sourceControl: 'sourceControl.settings',
-    promptAssets: 'promptAssets.externalAssets',
-    promptRegistries: 'promptRegistries.browse',
     mcpServers: 'mcpServers.settings',
     relayDrift: 'server.relayDrift',
     externalSessions: 'externalSessions.settings',

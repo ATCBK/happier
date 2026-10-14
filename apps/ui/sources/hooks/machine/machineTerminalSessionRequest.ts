@@ -10,9 +10,15 @@ export function buildMachineTerminalSessionRequest(input: Readonly<{
     initialCommand?: string;
     workspace?: WorkspaceAddressV1;
 }>): DaemonTerminalEnsureRequest {
-    const request = input.launch
-        ? { terminalKey: input.terminalKey, cols: input.cols, rows: input.rows, launch: input.launch,
-            ...(input.launch.kind === 'package_script' ? { cwd: input.cwd ?? undefined } : {}) }
-        : { terminalKey: input.terminalKey, cwd: input.cwd ?? undefined, cols: input.cols, rows: input.rows, initialCommand: input.initialCommand };
-    return { ...request, ...(input.workspace ? { workspace: input.workspace } : {}) };
+    // This object also enters the signed Action envelope before JSON encoding.
+    // Absent options must be omitted at their producer, not serialized as undefined.
+    return {
+        terminalKey: input.terminalKey,
+        ...(input.cols === undefined ? {} : { cols: input.cols }),
+        ...(input.rows === undefined ? {} : { rows: input.rows }),
+        ...(input.cwd !== null && (!input.launch || input.launch.kind === 'package_script') ? { cwd: input.cwd } : {}),
+        ...(input.launch ? { launch: input.launch }
+            : input.initialCommand === undefined ? {} : { initialCommand: input.initialCommand }),
+        ...(input.workspace ? { workspace: input.workspace } : {}),
+    };
 }
