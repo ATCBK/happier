@@ -1,7 +1,7 @@
 import type { AppPaneAction, AppPaneState } from '@/components/appShell/panes/model/appPaneReducer';
-import { EMPTY_TERMINAL_WORKSPACE, readSessionTerminalWorkspace, type SessionTerminalWorkspaceCommand } from './sessionTerminalWorkspace';
+import { EMPTY_TERMINAL_WORKSPACE, readSessionTerminalWorkspace, selectVisibleSessionTerminalTabs, type SessionTerminalWorkspaceCommand } from './sessionTerminalWorkspace';
 import { openSessionTerminalInDetails } from './embeddedTerminalDocking';
-import type { SessionTerminalPendingActionApprovalV1 } from '@happier-dev/protocol/terminal/workspace';
+import type { SessionTerminalPendingActionApprovalV1, SessionTerminalTabV1 } from '@happier-dev/protocol/terminal/workspace';
 import { parseSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { parseProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
 import { buildProjectTerminalKey, resolveProjectTerminalScope } from '@/components/projects/detail/projectTerminalScope';
@@ -33,6 +33,10 @@ export function subscribeSessionTerminalWorkspace(listener: () => void): () => v
 export function readSessionTerminalWorkspaceForScope(scopeId: string, initialWorkspace?: import('@happier-dev/protocol').SessionTerminalWorkspaceV1) {
     const scope = (mountedOwner?.getReadState?.() ?? mountedOwner?.getState())?.scopes[scopeId];
     return mountedOwner && (scope || initialWorkspace) ? readSessionTerminalWorkspace(scope?.bottom.tabState.terminal ?? initialWorkspace) : null;
+}
+export function readVisibleSessionTerminalTabsForScope(scopeId: string): readonly SessionTerminalTabV1[] {
+    const state = mountedOwner?.getReadState?.() ?? mountedOwner?.getState();
+    return state ? selectVisibleSessionTerminalTabs(state, scopeId) : [];
 }
 /** Explicit open intent initializes a new host through the existing pane owner; never on mount. */
 export function initializeSessionTerminalWorkspaceForScope(scopeId: string, workspace: import('@happier-dev/protocol').SessionTerminalWorkspaceV1): boolean {

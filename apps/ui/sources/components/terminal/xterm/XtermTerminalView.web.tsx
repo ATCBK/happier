@@ -104,15 +104,18 @@ function suppressQueuedXtermViewportSync(term: Terminal): void {
     viewport.syncScrollArea = () => {};
 }
 
+const XTERM_TRANSPARENT_BACKGROUND = '#00000000';
+
 export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerminalViewProps>(function XtermTerminalView(
     props,
     ref,
 ) {
     const { theme } = useUnistyles();
-    const glassBackground = useGlassSurfaceColor(theme.colors.surface.base, 'content');
-    // xterm resolves the CSS keyword `transparent` to opaque black (its viewport and WebGL clear), which
-    // hides the foreground ink on a light page; an explicit zero-alpha colour stays transparent.
-    const backgroundColor = glassBackground === 'transparent' ? '#00000000' : glassBackground;
+    // The pane frame already paints the content material (glass or solid) behind the terminal, so the
+    // terminal paints none of its own. xterm resolves the CSS keyword `transparent` to opaque black (its
+    // viewport and WebGL clear), which hides the foreground ink on a light page; an explicit zero-alpha
+    // colour stays transparent.
+    const backgroundColor = XTERM_TRANSPARENT_BACKGROUND;
     const selectionBackgroundColor = useGlassSurfaceColor(theme.colors.surface.selected, 'content', false);
     const backgroundColorRef = React.useRef(backgroundColor);
     backgroundColorRef.current = backgroundColor;
@@ -368,7 +371,7 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
 
         replayWritesInFlightRef.current = 0;
         term.open(container);
-        const find = loadXtermSearchAddon(term, resolveXtermFindColors(theme.colors.find, backgroundColorRef.current));
+        const find = loadXtermSearchAddon(term, resolveXtermFindColors(theme.colors.find, theme.colors.surface.base));
         findRef.current = find;
         onFindEngineRef.current?.(find);
 
@@ -587,13 +590,13 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
                 cursor: theme.colors.text.primary,
                 selectionBackground: selectionBackgroundColor,
             };
-            findRef.current?.setColors(resolveXtermFindColors(theme.colors.find, backgroundColor));
+            findRef.current?.setColors(resolveXtermFindColors(theme.colors.find, theme.colors.surface.base));
         } catch {
             // ignored
         }
 
         fitTerminal('resize');
-    }, [backgroundColor, selectionBackgroundColor, fitTerminal, props.fontSize, props.lineHeight, theme.colors.text.primary, theme.colors.find]);
+    }, [backgroundColor, selectionBackgroundColor, fitTerminal, props.fontSize, props.lineHeight, theme.colors.text.primary, theme.colors.find, theme.colors.surface.base]);
 
     return (
         <div
@@ -611,6 +614,9 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
                 minHeight: 0,
                 minWidth: 0,
                 overflow: 'hidden',
+                // xterm's canvases carry their own z-index; keeping them in this stacking context stops
+                // the link layer from sitting over controls that overlap the terminal (the phone tab bar).
+                isolation: 'isolate',
             }}
         />
     );

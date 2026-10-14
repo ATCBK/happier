@@ -25,10 +25,9 @@ import { SessionTerminalWorkspaceView } from '@/components/sessions/terminal/str
 import { useSessionTerminalWorkspace } from '@/components/sessions/terminal/useSessionTerminalWorkspace';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { KeyboardShortcutLabelsContext } from '@/keyboard/shortcutLabels';
-import { Modal } from '@/modal';
+import { presentTerminalActionFailure } from '@/components/sessions/terminal/terminalActionFailure';
 import { getStorage } from '@/sync/domains/state/storage';
 import { selectLocalServiceLaunchTargets, useLocalServiceLauncherState } from '@/sync/domains/local/services/launch';
-import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
@@ -71,7 +70,7 @@ export const SessionBottomPanel = React.memo((props: Readonly<{ sessionId: strin
 
     const run = React.useCallback(async (actionId: Parameters<typeof execute>[0], input?: Readonly<Record<string, unknown>>) => {
         const result = await execute(actionId, input);
-        if (!result.ok) Modal.alert(t('terminalWorkspace.actionFailed'));
+        if (!result.ok) presentTerminalActionFailure(result);
         return result;
     }, [execute]);
 

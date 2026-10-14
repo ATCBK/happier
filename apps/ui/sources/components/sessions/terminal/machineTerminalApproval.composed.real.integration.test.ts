@@ -824,9 +824,10 @@ describe('Machine terminal approval receipt across Home aliases (real SQLite)', 
         // The pane/member outlives its view. Both the returning view and its
         // remount recover actual requester custody through the real census;
         // neither carries a cached process id nor asks to approve another open.
-        for (const mount of targetKind === 'own-session' || targetKind === 'paired-terminal' ? [] : ['returning', 'reopened'] as const) {
+        for (const mount of targetKind === 'own-session' || targetKind === 'paired-terminal' ? [] : ['returning', 'reopened', 'cold-alias'] as const) {
             const href = buildScopedSessionRouteHref({ sessionId: session.id,
-                serverId: mount === 'returning' ? browserProfileId : homeId });
+                serverId: mount === 'reopened' ? homeId : browserProfileId });
+            let coldHost: typeof paneHost | undefined;
             if (mount === 'returning') {
                 // ApprovalSessionContextCard uses the Expo URL ingress. Its
                 // return omits the original pane's bottom=terminal presentation.
@@ -838,10 +839,23 @@ describe('Machine terminal approval receipt across Home aliases (real SQLite)', 
                 // Deliver its produced bare URL through real provider adoption.
                 expoRouter.push(href);
                 await paneHost.rerender();
-            } else {
+            } else if (mount === 'reopened') {
                 // Session-list rows live in the app rail, alongside an ordinary destination pane.
                 await act(async () => { expect(navigation.openHref('/projects')).toBe(true); });
                 await act(async () => { expect(navigation.openHref(href)).toBe(true); });
+            } else {
+                // Full reload: retire the provider, round-trip its actual saved
+                // layout and mount from the alias URL with terminal presentation.
+                await paneHost.unmount();
+                const settings = store.getState().localSettings;
+                store.setState({ localSettings: { ...settings,
+                    workspaceLayoutV1: JSON.parse(JSON.stringify(settings.workspaceLayoutV1)) } });
+                expect(parseWorkspaceLayout(store.getState().localSettings.workspaceLayoutV1[layoutKey])?.tabs['original-pane'])
+                    .toMatchObject({ preview: false, target: { params: { serverId: homeId, bottom: 'terminal' } } });
+                expoRouter.push(`${href}&bottom=terminal`);
+                coldHost = await renderHook(() => useMachineTerminalActionAdmission({ terminalKey: request.terminalKey,
+                    machineId: machine.id, serverId: learned.id, scopeId, memberId: member.id }), { wrapper });
+                context.onTestFinished(coldHost.unmount);
             }
             const pane = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
             expect(pane.id, 'C14 preview departure must retain the original pane before return adoption').toBe('original-pane');
@@ -861,7 +875,7 @@ describe('Machine terminal approval receipt across Home aliases (real SQLite)', 
                 expect(observed, mount).toEqual({ ok: true, terminalId: receipt.terminalId, reused: true });
                 expect(hook.getCurrent().approvalPending).toBe(false);
                 expect(await db.artifact.count({ where: { accountId: requester.id } })).toBe(1);
-            } finally { interest.abort(); await admission; await hook.unmount(); }
+            } finally { interest.abort(); await admission; await hook.unmount(); await coldHost?.unmount(); }
         }
         expect(lifecycle.getFiniteTerminalSessions().list()).toHaveLength(1);
         expect(spawn).toHaveBeenCalledTimes(1);

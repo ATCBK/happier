@@ -3,6 +3,7 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { splitCanvasReduce } from '@/components/appShell/splitCanvas/model/splitCanvasReducer';
 import type { SplitCanvasLeafNode, SplitCanvasNode, SplitCanvasState } from '@/components/appShell/splitCanvas/model/splitCanvasTypes';
 import { collectSplitCanvasLeaves } from '@/components/appShell/splitCanvas/model/splitCanvasTree';
+import type { AppPaneState } from '@/components/appShell/panes/model/appPaneReducer';
 
 export type SessionTerminalWorkspaceCommand =
     | { type: 'open'; terminal: SessionTerminalMemberV1 }
@@ -31,6 +32,16 @@ export function readSessionTerminalWorkspace(value: unknown): SessionTerminalWor
     if (parsed.success) return value as SessionTerminalWorkspaceV1;
     const stored = storedWorkspaceSchema.safeParse(value);
     return stored.success ? stored.data : initialWorkspace;
+}
+
+/** Pane visibility and terminal tab selection share the AppPane workspace owner. */
+export function selectVisibleSessionTerminalTabs(state: AppPaneState, scopeId: string): readonly SessionTerminalTabV1[] {
+    const scope = state.scopes[scopeId];
+    const selected = scope?.bottom.selectedDestination;
+    if (state.activeScopeId !== scopeId || !scope?.bottom.isOpen
+        || selected?.kind !== 'builtin' || selected.id !== 'terminal') return [];
+    const workspace = readSessionTerminalWorkspace(scope.bottom.tabState.terminal);
+    return workspace.tabs.filter(tab => tab.id === workspace.activeTabId);
 }
 
 function leaf(terminal: SessionTerminalMemberV1): SplitCanvasLeafNode<SessionTerminalMemberV1> {

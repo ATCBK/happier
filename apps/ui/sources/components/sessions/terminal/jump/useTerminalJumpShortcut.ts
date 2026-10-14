@@ -6,8 +6,7 @@ import { parseSessionPaneScopeId } from '@/components/sessions/panes/sessionPane
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import type { KeyboardShortcutHandlers } from '@/keyboard/runtime';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { Modal } from '@/modal';
-import { t } from '@/text';
+import { presentTerminalActionFailure } from '@/components/sessions/terminal/terminalActionFailure';
 
 import { useSessionTerminalAvailability } from '../useSessionTerminalAvailability';
 import { useSessionTerminalAction } from '../useSessionTerminalAction';
@@ -35,10 +34,9 @@ export function useTerminalJumpShortcut(paneScopeId: string): void {
         if (!enabled) return NO_HANDLERS;
         const run = (actionId: 'session.terminals.open' | 'session.terminals.split') => {
             void execute(actionId, { target: { kind: 'workspace_shell' } }).then((result) => {
-                if (!result.ok || (result.result && typeof result.result === 'object' && 'ok' in result.result && result.result.ok === false)) {
-                    Modal.alert(t('terminalWorkspace.actionFailed'));
-                }
-            }).catch(() => Modal.alert(t('terminalWorkspace.actionFailed')));
+                if (!result.ok) presentTerminalActionFailure(result);
+                else if (result.result && typeof result.result === 'object' && 'ok' in result.result && result.result.ok === false) presentTerminalActionFailure({});
+            }).catch(() => presentTerminalActionFailure({}));
         };
         return {
             ...(runtime ? { 'terminal.jump': () => runtime.open(undefined, undefined, { terminals: { scopeId: paneScopeId } }) } : {}),

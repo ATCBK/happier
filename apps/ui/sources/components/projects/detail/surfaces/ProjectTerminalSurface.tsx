@@ -21,7 +21,7 @@ import { useMachineListForServer, useWorkspaceRefs } from '@/sync/domains/state/
 import { useDeviceType } from '@/utils/platform/responsive';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
-import { Modal } from '@/modal';
+import { presentTerminalActionFailure } from '@/components/sessions/terminal/terminalActionFailure';
 import { t } from '@/text';
 import { buildProjectTerminalKey, resolveProjectTerminalScope } from '../projectTerminalScope';
 import { SessionTerminalTrustNotice } from '@/components/sessions/terminal/strip/SessionTerminalTrustNotice';
@@ -83,7 +83,7 @@ export const ProjectTerminalSurface = React.memo((props: Readonly<{
         const selectedInput = target && typeof target === 'object' && 'kind' in target && target.kind === 'workspace_shell'
             ? { ...input, target: { ...target, workspace: authority.workspace } } : input;
         const result = await execute(actionId, selectedInput);
-        if (!result.ok) Modal.alert(t('terminalWorkspace.actionFailed'));
+        if (!result.ok) presentTerminalActionFailure(result);
         return result;
     }, [authority, execute, retired]);
     const tabMenu = useSessionTerminalTabMenu({ scopeId: props.scopeId, workspace, tabs, run });

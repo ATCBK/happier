@@ -3,7 +3,7 @@ import * as React from 'react';
 import { parseProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
 import { parseSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { EMPTY_TERMINAL_WORKSPACE } from '@/components/sessions/terminal/sessionTerminalWorkspace';
-import { readSessionTerminalWorkspaceForScope, subscribeSessionTerminalWorkspace } from '@/components/sessions/terminal/sessionTerminalWorkspaceRuntime';
+import { readSessionTerminalWorkspaceForScope, readVisibleSessionTerminalTabsForScope, subscribeSessionTerminalWorkspace } from '@/components/sessions/terminal/sessionTerminalWorkspaceRuntime';
 import { useSessionTerminalActionExecute } from '@/components/sessions/terminal/useSessionTerminalWorkspace';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -52,7 +52,7 @@ function scopeServerId(scopeId: string): string | null {
 
 type OutputTerminalRef = Readonly<{ terminalId?: string | null; machineId: string }>;
 
-/** The host's bottom terminal tab that already shows this command's PTY, if any. */
+/** Retained PTY membership for explicit focus/open reuse, independent of pane visibility. */
 function findOutputTerminalInHost(scopeId: string, attachment: OutputTerminalRef) {
   const workspace = readSessionTerminalWorkspaceForScope(
     scopeId,
@@ -78,7 +78,9 @@ export function useProjectCommandOutputDocked(attachment: OutputTerminalRef | nu
   const machineId = attachment?.machineId ?? null;
   const subscribe = subscribeSessionTerminalWorkspace;
   const read = React.useCallback(
-    () => Boolean(scopeId && terminalId && machineId && findOutputTerminalInHost(scopeId, { terminalId, machineId })),
+    () => Boolean(scopeId && terminalId && machineId && readVisibleSessionTerminalTabsForScope(scopeId)
+      .some(tab => tab.terminals.some(member => member.target.kind === 'terminal_view'
+        && member.target.terminalId === terminalId && member.target.machineId === machineId))),
     [machineId, scopeId, terminalId],
   );
   return React.useSyncExternalStore(subscribe, read, read);
