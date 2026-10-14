@@ -12949,7 +12949,6 @@ const walkthroughTranslations = { 'zh-Hant': {
             notice: {
                 stale: '寫完後有檔案發生了變更',
                 refresh: '重新整理導讀',
-                failed: ({ reason }) => `撰寫已停止 · ${reason}`,
                 failedGeneric: '撰寫已停止',
                 tryAgain: '重試',
                 chooseModel: '選擇模型',
@@ -12960,6 +12959,7 @@ const walkthroughTranslations = { 'zh-Hant': {
                 incomplete: '部分變更無法列出。此處內容準確，但不聲稱完整。',
                 undo: '復原',
             },
+            generationFailure: { invalidRequest: '這台機器無法讀取該請求。它的 Happier 可能已過時。', reviewRequest: '請更新這台機器上的 Happier，然後重試', modelUnavailable: '所選模型目前無法使用。', machineUnavailable: 'Happier 無法連線到這台機器。', reconnectMachine: '請重新連線後重試', disabled: '「解釋變更」已關閉。', enableExplain: '在設定中開啟' },
             none: { title: '尚無導讀', reason: '導讀會依序閱讀這些變更，並在確切程式碼旁逐一說明。所有檔案已在檔案中。', showFiles: '顯示檔案' },
             explain: { notInStory: '不在故事中', readInWalkthrough: '在導讀中閱讀' },
         }),

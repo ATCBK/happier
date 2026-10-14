@@ -13015,7 +13015,6 @@ const walkthroughTranslations = { es: {
             notice: {
                 stale: 'Hay archivos que cambiaron después de escribir esto',
                 refresh: 'Actualizar recorrido',
-                failed: ({ reason }) => `La escritura se detuvo · ${reason}`,
                 failedGeneric: 'La escritura se detuvo',
                 tryAgain: 'Reintentar',
                 chooseModel: 'Elegir modelo',
@@ -13026,6 +13025,7 @@ const walkthroughTranslations = { es: {
                 incomplete: 'Algunos cambios no se pudieron listar. Lo que hay es exacto; nada afirma estar completo.',
                 undo: 'Deshacer',
             },
+            generationFailure: { invalidRequest: 'Esta máquina no pudo leer la solicitud. Puede que su Happier esté desactualizado.', reviewRequest: 'Actualiza Happier en esta máquina e inténtalo de nuevo', modelUnavailable: 'El modelo seleccionado no está disponible ahora mismo.', machineUnavailable: 'Happier no puede conectar con esta máquina.', reconnectMachine: 'Reconéctala e inténtalo de nuevo', disabled: '«Explicar cambios» está desactivado.', enableExplain: 'Actívalo en los ajustes' },
             none: { title: 'Aún no hay recorrido', reason: 'Un recorrido lee estos cambios en orden y explica cada uno junto a su código exacto. Todos los archivos ya están en Archivos.', showFiles: 'Mostrar archivos' },
             explain: { notInStory: 'No forma parte de la historia', readInWalkthrough: 'Leer en el recorrido' },
         }),

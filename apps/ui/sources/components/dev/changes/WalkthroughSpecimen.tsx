@@ -8,7 +8,9 @@ import { ScmComparisonPhoneHeader } from '@/components/sessions/files/comparison
 import { listFilesComparisonScopeOptions, resolveFilesComparisonLabel } from '@/components/sessions/files/comparison/filesComparison';
 import { WalkthroughContents } from '@/components/sessions/files/walkthrough/WalkthroughContents';
 import { WalkthroughView, type WalkthroughViewLayout, type WalkthroughViewProps } from '@/components/sessions/files/walkthrough/WalkthroughView';
-import { buildWalkthroughReading, type WalkthroughReadingInput } from '@/components/sessions/files/walkthrough/walkthroughReading';
+import type { ScmDiffSummaryFailurePresentation } from '@/sync/domains/scm/diffSummary/state';
+import { ScmDiffSummaryStartOptions } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
+import { buildWalkthroughReading, EMPTY_WALKTHROUGH_READING, type WalkthroughReadingInput } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
@@ -21,6 +23,7 @@ import {
     SPECIMEN_ANALYSIS_MOST,
     SPECIMEN_ANALYSIS_STOPPED,
     SPECIMEN_COMPARISON,
+    SPECIMEN_START_FAILURES,
     SPECIMEN_WALKTHROUGH,
     SPECIMEN_WALKTHROUGH_MERGED,
     specimenReviewedRefs,
@@ -93,6 +96,23 @@ function LiveMarks(props: Readonly<{
                 onToggleReviewed={(stop) => setRefs((current) => (stop.reviewed
                     ? current.filter((ref) => !stop.changeRefs.includes(ref))
                     : [...current, ...stop.changeRefs]))}
+            />
+        </View>
+    );
+}
+
+/** The empty state with its start: the model it will use beside Start, and the typed reason a start was refused. */
+function StartFrame(props: Readonly<{ phone: boolean; failure: ScmDiffSummaryFailurePresentation | null; disabled?: boolean }>) {
+    return (
+        <View style={styles.fill}>
+            {props.phone ? <SpecimenBar view="walkthrough" phone /> : <SpecimenBar view="walkthrough" pending />}
+            <WalkthroughView
+                reading={EMPTY_WALKTHROUGH_READING}
+                layout={props.phone ? 'phone' : 'wide'}
+                scopeLabel={resolveFilesComparisonLabel(PENDING, null)}
+                onShowFiles={noop}
+                start={{ onStart: noop, disabled: props.disabled, options: <ScmDiffSummaryStartOptions testID="walkthrough-start-options" failure={props.failure} message={null}
+                    model={{ value: '', onChange: noop, testID: 'walkthrough-model-choice' }} onChooseModel={noop} onEnableExplain={noop} /> }}
             />
         </View>
     );
@@ -192,6 +212,11 @@ function PhoneContents() {
 export type WalkthroughSpecimenFrame = Readonly<{ id: string; title: string; render: (phone: boolean) => React.ReactElement }>;
 
 export const WALKTHROUGH_SPECIMEN_FRAMES: readonly WalkthroughSpecimenFrame[] = [
+    { id: 'S1', title: 'Empty · Start with its model', render: (phone) => <StartFrame phone={phone} failure={null} /> },
+    { id: 'S2', title: 'Empty · refused: outdated machine', render: (phone) => <StartFrame phone={phone} failure={SPECIMEN_START_FAILURES.outdated} /> },
+    { id: 'S3', title: 'Empty · refused: model unavailable', render: (phone) => <StartFrame phone={phone} failure={SPECIMEN_START_FAILURES.model} /> },
+    { id: 'S4', title: 'Empty · refused: machine unreachable', render: (phone) => <StartFrame phone={phone} failure={SPECIMEN_START_FAILURES.unreachable} /> },
+    { id: 'S5', title: 'Empty · Explain changes is off', render: (phone) => <StartFrame phone={phone} failure={SPECIMEN_START_FAILURES.explainOff} disabled /> },
     { id: 'LongModel', title: 'Contract-valid long model identity', render: (phone) => <LiveMarks
         input={COMPLETE} reviewedCount={0} bar={!phone} view={{ ...base(phone ? 'phone' : 'wide'),
             modelLabel: 'synthetic-provider/descriptive-model-identity-with-an-unbounded-producer-label' }} /> },
@@ -206,6 +231,12 @@ export const WALKTHROUGH_SPECIMEN_FRAMES: readonly WalkthroughSpecimenFrame[] = 
     { id: 'A2', title: 'WT1-A2p · contents sheet', render: () => <PhoneContents /> },
     { id: 'L', title: 'WT2-L · lifecycle', render: () => <Lifecycle /> },
     { id: 'L7', title: 'WT2-L7 · failed', render: (phone) => <LiveMarks input={FAILED} reviewedCount={0} bar={!phone} view={{ ...base(phone ? 'phone' : 'wide'), onRetry: noop, onChooseModel: noop }} /> },
+    { id: 'L7m', title: 'WT2-L7 · regeneration refused: model unavailable, reading kept', render: (phone) => <LiveMarks input={COMPLETE} reviewedCount={0} bar={!phone}
+        view={{ ...base(phone ? 'phone' : 'wide'), failure: SPECIMEN_START_FAILURES.model, onRetry: noop, onChooseModel: noop }} /> },
+    { id: 'L7o', title: 'WT2-L7 · regeneration refused: outdated machine, reading kept', render: (phone) => <LiveMarks input={COMPLETE} reviewedCount={0} bar={!phone}
+        view={{ ...base(phone ? 'phone' : 'wide'), failure: SPECIMEN_START_FAILURES.outdated, onRetry: noop }} /> },
+    { id: 'L7e', title: 'WT2-L7 · regeneration refused: Explain changes is off, reading kept', render: (phone) => <LiveMarks input={COMPLETE} reviewedCount={0} bar={!phone}
+        view={{ ...base(phone ? 'phone' : 'wide'), failure: SPECIMEN_START_FAILURES.explainOff, onRetry: noop, onEnableExplain: noop }} /> },
     { id: 'L8', title: 'WT2-L8 · Machine offline', render: (phone) => <LiveMarks input={COMPLETE} reviewedCount={2}
         view={{ ...base(phone ? 'phone' : 'wide'), offline: { machine: 'MacBook Pro', time: '10:42' } }} /> },
     {

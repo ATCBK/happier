@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { View } from 'react-native';
 
+import { ScmDiffSummaryFailureNotice } from '@/components/sessions/files/comparison/ScmDiffSummaryFailureNotice';
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
+import { ScmDiffSummaryStartOptions, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
 import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 import { t } from '@/text';
 
@@ -29,34 +31,29 @@ export type ScmCommitsViewProps = Readonly<{
 export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommitsViewProps) {
     const plan = props.plan;
     const bound = plan.binding;
+    const openExplainSetting = useOpenExplainChangesSetting();
+    const [choosingModel, setChoosingModel] = React.useState(false);
     const canStart = plan.supportedComparison && bound.canSend && bound.launch.canLaunchExecutionRuns;
     const addToSaved = plan.addToSaved;
     const start = React.useMemo(() => {
         if (!plan.supportedComparison) {
-            return { onStart: () => {}, busy: false, disabled: true, reason: t('commitProposal.none.workingTreeOnly') };
+            return { onStart: () => {}, busy: false, disabled: true, reason: t('commitProposal.none.workingTreeOnly'), options: null };
         }
         if (addToSaved) {
-            return { onStart: () => { if (bound.canControl) void addToSaved(); }, busy: false, disabled: !bound.canControl,
-                reason: bound.error ?? (!bound.canControl ? t('walkthroughStart.unavailable') : null) };
+            return { onStart: () => { if (bound.canControl) void addToSaved(); }, busy: false, disabled: !bound.canControl, reason: null,
+                options: <ScmDiffSummaryStartOptions {...scmDiffSummaryStartOptionsOf(bound, { testID: 'commit-proposal-start-options',
+                    prerequisite: !bound.canControl ? t('walkthroughStart.unavailable') : null, onEnableExplain: openExplainSetting })} /> };
         }
-        const ready = canStart && bound.selected.success && bound.modelAvailable;
+        const ready = canStart && !bound.startBlocker && bound.selected.success && bound.modelAvailable;
         return {
             onStart: () => { if (ready) void bound.onStart(['commitPlan']); },
             busy: bound.starting,
             disabled: !ready,
-            reason: bound.error ?? (!ready ? t('walkthroughStart.unavailable') : null),
-            modelPicker: (
-                <ScmDiffSummaryModelPicker
-                    value={bound.model}
-                    onChange={bound.setModel}
-                    modelChoices={bound.modelChoices}
-                    machineId={bound.machine?.machineId}
-                    serverId={bound.serverId}
-                    testID="commit-proposal-model-choice"
-                />
-            ),
+            reason: null,
+            options: <ScmDiffSummaryStartOptions {...scmDiffSummaryStartOptionsOf(bound, { testID: 'commit-proposal-start-options', modelTestID: 'commit-proposal-model-choice',
+                prerequisite: !ready ? t('walkthroughStart.unavailable') : null, onEnableExplain: openExplainSetting })} />,
         };
-    }, [addToSaved, bound, canStart, plan.supportedComparison]);
+    }, [addToSaved, bound, canStart, openExplainSetting, plan.supportedComparison]);
     // The proposal's own Run and saved result: the offer says only that the proposal has an update, never that a commit landed.
     const { viewModel, machine, cwd } = bound;
     const runId = viewModel?.executionRunId ?? null;
@@ -68,9 +65,16 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
                 message: t('sessionWork.notify.commitPlanUpdate') }} /> : null;
     const onShowInGit = props.onShowInGit;
     const actions = React.useMemo(() => (onShowInGit ? { ...plan.actions, onShowInGit } : plan.actions), [onShowInGit, plan.actions]);
+    const failureNotice = plan.phase === 'ready' && bound.generationFailure ? (
+        <ScmDiffSummaryFailureNotice testID="commit-proposal" failure={bound.generationFailure}
+            onChooseModel={() => setChoosingModel(true)} onEnableExplain={openExplainSetting}
+            onRetry={canStart ? () => { void bound.onStart(['commitPlan']); } : undefined} />
+    ) : null;
     return (
         <View style={{ flex: 1, minHeight: 0 }}>
             {props.renderBar(plan.proposal?.groups.length ?? null)}
+            {choosingModel ? <ScmDiffSummaryModelPicker value={bound.model} onChange={bound.setModel} modelChoices={bound.modelChoices}
+                machineId={bound.machine?.machineId} serverId={bound.serverId} /> : null}
             <CommitProposalView
                 proposal={plan.proposal}
                 phase={plan.phase}
@@ -84,6 +88,7 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
                 focusGroupId={props.focusGroupId ?? null}
                 busy={plan.busy}
                 error={plan.phase === 'ready' ? plan.error : null}
+                failureNotice={failureNotice}
                 active={props.active}
                 onUndoDiscard={plan.undoDiscard}
             />

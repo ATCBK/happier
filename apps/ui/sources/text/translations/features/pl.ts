@@ -12979,7 +12979,6 @@ const walkthroughTranslations = { pl: {
             notice: {
                 stale: 'Pliki zmieniły się po napisaniu tego',
                 refresh: 'Odśwież przewodnik',
-                failed: ({ reason }) => `Pisanie przerwane · ${reason}`,
                 failedGeneric: 'Pisanie przerwane',
                 tryAgain: 'Spróbuj ponownie',
                 chooseModel: 'Wybierz model',
@@ -12990,6 +12989,7 @@ const walkthroughTranslations = { pl: {
                 incomplete: 'Niektórych zmian nie udało się wymienić. To, co tu jest, jest dokładne; nic nie twierdzi, że jest kompletne.',
                 undo: 'Cofnij',
             },
+            generationFailure: { invalidRequest: 'Ta maszyna nie mogła odczytać żądania. Jej Happier może być nieaktualny.', reviewRequest: 'Zaktualizuj Happier na tej maszynie i spróbuj ponownie', modelUnavailable: 'Wybrany model jest teraz niedostępny.', machineUnavailable: 'Happier nie może połączyć się z tą maszyną.', reconnectMachine: 'Połącz ją ponownie i spróbuj jeszcze raz', disabled: '„Wyjaśniaj zmiany” jest wyłączone.', enableExplain: 'Włącz to w ustawieniach' },
             none: { title: 'Brak przewodnika', reason: 'Przewodnik czyta te zmiany po kolei i wyjaśnia każdą obok jej dokładnego kodu. Wszystkie pliki są już w Plikach.', showFiles: 'Pokaż pliki' },
             explain: { notInStory: 'Poza historią', readInWalkthrough: 'Czytaj w przewodniku' },
         }),

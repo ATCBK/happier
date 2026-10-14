@@ -12965,7 +12965,6 @@ const walkthroughTranslations = { it: {
             notice: {
                 stale: 'Alcuni file sono cambiati dopo la stesura',
                 refresh: 'Aggiorna il percorso',
-                failed: ({ reason }) => `Scrittura interrotta · ${reason}`,
                 failedGeneric: 'Scrittura interrotta',
                 tryAgain: 'Riprova',
                 chooseModel: 'Scegli modello',
@@ -12976,6 +12975,7 @@ const walkthroughTranslations = { it: {
                 incomplete: 'Alcune modifiche non sono state elencate. Ciò che c’è è esatto; nulla dice di essere completo.',
                 undo: 'Annulla',
             },
+            generationFailure: { invalidRequest: 'Questa macchina non è riuscita a leggere la richiesta. Il suo Happier potrebbe essere obsoleto.', reviewRequest: 'Aggiorna Happier su questa macchina e riprova', modelUnavailable: 'Il modello selezionato non è disponibile in questo momento.', machineUnavailable: 'Happier non riesce a raggiungere questa macchina.', reconnectMachine: 'Riconnettila e riprova', disabled: '“Spiega le modifiche” è disattivato.', enableExplain: 'Attivalo nelle impostazioni' },
             none: { title: 'Ancora nessun percorso', reason: 'Un percorso legge queste modifiche in ordine e spiega ciascuna accanto al suo codice esatto. Tutti i file sono già in File.', showFiles: 'Mostra i file' },
             explain: { notInStory: 'Fuori dalla storia', readInWalkthrough: 'Leggi nel percorso' },
         }),

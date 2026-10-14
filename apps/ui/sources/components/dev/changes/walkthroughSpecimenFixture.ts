@@ -1,3 +1,4 @@
+import { SCM_DIFF_SUMMARY_DISABLED_FAILURE, type ScmDiffSummaryFailurePresentation } from '@/sync/domains/scm/diffSummary/state';
 import type { ScmComparison, ScmComparisonFile, ScmDiffSummaryAnalysisCoverage, ScmDiffSummaryWalkthrough } from '@happier-dev/protocol';
 
 /**
@@ -230,3 +231,11 @@ export const SPECIMEN_WALKTHROUGH_MERGED: ScmDiffSummaryWalkthrough = {
         SPECIMEN_WALKTHROUGH.stops[4]!,
     ],
 };
+
+/** The typed refusals a start can end in (the diff-summary store's presentation), for the empty-state specimens. */
+export const SPECIMEN_START_FAILURES = {
+    outdated: { reason: 'invalidRequest', messageKey: 'walkthrough.generationFailure.invalidRequest', nextAction: 'reviewRequest', nextActionKey: 'walkthrough.generationFailure.reviewRequest' },
+    model: { reason: 'modelUnavailable', messageKey: 'walkthrough.generationFailure.modelUnavailable', nextAction: 'chooseModel', nextActionKey: 'walkthrough.notice.chooseModel' },
+    unreachable: { reason: 'machineUnavailable', messageKey: 'walkthrough.generationFailure.machineUnavailable', nextAction: 'reconnectMachine', nextActionKey: 'walkthrough.generationFailure.reconnectMachine' },
+    explainOff: SCM_DIFF_SUMMARY_DISABLED_FAILURE,
+} as const satisfies Record<string, ScmDiffSummaryFailurePresentation>;

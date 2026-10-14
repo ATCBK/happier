@@ -12953,7 +12953,6 @@ const walkthroughTranslations = { ja: {
             notice: {
                 stale: '作成後にファイルが変更されました',
                 refresh: 'ウォークスルーを更新',
-                failed: ({ reason }) => `作成が止まりました · ${reason}`,
                 failedGeneric: '作成が止まりました',
                 tryAgain: '再試行',
                 chooseModel: 'モデルを選択',
@@ -12964,6 +12963,7 @@ const walkthroughTranslations = { ja: {
                 incomplete: '一部の変更を一覧にできませんでした。表示中の内容は正確ですが、完全とは主張しません。',
                 undo: '元に戻す',
             },
+            generationFailure: { invalidRequest: 'このマシンはリクエストを読み取れませんでした。Happier が古い可能性があります。', reviewRequest: 'このマシンの Happier を更新して、もう一度お試しください', modelUnavailable: '選択したモデルは現在利用できません。', machineUnavailable: 'Happier はこのマシンに接続できません。', reconnectMachine: '再接続してから、もう一度お試しください', disabled: '「変更を説明」はオフです。', enableExplain: '設定でオンにする' },
             none: { title: 'ウォークスルーはまだありません', reason: 'ウォークスルーはこれらの変更を順に読み、それぞれを正確なコードの横で説明します。すべてのファイルはすでにファイルにあります。', showFiles: 'ファイルを表示' },
             explain: { notInStory: 'ストーリー外', readInWalkthrough: 'ウォークスルーで読む' },
         }),

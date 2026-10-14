@@ -17,6 +17,8 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 import { Modal } from '@/modal';
 import { t } from '@/text';
 
+import { ScmDiffSummaryFailureNotice } from '@/components/sessions/files/comparison/ScmDiffSummaryFailureNotice';
+import { SCM_DIFF_SUMMARY_GENERIC_FAILURE, type ScmDiffSummaryFailurePresentation } from '@/sync/domains/scm/diffSummary/state';
 import { WalkthroughContents } from './WalkthroughContents';
 import { WalkthroughEditorialHeader } from './WalkthroughEditorialHeader';
 import { WalkthroughKeyboardShortcuts } from './WalkthroughKeyboardShortcuts';
@@ -90,7 +92,11 @@ export type WalkthroughViewProps = Readonly<{
     update?: Readonly<{ message: React.ReactNode; onUndo?: () => void }> | null;
     onRetry?: () => void;
     onChooseModel?: () => void;
-    start?: Readonly<{ modelPicker: React.ReactNode; onStart: () => void | Promise<unknown>; busy?: boolean; disabled?: boolean; reason?: string | null }>;
+    /** The typed refusal or failure of the last generation, drawn as a notice over whatever reading is shown. */
+    failure?: ScmDiffSummaryFailurePresentation | null;
+    onEnableExplain?: () => void;
+    /** Start, with what belongs beside it (the model it will use, why it did not start) in `options`. */
+    start?: Readonly<{ options: React.ReactNode; onStart: () => void | Promise<unknown>; busy?: boolean; disabled?: boolean }>;
     endedConversation?: Readonly<{ onStartNew?: () => void; onAskSession: () => void }> | null;
     /** Revisioned result controls, supplied by the saved-result consumer. */
     savedActions?: React.ReactNode;
@@ -192,7 +198,6 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
 
     if (reading.phase === 'none') {
         return (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: theme.space.s20, gap: theme.space.s12 }}>
             <SurfaceStateCard
                 testID="walkthrough-none"
                 kind="empty"
@@ -201,10 +206,8 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
                 reason={t('walkthrough.none.reason')}
                 action={props.start ? { testID: 'walkthrough-start', label: t('walkthroughStart.start'), onPress: props.start.onStart, busy: props.start.busy, disabled: props.start.disabled } : props.onShowFiles ? { label: t('walkthrough.none.showFiles'), onPress: props.onShowFiles } : undefined}
                 secondaryAction={props.start && props.onShowFiles ? { label: t('walkthrough.none.showFiles'), onPress: props.onShowFiles } : undefined}
-                note={props.start?.reason ?? undefined}
+                actionFooter={props.start?.options}
             />
-            {props.start?.modelPicker}
-            </View>
         );
     }
 
@@ -232,17 +235,13 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
         notices.push(<SurfaceFreshnessLine key="stale" testID="walkthrough-notice-stale" reason={t('walkthrough.notice.stale')}
             action={props.stale.onRefresh ? { testID: 'walkthrough-refresh', label: t('walkthrough.notice.refresh'), onPress: props.stale.onRefresh } : undefined} />);
     }
-    if (reading.phase === 'failed') {
-        notices.push(
-            <WalkthroughNotice key="failed" testID="walkthrough-notice-failed" tone="danger" icon="x-circle" phone={phone}
-                message={reading.failureReason ? t('walkthrough.notice.failed', { reason: reading.failureReason }) : t('walkthrough.notice.failedGeneric')}
-                actions={!props.offline && (props.onChooseModel || props.onRetry) ? (
-                    <>
-                        {props.onChooseModel ? <WalkthroughNoticeLink testID="walkthrough-choose-model" label={t('walkthrough.notice.chooseModel')} onPress={props.onChooseModel} /> : null}
-                        {props.onRetry ? <WalkthroughNoticeButton testID="walkthrough-retry" icon="arrows-clockwise" label={t('walkthrough.notice.tryAgain')} onPress={props.onRetry} /> : null}
-                    </>
-                ) : undefined} />,
-        );
+    // One failure presenter for every non-empty state: the store's typed failure (a refused regeneration of a kept
+    // reading, an admitted failed output), or the generic one for a reading that failed with nothing recorded.
+    const failure = props.failure ?? (reading.phase === 'failed' ? SCM_DIFF_SUMMARY_GENERIC_FAILURE : null);
+    if (failure) {
+        notices.push(<ScmDiffSummaryFailureNotice key="failed" testID="walkthrough" failure={failure} phone={phone}
+            onChooseModel={props.offline ? undefined : props.onChooseModel} onEnableExplain={props.offline ? undefined : props.onEnableExplain}
+            onRetry={props.offline ? undefined : props.onRetry} />);
     }
     if (reading.phase === 'cancelled') {
         notices.push(<WalkthroughNotice key="cancelled" testID="walkthrough-notice-cancelled" tone="neutral" icon="stop-circle" message={t('walkthrough.notice.cancelled')} />);

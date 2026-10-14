@@ -13012,7 +13012,6 @@ const walkthroughTranslations = { fr: {
             notice: {
                 stale: 'Des fichiers ont changé après la rédaction',
                 refresh: 'Actualiser le parcours',
-                failed: ({ reason }) => `Rédaction interrompue · ${reason}`,
                 failedGeneric: 'Rédaction interrompue',
                 tryAgain: 'Réessayer',
                 chooseModel: 'Choisir un modèle',
@@ -13023,6 +13022,7 @@ const walkthroughTranslations = { fr: {
                 incomplete: 'Certaines modifications n’ont pas pu être listées. Ce qui est ici est exact ; rien ne prétend être complet.',
                 undo: 'Annuler',
             },
+            generationFailure: { invalidRequest: 'Cette machine n’a pas pu lire la demande. Son Happier est peut-être obsolète.', reviewRequest: 'Mets à jour Happier sur cette machine, puis réessaie', modelUnavailable: 'Le modèle sélectionné n’est pas disponible pour le moment.', machineUnavailable: 'Happier n’arrive pas à joindre cette machine.', reconnectMachine: 'Reconnecte-la, puis réessaie', disabled: '« Expliquer les modifications » est désactivé.', enableExplain: 'Active-le dans les réglages' },
             none: { title: 'Pas encore de parcours', reason: 'Un parcours lit ces modifications dans l’ordre et explique chacune à côté de son code exact. Tous les fichiers sont déjà dans Fichiers.', showFiles: 'Afficher les fichiers' },
             explain: { notInStory: 'Hors de l’histoire', readInWalkthrough: 'Lire dans le parcours' },
         }),

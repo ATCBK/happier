@@ -12988,7 +12988,6 @@ const walkthroughTranslations = { ca: {
             notice: {
                 stale: 'Hi ha fitxers que han canviat després d’escriure això',
                 refresh: 'Actualitza el recorregut',
-                failed: ({ reason }) => `L’escriptura s’ha aturat · ${reason}`,
                 failedGeneric: 'L’escriptura s’ha aturat',
                 tryAgain: 'Torna-ho a provar',
                 chooseModel: 'Tria un model',
@@ -12999,6 +12998,7 @@ const walkthroughTranslations = { ca: {
                 incomplete: 'Alguns canvis no s’han pogut llistar. El que hi ha és exacte; res no diu que sigui complet.',
                 undo: 'Desfés',
             },
+            generationFailure: { invalidRequest: 'Aquesta màquina no ha pogut llegir la sol·licitud. Pot tenir un Happier antic.', reviewRequest: 'Actualitza el Happier d’aquesta màquina i torna-ho a provar', modelUnavailable: 'El model seleccionat no està disponible ara mateix.', machineUnavailable: 'Happier no pot arribar a aquesta màquina.', reconnectMachine: 'Reconnecta-la i torna-ho a provar', disabled: '“Explica els canvis” està desactivat.', enableExplain: 'Activa’l a la configuració' },
             none: { title: 'Encara no hi ha recorregut', reason: 'Un recorregut llegeix aquests canvis en ordre i explica cadascun al costat del seu codi exacte. Tots els fitxers ja són a Fitxers.', showFiles: 'Mostra els fitxers' },
             explain: { notInStory: 'No forma part de la història', readInWalkthrough: 'Llegeix-ho al recorregut' },
         }),

@@ -12949,7 +12949,6 @@ const walkthroughTranslations = { 'zh-Hans': {
             notice: {
                 stale: '写完后有文件发生了更改',
                 refresh: '刷新导读',
-                failed: ({ reason }) => `撰写已停止 · ${reason}`,
                 failedGeneric: '撰写已停止',
                 tryAgain: '重试',
                 chooseModel: '选择模型',
@@ -12960,6 +12959,7 @@ const walkthroughTranslations = { 'zh-Hans': {
                 incomplete: '部分更改无法列出。此处内容准确，但不声称完整。',
                 undo: '撤销',
             },
+            generationFailure: { invalidRequest: '这台机器无法读取该请求。它的 Happier 可能已过时。', reviewRequest: '请更新这台机器上的 Happier，然后重试', modelUnavailable: '所选模型目前不可用。', machineUnavailable: 'Happier 无法连接到这台机器。', reconnectMachine: '请重新连接后重试', disabled: '“解释变更”已关闭。', enableExplain: '在设置中开启' },
             none: { title: '尚无导读', reason: '导读会按顺序阅读这些更改，并在确切代码旁逐一解释。所有文件已在文件中。', showFiles: '显示文件' },
             explain: { notInStory: '不在故事中', readInWalkthrough: '在导读中阅读' },
         }),

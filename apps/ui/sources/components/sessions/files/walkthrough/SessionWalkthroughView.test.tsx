@@ -19,6 +19,9 @@ const boundary = vi.hoisted(() => ({
     nativeRunBarrier: null as (() => Promise<void>) | null,
     sessionCalls: [] as Array<{ sessionId: string; method: string; payload: unknown; scope?: { serverId: string; accountId: string } }>,
     accountRoute: null as ((request: ServedHomeRequest) => Promise<Response | undefined>) | null,
+    /** The daemon's answer to a generation the canonical request schema admitted, when a case needs one. */
+    generate: null as ((input: import('@happier-dev/protocol/scm').ScmDiffSummaryGenerateInput) => unknown) | null,
+    router: null as ReturnType<typeof import('@/dev/testkit/mocks/router').createExpoRouterMock> | null,
 }));
 
 vi.mock('react-native', async () => {
@@ -27,7 +30,8 @@ vi.mock('react-native', async () => {
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock().module;
+    boundary.router = createExpoRouterMock();
+    return boundary.router.module;
 });
 // The machine transport is the remote process boundary. Its real SCM and
 // capability facades, admission, schemas, settings and result store are intact.
@@ -84,6 +88,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
         }
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE) {
             const input = ScmDiffSummaryGenerateInputSchema.parse(request.payload);
+            if (boundary.generate) return boundary.generate(input);
             // The host reads this retained identity before model admission; an
             // unavailable capture must not become fresh working-tree evidence.
             if (input.comparisonId) return ScmDiffSummaryGenerateOutputSchema.parse({ success: false,
@@ -172,6 +177,8 @@ afterEach(async () => {
     boundary.nativeRunBarrier = null;
     boundary.sessionCalls = [];
     boundary.accountRoute = null;
+    boundary.generate = null;
+    boundary.router?.spies.push.mockClear();
     await servedHome?.dispose();
     servedHome = null;
 });
@@ -510,6 +517,88 @@ describe('SessionWalkthroughView START through real generation and model owners'
         expect(entry).toMatchObject({ sessionId, input: { source, modelSelector: selector }, latestOutput: { success: true, metadata: { source } } });
     }, 120_000);
 
+    /** The first eligible model of the real picker: Start needs a settled machine and a chosen model. */
+    async function chooseEligibleModel(screen: Awaited<ReturnType<typeof mount>>['screen']) {
+        const picker = screen.findByType(DropdownMenu);
+        const eligible = picker.props.items.find((item: { id: string; disabled?: boolean }) => decodeScmDiffSummaryModelOverride(item.id) !== null && !item.disabled);
+        expect(eligible).toBeDefined();
+        await act(async () => picker.props.onSelect(eligible.id));
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-start')?.props.disabled).toBe(false));
+    }
+    const EXECUTION_CAPABILITIES = async () => ({ protocolVersion: 1, results: {
+        'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { backends: { codex: { available: true, intents: ['scm_diff_summary'] } } } },
+    } });
+
+    it('presents an admitted failed output as the typed failure, never the native reason', async () => {
+        boundary.capabilities = EXECUTION_CAPABILITIES;
+        boundary.generate = (input) => {
+            const sourceKey = `comparison:${input.sessionId ?? input.cwd}`;
+            return ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey, metadata: { sourceKey, source: input.source },
+                requestedOutputs: input.outputs,
+                comparison: { id: sourceKey, source: input.source, repository: { rootPath: input.cwd }, endpoints: {},
+                    inventory: { state: 'complete', files: [], reasons: [] } },
+                outputs: { walkthrough: { state: 'failed', reason: 'Native model provisioning failed' } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } });
+        };
+        const { screen } = await mount({ kind: 'workingTree' }, 'admitted-failure');
+        await chooseEligibleModel(screen);
+        await screen.pressByTestIdAsync('walkthrough-start');
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-notice-failed')).toBeTruthy());
+        expect(screen.findByTestId('walkthrough-none')).toBeNull();
+        expect(screen.getTextContent()).toContain('Writing stopped');
+        expect(screen.getTextContent()).not.toContain('Native model provisioning failed');
+        expect(screen.findByTestId('walkthrough-retry')).toBeTruthy();
+    }, 120_000);
+
+    it('tells a refused regeneration of a kept reading what to do, and keeps the reading', async () => {
+        boundary.capabilities = EXECUTION_CAPABILITIES;
+        let generations = 0;
+        boundary.generate = (input) => {
+            // The first admission writes a reading of files that changed since; the second is refused by the daemon.
+            if (++generations > 1) return ScmDiffSummaryGenerateOutputSchema.parse({ success: false, errorCode: 'MODEL_UNAVAILABLE', error: 'Provider xyz rejected the model' });
+            const sourceKey = `comparison:${input.sessionId ?? input.cwd}`;
+            return ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey, metadata: { sourceKey, source: input.source },
+                requestedOutputs: input.outputs,
+                comparison: { id: sourceKey, source: input.source, freshness: 'stale', repository: { rootPath: input.cwd }, endpoints: {},
+                    inventory: { state: 'complete', files: [], reasons: [] } },
+                outputs: { walkthrough: { state: 'complete', value: { title: 'Kept reading', intro: '', stops: [], otherChangeRefs: [] } } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } });
+        };
+        const { screen } = await mount({ kind: 'workingTree' }, 'kept-reading');
+        await chooseEligibleModel(screen);
+        await screen.pressByTestIdAsync('walkthrough-start');
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-notice-stale')).toBeTruthy());
+        expect(screen.findByTestId('walkthrough-notice-failed')).toBeNull();
+        await screen.pressByTestIdAsync('walkthrough-refresh');
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-notice-failed')).toBeTruthy());
+        // The reading stays; the refusal is the typed sentence and its next step, not the daemon's words or code.
+        expect(generations).toBe(2);
+        expect(screen.getTextContent()).toContain('Kept reading');
+        expect(screen.getTextContent()).toContain('The selected model isn’t available right now.');
+        expect(screen.getTextContent()).not.toContain('Provider xyz');
+        expect(screen.getTextContent()).not.toContain('MODEL_UNAVAILABLE');
+        expect(screen.findAllByType(ScmDiffSummaryModelPicker)).toHaveLength(0);
+        await screen.pressByTestIdAsync('walkthrough-choose-model');
+        expect(screen.findAllByType(ScmDiffSummaryModelPicker)).toHaveLength(1);
+    }, 120_000);
+
+    it('keeps Start unavailable while Explain changes is off, says so, and leads to the setting', async () => {
+        boundary.capabilities = EXECUTION_CAPABILITIES;
+        const { screen } = await mount({ kind: 'workingTree' }, 'explain-off');
+        await chooseEligibleModel(screen);
+        await act(async () => getStorage().setState((state) => ({ settings: { ...state.settings, 'scm.diffSummary.enabled': false } })));
+        expect(screen.findByTestId('walkthrough-start')?.props.disabled).toBe(true);
+        await screen.pressByTestIdAsync('walkthrough-start');
+        expect(generationCalls()).toEqual([]);
+        expect(screen.getTextContent()).toContain('“Explain changes” is off.');
+        await screen.pressByTestIdAsync('walkthrough-start-options-enable-explain');
+        expect(boundary.router!.spies.push).toHaveBeenCalledWith('/settings/source-control');
+        // Turning it on clears the refusal and Start works again.
+        await act(async () => getStorage().setState((state) => ({ settings: { ...state.settings, 'scm.diffSummary.enabled': true } })));
+        expect(screen.findByTestId('walkthrough-start')?.props.disabled).toBe(false);
+        expect(screen.getTextContent()).not.toContain('is off');
+    }, 120_000);
+
     it('does not admit a syntactically valid stored selector absent from the real eligible catalog', async () => {
         boundary.capabilities = async () => ({ protocolVersion: 1, results: {
             'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { backends: { codex: { available: true } } } },
@@ -551,7 +640,10 @@ describe('SessionWalkthroughView START through real generation and model owners'
         const entry = Object.values(getScmDiffSummaryState().entriesByKey).find((value) => value.sessionId === 'captured-route');
         expect(entry).toMatchObject({ status: 'failed', error: { code: 'DIFF_UNAVAILABLE' } });
         expect(entry?.latestOutput?.success).not.toBe(true);
-        expect(screen.getTextContent()).toContain(entry!.error!.message);
+        // The person reads the typed refusal and its way forward, never the diagnostic message or code.
+        expect(screen.getTextContent()).toContain('Writing stopped');
+        expect(screen.getTextContent()).not.toContain(entry!.error!.message);
+        expect(screen.getTextContent()).not.toContain('DIFF_UNAVAILABLE');
     }, 120_000);
 
     it('keeps Refresh when a stale saved reading receives a new supported Summary preference with its picker unmounted', async () => {

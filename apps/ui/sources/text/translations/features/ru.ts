@@ -12991,7 +12991,6 @@ const walkthroughTranslations = { ru: {
             notice: {
                 stale: 'Файлы изменились после написания',
                 refresh: 'Обновить обзор',
-                failed: ({ reason }) => `Написание остановлено · ${reason}`,
                 failedGeneric: 'Написание остановлено',
                 tryAgain: 'Повторить',
                 chooseModel: 'Выбрать модель',
@@ -13002,6 +13001,7 @@ const walkthroughTranslations = { ru: {
                 incomplete: 'Некоторые изменения не удалось перечислить. Показанное точно; полноты никто не утверждает.',
                 undo: 'Отменить',
             },
+            generationFailure: { invalidRequest: 'Эта машина не смогла прочитать запрос. Возможно, на ней устаревшая версия Happier.', reviewRequest: 'Обновите Happier на этой машине и повторите попытку', modelUnavailable: 'Выбранная модель сейчас недоступна.', machineUnavailable: 'Happier не может связаться с этой машиной.', reconnectMachine: 'Подключите её снова и повторите попытку', disabled: '«Объяснять изменения» выключено.', enableExplain: 'Включите в настройках' },
             none: { title: 'Обзора пока нет', reason: 'Обзор читает эти изменения по порядку и объясняет каждое рядом с точным кодом. Все файлы уже есть в Файлах.', showFiles: 'Показать файлы' },
             explain: { notInStory: 'Не часть истории', readInWalkthrough: 'Читать в обзоре' },
         }),

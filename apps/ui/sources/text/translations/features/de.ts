@@ -12459,7 +12459,6 @@ const walkthroughTranslations = { de: {
             notice: {
                 stale: 'Dateien haben sich geändert, nachdem dies geschrieben wurde',
                 refresh: 'Durchgang aktualisieren',
-                failed: ({ reason }) => `Schreiben gestoppt · ${reason}`,
                 failedGeneric: 'Schreiben gestoppt',
                 tryAgain: 'Erneut versuchen',
                 chooseModel: 'Modell wählen',
@@ -12470,6 +12469,7 @@ const walkthroughTranslations = { de: {
                 incomplete: 'Einige Änderungen konnten nicht aufgelistet werden. Was hier ist, ist exakt; nichts behauptet, vollständig zu sein.',
                 undo: 'Rückgängig',
             },
+            generationFailure: { invalidRequest: 'Dieser Rechner konnte die Anfrage nicht lesen. Sein Happier ist möglicherweise veraltet.', reviewRequest: 'Aktualisiere Happier auf diesem Rechner und versuche es erneut', modelUnavailable: 'Das gewählte Modell ist gerade nicht verfügbar.', machineUnavailable: 'Happier erreicht diesen Rechner nicht.', reconnectMachine: 'Verbinde ihn neu und versuche es erneut', disabled: '„Änderungen erklären“ ist ausgeschaltet.', enableExplain: 'Schalte es in den Einstellungen ein' },
             none: { title: 'Noch kein Durchgang', reason: 'Ein Durchgang liest diese Änderungen der Reihe nach und erklärt jede neben ihrem genauen Code. Alle Dateien sind schon in Dateien.', showFiles: 'Dateien zeigen' },
             explain: { notInStory: 'Nicht Teil der Geschichte', readInWalkthrough: 'Im Durchgang lesen' },
         }),

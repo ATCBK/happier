@@ -51,7 +51,8 @@ export function useScmCommitPlan(params: Readonly<{
     const proposal = React.useMemo<CommitProposal | null>(() => (supportedComparison && comparison && plan && comparison.source.kind === 'workingTree'
         ? buildCommitProposal({ comparison, plan, application })
         : null), [application, comparison, plan, supportedComparison]);
-    const isGenerating = supportedComparison && (planOutput?.state === 'pending' || planOutput?.state === 'writing');
+    const isGenerating = supportedComparison && (viewModel?.status === 'starting'
+        || planOutput?.state === 'pending' || planOutput?.state === 'writing');
     const phase: 'none' | 'writing' | 'ready' = proposal ? 'ready' : isGenerating ? 'writing' : 'none';
     const [busy, setBusy] = React.useState(false);
     const key = viewModel?.requestKey ?? null;

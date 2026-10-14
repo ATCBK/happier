@@ -184,8 +184,8 @@ function hasDurableCheckpointHint(params: GenerateScmDiffSummaryParams): boolean
     const checkpointReceiptId = (params.input.source.checkpointReceiptId ?? params.input.checkpointReceiptId)?.trim();
     const turn = params.turnChangeSet;
     const receipt = readCompletedScmDiffSummaryCheckpointReceipt(turn);
-    return Boolean(receipt && checkpointReceiptId === receipt.id
-        && turn?.sessionId === params.sessionId
+    return Boolean(receipt && turn && checkpointReceiptId === receipt.id
+        && turn.sessionId === params.sessionId
         && (params.input.source.turnId ?? params.input.turnId) === turn.turnId);
 }
 
@@ -346,14 +346,16 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             catalogProfiles: params.catalogProfiles ?? [],
         });
         if (!resolvedSettings.enabled) {
-            return {
-                ok: false,
-                key,
-                error: 'SCM diff summary generation is disabled',
-                errorCode: 'SCM_DIFF_SUMMARY_DISABLED',
-                state,
-                viewModel: selectScmDiffSummaryViewModel(state, key),
-            };
+            // Like every other admission refusal, the store retains it so the view presents the typed recovery.
+            const error = 'SCM diff summary generation is disabled';
+            const errorCode = 'SCM_DIFF_SUMMARY_DISABLED';
+            setState(applyScmDiffSummaryEvent(state, {
+                type: 'request_failed', key, sessionId: params.sessionId ?? null, ...(params.machineId ? { machineId: params.machineId } : {}),
+                scopeKey: params.scope ? serverAccountScopeKeySuffix(params.scope) : undefined,
+                actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID, input: params.input,
+                error, errorCode, failedAtMs: nowMs(), intent,
+            }));
+            return { ok: false, key, error, errorCode, state, viewModel: selectScmDiffSummaryViewModel(state, key) };
         }
         if (resolvedSettings.modelOverrideError) {
             const error = resolvedSettings.modelOverrideError === 'SCM_DIFF_SUMMARY_MODEL_UNSUPPORTED'
@@ -371,6 +373,14 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             return { ok: false, key, error, errorCode, state, viewModel: selectScmDiffSummaryViewModel(state, key) };
         }
         applyCheckpointCleanupReceiptsFromTurnChangeSet(params.turnChangeSet);
+        const requestedAtMs = nowMs();
+        setState(applyScmDiffSummaryEvent(state, {
+            type: 'request_started', key,
+            sessionId: params.sessionId ?? null, ...(params.machineId ? { machineId: params.machineId } : {}),
+            scopeKey: params.scope ? serverAccountScopeKeySuffix(params.scope) : undefined,
+            actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID, input: params.input,
+            runId: null, requestedAtMs, intent,
+        }));
         const generated = await invokeUiScmAction({ actionId: 'scm.diffSummary.generate', input: buildGenerateRequest(params),
             schema: ScmDiffSummaryGenerateOutputSchema, context: actionContext(params), executor: deps.actionExecutor,
             shouldContinue: current });
@@ -429,7 +439,7 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             input: params.input,
             runId: output.runId ?? null,
             structuredOutput: output,
-            requestedAtMs: nowMs(),
+            requestedAtMs,
             intent,
         }));
         if (cacheKeyInput && output.success && hasCompletedRequestedOutputs(output, params.input)) {
@@ -449,12 +459,17 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
         };
     };
 
-    const prefetch = async (params: Omit<GenerateScmDiffSummaryParams, 'intent'>): Promise<ScmDiffSummaryOperationResult> => {
+    const prefetch = async (params: ScmDiffSummaryHost & Omit<GenerateScmDiffSummaryParams, 'intent'>): Promise<ScmDiffSummaryOperationResult> => {
         const key = params.key ?? buildRequestKey(params);
         const resolvedSettings = resolveScmDiffSummarySettings({
             storedSettings: params.settings ?? {},
             catalogProfiles: params.catalogProfiles ?? [],
         });
+        // Background work never publishes the refusal a person's own Start would: nothing was asked for.
+        if (!resolvedSettings.enabled) {
+            return { ok: false, key, error: 'SCM diff summary generation is disabled', errorCode: 'SCM_DIFF_SUMMARY_DISABLED',
+                state, viewModel: selectScmDiffSummaryViewModel(state, key) };
+        }
         if (!resolvedSettings.prefetch) {
             return {
                 ok: false,

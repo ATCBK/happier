@@ -3,10 +3,22 @@ import { ScmDiffSummaryResultSchema } from '@happier-dev/protocol/scm';
 import { getScmDiffSummaryState, loadSavedScmDiffSummaryResult, retireScmDiffSummaryScope } from '@/sync/ops/scmDiffSummary/generate';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import { scmComparisonSourceOf, scmReviewComparisonMatchesSource, selectSessionScmWalkthroughKey } from './selection';
+import { applyScmDiffSummaryEvent, createInitialScmDiffSummaryState, SCM_DIFF_SUMMARY_GENERATE_ACTION_ID } from './state';
 
 const scope = { serverId: 'selection-home', accountId: 'selection-account' };
 afterEach(() => retireScmDiffSummaryScope(scope));
 describe('captured comparison result selection', () => {
+    it('selects admission and failure for the exact requested comparison before a capture receipt returns', () => {
+        const input = { cwd: '/repo', source: { kind: 'workingTree' as const }, comparisonId: 'captured', outputs: ['commitPlan' as const] };
+        const starting = applyScmDiffSummaryEvent(createInitialScmDiffSummaryState(), { type: 'request_started', key: 'admission',
+            sessionId: 's', input, actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID, runId: null, requestedAtMs: 1, intent: 'generate' });
+        expect(selectSessionScmWalkthroughKey(starting, 's', { kind: 'workingTree', comparisonId: 'captured' }, 'commitPlan')).toBe('admission');
+        expect(selectSessionScmWalkthroughKey(starting, 's', { kind: 'workingTree', comparisonId: 'other' }, 'commitPlan')).toBeNull();
+        const failed = applyScmDiffSummaryEvent(starting, { type: 'request_failed', key: 'admission', sessionId: 's', input,
+            actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID, error: 'Unavailable', failedAtMs: 2, intent: 'generate' });
+        expect(selectSessionScmWalkthroughKey(failed, 's', { kind: 'workingTree', comparisonId: 'captured' }, 'commitPlan')).toBe('admission');
+    });
+
     it('matches explicit Session evidence only to that Session while a view selector remains host-relative', () => {
         const source = { kind: 'session' as const, sessionId: 'session-a' };
         expect(scmReviewComparisonMatchesSource({ kind: 'session', sessionId: 'session-b' }, source)).toBe(false);

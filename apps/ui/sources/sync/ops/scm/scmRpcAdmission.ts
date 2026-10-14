@@ -2,6 +2,10 @@ import type { ScmCapabilities, ScmCommitCreateRequest, ScmRemotePolicy } from '@
 import { admitScmCommitPolicy, admitScmCommitUndoLast, admitScmRemotePolicy, ScmBackendDescribeResponseSchema } from '@happier-dev/protocol/scm';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { assertScmResponse, type ScmRpcFailure } from './scmRpcFailure';
+import { ActionExecuteFailureSchema, type ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
+
+/** Transport admission refusals are Action receipts, not SCM domain outputs. */
+export type ScmRpcTransportResult<T> = T | ScmRpcFailure | ActionExecuteFailure;
 
 type ScmRpcPolicyRequest = Pick<ScmCommitCreateRequest, 'mode' | 'signOff' | 'expectedHeadOid' | 'expectedRef'> & ScmRemotePolicy & Readonly<{ cwd?: string; backendPreference?: unknown }>;
 
@@ -9,7 +13,7 @@ export async function runScmRpcWithAdmission<T extends { success: boolean; error
     method: string;
     request: ScmRpcPolicyRequest;
     call: (method: string, request: Readonly<object>) => Promise<unknown>;
-}>): Promise<T | ScmRpcFailure> {
+}>): Promise<ScmRpcTransportResult<T>> {
     const commitAdmission = input.method === RPC_METHODS.SCM_COMMIT_CREATE ? admitScmCommitPolicy(input.request) : { success: true };
     const remoteAdmission = admitScmRemotePolicy(input.request);
     const undoAdmission = input.method === RPC_METHODS.SCM_COMMIT_UNDO_LAST ? admitScmCommitUndoLast() : { success: true };
@@ -36,5 +40,9 @@ export async function runScmRpcWithAdmission<T extends { success: boolean; error
         }
     }
     const response = await input.call(input.method, input.request);
+    if (response && typeof response === 'object' && 'ok' in response && response.ok === false) {
+        const refusal = ActionExecuteFailureSchema.safeParse(response);
+        if (refusal.success) return refusal.data;
+    }
     return assertScmResponse<T>(response);
 }

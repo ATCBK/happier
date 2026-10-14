@@ -152,6 +152,8 @@ export function SurfaceStateCard(props: Readonly<{
     learnMore?: SurfaceStateAction;
     /** A quiet line under the actions: a prerequisite ("Runs on a machine in Personal Home.") or a reassurance ("Nothing is lost."). */
     note?: string;
+    /** Controls that belong with the action: a choice it affects, or why it cannot proceed. Directly under the actions, before the note. */
+    actionFooter?: React.ReactNode;
     /**
      * The present, under the copy ("Reconnecting · next try in 8 s"). A sized loading state narrates a
      * long wait on its own ("Still waiting · 12 s") unless this is given.
@@ -312,6 +314,7 @@ export function SurfaceStateCard(props: Readonly<{
             body={props.body}
             actionCaption={props.actionCaption}
             note={props.note}
+            actionFooter={props.actionFooter}
             learnMore={props.learnMore}
             bindings={tileBindings}
         />

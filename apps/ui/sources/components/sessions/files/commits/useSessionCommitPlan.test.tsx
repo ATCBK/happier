@@ -15,6 +15,8 @@ const boundary = vi.hoisted(() => ({
     sessionId: '',
     read: null as (() => Promise<unknown>) | null,
     recover: null as (() => Promise<unknown>) | null,
+    generate: null as (() => Promise<unknown>) | null,
+    listSaved: true,
     requests: [] as Array<Readonly<{ method: string; machineId?: string; sessionId?: string; payload?: unknown }>>,
 }));
 
@@ -47,15 +49,15 @@ async function remote(method: string): Promise<unknown> {
     });
     if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST) {
         const saved = boundary.saved!;
-        return ScmDiffSummaryResultListResponseSchema.parse({ success: true, results: [{ cwd: '/repo/exact',
+        return ScmDiffSummaryResultListResponseSchema.parse({ success: true, results: boundary.listSaved ? [{ cwd: '/repo/exact',
             ...(boundary.sessionId ? { sessionId: boundary.sessionId } : {}),
             resultId: saved.resultId, revision: saved.revision, comparisonId: saved.output.comparison!.id,
-            source: saved.output.comparison!.source, bytes: 100, updatedAtMs: 1 }], count: 1, bytes: 100,
+            source: saved.output.comparison!.source, bytes: 100, updatedAtMs: 1 }] : [], count: boundary.listSaved ? 1 : 0, bytes: boundary.listSaved ? 100 : 0,
             sevenDayCost: { status: 'unavailable', pricedRunCount: 0, unpricedRunCount: 0, sinceMs: 0, untilMs: 1 } });
     }
     if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ) return boundary.read ? boundary.read() : { success: true, result: boundary.saved };
     if (method === 'scm.diffSummary.commitPlan.recover') return boundary.recover!();
-    if (method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE) return ScmDiffSummaryGenerateOutputSchema.parse({ success: false,
+    if (method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE) return boundary.generate ? boundary.generate() : ScmDiffSummaryGenerateOutputSchema.parse({ success: false,
         errorCode: 'SUMMARY_FAILED', error: 'The generation boundary was reached.' });
     throw new Error(`Unexpected remote method: ${method}`);
 }
@@ -108,6 +110,7 @@ afterEach(async () => {
     vi.useRealTimers();
     getStorage().setState(initialStorage, true);
     boundary.saved = null; boundary.read = null; boundary.recover = null;
+    boundary.generate = null; boundary.listSaved = true;
     boundary.requests = [];
     await homes.reset();
 });
@@ -224,6 +227,83 @@ async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderP
 }
 
 describe('exact workspace commit plans', () => {
+    it('keeps a previous saved proposal readable without treating its refresh as completion of a new admission', async () => {
+        const initial = savedResult(1, 'complete');
+        const saved = ScmDiffSummaryResultSchema.parse({ ...initial, application: undefined,
+            output: { ...initial.output, runId: 'original-generator' } });
+        boundary.listSaved = false;
+        const admission = createDeferred<unknown>();
+        let generations = 0;
+        boundary.generate = () => ++generations === 1 ? Promise.resolve(saved.output) : admission.promise;
+        const { latest, screen } = await mountWorkspaceProposal(saved, true, true);
+        await vi.waitFor(() => expect(latest.current?.binding.modelAvailable, proposalDiagnostic(latest.current)).toBe(true));
+        await vi.waitFor(() => expect(latest.current?.binding.launch.canLaunchExecutionRuns).toBe(true));
+        await act(async () => { await latest.current!.binding.onStart(['commitPlan']); });
+        await vi.waitFor(() => expect(latest.current?.binding.viewModel?.savedResult?.resultId).toBe(saved.resultId));
+        let start!: Promise<void>;
+        await act(async () => { start = latest.current!.binding.onStart(['commitPlan']); });
+        await vi.waitFor(() => expect(generations).toBe(2));
+        expect(latest.current?.binding.viewModel?.status, proposalDiagnostic(latest.current)).toBe('starting');
+        expect(latest.current?.phase).toBe('ready');
+        expect(latest.current?.isGenerating).toBe(true);
+        expect(screen.findByTestId('commit-group:g1')).toBeTruthy();
+        await act(async () => {
+            admission.resolve(ScmDiffSummaryGenerateOutputSchema.parse({ success: false, errorCode: 'SUMMARY_FAILED', error: 'Retry failed.' }));
+            await start;
+        });
+        expect(latest.current?.binding.generationFailure).toMatchObject({ reason: 'generationFailed', messageKey: 'walkthrough.notice.failedGeneric' });
+        expect(latest.current?.error).toBeNull();
+        expect(latest.current?.isGenerating).toBe(false);
+        expect(screen.findByTestId('commit-group:g1')).toBeTruthy();
+    });
+
+    it('shows a generation failure retained in a successfully admitted saved result', async () => {
+        const failed = ScmDiffSummaryResultSchema.parse({ ...savedResult(1, 'complete'), application: undefined,
+            output: { ...savedResult(1, 'complete').output, outputs: { commitPlan: { state: 'failed', reason: 'Native model provisioning failed' } } } });
+        boundary.listSaved = false;
+        boundary.generate = async () => failed.output;
+        const { latest, screen } = await mountWorkspaceProposal(failed, true, true);
+        await vi.waitFor(() => expect(latest.current?.binding.modelAvailable, proposalDiagnostic(latest.current)).toBe(true));
+        await vi.waitFor(() => expect(latest.current?.binding.launch.canLaunchExecutionRuns).toBe(true));
+        await act(async () => { await latest.current!.binding.onStart(['commitPlan']); });
+        await vi.waitFor(() => expect(latest.current?.binding.viewModel?.status).toBe('failed'));
+        expect(latest.current?.binding.generationFailure, proposalDiagnostic(latest.current)).toMatchObject({ reason: 'generationFailed' });
+        expect(latest.current?.isGenerating).toBe(false);
+        expect(screen.findByTestId('commit-proposal-writing')).toBeNull();
+        expect(screen.findByTestId('commit-proposal-start-options-refusal')).toBeTruthy();
+        expect(screen.findByTestId('commit-proposal-start')?.props.disabled).toBe(false);
+        expect(screen.getTextContent()).toContain('Writing stopped');
+        expect(screen.getTextContent()).not.toContain('Native model provisioning failed');
+    });
+
+    it('shows admission progress for exact captured evidence and retains its failure through the real Action transport', async () => {
+        boundary.listSaved = false;
+        const admission = createDeferred<unknown>();
+        boundary.generate = () => admission.promise;
+        const { latest, screen, machine } = await mountWorkspaceProposal(savedResult(1, 'complete'), true, true);
+        await vi.waitFor(() => expect(latest.current?.binding.modelAvailable, proposalDiagnostic(latest.current)).toBe(true));
+        await vi.waitFor(() => expect(latest.current?.binding.launch.canLaunchExecutionRuns).toBe(true));
+        expect(latest.current?.phase).toBe('none');
+        let start!: Promise<void>;
+        await act(async () => { start = latest.current!.binding.onStart(['commitPlan']); });
+        await vi.waitFor(() => expect(boundary.requests.some(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE)).toBe(true));
+        expect(latest.current?.binding.viewModel?.status, proposalDiagnostic(latest.current)).toBe('starting');
+        expect(screen.findByTestId('commit-proposal-writing')).toBeTruthy();
+        expect(boundary.requests.find(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE)).toMatchObject({
+            machineId: machine.id, payload: { comparisonId: 'c'.repeat(64), cwd: '/repo/exact', outputs: ['commitPlan'] },
+        });
+        await act(async () => {
+            admission.resolve(ScmDiffSummaryGenerateOutputSchema.parse({ success: false, errorCode: 'SUMMARY_FAILED', error: 'Generation failed.' }));
+            await start;
+        });
+        expect(latest.current?.binding.viewModel?.status).toBe('failed');
+        expect(latest.current?.binding.generationFailure).toMatchObject({ reason: 'generationFailed' });
+        expect(latest.current?.phase).toBe('none');
+        expect(screen.findByTestId('commit-proposal-writing')).toBeNull();
+        expect(screen.getTextContent()).toContain('Writing stopped');
+        expect(screen.getTextContent()).not.toContain('SUMMARY_FAILED');
+    });
+
     it('keeps the exact Run notification and its cancellation available as partial groups arrive, until output completion', async () => {
         const initial = savedResult(1, 'complete');
         const occurrence = SPECIMEN_COMPARISON.inventory.files[0]!.occurrences[0]!;
@@ -289,7 +369,7 @@ describe('exact workspace commit plans', () => {
         expect(latest.current?.binding.selected.success).toBe(true);
         expect(latest.current?.actions.onRegenerate).toBeDefined();
         await act(async () => latest.current?.actions.onRegenerate?.());
-        await vi.waitFor(() => expect(latest.current?.error).toBe('The generation boundary was reached.'));
+        await vi.waitFor(() => expect(latest.current?.binding.generationFailure).toMatchObject({ reason: 'generationFailed' }));
         expect(boundary.requests.find(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE)).toMatchObject({
             machineId: machine.id, payload: { cwd: '/repo/exact', outputs: ['commitPlan'] },
         });

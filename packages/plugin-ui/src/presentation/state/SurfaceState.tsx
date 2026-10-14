@@ -125,6 +125,8 @@ export type HappierSurfaceStateProps = Readonly<{
   actionSlot?: ReactNode;
   /** A quiet line under the actions: a prerequisite or a reassurance. */
   note?: string;
+  /** Caller-owned controls that belong with the action: a choice it affects, or why it cannot proceed. Lines omit it. */
+  actionFooter?: ReactNode;
   learnMore?: HappierSurfaceStateAction;
   /** Raw machine code: a collapsed disclosure on a failure, a testID marker otherwise. Never the sentence. */
   diagnosticCode?: string | null;
@@ -404,6 +406,7 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
     ) : null;
   const supplemental = (
     <>
+      {props.actionFooter}
       {quietLine}
       {diagnosticDetails}
     </>

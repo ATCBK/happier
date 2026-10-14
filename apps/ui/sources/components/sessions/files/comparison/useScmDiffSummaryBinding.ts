@@ -17,6 +17,7 @@ import { createScmDiffSummaryResultOperations, type ScmDiffSummaryHost } from '@
 import { createScmDiffSummarySavedResultOperations } from '@/sync/ops/scmDiffSummary/savedResultOperations';
 import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { t } from '@/text';
+import { SCM_DIFF_SUMMARY_DISABLED_FAILURE } from '@/sync/domains/scm/diffSummary/state';
 import { scmComparisonKey } from './filesComparison';
 import { useScmDiffSummaryModelChoices } from '@/components/settings/sourceControl/useScmDiffSummaryModelChoices';
 
@@ -53,6 +54,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         currentHostKey.current = hostKey;
         return () => { if (currentHostKey.current === hostKey) currentHostKey.current = null; };
     }, [hostKey]);
+    const explainEnabled = useSetting(SCM_DIFF_SUMMARY_SETTING_KEYS.enabled) !== false;
     const storedModel = useSetting(SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride);
     const [model, setModel] = React.useState(typeof storedModel === 'string' ? storedModel : '');
     const modelChoices = useScmDiffSummaryModelChoices({ value: model, machineId: machine?.machineId,
@@ -120,13 +122,13 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         try {
             if (!sessionId && (comparison.kind === 'session' || comparison.kind === 'turnCheckpoint')) return;
             const source = scmComparisonSourceOf(comparison, sessionId ?? '');
-            const result = await generateScmDiffSummaryFromUserAction({ ...host, serverId: scope.serverId, scope,
+            await generateScmDiffSummaryFromUserAction({ ...host, serverId: scope.serverId, scope,
                 shouldContinue: isCurrent, backendTarget: selected.backendTarget,
                 input: { cwd, source, ...(comparison.comparisonId ? { comparisonId: comparison.comparisonId } : {}),
                     outputs: [...outputs], modelSelector: selected.modelSelector },
                 settings: { ...getStorage().getState().settings, [SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]: model },
                 intent: viewModel ? 'regenerate' : 'generate' });
-            if (isCurrent() && !result.ok) setError(result.error);
+            // A refused generation is retained by the diff-summary store; its typed presentation is `generationFailure`.
         } catch (failure) {
             if (isCurrent()) setError(failure instanceof Error ? failure.message : t('walkthroughStart.unavailable'));
         } finally { if (isCurrent()) setStarting(false); }
@@ -194,6 +196,14 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         host, serverId, comparison,
         binding, isCurrent, scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
         error, setError,
+        /** The typed refusal or failure of the comparison's generation; never its diagnostic code or message. */
+        generationFailure: viewModel?.error && !(viewModel.error.reason === 'disabled' && explainEnabled) ? viewModel.error : null,
+        /**
+         * Why Start cannot run at all: Explain changes is off. Start stays unavailable and says how to turn it on;
+         * an action that still reaches the generation owner (Refresh, Try again) is refused there with the same
+         * typed failure, which `generationFailure` then carries.
+         */
+        startBlocker: explainEnabled ? null : SCM_DIFF_SUMMARY_DISABLED_FAILURE,
         model, setModel, modelChoices, modelAvailable, selected, starting, onStart,
     } as const;
 }
