@@ -6,6 +6,7 @@ import {
     createExternalActionDaemonDispatchResponse,
     createExternalActionDaemonDispatchResponseV1,
     createExternalActionResultTooLargeExecutionV1,
+    ExternalActionExecutionAuthorizationV1Schema,
     prepareExternalActionResponseEnvelopeV1,
     prepareExternalActionResponseV2,
     sealExternalActionRequestV2,
@@ -25,7 +26,7 @@ function createExternalActionDaemonDispatcher(
     return createProductionExternalActionDaemonDispatcher({
         ...params,
         getServerIdentityId: async () => "server-1",
-        mintExecutionAuthorization: async (binding) => ({ v: 1, token: "test-authorization",
+        mintExecutionAuthorization: async (binding) => ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: "test-authorization",
             binding: { ...binding, custodianAccountId: binding.accountId, installationId: 'installation-1' } }),
     });
 }

@@ -92,7 +92,6 @@ export async function startMachineCarrierGrantIntegrationFixture(input: Readonly
                 [FEATURE_ENV_KEYS.peerMediationRouteGrantSigningPrivateKey]: Buffer.from(signingKeyPair.secretKey).toString('base64url'),
             },
             nowMs: () => Date.now(),
-            readMachineOwnershipState: async () => 'available',
             readMachineIrohEndpointAuthority: async ({ machineId }) => (
                 machineId === input.machineId
                     ? { endpointId: input.targetEndpointId, revision: 1 }

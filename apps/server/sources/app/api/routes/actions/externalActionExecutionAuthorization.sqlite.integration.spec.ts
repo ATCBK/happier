@@ -2,6 +2,10 @@ import Fastify from "fastify";
 import axios from 'axios';
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { maxHeaderSize } from 'node:http';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { Server as SocketServer } from 'socket.io';
+import { io as connectSocket } from 'socket.io-client';
 import type { FastifyRequest, InjectOptions } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
 import tweetnacl from "tweetnacl";
@@ -98,7 +102,7 @@ import { currentAccountStoredContentCompatibilityHeaders, currentAccountStoredCo
 import { createExternalActionDaemonDispatcher, resolveCurrentSessionMachineFromServer,
     type ExternalActionDaemonDispatcher } from "@/app/api/socket/externalActionDispatcher";
 import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
-import { getAccountSessionSocketRoom } from "@/app/api/socketRooms";
+import { getAccountSessionSocketRoom, getMachineSocketRoom } from "@/app/api/socketRooms";
 import { registerSocketRpcHandlers } from '@/app/api/socket/rpc/registerSocketRpcHandlers';
 import { machineUpdateHandler } from "@/app/api/socket/machineUpdateHandler";
 import { createFakeSocket, getSocketHandler, createSocketRoomDiscoveryHarness } from "@/app/api/testkit/socketHarness";
@@ -139,6 +143,44 @@ import { createSignedPluginInstallationPublisherHeader } from '@/testkit/pluginI
 import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 } from '@happier-dev/protocol';
 import { materializeWorkflowAcceptedSnapshotFixture } from '@/testkit/workflowAcceptedSnapshot';
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { createDaemonSessionAccountActionExecutor } from '../../../../../../cli/src/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
+import { prepareExternalActionRequesterAccountAuthorization } from '../../../../../../cli/src/api/externalActionExecutionAuthorization';
+import { createCliApprovalsArtifactStore } from '../../../../../../cli/src/session/actions/approvals/artifactStore';
+import { createAccountServerActionDeps } from '../../../../../../cli/src/api/accountServerActionDeps';
+import { createDaemonApprovalExecutionOriginCurrentness } from '../../../../../../cli/src/daemon/externalActions/daemonExternalActionTargetResolver';
+import { resolveAvailableAccountSettings } from '../../../../../../cli/src/settings/accountSettings/resolveAvailableAccountSettings';
+import { artifactsRoutes } from '@/app/api/routes/artifacts/artifactsRoutes';
+import { registerAccountProfileRoute } from '@/app/api/routes/account/registerAccountProfileRoute';
+import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
+import { encrypt as encryptRpc, decrypt as decryptRpc, encodeBase64 as encodeRpcBase64 } from '../../../../../../cli/src/api/encryption';
+import { RpcHandlerManager } from '../../../../../../cli/src/api/rpc/RpcHandlerManager';
+import { authorizeMachineRpcRequest, verifyMachineRpcAdmissionCurrent } from '../../../../../../cli/src/api/machine/machineRpcAuthorization';
+import { registerMachinePromptAssetTransferRpcHandlers } from '../../../../../../cli/src/api/machine/rpcHandlers.promptAssetTransfers';
+import { createFoundSkillBundleReader } from '../../../../../../cli/src/cli/actions/foundSkillBundleReader';
+import { scanNativeSkillRoots } from '../../../../../../cli/src/prompts/skills/native/scanNativeSkillRoots';
+import { createCliActionDeps } from '../../../../../../cli/src/session/actions/createCliActionDeps';
+import { FoundSkillBundleV1Schema } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
+import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import { createTransferRecipientKeyPair } from '@happier-dev/transfers/node';
+import { resolveVerifiedMachineSocketInstallationId } from '@/app/api/socket/machineSocketInstallationProof';
+import { eventRouter } from '@/app/events/eventRouter';
+import { readFoundSkillBundle } from '../../../../../../cli/src/prompts/skills/native/resolveFoundSkillDownloadSource';
+import { createDirectTransferServerLifecycle } from '../../../../../../cli/src/machines/transfer/directTransferServerLifecycle';
+import { registerMachinePreparedTransferRpcHandlers } from '../../../../../../cli/src/api/machine/rpcHandlers.preparedTransfers';
+import { buildDirectPeerTransferEndpointPath, requestDirectPeerTransferToFile } from '../../../../../../cli/src/machines/transfer/directPeerTransport';
+import { DIRECT_PEER_RECIPIENT_PUBLIC_KEY_HEADER } from '../../../../../../cli/src/machines/transfer/directPeerTransport/protocol';
+import { PreparedTransferRpcRequestV1Schema, PreparedTransferRpcResponseV1Schema,
+    resolvePreparedTransferRpcPhaseV1 } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
+import { prepareWorkspaceFileExport } from '../../../../../../cli/src/machines/transfer/prepareWorkspaceFileExport';
+import { registerPromptLibraryRoutes } from '@/app/account/prompts/registerPromptLibraryRoutes';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowReadResponseV1Schema,
+    openPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { prepareFoundSkillExport } from '../../../../../../cli/src/machines/transfer/prepareFoundSkillExport';
+import { registerMachineDirectTransferExportRpcHandlers } from '../../../../../../cli/src/api/machine/rpcHandlers.directTransferExports';
+import { TransferEndpointCandidateSchema } from '@happier-dev/protocol/machines/transfer/transferStream';
 
 const ACTION_ID = "teams.policy.set" as const;
 const authorizationRequests = new Map<string, Readonly<{
@@ -162,6 +204,7 @@ describe("external Action execution authorization", () => {
             tempDirPrefix: "happier-external-action-execution-authorization-",
             initAuth: true,
             initEncrypt: true,
+            initFiles: true,
             env: {
                 AUTH_REQUIRED_LOGIN_PROVIDERS: "",
                 AUTH_LOGIN_ELIGIBILITY_CACHE_TTL_MS: "0",
@@ -191,6 +234,7 @@ describe("external Action execution authorization", () => {
         await db.team.deleteMany();
         await db.sessionMessage.deleteMany();
         await db.session.deleteMany();
+        await db.artifact.deleteMany();
         await db.account.deleteMany();
     });
 
@@ -278,7 +322,8 @@ describe("external Action execution authorization", () => {
 
     async function createApp(teamId: string, semanticWithdraw = false,
         resolveCurrentSessionMachine?: (input: Readonly<{ accountId: string; sessionId: string }>) => Promise<string | null>,
-        daemonTransport?: ExternalActionDaemonDispatcher, usageReads = false) {
+        daemonTransport?: ExternalActionDaemonDispatcher, usageReads = false,
+        configure?: (app: Parameters<typeof artifactsRoutes>[0]) => void) {
         const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>() as any;
         app.setValidatorCompiler(validatorCompiler);
         app.setSerializerCompiler(serializerCompiler);
@@ -349,6 +394,7 @@ describe("external Action execution authorization", () => {
         });
         app.post("/v1/sessions/:sessionId/discussions", { preHandler: app.authenticate }, async () => ({ ok: true }));
         app.post("/test/present-user-only", { preHandler: [app.authenticate, requirePresentUser] }, async () => ({ ok: true }));
+        configure?.(app);
         await app.ready();
         return { app, transport, dispatchedPrincipals };
     }
@@ -557,6 +603,10 @@ describe("external Action execution authorization", () => {
             const setup = await h.run({ workspace, phase: 'setup', expectedEffectDigest: reviewed.plan.reviewedEffectDigest,
                 consentScope: 'thisTime' }, 'ui', 'unsigned-ui', 'present_user', 'projects.prepare', 'this-time-setup');
             expect(setup).toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId: 'projects.prepare' } });
+            expect((await h.approval()).preview).toMatchObject({ setupReview: {
+                reviewedEffectDigest: reviewed.plan.reviewedEffectDigest,
+                reviewedEffect: { commands: [{ kind: 'command', command: 'echo setup-reviewed' }] },
+            } });
             expect(await h.decide('approve')).toMatchObject({ ok: true });
             const execution = (await h.approval()).execution;
             expect(execution, JSON.stringify({ execution, httpReads: httpReads.filter(read => !read.path.endsWith('/verify')) }))
@@ -577,7 +627,9 @@ describe("external Action execution authorization", () => {
     });
 
     it.each(['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'projects.inspect', 'localServices.launcher.start',
-        'localServices.actions.restartManaged', 'approval.request.decide'] as const)(
+        'localServices.actions.restartManaged', 'approval.request.decide',
+        'machines.terminal.open', 'machines.terminal.list', 'machines.terminal.read', 'machines.terminal.write',
+        'machines.terminal.close', 'machines.terminal.restart'] as const)(
         'resolves accepted Project rows through the signed %s HTTP read without granting row mutation', async actionId => {
         const fixture = await createFixture({ qualifiedPat: false });
         const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
@@ -601,6 +653,12 @@ describe("external Action execution authorization", () => {
             : actionId === 'localServices.launcher.start' ? { workspace, machineId: fixture.machine.id,
                 targetId: createProjectServiceDeclarationTargetIdV1(ref, { kind: 'manifest', name: 'api' }),
                 declaration: { workspaceRefId: ref.id, selection: { kind: 'manifest', name: 'api' } } }
+            : actionId.startsWith('machines.terminal.') ? { serverId: homeId, machineId: fixture.machine.id,
+                ...(actionId === 'machines.terminal.open' || actionId === 'machines.terminal.restart'
+                    ? { workspace, terminalKey: 'requester-shell' }
+                    : actionId === 'machines.terminal.list' ? { workspace }
+                    : { terminalId: 'requester-pty', ...(actionId === 'machines.terminal.read' ? { byteOffset: 0 }
+                        : actionId === 'machines.terminal.write' ? { event: { t: 'text', text: 'pwd\r' } } : {}) }) }
             : { workspace });
         const envelope = ExternalActionRequestEnvelopeV1Schema.parse({ ...fixture.envelope, input });
         const { app } = await createApp(fixture.team.id);
@@ -659,10 +717,14 @@ describe("external Action execution authorization", () => {
             if (rows.status !== 'listed') throw new Error('Project rows were not listed');
             const refs = rows.rows.flatMap(row => row.content?.t === 'plain' && 'id' in row.content.v.value ? [row.content.v.value] : []);
             expect(resolveWorkspaceRefV1(refs, workspace)).toEqual({ kind: 'resolved', ref });
-            expect((await send('/v1/account/project-rows/read', { key })).json()).toMatchObject({ status: 'present', row: { key } });
+            const singleRow = await send('/v1/account/project-rows/read', { key });
+            if (actionId.startsWith('machines.terminal.')) expect(singleRow.statusCode).toBe(401);
+            else expect(singleRow.json()).toMatchObject({ status: 'present', row: { key } });
             const trust = await send('/v1/account/project-trust/read', { project: { serverId: homeId, projectId: ref.projectKey } });
-            expect(trust.statusCode, trust.body).toBe(200);
-            expect(ProjectTrustReadResponseV1Schema.parse(trust.json())).toEqual({ status: 'absent' });
+            const readsTrust = !actionId.startsWith('machines.terminal.') || actionId === 'machines.terminal.open'
+                || actionId === 'machines.terminal.restart';
+            expect(trust.statusCode, trust.body).toBe(readsTrust ? 200 : 401);
+            if (readsTrust) expect(ProjectTrustReadResponseV1Schema.parse(trust.json())).toEqual({ status: 'absent' });
             expect((await send('/v1/account/project-rows/list', {}, tweetnacl.sign.keyPair().secretKey)).statusCode).toBe(401);
             const foreignEffect = await app.inject({ method: 'POST', url: '/v1/account/project-rows/list', payload: {},
                 headers: machineHeaders({ authorizationToken: authorization.token, effectActionId: actionId === 'projects.prepare'
@@ -1231,6 +1293,121 @@ describe("external Action execution authorization", () => {
             await db.account.update({ where: { id: fixture.account.id }, data: { tokenEpoch: { increment: 1 } } });
             expect(await verifyCurrentExternalActionPrincipal(authorization.binding)).toBeNull();
             expect(await verifyCurrentExternalActionPrincipal(terminalAuthorization.binding)).toBeNull();
+        } finally { await app.close(); }
+    });
+
+    it('admits connected Session name set and clear, persists approval custody, and executes each decision once', async () => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const session = await db.session.create({ data: { accountId: fixture.account.id,
+            tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id,
+            sessionId: session.id, data: 'opaque-source-key' } });
+        // Socket publisher discovery is the external boundary; HTTP, installed
+        // signatures, admission, approval codecs/CAS and SQLite remain real.
+        let publisher: string | null = fixture.machine.id;
+        let effects = 0;
+        const { app } = await createApp(fixture.team.id, false, async () => publisher, undefined, false, routes => {
+            artifactsRoutes(routes);
+            registerAccountProfileRoute(routes);
+            registerAccountApiTokenManagementRoutes(routes);
+            routes.addHook('onRequest', async (request) => {
+                if (request.method === 'POST' && request.url === '/v1/account/profile') effects += 1;
+            });
+        });
+        const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const credentials = { token, encryption: null };
+        const homeId = await getOrCreateServerIdentityId();
+        const serverId = 'name-clear-profile';
+        const target = { kind: 'machine' as const, machineId: fixture.machine.id };
+        try {
+            const serverHttpBaseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
+            await runWithServerHttpBaseUrl(serverHttpBaseUrl, async () => {
+                await bootstrapAccountSettingsContext({ credentials, mode: 'blocking' });
+                const artifacts = createCliApprovalsArtifactStore({ credentials, serverId });
+                const accountDeps = createAccountServerActionDeps({ token, credentials, serverId, serverHttpBaseUrl,
+                    serverIdentityId: homeId });
+                const current = createDaemonApprovalExecutionOriginCurrentness({ accountId: fixture.account.id,
+                    machineId: fixture.machine.id, serverId,
+                    resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: fixture.machine.id, serverIdentityId: homeId }),
+                    resolveTarget: createDaemonExternalActionTargetResolver({ credentials, serverApiUrl: serverHttpBaseUrl }),
+                    listAccountApiTokens: async () => {
+                        const result = await accountDeps.accountApiTokensListAction!({ input: {},
+                            context: { surface: 'ui', authority: 'present_user', serverId } });
+                        if ('ok' in result) throw new Error(result.errorCode);
+                        return result;
+                    },
+                    externalActionMachinePublicKey: fixture.keyPair.publicKey,
+                    verifyExternalExecutionAuthorization: args => verifyExternalActionExecutionAuthorizationCurrent({ ...args,
+                        privateKey: fixture.keyPair.secretKey, installationId: fixture.machine.installationId!, serverHttpBaseUrl }),
+                    isSessionCallerCurrent: async () => publisher === fixture.machine.id,
+                    resolveCurrentPermissionMode: async () => 'default',
+                    resolveCurrentSessionAgentSpawnPolicyV1: async () =>
+                        (await resolveAvailableAccountSettings({ credentials }))?.sessionAgentSpawnPolicyV1 ?? null,
+                });
+                // This family consumes the real Home/Artifact ports; unused transports are absent.
+                const executor = createActionExecutor({ ...accountDeps, ...artifacts,
+                    isApprovalExecutionOriginCurrent: ({ origin, request, signal }) => current({ origin, request, signal }),
+                } as ActionExecutorDeps);
+                const execute = createDaemonSessionAccountActionExecutor({ serverId, serverHttpBaseUrl, token,
+                    machineId: fixture.machine.id,
+                    prepareExternalActionAuthorization: async ({ operation, sessionActionOrigin, isCallerCurrent }) => {
+                        const authorization = await prepareExternalActionRequesterAccountAuthorization({
+                            actionId: operation.actionId, input: operation.input, requestId: operation.requestId,
+                            target, machineId: fixture.machine.id, sourceMachineId: fixture.machine.id,
+                            accountId: fixture.account.id, accountEncryptionMode: 'plain', tokenEpochHint: fixture.account.tokenEpoch,
+                            token, serverId, serverIdentityId: homeId, serverHttpBaseUrl,
+                            installationId: fixture.machine.installationId!, privateKey: fixture.keyPair.secretKey,
+                            sessionActionOrigin, isCurrent: isCallerCurrent,
+                        });
+                        return authorization ? { authorization, target } : null;
+                    },
+                    createExecutor: () => ({ execute: (actionId, input, context) => executor.execute(actionId, input, {
+                        ...context, serverIdentityId: homeId, runtimeAccountId: fixture.account.id,
+                        signExternalActionApprovalInput: args => signExternalActionApprovalInputV1({
+                            authorizationToken: args.authorization.token, actionId: args.actionId, input: args.input,
+                            target: args.target, privateKey: fixture.keyPair.secretKey,
+                        }),
+                    }) }),
+                });
+                for (const name of ['Morgan Reed', '']) {
+                    const requestFromInput = bindHomeDomainActionHttpRequestV1('account.name.set', { name });
+                    expect(bindHomeDomainActionHttpRequestV1('account.name.set', requestFromInput.body)).toEqual(requestFromInput);
+                    const before = effects;
+                    const pending = await execute({ kind: 'action.execute', actionId: 'account.name.set', input: { name },
+                        requestId: crypto.randomUUID(), witness: { turnId: 'name-turn', inputId: crypto.randomUUID(), callerPermissionMode: 'default',
+                            userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0,
+                            agentStartCaller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 } } },
+                        { sessionId: session.id, isCurrent: async () => true });
+                    expect(pending).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+                    if (!pending.ok || !pending.result || typeof pending.result !== 'object' || !('artifactId' in pending.result)
+                        || typeof pending.result.artifactId !== 'string') throw new Error('Expected durable approval reference');
+                    const artifactId = pending.result.artifactId;
+                    const request = ApprovalRequestV2Schema.parse(await artifacts.approvalsGet({ artifactId, serverId }));
+                    expect(request.actionArgs).toEqual({ name: name || null });
+                    expect(effects).toBe(before);
+                    const decide = () => executor.execute('approval.request.decide', { artifactId, decision: 'approve' },
+                        { surface: 'ui', authority: 'present_user', serverId, serverIdentityId: homeId,
+                            runtimeAccountId: fixture.account.id, actionCaller: { kind: 'host' } });
+                    const decided = await decide();
+                    const settled = ApprovalRequestV2Schema.parse(await artifacts.approvalsGet({ artifactId, serverId }));
+                    expect(settled.execution?.errorCode, name === '' ? 'clear name replay' : 'set name replay').toBeUndefined();
+                    expect(decided).toMatchObject({ ok: true, result: { status: 'executed' } });
+                    expect((await db.account.findUniqueOrThrow({ where: { id: fixture.account.id } })).name).toBe(name || null);
+                    expect(effects).toBe(before + 1);
+                    expect(await decide()).toMatchObject({ ok: true });
+                    expect(effects).toBe(before + 1);
+                }
+                publisher = null;
+                // Mis-binding the actual source prevents admission even for a
+                // canonical clear; no reference or profile effect may escape.
+                expect(await execute({ kind: 'action.execute', actionId: 'account.name.set', input: { name: '' },
+                    requestId: crypto.randomUUID(), witness: { turnId: 'name-turn', inputId: crypto.randomUUID(), callerPermissionMode: 'default',
+                        userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0,
+                        agentStartCaller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 } } },
+                    { sessionId: session.id, isCurrent: async () => true })).toMatchObject({ ok: false,
+                        errorCode: 'target_unavailable', details: { reason: 'external_authorization_refused' } });
+                expect(effects).toBe(2);
+            });
         } finally { await app.close(); }
     });
 
@@ -5507,6 +5684,314 @@ describe("external Action execution authorization", () => {
                 }
             }
         } finally { await app.close(); }
+    });
+
+    it("reads and adopts Found skill bytes through signed encrypted Home RPC and real Account storage", async () => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const terminal = await auth.createToken(fixture.account.id, undefined, { kind: 'terminal', authority: 'account_automation' });
+        const credentials = { token, encryption: null } as const;
+        const home = join(harness.baseDir, fixture.machine.id);
+        const path = join(home, '.agents', 'skills', 'native');
+        const markdown = '---\nname: native\ndescription: Native seam fixture\n---\nRead the diff.\n';
+        const script = '#!/bin/sh\nprintf native\n';
+        await mkdir(join(path, 'scripts'), { recursive: true });
+        await writeFile(join(path, 'SKILL.md'), markdown);
+        await writeFile(join(path, 'scripts', 'run.sh'), script);
+        await chmod(join(path, 'scripts', 'run.sh'), 0o755);
+        const agents = [{ agentId: 'codex', nativeRoots: { user: [['.agents', 'skills']] } }];
+        const scan = await scanNativeSkillRoots({ purpose: 'found', home, agents });
+        expect(scan.items).toMatchObject([{ name: 'native', path, agents: ['codex'] }]);
+        await db.machine.update({ where: { id: fixture.machine.id }, data: { active: true, lastActiveAt: new Date() } });
+        const { app } = await createApp(fixture.team.id, false, undefined, undefined, false, routes => {
+            artifactsRoutes(routes);
+            registerAccountProfileRoute(routes);
+            registerPromptLibraryRoutes(routes);
+        });
+        const io = new SocketServer(app.server, { path: '/v1/updates' });
+        // The network boundary verifies real credentials and installation proof;
+        // registration, relay admission, handler execution and storage remain real.
+        io.use((socket, next) => {
+            void (async () => {
+                const verified = await auth.verifyTokenForRoute(socket.handshake.auth.token);
+                if (!verified || verified.userId !== fixture.account.id) return next(new Error('Unauthorized'));
+                socket.data = { userId: verified.userId, authTokenKind: verified.authTokenKind,
+                    authAuthority: verified.authority, authTokenAuthenticationEvidence: verified.authenticationEvidence,
+                    clientType: socket.handshake.auth.clientType, machineId: socket.handshake.auth.machineId };
+                qualifyCurrentAccountStoredContentSocket(socket);
+                if (socket.data.clientType === 'machine-scoped') {
+                    const installationId = resolveVerifiedMachineSocketInstallationId({ accountId: fixture.account.id,
+                        machineId: fixture.machine.id, machine: fixture.machine, socketAuth: socket.handshake.auth });
+                    if (!installationId) return next(new Error('Invalid installation'));
+                    socket.data.verifiedMachineInstallationId = installationId;
+                    await socket.join(getMachineSocketRoom(verified.userId, fixture.machine.id));
+                }
+                next();
+            })().catch(next);
+        });
+        io.on('connection', socket => registerSocketRpcHandlers({ userId: fixture.account.id, socket, io }));
+        eventRouter.setIo(io);
+        const origin = await app.listen({ port: 0, host: '127.0.0.1' });
+        const key = new Uint8Array(randomBytes(32));
+        const content: SocketRpcContent = { mode: 'e2ee', cipher: {
+            encryptRaw: async value => encodeBase64(encryptRpc(key, 'dataKey', value), 'base64'),
+            decryptRaw: async ciphertext => decryptRpc(key, 'dataKey', decodeBase64(ciphertext, 'base64')),
+        } };
+        const rpcDiagnostics: unknown[] = [];
+        const manager = new RpcHandlerManager({ scopePrefix: fixture.machine.id, localMachineId: fixture.machine.id,
+            encryptionMode: 'e2ee', encryptionKey: key, encryptionVariant: 'dataKey',
+            logger: (message, diagnostic) => { if (message === '[RPC] Request completed') rpcDiagnostics.push(diagnostic); },
+            authorizeRequest: request => authorizeMachineRpcRequest(request, { machineId: fixture.machine.id,
+                resolveInstallationId: () => fixture.machine.installationId,
+                resolveCustodianAccountId: async () => fixture.account.id,
+                verifyMachineAdmission: input => verifyMachineRpcAdmissionCurrent({ ...input, privateKey: fixture.keyPair.secretKey,
+                    daemonToken: token, serverHttpBaseUrl: origin }),
+            }),
+        });
+        const transfers = registerMachinePromptAssetTransferRpcHandlers({ rpcHandlerManager: manager,
+            adapterRegistry: new Map(), foundSkills: { home, agents } });
+        const prepared = createDirectTransferServerLifecycle({ bindPort: 0, listenerClasses: ['loopback_http'] });
+        registerMachinePreparedTransferRpcHandlers({ rpcHandlerManager: manager, request: prepared.requestPreparedTransfer });
+        registerMachineDirectTransferExportRpcHandlers({ rpcHandlerManager: manager,
+            prepareExportSession: async (input, _scope, context) => {
+                if (input.t !== 'prompt_asset_download_v1') throw new Error('Expected Found export request');
+                return await prepareFoundSkillExport({ lifecycle: prepared, request: { path: input.path }, signal: context?.signal });
+            },
+            releaseExportSession: (transferId, scope) => { prepared.clearPublishedTransfer(transferId, scope); },
+        });
+        const machine = connectSocket(origin, { path: '/v1/updates', transports: ['websocket'], autoConnect: false, reconnection: false,
+            auth: { token, clientType: 'machine-scoped', machineId: fixture.machine.id, installationId: fixture.machine.installationId,
+                installationPublicKey: encodeRpcBase64(fixture.keyPair.publicKey, 'base64url'),
+                installationProof: signMachineInstallationProof({ payload: { version: 1, machineId: fixture.machine.id,
+                    installationId: fixture.machine.installationId!, accountId: fixture.account.id }, privateKey: fixture.keyPair.secretKey }),
+                ...currentAccountStoredContentCompatibilitySocketAuth } });
+        const requester = connectSocket(origin, { path: '/v1/updates', transports: ['websocket'], autoConnect: false, reconnection: false,
+            auth: { token, clientType: 'user-scoped', ...currentAccountStoredContentCompatibilitySocketAuth } });
+        machine.on(SOCKET_RPC_EVENTS.REQUEST, (request, acknowledge) => { void manager.handleRequest(request).then(acknowledge); });
+        machine.on('connect', () => manager.onSocketConnect(machine));
+        machine.on('disconnect', () => manager.onSocketDisconnect());
+        const connect = async (socket: typeof machine) => await new Promise<void>((resolve, reject) => {
+            socket.once('connect', resolve); socket.once('connect_error', reject); socket.connect();
+        });
+        const originalEnvironment = snapshotEnv();
+        try {
+            // HOME is the real OS boundary used by the production scanner. The
+            // prepared producer uses the current Agent catalog without injection.
+            applyEnvValues({ HOME: home, USERPROFILE: home });
+            await Promise.all([connect(machine), connect(requester)]);
+            const methods = [RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK,
+                RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT];
+            const preparedMethods = [RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK,
+                RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT];
+            expect(await manager.waitForRegisteredHandlers([...methods, ...preparedMethods,
+                RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE, RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE],
+                { timeoutMs: 10_000 })).toEqual({ status: 'ready' });
+            const target = { kind: 'machine' as const, machineId: fixture.machine.id };
+            let authorization: ReturnType<typeof ExternalActionExecutionAuthorizationV1Schema.parse>;
+            let effectActionId: 'skills.found.read' | 'skills.found.adopt' | 'daemon.filesystem.download' = 'skills.found.read';
+            const phases: string[] = [];
+            const call = async (rpc: string, payload: unknown, tamper?: 'body' | 'root' | 'target') => {
+                const method = `${fixture.machine.id}:${rpc}`, requestId = crypto.randomUUID(), callId = crypto.randomUUID().replaceAll('-', '');
+                const params = await socketRpcCodec.encodeParams(content, payload, { method, callId });
+                const signedEffect = tamper === 'root' ? 'skills.list' : effectActionId;
+                const signedTarget = tamper === 'target' ? { kind: 'machine' as const, machineId: 'another-machine' } : target;
+                const execution = { v: 1 as const, authorization, effectActionId: signedEffect, target: signedTarget, installationId: fixture.machine.installationId!,
+                    machineSignature: signExternalActionMachineRpcRequestV1({ authorizationToken: authorization.token, effectActionId: signedEffect, target: signedTarget,
+                        installationId: fixture.machine.installationId!, event: SOCKET_RPC_EVENTS.CALL, method, requestId, params,
+                        privateKey: fixture.keyPair.secretKey }) };
+                const reply = await requester.timeout(20_000).emitWithAck(SOCKET_RPC_EVENTS.CALL, { method, requestId,
+                    params: tamper === 'body' ? await socketRpcCodec.encodeParams(content, { substituted: true }, { method, callId }) : params,
+                    externalActionExecution: execution });
+                if (tamper) { expect(reply).toMatchObject({ ok: false, errorCode: 'RPC_FORBIDDEN' }); return; }
+                phases.push(rpc);
+                return await socketRpcCodec.decodeResult(content, reply, callId);
+            };
+            const preparedCall = async (payload: ReturnType<typeof PreparedTransferRpcRequestV1Schema.parse>) => {
+                const parsed = PreparedTransferRpcRequestV1Schema.parse(payload);
+                const method = resolvePreparedTransferRpcPhaseV1(parsed.path, parsed.httpMethod, parsed.body);
+                if (!method) throw new Error('Expected a prepared download phase');
+                const response = await call(method, parsed);
+                expect(response, JSON.stringify({ response, diagnostic: rpcDiagnostics.at(-1) })).toHaveProperty('status');
+                return PreparedTransferRpcResponseV1Schema.parse(response);
+            };
+            const fetchPrepared: typeof fetch = async (input, init) => {
+                const request = new Request(input, init);
+                const payload = PreparedTransferRpcRequestV1Schema.parse({ t: 'prepared_machine_transfer_v1',
+                    path: new URL(request.url).pathname, httpMethod: request.method,
+                    authorizationToken: request.headers.get('authorization')?.replace(/^Bearer /u, ''),
+                    recipientPublicKeyBase64: request.headers.get(DIRECT_PEER_RECIPIENT_PUBLIC_KEY_HEADER) });
+                const response = await preparedCall(payload);
+                return new Response(response.body, { status: response.status,
+                    headers: { 'content-type': response.contentType ?? 'application/json' } });
+            };
+            await runWithServerHttpBaseUrl(origin, async () => {
+                const settings = await bootstrapAccountSettingsContext({ credentials, mode: 'blocking' });
+                expect(settings.source).toBe('network');
+                const executor = createActionExecutor(createCliActionDeps({ token, credentials, serverId: 'found-seam',
+                    serverIdentityId: await getOrCreateServerIdentityId(), serverHttpBaseUrl: origin, sessionId: '', mode: 'plain', ctx: null,
+                    machineActionDirectTargetTransport: { machineId: fixture.machine.id, invoke: (rpc, payload) => call(rpc, payload) } }));
+                for (const actionId of ['skills.found.read', 'skills.found.adopt'] as const) {
+                    effectActionId = actionId;
+                    const input = actionId === 'skills.found.read' ? { machineId: fixture.machine.id, path }
+                        : { machineId: fixture.machine.id, items: [{ name: scan.items[0]!.name, path }] };
+                    const issued = await fetch(`${origin}${bindExternalActionExecutionAuthorizationHttpPathV1(actionId)}`, { method: 'POST',
+                        headers: { authorization: `Bearer ${terminal}`, 'content-type': 'application/json' },
+                        body: JSON.stringify({ v: 1, machineId: fixture.machine.id,
+                            envelope: { v: 1, requestId: crypto.randomUUID(), target, input } }) });
+                    expect(issued.status).toBe(200);
+                    authorization = ExternalActionExecutionAuthorizationV1Schema.parse(await issued.json());
+                    const recipient = createTransferRecipientKeyPair();
+                    for (const tamper of ['root', 'target', 'body'] as const) {
+                        await call(RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT, { path,
+                            recipientPublicKeyBase64: recipient.recipientPublicKeyBase64 }, tamper);
+                        expect(transfers.downloadStore.listDownloadSessionIds()).toEqual([]);
+                    }
+                    const before = await db.artifact.count({ where: { accountId: fixture.account.id } });
+                    const result = await executor.execute(actionId, input, { surface: 'ui', authority: 'present_user' });
+                    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+                    if (!result.ok) throw new Error('Expected Found Action completion');
+                    if (actionId === 'skills.found.read') {
+                        const bundle = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.found.read'].parse(result.result);
+                        expect(bundle).toMatchObject({ name: 'native' });
+                        expect(bundle.files).toEqual(expect.arrayContaining([
+                            expect.objectContaining({ path: 'SKILL.md', contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64') }),
+                            expect.objectContaining({ path: 'scripts/run.sh', unixMode: 0o755 }),
+                        ]));
+                        expect(await db.artifact.count({ where: { accountId: fixture.account.id } })).toBe(before);
+                    } else {
+                        const adopted = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.found.adopt'].parse(result.result);
+                        expect(adopted.skillIds).toHaveLength(1);
+                        expect(adopted.incomplete).toBeUndefined();
+                        expect(await db.artifact.count({ where: { accountId: fixture.account.id } })).toBe(before + 1);
+                        const stored = createCliApprovalsArtifactStore({ credentials, serverId: 'found-seam', getAccountEncryptionMode: async () => 'plain' });
+                        const copy = await stored.promptLibraryStore.read(adopted.skillIds[0]!);
+                        expect(copy?.header).toMatchObject({ kind: 'prompt_bundle.v2', skillLock: {
+                            provenance: { kind: 'machine', machineId: fixture.machine.id, path, agentIds: ['codex'] } } });
+                        expect(copy?.body).toContain(encodeBase64(new TextEncoder().encode(script), 'base64'));
+                        const ruleRead = await fetch(`${origin}${PROMPT_LIBRARY_ROWS_ROUTE_V1}/skill-rules`, {
+                            headers: { authorization: `Bearer ${token}` } });
+                        expect(ruleRead.status).toBe(200);
+                        const ruleRow = PromptLibraryRowReadResponseV1Schema.parse(await ruleRead.json());
+                        if (ruleRow.status !== 'present') throw new Error('Expected persisted adopted skill rules');
+                        expect(openPromptLibraryContentV1({ key: 'skill-rules', mode: 'plain', material: null, content: ruleRow.content }))
+                            .toMatchObject({ status: 'opened', record: { key: 'skill-rules', value: { rules: expect.arrayContaining([
+                                expect.objectContaining({ skillId: adopted.skillIds[0], target: { t: 'allMachines' }, enabled: true }),
+                            ]) } } });
+                    }
+                    expect(transfers.downloadStore.listDownloadSessionIds()).toEqual([]);
+
+                    // The browser baseline carries the incumbent prepared HTTP
+                    // phases over the same Home relay. The producer and file
+                    // consumer retain their real scanner, encryption and digest.
+                    const exportInput = { t: 'prompt_asset_download_v1', path };
+                    for (const tamper of ['root', 'target', 'body'] as const) {
+                        await call(RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE, exportInput, tamper);
+                        expect(prepared.getState().publishedTransferCount).toBe(0);
+                    }
+                    const registeredExport = await call(RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE, exportInput);
+                    expect(registeredExport).toMatchObject({ success: true });
+                    const producer = await readFoundSkillBundle({ home, agents, request: { path } });
+                    if (!registeredExport || typeof registeredExport !== 'object' || !('transferId' in registeredExport)
+                        || typeof registeredExport.transferId !== 'string' || !('endpointCandidates' in registeredExport)) {
+                        throw new Error('Expected registered Found export');
+                    }
+                    const transferId = registeredExport.transferId;
+                    const endpointCandidates = TransferEndpointCandidateSchema.array().parse(registeredExport.endpointCandidates);
+                    const endpoint = endpointCandidates[0];
+                    if (!endpoint?.authorizationToken) throw new Error('Expected Found capability');
+                    const base = buildDirectPeerTransferEndpointPath(transferId);
+                    const recipientInput = { t: 'prepared_machine_transfer_v1' as const, path: `${base}/open`, httpMethod: 'POST' as const,
+                        authorizationToken: endpoint.authorizationToken, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64 };
+                    for (const tamper of ['root', 'target', 'body'] as const) await call(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, recipientInput, tamper);
+                    expect(prepared.getState().publishedTransferCount).toBe(1);
+                    const invalidCapability = await preparedCall({ ...recipientInput, authorizationToken: 'invalid-capability' });
+                    expect(invalidCapability.status).toBe(401);
+                    const downloaded = await requestDirectPeerTransferToFile({ transferId, endpointCandidates,
+                        destinationPath: join(home, `${actionId}.json`), fetchFn: fetchPrepared });
+                    const bundle = FoundSkillBundleV1Schema.parse(JSON.parse(await readFile(downloaded.destinationPath, 'utf8')));
+                    expect(bundle).toMatchObject({ name: producer.name, path: producer.path, pluginOwned: producer.pluginOwned });
+                    expect(bundle.files).toEqual(producer.files);
+                    expect(bundle.agents).toContain('codex');
+                    const releaseInput = { transferId };
+                    for (const tamper of ['root', 'target', 'body'] as const) {
+                        await call(RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE, releaseInput, tamper);
+                        expect(prepared.getState().publishedTransferCount).toBe(1);
+                    }
+                    expect(await call(RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE, releaseInput)).toEqual({ success: true });
+                    expect(prepared.getState().publishedTransferCount).toBe(0);
+                    expect((await preparedCall({ ...recipientInput, path: `${base}/chunks/0`, httpMethod: 'GET' })).status).toBe(401);
+                }
+                effectActionId = 'daemon.filesystem.download';
+                const workspaceBytes = Buffer.from([0, 255, 128, 10, 0, 1]);
+                await writeFile(join(home, 'binary.bin'), workspaceBytes);
+                const workspaceInput = getActionSpec(effectActionId).inputSchema.parse({ rootPath: home, path: 'binary.bin',
+                    destination: { destinationId: 'browser' }, asZip: false });
+                const workspaceAuthorization = await fetch(`${origin}${bindExternalActionExecutionAuthorizationHttpPathV1(effectActionId)}`, {
+                    method: 'POST', headers: { authorization: `Bearer ${terminal}`, 'content-type': 'application/json' },
+                    body: JSON.stringify({ v: 1, machineId: fixture.machine.id,
+                        envelope: { v: 1, requestId: crypto.randomUUID(), target, input: workspaceInput } }),
+                });
+                expect(workspaceAuthorization.status).toBe(200);
+                authorization = ExternalActionExecutionAuthorizationV1Schema.parse(await workspaceAuthorization.json());
+                const workspaceScope = { rootPath: home, requesterAccountId: fixture.account.id, destinationId: 'browser' };
+                const publishWorkspace = () => prepareWorkspaceFileExport({ lifecycle: prepared, filesystemScope: workspaceScope,
+                    request: { workingDirectory: home, path: 'binary.bin', asZip: false } });
+                const workspace = await publishWorkspace();
+                const workspaceEndpoint = workspace.endpointCandidates[0];
+                if (!workspaceEndpoint?.authorizationToken) throw new Error('Expected prepared workspace capability');
+                const workspaceBase = new URL(workspaceEndpoint.url).pathname;
+                const workspaceRecipient = createTransferRecipientKeyPair();
+                const workspaceOpen = { t: 'prepared_machine_transfer_v1' as const, path: `${workspaceBase}/open`, httpMethod: 'POST' as const,
+                    authorizationToken: workspaceEndpoint.authorizationToken, recipientPublicKeyBase64: workspaceRecipient.recipientPublicKeyBase64 };
+                for (const tamper of ['root', 'target', 'body'] as const) await call(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, workspaceOpen, tamper);
+                const workspaceDownload = await requestDirectPeerTransferToFile({ transferId: workspace.transferId,
+                    endpointCandidates: workspace.endpointCandidates, destinationPath: join(home, 'downloaded.bin'), fetchFn: fetchPrepared,
+                    expectedSizeBytes: workspace.sizeBytes, expectedManifestHash: workspace.manifestHash });
+                expect(await readFile(workspaceDownload.destinationPath)).toEqual(workspaceBytes);
+                const workspaceSettlement = prepared.waitForFilesystemExportSettlement(workspace.transferId, workspaceScope);
+                expect((await preparedCall({ t: 'prepared_machine_transfer_v1', path: `${workspaceBase}/complete`, httpMethod: 'POST',
+                    authorizationToken: workspaceEndpoint.authorizationToken, body: { destinationId: 'browser', success: true,
+                        sizeBytes: workspaceDownload.sizeBytes, manifestHash: workspaceDownload.manifestHash } })).status).toBe(200);
+                expect(await workspaceSettlement).toMatchObject({ success: true, sizeBytes: workspaceBytes.length });
+                expect((await preparedCall({ ...workspaceOpen, path: `${workspaceBase}/chunks/0`, httpMethod: 'GET' })).status).toBe(401);
+                const workspaceAbort = await publishWorkspace();
+                const workspaceAbortEndpoint = workspaceAbort.endpointCandidates[0];
+                if (!workspaceAbortEndpoint?.authorizationToken) throw new Error('Expected workspace cancellation capability');
+                const workspaceAbortSettlement = prepared.waitForFilesystemExportSettlement(workspaceAbort.transferId, workspaceScope);
+                expect((await preparedCall({ t: 'prepared_machine_transfer_v1',
+                    path: `${new URL(workspaceAbortEndpoint.url).pathname}/complete`, httpMethod: 'POST',
+                    authorizationToken: workspaceAbortEndpoint.authorizationToken,
+                    body: { destinationId: 'browser', success: false, error: 'cancelled' } })).status).toBe(200);
+                expect(await workspaceAbortSettlement).toMatchObject({ success: false, error: 'cancelled' });
+                expect(prepared.getState().publishedTransferCount).toBe(0);
+                effectActionId = 'skills.found.adopt';
+                const cancellationAuthorization = await fetch(`${origin}${bindExternalActionExecutionAuthorizationHttpPathV1(effectActionId)}`, {
+                    method: 'POST', headers: { authorization: `Bearer ${terminal}`, 'content-type': 'application/json' },
+                    body: JSON.stringify({ v: 1, machineId: fixture.machine.id, envelope: { v: 1, requestId: crypto.randomUUID(), target,
+                        input: { machineId: fixture.machine.id, items: [{ name: 'native', path }] } } }),
+                });
+                expect(cancellationAuthorization.status).toBe(200);
+                authorization = ExternalActionExecutionAuthorizationV1Schema.parse(await cancellationAuthorization.json());
+                const controller = new AbortController();
+                const cancelled = createFoundSkillBundleReader({ machineId: null, machineRPC: async (_machineId, rpc, payload) => {
+                    const result = await call(rpc, payload);
+                    if (rpc === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK) controller.abort();
+                    return result;
+                } });
+                await expect(cancelled(fixture.machine.id, path, controller.signal)).rejects.toMatchObject({ code: 'cancelled' });
+                expect(transfers.downloadStore.listDownloadSessionIds()).toEqual([]);
+                expect(phases).toEqual(expect.arrayContaining([...methods, ...preparedMethods]));
+                expect(phases).toEqual(expect.arrayContaining([RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE,
+                    RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE]));
+                expect(await readFile(join(path, 'SKILL.md'), 'utf8')).toBe(markdown);
+                expect(await readFile(join(path, 'scripts', 'run.sh'), 'utf8')).toBe(script);
+            });
+        } finally {
+            restoreEnv(originalEnvironment);
+            requester.close(); machine.close();
+            await transfers.dispose(); await prepared.stop(); eventRouter.clearIo();
+            await io.close(); await app.close();
+        }
     });
 
     it("admits a signed decision proof only when the current credential retains approve", async () => {

@@ -4,14 +4,12 @@ import type { Fastify } from "../types";
 import { log } from "@/utils/logging/log";
 import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
 import { captureAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";
-import {
-    AUTHORITY_CEILING_HEADER_V1,
-    ACCOUNT_DIRECTORY_ERROR_CODES_V1,
-    parseAccountApiTokenBearerV1,
-    readServerConfig,
-    SERVER_CONFIG,
-    type AuthTokenAuthenticationEvidenceV1,
-} from "@happier-dev/protocol";
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
+import { ACCOUNT_DIRECTORY_ERROR_CODES_V1 } from '@happier-dev/protocol/auth/accountDirectory';
+import { parseAccountApiTokenBearerV1 } from '@happier-dev/protocol/auth/accountApiTokens';
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
+import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
 import {
     isRestrictedAuthTokenDeniedForRoute,
@@ -23,13 +21,7 @@ import {
 } from "./apiTokenRouteAdmission";
 import { readBearerCredential, verifyRequestPrincipal, type RequestPrincipalVerification } from "./verifyRequestPrincipal";
 import { isApiTokenRequestOriginAllowed } from "./isApiTokenRequestOriginAllowed";
-import {
-    EXTERNAL_ACTION_EFFECT_ACTION_HEADER,
-    EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER,
-    EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_VERIFY_HTTP_PATH_TEMPLATE_V1,
-    EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
-    EXTERNAL_ACTION_RESOLVED_TARGET_HEADER,
-} from "@happier-dev/protocol/actions";
+import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER, EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_VERIFY_HTTP_PATH_TEMPLATE_V1, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER, EXTERNAL_ACTION_RESOLVED_TARGET_HEADER } from '@happier-dev/protocol/actions/externalActionApi';
 import { narrowCredentialAuthority } from "@/app/auth/effectiveCredentialAuthority";
 import {
     verifyExternalActionDomainExecutionRequest,
@@ -134,6 +126,11 @@ export function enableAuthentication(app: Fastify) {
             ) {
                 return sendInvalidConnectionCredentialFailure(request, reply);
             }
+            const sessionBinding = request.routeOptions?.config?.restrictedCredentialBinding;
+            const routeSessionId = sessionBinding?.scope === 'session'
+                && resolveApiTokenSessionActionForRoute(request) !== undefined
+                && isExternalActionSessionRoutePurposeAllowed(request, effectActionId)
+                ? readRestrictedCredentialRouteField(request, sessionBinding.session) : null;
             const proof = {
                 authorizationToken: executionAuthorization,
                 machineSignature,
@@ -142,6 +139,8 @@ export function enableAuthentication(app: Fastify) {
                 method: request.method,
                 path: request.url,
                 body: request.body,
+                ...(typeof routeSessionId === 'string' && routeSessionId.length > 0
+                    ? { sessionRouteTarget: { kind: 'session' as const, sessionId: routeSessionId } } : {}),
                 routeInput: {
                     ...(request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params : {}),
                     ...(request.query && typeof request.query === 'object' && !Array.isArray(request.query) ? request.query : {}),

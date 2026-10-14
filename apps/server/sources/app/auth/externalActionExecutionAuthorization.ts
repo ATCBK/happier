@@ -1,40 +1,24 @@
-import {
-    ExternalActionActionIdV1Schema,
-    bindExternalActionExecutionAuthorizationVerifyHttpPathV1,
-    bindExternalActionExecutionAuthorizationHttpPathV1,
-    EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1,
-    ExternalActionExecutionAuthorizationRequestV1Schema,
-    ExternalActionExecutionAuthorizationVerifyRequestV1Schema,
-    decodeExternalActionResolvedTargetV1,
-    encodeExternalActionResolvedTargetV1,
-    getActionSpec,
-    isPluginProvenanceOnlyActionId,
-    parseQualifiedPluginActionId,
-    isExternalActionResolvedTargetAllowedV1,
-    PublicActionIdSchema,
-    SignedRootActionIdSchema,
-    ActionIdSchema,
-    MachineAccessActionIdSchema,
-    verifyExternalActionMachineRpcRequestV1,
-    verifyExternalActionMachineRequestV1,
-    isExternalActionAuthorizationBoundToEnvelope,
-    type ExternalActionExecutionAuthorizationBindingV1,
-    type ExternalActionExecutionAuthorizationV1,
-    type ExternalActionMachineRpcExecutionV1,
-    type ExternalActionTargetV1,
-    type ExternalActionMachineRpcEventV1,
-    type ExternalActionServerPrincipalV1,
-} from "@happier-dev/protocol/actions";
+import { ExternalActionActionIdV1Schema, bindExternalActionExecutionAuthorizationVerifyHttpPathV1, bindExternalActionExecutionAuthorizationHttpPathV1, EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationVerifyRequestV1Schema, isExternalActionResolvedTargetAllowedV1, type ExternalActionExecutionAuthorizationBindingV1, type ExternalActionExecutionAuthorizationV1, type ExternalActionMachineRpcExecutionV1, type ExternalActionTargetV1, type ExternalActionServerPrincipalV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { decodeExternalActionResolvedTargetV1, encodeExternalActionResolvedTargetV1, verifyExternalActionMachineRpcRequestV1, verifyExternalActionMachineRequestV1, isExternalActionAuthorizationBoundToEnvelope, type ExternalActionMachineRpcEventV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { getActionSpec, isPluginProvenanceOnlyActionId, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { MachineAccessActionIdSchema } from '@happier-dev/protocol/actions';
 import type { ActionRequiredAuthority } from "@happier-dev/protocol/actions/metadata";
 import { SOCKET_RPC_EVENTS, WorkspaceSyncSourceExecutionV1Schema, type WorkspaceSyncSourceRoutingV1, type WorkspaceSyncSourceWriterTargetRoutingV1,
     type WorkspaceSyncSourceExecutionV1, type WorkspaceSyncTargetRoutingV1, type WorkspaceSyncSeedRoutingV1 } from "@happier-dev/protocol/socketRpc";
 import { OpenProjectInputV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { evaluateApiTokenGrantV1, isApiTokenGrantWithinV1, resolveCredentialActionAdmissionV1, ManagedMachineActionIdV1Schema,
-    managedMachineActionEndpointPathV1, ManagedControllerReportV1Schema, ManagedControllerIntentReportV1Schema,
-    type ManagedControllerReportV1, type ManagedControllerIntentReportV1, type AuthTokenAuthenticationEvidenceV1,
-    decodeBase64, QualifiedConnectedServiceUsageSourceV4Schema, ProviderAccountUsageRecordIdSchema,
-    parseQualifiedConnectedAccountV4StructuredQueryValue } from "@happier-dev/protocol";
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { evaluateApiTokenGrantV1, isApiTokenGrantWithinV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { resolveCredentialActionAdmissionV1 } from '@happier-dev/protocol/actions/decisionAuthority';
+import { ManagedMachineActionIdV1Schema, managedMachineActionEndpointPathV1, ManagedControllerReportV1Schema, ManagedControllerIntentReportV1Schema, type ManagedControllerReportV1, type ManagedControllerIntentReportV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
+import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { ProviderAccountUsageRecordIdSchema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
+import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
+import { SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2 } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
 import { resolveMachineRpcExternalActionEffectV1 } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 import { MANAGED_ACTIVITY_READ_RPC_METHOD, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD,
     ManagedActivityReadRequestV1Schema, ManagedAdmissionDrainConfirmRequestV1Schema,
@@ -60,6 +44,7 @@ import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema, ProjectTru
 import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1, WorkspaceExecutionConfigReadRequestV1Schema,
     WorkspaceExecutionConfigMutationRequestV1Schema } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import { isRequesterProjectExecutionActionV1, PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { MACHINE_TERMINAL_ACTION_IDS } from '@happier-dev/protocol/actions/specs/machineTerminal';
 
 import { auth, type VerifiedApiTokenPrincipal } from "./auth";
 import { isAutomationOriginRunPublisherTx } from '@/app/automations/automationTriggerCauseChain';
@@ -457,6 +442,8 @@ type ExternalActionExecutionRequestProof = Readonly<{
     body: unknown;
     /** Validated HTTP route operands, used only to compare with the canonical Action binding. */
     routeInput?: unknown;
+    /** Session selected by the HTTP route's incumbent operation/target policy, never by a header. */
+    sessionRouteTarget?: Extract<ExternalActionTargetV1, { kind: 'session' }>;
     resolveCurrentSessionMachine?: (input: Readonly<{ accountId: string; sessionId: string }>) => Promise<string | null>;
 }>;
 
@@ -694,6 +681,11 @@ async function verifyCommon(
     return { binding, effectActionId: effectActionId.data, target, principal };
 }
 
+function isAccountEncryptionCurrentnessHttpRead(proof: ExternalActionExecutionRequestProof): boolean {
+    return proof.method.toUpperCase() === 'GET' && proof.body === undefined
+        && proof.path === '/v1/account/encryption/currentness';
+}
+
 /** Quota reads consume B's canonical request schemas, not a generic Account read privilege. */
 function isQuotaReadHttpPurpose(proof: ExternalActionExecutionRequestProof): boolean {
     const url = new URL(proof.path, 'http://home.invalid');
@@ -703,7 +695,8 @@ function isQuotaReadHttpPurpose(proof: ExternalActionExecutionRequestProof): boo
             && PendingResetStartsReadInputV1Schema.safeParse(proof.body).success;
     }
     if (method !== 'GET' || proof.body !== undefined) return false;
-    if (['/v1/account/encryption/currentness', '/v1/account/encryption', '/v2/account/settings'].includes(url.pathname)) {
+    if (isAccountEncryptionCurrentnessHttpRead(proof)) return true;
+    if (['/v1/account/encryption', '/v2/account/settings'].includes(url.pathname)) {
         return url.search === '';
     }
     const field = url.pathname === '/v4/connect/qualified/provider-account-usage/sources/resolve' ? 'source'
@@ -737,7 +730,7 @@ function isScmReviewedMarksHttpPurpose(proof: ExternalActionExecutionRequestProo
         return request.success && request.data.mutations.every(mutation => isReviewedKey(mutation.key));
     }
     if (method !== 'GET' || proof.body !== undefined) return false;
-    if (url.pathname === '/v1/account/encryption/currentness') return true;
+    if (isAccountEncryptionCurrentnessHttpRead(proof)) return true;
     const prefix = '/v1/kv/';
     if (!url.pathname.startsWith(prefix)) return false;
     try {
@@ -753,6 +746,14 @@ function isProjectAccountMetadataHttpPurpose(verified: VerifiedExternalActionExe
     const actionId = verified.binding.actionId;
     const url = new URL(proof.path, 'http://home.invalid');
     const method = proof.method.toUpperCase();
+    if (MACHINE_TERMINAL_ACTION_IDS.some(id => id === actionId)) {
+        if (url.search !== '' || url.hash !== '' || method !== 'POST') return false;
+        // Census/control revalidate the requester's accepted checkouts. They
+        // confer neither row mutation nor another Account's catalog authority.
+        if (url.pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return ProjectAccountRowListRequestV1Schema.safeParse(proof.body).success;
+        return (actionId === 'machines.terminal.open' || actionId === 'machines.terminal.restart')
+            && url.pathname === `${PROJECT_TRUST_ROUTE_V1}/read` && ProjectTrustReadRequestV1Schema.safeParse(proof.body).success;
+    }
     // Preparation, including an unsigned proposal replayed inside its admitted
     // decision, spends the unchanged signed root. Reads confer no mutation authority.
     const readsExecutionConfig = actionId === 'projects.script.run' || actionId === 'projects.compute.exec'
@@ -835,7 +836,7 @@ function isHomeDomainActionHttpPurpose(verified: VerifiedExternalActionExecution
     if (verified.effectActionId !== verified.binding.actionId) return false;
     if (verified.binding.actionId === 'session.organization.pin.set'
         && proof.method.toUpperCase() === 'GET' && proof.body === undefined) {
-        if (proof.path === '/v1/account/encryption/currentness') return true;
+        if (isAccountEncryptionCurrentnessHttpRead(proof)) return true;
         // Rail admission opens only a named authorized Session. The existing
         // detail route retains access/projection policy; no list or Account
         // content read is granted by the pin's installed-Machine signature.
@@ -870,7 +871,7 @@ export async function verifyExternalActionDomainExecutionRequest(
     const readsExecutionMachine = root.success
         && ((rootSpec?.executionPlacements ?? [rootSpec?.executionPlacement]).includes('machine')
             && verified.binding.target.kind === 'machine' && verified.binding.target.machineId === verified.binding.machineId
-            || getActionSpec(root.data).executionPlacement === 'session' && verified.binding.target.kind === 'session')
+            || getActionSpec(root.data).executionPlacement === 'session' && verified.target.kind === 'session')
         && verified.effectActionId === verified.binding.actionId
         && proof.method.toUpperCase() === 'GET' && proof.body === undefined
         && proof.path === `/v1/machines/${encodeURIComponent(verified.binding.machineId)}`;
@@ -879,6 +880,12 @@ export async function verifyExternalActionDomainExecutionRequest(
     if (readsExecutionMachine) {
         // Native Machine and Session RPC read the exact execution Machine's content codec
         // before delivery. This is not Account read authority or a family grant.
+    } else if (rootSpec?.executionPlacement === 'session'
+        && verified.effectActionId === verified.binding.actionId && verified.target.kind === 'session'
+        && isAccountEncryptionCurrentnessHttpRead(proof)) {
+        // The Session transport must admit persisted requester Account mode
+        // before opening owner metadata. verifyCommon has already rechecked
+        // the signed resolved Session, Machine installation and principal.
     } else if (isAdmittedRootRelay || verified.binding.handoffPreflight) {
         // Exact root re-entry is not a family grant or a new originator.
     } else if (managedRoot.success) {
@@ -980,6 +987,12 @@ export async function verifyExternalActionDomainExecutionRequest(
         // The signature binds these exact bytes; route schemas and the domain
         // still own resource admission, while the credential policy below
         // retains human-only execution floors.
+    } else if (rootSpec?.executionPlacement === 'session'
+        && verified.effectActionId === verified.binding.actionId && verified.target.kind === 'session'
+        && proof.sessionRouteTarget?.sessionId === verified.target.sessionId) {
+        // The HTTP auth adapter uses the same route operation/selector owner
+        // as direct Session admission. Reads retain domain access checks and
+        // mutations must declare this root's actual effect on that exact Session.
     } else if ('authentication' in verified.binding) {
         const path = proof.path.split('?')[0];
         const childPurpose = verified.binding.actionId === 'session.spawn_new' && verified.binding.managedContinuation
@@ -1337,8 +1350,15 @@ export async function verifyExternalActionMachineRpcExecution(
         const prefix = `${binding.machineId}:`;
         const method = managedGuestActivity && guestMethod ? guestMethod
             : request.method.startsWith(prefix) ? request.method.slice(prefix.length) : request.method;
+        // Pending admission has its own signed socket event, not a Machine RPC
+        // method. Preserve both existing epochs and their exact carrier name.
+        const pendingEvent = request.event === SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1
+            || request.event === SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2;
+        const effectActionId = pendingEvent
+            ? request.method === request.event ? 'session.message.send' : null
+            : resolveMachineRpcExternalActionEffectV1(method, binding);
         if (binding.actionId !== execution.effectActionId
-            || resolveMachineRpcExternalActionEffectV1(method, binding) !== execution.effectActionId) return null;
+            || effectActionId !== execution.effectActionId) return null;
     }
     // Home proves the original Session or accepted handoff source. RPC effects
     // cannot substitute the destination signer for that original authority.
