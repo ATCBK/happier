@@ -57,7 +57,8 @@ export function settleApprovalRequestActionArgs(request: ApprovalRequest): unkno
   if (spec.approvalInputCustody === 'live_only') return request.actionArgs;
   if (spec.approvalPresentation?.retainInputOnSettlement && spec.approvalPresentation.projectInput
     && spec.inputSchema.safeParse(request.actionArgs).success) {
-    return spec.approvalPresentation.projectInput(request.actionArgs);
+    const review = spec.approvalPresentation.projectInput(request.actionArgs);
+    return spec.approvalPresentation.inputSchema ? spec.approvalPresentation.inputSchema.parse(review) : review;
   }
   if (!spec.projectObservationInput) return request.actionArgs;
   return spec.projectObservationInput(request.actionArgs);

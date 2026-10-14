@@ -39,6 +39,27 @@ import {
   type RuntimeActionIdV1,
 } from './actionIds.js';
 
+it('PARITY2 publishes hook inventory and registry installation with user-changeable approval defaults', () => {
+  for (const id of ['plugins.sessionHooks.status.get', 'prompt_registry.install', 'plugins.permissions.grants.list', 'plugins.permissions.grants.revoke'] as const) {
+    for (const surface of ['agent', 'mcp'] as const) {
+      expect(listActionSpecsForCatalogSurface({ surface }).map(spec => spec.id), `${id}:${surface}`).toContain(id);
+    }
+  }
+  for (const surface of ['agent', 'mcp'] as const) {
+    for (const id of ['prompt_registry.install', 'plugins.permissions.grants.revoke'] as const) {
+      const spec = getActionSpec(id);
+      expect(resolveActionApprovalRouting({ actionId: id, spec, context: { surface } }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId: id, spec, context: { surface },
+        settings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [id]: [surface] } }),
+      }).required).toBe(false);
+    }
+    for (const id of ['plugins.sessionHooks.status.get', 'plugins.permissions.grants.list'] as const) {
+      expect(resolveActionApprovalRouting({ actionId: id, spec: getActionSpec(id), context: { surface } }).required).toBe(false);
+    }
+    expect(getActionSpec('plugins.permissions.grants.request').surfaces[surface]).toBe(false);
+  }
+});
+
 const RETIRED_UNBACKED_RUNTIME_ACTION_IDS = [
   'browser.automation.evaluate',
   'browser.automation.elementPicker.start',
@@ -509,12 +530,10 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'prompt_doc.create',
   'prompt_doc.favorite.set',
   'prompt_bundle.update',
-  'prompt_registry.install',
   'approval.request.create',
   'approval.request.decide',
   'plugins.permissions.grants.request',
   'plugins.permissions.grants.grant',
-  'plugins.permissions.grants.revoke',
   'plugins.permissions.grants.dismissRequest',
   'plugin.webhook.endpoint.convergeTarget',
   'plugin.webhook.endpoint.revoke',
@@ -552,6 +571,8 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
 ] as const;
 
 const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
+  'prompt_registry.install',
+  'plugins.permissions.grants.revoke',
   'session.reports_to.set',
   // Session-access mutations, mirrored from their owner's rows now that the
   // declared family is projected into the canonical id list.

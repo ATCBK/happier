@@ -1047,7 +1047,20 @@ describe('createActionExecutor (prompt library actions)', () => {
     expect(stored.header).not.toHaveProperty('folderId');
   });
 
-  it('keeps the retained registry Action on pinned library installation and preserves partial effects', async () => {
+  it.each(['ui', 'agent', 'mcp'] as const)('PARITY2 asks before %s registry installation without writing library data', async (surface) => {
+    const promptRegistryInstall = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({ promptRegistryInstall,
+      approvalsCreate: async () => ({ artifactId: 'registry-approval' }),
+    });
+    const result = await executor.execute('prompt_registry.install', { machineId: 'machine-1', sourceId: 'repo', itemId: 'frontend-design' }, {
+      surface, authority: 'account_automation', serverId: 'home', actionRequestId: `registry-${surface}`,
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true,
+      result: { kind: 'approval_request_created', artifactId: 'registry-approval' } });
+    expect(promptRegistryInstall).not.toHaveBeenCalled();
+  });
+
+  it.each(['ui', 'agent', 'mcp'] as const)('PARITY2 keeps %s waived registry installation pinned and partial-effect aware', async (surface) => {
     const { store, artifacts } = createStoredLibrary(), fetched = fetchedRegistrySkill();
     let rules: SkillRuleV1[] = [], revision = 1, readBackUnavailable = false;
     const skills = createSkillActionExecuteV1({ store: { ...store, read: async (id, options) => readBackUnavailable && artifacts.has(id) ? null : store.read(id, options) },
@@ -1072,17 +1085,21 @@ describe('createActionExecutor (prompt library actions)', () => {
     const input = { machineId: 'machine-1', sourceId: 'repo', itemId: 'frontend-design',
       installTarget: { assetTypeId: 'agents.skill', scope: 'project', directory: '/tmp/project', targetName: 'frontend-design', installMode: 'copy' },
       configuredSources: [{ arbitraryOldAccountDeclarations: true }] };
-    const context = { surface: 'ui' as const, actionsSettings: routingApprovalSettings };
+    const context = { surface, actionsSettings: ActionsSettingsV1Schema.parse({
+      ...routingApprovalSettings, approvalWaivedSurfaces: { ...routingApprovalSettings.approvalWaivedSurfaces,
+        'prompt_registry.install': [surface] },
+    }) };
     const result = await executor.execute('prompt_registry.install', input, context);
     expect(result).toMatchObject({ ok: true, result: { ok: true, artifactId: 'artifact-1', exported: false, skillIds: ['artifact-1'] } });
     expect(artifacts.get('artifact-1')?.header).toMatchObject({ skillLock: { provenance: { kind: 'registry', registry: { ref: { commit: 'abc' } } } } });
-    expect(rules).toMatchObject([{ skillId: 'artifact-1', enabled: true }]);
+    if (surface === 'agent') expect(rules).toEqual([]);
+    else expect(rules).toMatchObject([{ skillId: 'artifact-1', enabled: true }]);
     if (!result.ok) throw new Error('Expected retained library installation');
     expect(result.result).not.toHaveProperty('nextPromptExternalLinks');
     readBackUnavailable = true;
     const partial = await executor.execute('prompt_registry.install', input, context);
     expect(partial).toMatchObject({ ok: false, errorCode: 'created_skill_unreadable',
-      details: { skillIds: ['artifact-2'], incomplete: [{ skillId: 'artifact-2', step: 'rules' }] } });
+      details: { skillIds: ['artifact-2'], incomplete: surface === 'agent' ? [] : [{ skillId: 'artifact-2', step: 'rules' }] } });
     if (partial.ok) throw new Error('Expected retained partial failure');
     expect(LegacySkillRegistryInstallEffectsV1Schema.parse(partial.details)).toMatchObject({ skillIds: ['artifact-2'] });
     expect(artifacts.has('artifact-2')).toBe(true);

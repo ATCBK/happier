@@ -52,7 +52,8 @@ describe('approval field presentation', () => {
       const observed = spec.projectObservationInput?.(admitted) ?? admitted;
       const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
         createdBy: { surface: 'cli' }, actionId, actionArgs: spec.approvalInputCustody === 'live_only' ? observed : admitted,
-        preview: { actionId, actionArgs: observed }, summary: spec.title,
+        preview: { actionId, actionArgs: spec.approvalInputCustody === 'live_only' && spec.approvalPresentation?.inputSchema
+          ? spec.approvalPresentation.projectInput?.(admitted) : observed }, summary: spec.title,
         executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'neighbor-request',
           surface: 'cli', serverId: 'home', actionId } });
       const admission = resolveApprovalRequestApproveAdmission(request);
@@ -390,10 +391,8 @@ describe('approval field presentation', () => {
       { label: 'Server id', value: 'srv_home', depth: 0, reference: { kind: 'home', id: 'srv_home' } },
       { label: 'Account id', value: '5e3a0581-6f3d-4e73-bf40-383db0be6c3e', depth: 0,
         reference: { kind: 'account', id: '5e3a0581-6f3d-4e73-bf40-383db0be6c3e' } },
-      { label: 'Owner', value: null, depth: 0 },
-      { label: 'Kind', value: 'Core page', depth: 1 },
-      { label: 'Page id', value: 'usage', depth: 1 },
-      { label: 'Area', value: 'main', depth: 1 },
+      // A small kind-led group of plain values reads as one line, not a heading over Kind / Page id / Area.
+      { label: 'Owner', value: 'Core page · Usage · Main', depth: 0 },
       { label: 'Layout id', value: 'qaf1-usage', depth: 0 },
     ]);
     expect(entries('instance')).toEqual([

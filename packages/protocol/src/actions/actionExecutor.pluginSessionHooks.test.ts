@@ -35,6 +35,15 @@ function createDeps() {
 }
 
 describe('createActionExecutor (plugin session hooks)', () => {
+  it.each(['agent', 'mcp'] as const)('PARITY2 reads hook inventory on %s without approval or plugin identity binding', async (surface) => {
+    const deps = createDeps();
+    const executor = createActionExecutor(deps as unknown as ActionExecutorDeps);
+    const input = { intent: 'install_preview', agent: { pluginId: 'author.example', localId: 'codex' } } as const;
+    await expect(executor.execute('plugins.sessionHooks.status.get', input, { surface, authority: 'account_automation' }))
+      .resolves.toEqual({ ok: true, result: { ok: true, rows: [], nextCursor: null, diagnostics: [] } });
+    expect(deps.pluginSessionHookManagementAction).toHaveBeenCalledWith({ actionId: 'plugins.sessionHooks.status.get', input });
+  });
+
   it('binds the caller plugin identity and routes through the canonical management dependency', async () => {
     const deps = createDeps();
     const signal = new AbortController().signal;

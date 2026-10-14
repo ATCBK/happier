@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { buildBackendTargetKeyV2, parseBackendTargetKeyV2, type PersistedBackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
 import { assertNonEscalatingPermissionMode } from '../../actions/permissionPrivilege.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
@@ -104,12 +104,12 @@ export type AgentStartRequestV1 =
   // Role writes consume check 1 only; keeping them here avoids a second subtree policy owner.
   | Readonly<{ kind: 'session_target'; targetSessionId: string }>;
 
-export const AgentStartSessionCallerV1Schema = lazyZodSchema(() => z.object({
+export const AgentStartSessionCallerV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('session'),
   sessionId: asProtocolZod(SessionIdSchema),
-  starterDepth: z.number().int().nonnegative().safe(),
-  turnDepth: z.number().int().nonnegative().safe(),
-}).strict());
+  starterDepth: z.number().check(z.int(), z.nonnegative(), z.int()),
+  turnDepth: z.number().check(z.int(), z.nonnegative(), z.int()),
+}));
 export type AgentStartSessionCallerV1 = Readonly<z.infer<typeof AgentStartSessionCallerV1Schema>>;
 
 export type AgentStartCallerV1 =
@@ -148,22 +148,24 @@ export const AGENT_START_REFUSAL_CODES_V1 = [
 ] as const;
 export type AgentStartRefusalV1 = Readonly<{
   code: (typeof AGENT_START_REFUSAL_CODES_V1)[number];
-  reason?: 'selection_unavailable' | 'profile_unavailable' | 'engine_unavailable';
+  reason?: 'selection_unavailable' | 'profile_unavailable' | 'engine_unavailable'
+    | 'agent_start_context_unavailable' | 'spawn_policy_invalid' | 'caller_permission_unavailable';
   field?: string;
   roleId?: string;
   agentTargetKey?: string;
   blockId?: string;
   cause?: AgentStartRefusalV1;
 }>;
-export const AgentStartRefusalV1Schema: z.ZodType<AgentStartRefusalV1> = lazyZodSchema(() => z.object({
+export const AgentStartRefusalV1Schema: z.ZodMiniType<AgentStartRefusalV1> = lazyZodSchema(() => z.strictObject({
   code: z.enum(AGENT_START_REFUSAL_CODES_V1),
-  reason: z.enum(['selection_unavailable', 'profile_unavailable', 'engine_unavailable']).optional(),
-  field: z.string().min(1).optional(),
-  roleId: z.string().min(1).optional(),
-  agentTargetKey: z.string().min(1).optional(),
-  blockId: z.string().min(1).optional(),
-  cause: z.lazy(() => AgentStartRefusalV1Schema).optional(),
-}).strict());
+  reason: z.optional(z.enum(['selection_unavailable', 'profile_unavailable', 'engine_unavailable',
+    'agent_start_context_unavailable', 'spawn_policy_invalid', 'caller_permission_unavailable'])),
+  field: z.optional(z.string().check(z.minLength(1))),
+  roleId: z.optional(z.string().check(z.minLength(1))),
+  agentTargetKey: z.optional(z.string().check(z.minLength(1))),
+  blockId: z.optional(z.string().check(z.minLength(1))),
+  cause: z.optional(z.lazy(() => AgentStartRefusalV1Schema)),
+}));
 export type AgentStartAdmissionV1 = Readonly<{ ok: true; stamped: StampedStartV1 }> | Readonly<{ ok: false; refusal: AgentStartRefusalV1 }>;
 
 function isUnresolved(value: unknown): value is Unresolved {

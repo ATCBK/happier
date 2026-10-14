@@ -85,7 +85,7 @@ function requiresDefaultApprovalFloor(
   const spec = getActionSpec(actionId);
   const policy = spec.approvalPolicy;
   const uiPolicyConfirmation = policy?.uiConfirmationForInput?.(input) ?? (policy?.uiConfirmation === 'policy');
-  defaultSafety ??= spec.safetyForInput?.(input);
+  defaultSafety ??= spec.safetyForInput?.(input) ?? spec.safety;
   if (policy?.pluginCaptureWaiver === true) return true;
   // Permission answers share the Agent default on MCP too; persisted surface
   // waivers remain resolved by the same ActionsSettings owner above this floor.
@@ -93,10 +93,9 @@ function requiresDefaultApprovalFloor(
   // Scoped removal is dangerous metadata, but its own/led Session policy owns
   // admission (FIN 03 §5.4/§5.7); it does not acquire the Account trigger approval floor.
   if (policy?.scopeAdmissionOwnsConfirmation === true && surface.kind !== 'ambiguous') return false;
-  // UI owns a direct present-user confirmation host for its ordinary dangerous
-  // Actions, except the rows whose confirmation is this policy's own default.
-  // Host-proved contextual danger also uses this policy: a contextual safe
-  // neighbor must not need a separate UI review merely to share this Action.
+  // Declared and contextual danger share the UI host's configurable default
+  // confirmation. Contextually safe neighbors remain direct unless the Action
+  // declares a policy-owned UI confirmation.
   // CLI and UI suppress the duplicate default when the host records a completed
   // confirmation for this exact Action. Explicit settings are evaluated first
   // and still win.
@@ -110,7 +109,7 @@ function requiresDefaultApprovalFloor(
   ) {
     return false;
   }
-  if (defaultSafety === 'danger' || (defaultSafety === undefined && spec.safety === 'danger')) {
+  if (defaultSafety === 'danger') {
     if (surface.kind === 'ambiguous') return true;
     // General RPC remains an internal transport surface. These new semantic
     // filesystem methods are directly reachable effect entry points, however,

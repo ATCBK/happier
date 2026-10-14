@@ -10,12 +10,13 @@ import { readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
 import { normalizeUiSurfaceCapabilityRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 import { SessionVisualReviewedAdmissionV1Schema } from '../sessions/board/actions.js';
 import { resolveSessionVisualEffectiveCapabilitiesV1 } from '../sessions/board/visualPolicy.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { unwrapActionInputSchema } from './actionInputSchemaPath.js';
 import { isSettingsDeclarationActionIdV1 } from './settingsDeclarationActionFamily.js';
 import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
 import { ReachPlaceV1Schema } from '../reach/reachPlaceV1.js';
 import { ReachRuleDraftV1Schema } from '../reach/reachRuleV1.js';
+import { ReachRulesChangeV1Schema } from '../reach/reachRulesChangeV1.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -113,6 +114,9 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
   if (typeof value !== 'string' || !value.trim()) return undefined;
   if (actionId === 'skills.rules.set' && field.path === 'items.[].skillId') return { kind: 'skill', id: value };
   if (actionId === 'mcp.rules.set' && field.path === 'items.[].serverId') return { kind: 'mcpServer', id: value };
+  if (actionId.startsWith('mcp.') && field.path === 'serverId') return { kind: 'mcpServer', id: value };
+  if (actionId.startsWith('skills.') && field.path === 'skillId') return { kind: 'skill', id: value };
+  if (field.path === 'machineId' && (actionId.startsWith('mcp.') || actionId.startsWith('skills.') || actionId.startsWith('machines.terminal.'))) return { kind: 'machine', id: value };
   if ((actionId === 'skills.rules.set' || actionId === 'mcp.rules.set') && field.path === 'change.write.agentId') return { kind: 'agent', id: value };
   if (actionId.startsWith('registries.sources.') && field.path === 'sourceId') return { kind: 'registrySource', id: value };
   if (field.path === 'anchor' && isSettingsDeclarationActionIdV1(actionId) && readBuiltInSettingDeclarationV1(value)) {
@@ -153,6 +157,42 @@ function describeApprovalRuleEntries(values: readonly unknown[]): readonly Appro
       { label: 'Change', value: rule.enabled ? 'Turn on' : 'Turn off', depth: 0 },
     ];
   });
+}
+
+function describeApprovalReachChange(value: unknown): readonly ApprovalStructuredValueEntry[] {
+  const change = ReachRulesChangeV1Schema.parse(value);
+  if (change.kind === 'replace') return describeApprovalRuleEntries([change.rules]);
+  const place = change.write.place;
+  const reference = describeApprovalPlaceReference(place);
+  return [{ label: 'Where', value: place.t === 'allMachines' ? 'Everywhere' : JSON.stringify(place), depth: 0,
+    ...(reference ? { reference } : {}) },
+    ...(change.write.agentId ? [{ label: 'Agent', value: change.write.agentId, depth: 0,
+      reference: { kind: 'agent' as const, id: change.write.agentId } }] : []),
+    { label: 'Change', value: change.write.state === 'on' ? 'Turn on' : change.write.state === 'off' ? 'Turn off' : 'Use inherited rules', depth: 0 }];
+}
+
+function describeMcpReviewConfiguration(value: unknown): readonly ApprovalStructuredValueEntry[] {
+  if (!isRecord(value)) return [];
+  const { where, toolPolicy, configOverrides, ...configuration } = value;
+  const entries: ApprovalStructuredValueEntry[] = [];
+  appendApprovalStructuredMembers(configuration, 0, entries);
+  if (isRecord(toolPolicy)) {
+    const defaults: Readonly<Record<string, string>> = { ask: 'Ask', allow_read_only: 'Allow read-only', allow_all: 'Allow all' };
+    const settings: Readonly<Record<string, string>> = { off: 'Off', ask: 'Ask', allow: 'Allow' };
+    entries.push({ label: 'Default tool policy', value: defaults[String(toolPolicy.default)] ?? String(toolPolicy.default), depth: 0 });
+    entries.push(...Object.entries(isRecord(toolPolicy.overrides) ? toolPolicy.overrides : {}).map(([name, setting]) => ({
+      label: name, value: settings[String(setting)] ?? String(setting), depth: 0,
+    })));
+  }
+  if (where !== undefined) {
+    const place = ReachPlaceV1Schema.safeParse(where);
+    entries.push(...(place.success ? [{ label: 'Where', value: JSON.stringify(place.data), depth: 0,
+      reference: describeApprovalPlaceReference(place.data) }] : describeApprovalReachChange(where)));
+  }
+  if (Array.isArray(configOverrides)) {
+    entries.push(...configOverrides.flatMap(override => describeMcpReviewConfiguration(override)));
+  }
+  return entries;
 }
 
 export type ApprovalActionFieldsPresentation = Readonly<{
@@ -313,9 +353,35 @@ function appendApprovalStructuredEntries(
     output.push({ label, value: formatApprovalEntryValue(discriminator, value[discriminator]), depth });
     return;
   }
+  const kindLed = !widgetStructure ? describeKindLedApprovalGroup(value) : null;
+  if (kindLed) {
+    // A group led by its kind whose other members are plain words reads as one line too
+    // ("Owner  Core page · Usage · Main"), not a heading over Kind / Page id / Area.
+    output.push({ label, value: kindLed, depth });
+    return;
+  }
   output.push({ label, value: null, depth });
   appendApprovalStructuredMembers(value, depth + 1, output,
     widgetStructure && !['bindings', 'context', 'inputSchema', 'inputs', 'network'].includes(key ?? ''));
+}
+
+// Words only: a value with digits or separators-only shapes (ids, hashes, uuids) keeps its own row.
+const APPROVAL_WORD_VALUE = /^[a-z][A-Za-z_-]*$/;
+
+/** A kind and a few plain words, joined: no ids, references, versions or nested values. */
+function describeKindLedApprovalGroup(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const discriminator = typeof value.kind === 'string' ? 'kind' : typeof value.type === 'string' ? 'type' : null;
+  if (!discriminator) return null;
+  const members = Object.entries(value);
+  const words: string[] = [formatApprovalEntryValue(discriminator, value[discriminator])];
+  for (const [key, member] of members) {
+    if (key === discriminator) continue;
+    if (typeof member !== 'string' || !APPROVAL_WORD_VALUE.test(member)
+      || isTechnicalApprovalKey(key) || describeApprovalKeyReference(key, member)) return null;
+    words.push(humanizeApprovalKey(member));
+  }
+  return words.join(' · ');
 }
 
 function appendApprovalStructuredMembers(value: unknown, depth: number, output: ApprovalStructuredValueEntry[], widgetStructure = false): void {
@@ -399,6 +465,7 @@ export function describeApprovalActionFields(input: Readonly<{
   actionId: string;
   actionArgs: unknown;
   preview?: unknown;
+  status?: ApprovalRequest['status'];
 }>): ApprovalActionFieldsPresentation {
   let spec;
   try {
@@ -406,20 +473,35 @@ export function describeApprovalActionFields(input: Readonly<{
   } catch {
     return { rows: [], unrepresentable: { path: '', reason: 'missing_required_context' } };
   }
-  if (spec.approvalPresentation?.projectInput && !spec.inputSchema.safeParse(input.actionArgs).success) {
+  const review = spec.approvalPresentation;
+  const settled = input.status && ['executed', 'failed', 'rejected', 'canceled'].includes(input.status);
+  // Safe presentation data is not executable input. Only terminal history or a
+  // live-only continuation can read its declared schema from stored review.
+  const storedReview = review?.inputSchema && (settled || spec.approvalInputCustody === 'live_only')
+    ? review.inputSchema.safeParse(spec.approvalInputCustody === 'live_only'
+      ? readApprovalPresentationPreview(input)?.actionArgs : input.actionArgs) : null;
+  if (review?.projectInput && !spec.inputSchema.safeParse(input.actionArgs).success && !storedReview?.success) {
     const reason = 'missing_required_context' as const;
     return { rows: [{ kind: 'unrepresentable', path: '', title: spec.title, reason }],
       unrepresentable: { path: '', reason } };
   }
   // Observation previews can intentionally omit private domain content. Only the domain's
   // explicit review projection may disclose that content; never fall back to raw secret input.
-  const presentationInput = spec.approvalPresentation?.projectInput
-    ? spec.approvalPresentation.projectInput(input.actionArgs)
+  const projectedInput = storedReview?.success ? storedReview.data : review?.projectInput
+    ? review.projectInput(input.actionArgs)
     : resolveApprovalPresentationInput(input);
-  const resolved = [...resolveEffectiveActionInputFields(spec, presentationInput)];
+  const parsedReview = review?.inputSchema?.safeParse(projectedInput);
+  if (parsedReview && !parsedReview.success) {
+    const reason = 'missing_required_context' as const;
+    return { rows: [{ kind: 'unrepresentable', path: '', title: spec.title, reason }], unrepresentable: { path: '', reason } };
+  }
+  const presentationInput = parsedReview?.success ? parsedReview.data : projectedInput;
+  const presentationSpec = review?.inputSchema || review?.inputHints
+    ? { ...spec, inputSchema: review.inputSchema ?? spec.inputSchema, inputHints: review.inputHints ?? spec.inputHints } : spec;
+  const resolved = [...resolveEffectiveActionInputFields(presentationSpec, presentationInput)];
   const coveredRoots = new Set(resolved.map(field => field.path.split('.')[0]));
-  const schema = unwrapActionInputSchema(spec.inputSchema).schema;
-  const shape = schema instanceof z.ZodObject ? schema.shape as Record<string, z.core.$ZodType> : {};
+  const schema = unwrapActionInputSchema(presentationSpec.inputSchema).schema;
+  const shape = schema instanceof z.ZodMiniObject ? schema.shape as Record<string, z.core.$ZodType> : {};
   // Form hints refine a field's reading; without hints, the canonical review
   // projection determines which operands can be shown.
   // Existing hints also declare intentional safe omissions (for example a saved credential
@@ -436,7 +518,7 @@ export function describeApprovalActionFields(input: Readonly<{
   const schemaKeys = !spec.approvalPresentation?.projectInput && spec.projectObservationInput
     ? isRecord(observationInput) ? Object.keys(observationInput) : []
     : Object.keys(shape);
-  const keys = new Set((spec.inputHints?.fields.length ?? 0) === 0
+  const keys = new Set((presentationSpec.inputHints?.fields.length ?? 0) === 0
     ? [...schemaKeys, ...(isRecord(presentationInput) ? Object.keys(presentationInput) : [])]
     : []);
   for (const path of keys) {
@@ -471,7 +553,8 @@ export function describeApprovalActionFields(input: Readonly<{
     const option = field.widget === 'select' && values.length === 1
       ? field.options?.find((candidate) => candidate.value === values[0]) : undefined;
     const rulesAction = input.actionId === 'skills.rules.set' || input.actionId === 'mcp.rules.set';
-    const place = rulesAction && field.path === 'change.write.place' ? ReachPlaceV1Schema.safeParse(values[0]) : null;
+    const reachPlace = rulesAction && field.path === 'change.write.place' || field.path === 'where.write.place';
+    const place = reachPlace ? ReachPlaceV1Schema.safeParse(values[0]) : null;
     const choices = (field.widget === 'multiselect' || field.widget === 'text_list') && field.options
       ? values.flatMap(value => Array.isArray(value) ? value : [value]).map(value =>
         field.options?.find(candidate => candidate.value === value)?.label ?? String(value)).join(', ') : null;
@@ -495,15 +578,24 @@ export function describeApprovalActionFields(input: Readonly<{
       }
       continue;
     }
-    const reference = describeApprovalReference(input.actionId, field, values, presentationInput);
+    const reference = reachPlace ? describeApprovalPlaceReference(values[0]) : describeApprovalReference(input.actionId, field, values, presentationInput);
     // A typed reference already reads by its name; entries are for values nothing else can read.
-    let entries = rulesAction && field.path === 'change.rules' ? describeApprovalRuleEntries(values)
+    let entries = (rulesAction && field.path === 'change.rules' || field.path === 'where.rules') ? describeApprovalRuleEntries(values)
       : rulesAction && field.path.startsWith('items.') && values.length > 1 ? values.map(value => ({
         label: field.title, value: String(value), depth: 0,
         reference: describeApprovalReference(input.actionId, field, [value], presentationInput),
       }))
       : field.widget === 'json' && !reference && !place?.success ? describeApprovalStructuredValue(values,
         input.actionId.startsWith('widgets.') && ['instance', 'group', 'fragment', 'definition'].includes(field.path)) : undefined;
+    if (input.actionId === 'mcp.servers.tools.set' && field.path === 'tools') {
+      const settings: Readonly<Record<string, string>> = { off: 'Off', ask: 'Ask', allow: 'Allow', inherit: 'Use server default' };
+      entries = values.flatMap(value => isRecord(value) ? Object.entries(value).map(([name, setting]) => ({
+        label: name, value: settings[String(setting)] ?? String(setting), depth: 0,
+      })) : []);
+    }
+    if (input.actionId.startsWith('mcp.') && (field.path === 'servers' || field.path === 'configOverrides')) {
+      entries = values.flatMap(value => Array.isArray(value) ? value : [value]).flatMap(describeMcpReviewConfiguration);
+    }
     if (input.actionId === 'agents.acp.backends.upsert' && field.path === 'backend.launch' && entries) {
       const methods: Readonly<Record<string, string>> = { Command: 'Command', Npm: 'npm package', Uv: 'Python package', Archive: 'Downloaded binary' };
       entries = entries.map(entry => entry.depth === 0 && entry.label === 'Kind'
@@ -515,6 +607,8 @@ export function describeApprovalActionFields(input: Readonly<{
       // in Details, rather than adding an opaque id to that first reading.
       || field.path === 'itemId' && Boolean(readApprovalVisualItem(input.actionId, presentationInput)?.title?.trim())
       || input.actionId.startsWith('providers.') && field.path === 'action'
+      // The terminal key is how the daemon finds its terminal; people know the terminal by its folder and Machine.
+      || input.actionId.startsWith('machines.terminal.') && field.path === 'terminalKey'
       || input.actionId === 'agents.acp.backends.upsert' && ['backend.id', 'backend.name'].includes(field.path)
       || (input.actionId.startsWith('widgets.fragment.') || input.actionId.startsWith('widgets.definition.'))
         && (field.path === 'artifactId' || field.path === 'newArtifactId'));
@@ -618,6 +712,7 @@ export function describeApprovalRequestFields(
   const presentation = describeApprovalActionFields({
     actionId: request.actionId,
     actionArgs: request.actionArgs,
+    ...(request.status === undefined ? {} : { status: request.status }),
     ...(request.preview === undefined ? {} : { preview: request.preview }),
   });
   // A consumed request is history, not another admission attempt. Missing historical

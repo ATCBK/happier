@@ -12,7 +12,8 @@ import { createWidgetAreaActionPortV1, createWidgetAreaLayoutArtifactPortV1, cre
 
 const account = { serverId: 'home', accountId: 'account' };
 
-async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean, policyHook = true) {
+async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean, policyHook = true,
+  presentUserActionConfirmation?: () => Promise<boolean>, readActionsSettings?: () => ReturnType<typeof normalizeActionsSettingsV1>) {
   const boundary = createWorkBoardArtifactBoundary();
   const transport = boundary.forAccount(account.accountId);
   // Artifact transport is the system boundary; domain ports and approval logic remain real.
@@ -38,9 +39,9 @@ async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean, poli
   }, size: 'small' });
   await artifact.apply({ kind: 'group_create', groupId: 'group', instanceIds: ['two'] });
   const port = createWidgetAreaActionPortV1(artifactFor);
-  const executor = createActionExecutor({ widgetAccountScope: () => account,
+  const executor = createActionExecutor({ widgetAccountScope: () => account, presentUserActionConfirmation,
     ...(policyHook ? { isActionApprovalRequired: (actionId: ActionId, context: ActionExecutorContext, input: unknown) => isApprovalRequiredByActionsSettings(actionId,
-      context.actionsSettings ?? normalizeActionsSettingsV1({ v: 1 }), context, undefined, undefined, input) } : {}),
+      readActionsSettings?.() ?? context.actionsSettings ?? normalizeActionsSettingsV1({ v: 1 }), context, undefined, undefined, input) } : {}),
     widgetSurfaceActions: { [owner.kind]: port },
     widgetInputs: createWidgetActionInputResolverV1({
       readDescriptor: async ({ instance }) => readBuiltinWidgetDescriptorV1(instance.definition),
@@ -66,13 +67,13 @@ async function revision(artifact: Fixture['artifact']) {
   if (state.kind !== 'present') throw new Error('Expected seeded layout');
   return state.revision;
 }
-const edits: readonly { name: string; action: ActionId; input: (state: Fixture) => Promise<unknown> | unknown }[] = [
-  { name: 'widget rename', action: 'widgets.item.rename', input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, displayName: 'Renamed' }) },
-  { name: 'widget size', action: 'widgets.item.size.set', input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, size: 'medium' }) },
-  { name: 'widget frame', action: 'widgets.item.frame.set', input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, frameStyle: 'plain' }) },
-  { name: 'widget reorder', action: 'widgets.item.move', input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, toIndex: 1 }) },
-  { name: 'widget native reorder', action: 'widgets.item.move', input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, to: { surface, index: 1 } }) },
-  { name: 'group width', action: 'widgets.item.size.set', input: ({ surface }) => ({ ref: { surface, instanceId: 'group' }, width: 'half' }) },
+const edits: readonly { name: string; action: ActionId; directUi?: boolean; input: (state: Fixture) => Promise<unknown> | unknown }[] = [
+  { name: 'widget rename', action: 'widgets.item.rename', directUi: true, input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, displayName: 'Renamed' }) },
+  { name: 'widget size', action: 'widgets.item.size.set', directUi: true, input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, size: 'medium' }) },
+  { name: 'widget frame', action: 'widgets.item.frame.set', directUi: true, input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, frameStyle: 'plain' }) },
+  { name: 'widget reorder', action: 'widgets.item.move', directUi: true, input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, toIndex: 1 }) },
+  { name: 'widget native reorder', action: 'widgets.item.move', directUi: true, input: ({ surface }) => ({ ref: { surface, instanceId: 'one' }, to: { surface, index: 1 } }) },
+  { name: 'group width', action: 'widgets.item.size.set', directUi: true, input: ({ surface }) => ({ ref: { surface, instanceId: 'group' }, width: 'half' }) },
   { name: 'group dividers', action: 'widgets.group.set', input: ({ surface }) => ({ ref: { surface, instanceId: 'group' }, dividers: 'none' }) },
   { name: 'layout create', action: 'widgets.area.layout.create', input: ({ surface }) => ({ surface, layoutId: 'new', name: 'New' }) },
   { name: 'layout rename', action: 'widgets.area.layout.rename', input: async ({ surface, artifact }) => ({ surface, name: 'Renamed', expectedRevision: await revision(artifact) }) },
@@ -109,16 +110,84 @@ const consequentialEdits: readonly { action: ActionId; input: (state: Fixture) =
 ];
 
 describe('contextual widget approval at the Action executor', () => {
+  it('refuses a confirmation when current Account policy changed to Ask-first while the host was open', async () => {
+    let settings = normalizeActionsSettingsV1({ v: 1 });
+    const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, true, true,
+      async () => {
+        settings = normalizeActionsSettingsV1({ v: 1, actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } } });
+        return true;
+      }, () => settings);
+    const before = (await state.artifact.read()).items;
+    expect(await state.executor.execute('widgets.item.rename', {
+      ref: { surface: state.surface, instanceId: 'one' }, displayName: 'Stale decision',
+    }, { surface: 'ui', authority: 'present_user', actionsSettings: settings }))
+      .toMatchObject({ ok: false, errorCode: 'approval_stale' });
+    expect((await state.artifact.read()).items).toEqual(before);
+  });
+
+  it('keeps declared-danger confirmation on the same host boundary for non-widget UI actions', async () => {
+    const executor = createActionExecutor({ presentUserActionConfirmation: async () => false });
+    expect(await executor.execute('projects.trust.revoke', {
+      project: { serverId: 'home', projectId: 'project' }, expectedRevision: 1, expectedEffectDigest: 'reviewed-effect',
+    }, { surface: 'ui', authority: 'present_user' }))
+      .toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+  });
+
+  it('offers admitted shared UI confirmation through the host and cancels without a write', async () => {
+    let confirmations = 0;
+    let approved = false;
+    const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, true, true,
+      async () => { confirmations += 1; return approved; });
+    const before = (await state.artifact.read()).items;
+    expect(await state.executor.execute('widgets.item.rename', {
+      ref: { surface: state.surface, instanceId: 'one' }, displayName: 'Changed',
+    }, { surface: 'ui', authority: 'present_user' }))
+      .toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+    expect(confirmations).toBe(1);
+    expect((await state.artifact.read()).items).toEqual(before);
+    expect(await state.executor.prepare('widgets.item.rename', {
+      ref: { surface: state.surface, instanceId: 'one' }, displayName: 'Prepared',
+    }, { surface: 'ui', authority: 'present_user' }))
+      .toMatchObject({ kind: 'settled', result: { ok: false, errorCode: 'approvals_not_supported' } });
+    expect(confirmations).toBe(1);
+    expect((await state.artifact.read()).items).toEqual(before);
+    approved = true;
+    expect(await state.executor.execute('widgets.item.rename', {
+      ref: { surface: state.surface, instanceId: 'one' }, displayName: 'Approved',
+    }, { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+    expect(confirmations).toBe(2);
+    const applied = (await state.artifact.read()).items;
+    expect(applied[0]).toMatchObject({ instance: { id: 'one', displayName: 'Approved' } });
+    expect(await state.executor.execute('widgets.item.rename', {
+      ref: { surface: state.surface, instanceId: 'one' }, displayName: 'Requires Inbox approval',
+    }, { surface: 'ui', authority: 'present_user', actionsSettings: normalizeActionsSettingsV1({ v: 1,
+      actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } },
+      approvalWaivedSurfaces: { 'widgets.item.rename': ['ui'] },
+    }) })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect(confirmations).toBe(2);
+    expect((await state.artifact.read()).items).toEqual(applied);
+  });
+
   it.each(owners.flatMap(owner => edits.flatMap(edit => ['ui', 'mcp'].map(surface => ({ ...owner, ...edit, surface })))))('$name ($owner.kind, shared=$shared, $surface)', async row => {
     const state = await fixture(row.owner, row.shared);
     const input = await row.input(state);
     const before = [...(await state.artifact.read()).items];
     const result = await state.executor.execute(row.action, input, { surface: row.surface, authority: row.surface === 'ui' ? 'present_user' : 'account_automation' });
+    if (row.surface === 'ui' && !row.shared && row.directUi) {
+      if (row.owner.kind === 'project' && row.name === 'widget size') {
+        expect(result).toMatchObject({ ok: false, errorCode: 'widget_size_unsupported' });
+        expect((await state.artifact.read()).items).toEqual(before);
+      } else {
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+        expect((await state.artifact.read()).items).not.toEqual(before);
+      }
+      return;
+    }
     expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
     expect((await state.artifact.read()).items).toEqual(before);
   });
 
-  it.each(['ui', 'mcp'] as const)('applies a private widget edit only after its persisted %s approval waiver', async surface => {
+  it.each(['ui', 'mcp'] as const)('honors a persisted %s approval waiver for a private widget edit', async surface => {
     // The executor must route persisted policy even without an optional host policy hook.
     const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, false, false);
     const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'widgets.item.rename': [surface] } });
@@ -147,8 +216,8 @@ describe('contextual widget approval at the Action executor', () => {
   it.each(owners.filter(owner => !owner.dangerous).flatMap(owner => edits.map(edit => ({ ...owner, ...edit }))))('retains explicit Ask-first for $name ($owner.kind)', async row => {
     const state = await fixture(row.owner, row.shared);
     const input = await row.input(state);
-    const actionsSettings = normalizeActionsSettingsV1({ v: 1, actions: { [row.action]: { approvalRequiredSurfaces: ['mcp'] } } });
-    expect(await state.executor.execute(row.action, input, { surface: 'mcp', authority: 'account_automation', actionsSettings }))
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1, actions: { [row.action]: { approvalRequiredSurfaces: ['ui'] } } });
+    expect(await state.executor.execute(row.action, input, { surface: 'ui', authority: 'present_user', actionsSettings }))
       .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
   });
 
@@ -157,6 +226,17 @@ describe('contextual widget approval at the Action executor', () => {
     const created = await state.layouts.create({ surface: state.surface, layoutId: 'delete-me', name: 'Delete me' });
     expect(await state.executor.execute('widgets.area.layout.delete', { surface: created.surface, expectedRevision: created.revision },
       { surface: 'mcp', authority: 'account_automation' })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+  });
+
+  it.each(['widgets.item.remove', 'widgets.item.network.set'] as const)('retains private present-user danger for %s', async action => {
+    const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, false);
+    const before = (await state.artifact.read()).items;
+    expect(await state.executor.execute(action, {
+      ref: { surface: state.surface, instanceId: 'one' },
+      ...(action === 'widgets.item.network.set' ? { network: { network: 'none' } } : {}),
+    }, { surface: 'ui', authority: 'present_user' }))
+      .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect((await state.artifact.read()).items).toEqual(before);
   });
 
   it.each(owners.flatMap(owner => consequentialEdits.map(edit => ({ ...owner, ...edit }))))('retains danger for $action on $name', async row => {

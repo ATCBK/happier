@@ -6,6 +6,7 @@ import type {
   PluginPermissionGrantV1,
 } from '../plugins/permissions/grants.js';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 
 function createExecutor(
   pluginPermissionGrantAction: NonNullable<ActionExecutorDeps['pluginPermissionGrantAction']>,
@@ -75,6 +76,50 @@ const dismissedPendingRequest = {
 } as const satisfies PluginPermissionGrantRequestV1;
 
 describe('createActionExecutor (plugin permission grants)', () => {
+  it.each(['agent', 'mcp'] as const)('PARITY2 admits %s list and user-waived revoke without conferring grant authority', async (surface) => {
+    // Permission persistence/transport is the boundary; executor admission and policy stay real.
+    const operations: string[] = [];
+    const executor = createActionExecutor({
+      pluginPermissionGrantAction: async ({ actionId }) => {
+        operations.push(actionId);
+        return actionId === 'plugins.permissions.grants.list'
+          ? { grants: [activeGrant], pendingRequests: [pendingRequest] }
+          : { grant: revokedGrant };
+      },
+      approvalsCreate: async () => ({ artifactId: 'revoke-approval' }),
+    } as ActionExecutorDeps);
+    const context = { surface, authority: 'account_automation' as const,
+      serverId: 'server-1', actionRequestId: `permission-${surface}` };
+    await expect(executor.execute('plugins.permissions.grants.list', {}, context))
+      .resolves.toMatchObject({ ok: true, result: { grants: [activeGrant], pendingRequests: [pendingRequest] } });
+    expect(operations).toEqual(['plugins.permissions.grants.list']);
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+      'plugins.permissions.grants.revoke': [surface],
+      'plugins.permissions.grants.grant': [surface],
+      'plugins.permissions.grants.dismissRequest': [surface],
+    } });
+    await expect(executor.execute('plugins.permissions.grants.revoke', { grantId: activeGrant.id }, { ...context, actionsSettings }))
+      .resolves.toMatchObject({ ok: true, result: { grant: revokedGrant } });
+    for (const actionId of ['plugins.permissions.grants.grant', 'plugins.permissions.grants.dismissRequest'] as const) {
+      await expect(executor.execute(actionId, { requestId: pendingRequest.id }, { ...context, actionsSettings }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    }
+    expect(operations).toEqual(['plugins.permissions.grants.list', 'plugins.permissions.grants.revoke']);
+  });
+
+  it.each(['agent', 'mcp'] as const)('PARITY2 asks before %s permission revocation without reaching persistence', async (surface) => {
+    const pluginPermissionGrantAction = vi.fn(async () => ({ grant: revokedGrant }));
+    const executor = createActionExecutor({ pluginPermissionGrantAction,
+      approvalsCreate: async () => ({ artifactId: 'revoke-approval' }),
+    } as ActionExecutorDeps);
+    const result = await executor.execute('plugins.permissions.grants.revoke', { grantId: activeGrant.id }, {
+      surface, authority: 'account_automation', serverId: 'server-1', actionRequestId: `permission-${surface}`,
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true,
+      result: { kind: 'approval_request_created', artifactId: 'revoke-approval' } });
+    expect(pluginPermissionGrantAction).not.toHaveBeenCalled();
+  });
+
   it('binds plugin list/request identity before the canonical permission operation', async () => {
     const pluginPermissionGrantAction = vi.fn(async ({ actionId }) => actionId === 'plugins.permissions.grants.list'
       ? { grants: [], pendingRequests: [] }

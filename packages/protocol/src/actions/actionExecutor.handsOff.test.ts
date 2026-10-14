@@ -79,6 +79,16 @@ describe('hands-off Action admission', () => {
     expect(roleActionExecute).not.toHaveBeenCalled();
     await expect(executor.execute('session.notes.set', { sessionId: 'self', notes: 'own task' }, context))
       .resolves.toMatchObject({ ok: true });
+    const runContext = { ...context, agentStartContext: { ...context.agentStartContext,
+      caller: { kind: 'originless' as const, runId: 'workflow-run', runDepth: 4, runOriginSessionId: 'self' } } };
+    await expect(executor.execute('session.notes.set', { sessionId: 'self', notes: 'origin task' }, runContext))
+      .resolves.toMatchObject({ ok: true });
+    await expect(executor.execute('session.notes.set', { sessionId: 'report', notes: 'detached task' }, runContext))
+      .resolves.toMatchObject({ ok: false, errorCode: 'subtree_denied' });
+    await expect(executor.execute('session.notes.set', { sessionId: 'self', notes: 'unproved task' }, {
+      ...runContext, agentStartContext: { ...runContext.agentStartContext,
+        caller: { kind: 'originless', runId: 'workflow-run', runDepth: 4 } },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'subtree_denied' });
   });
   it('rechecks the live workspace ceiling when a prepared invocation finally dispatches', async () => {
     let workspaceWrites: 'allow' | 'deny' = 'allow';

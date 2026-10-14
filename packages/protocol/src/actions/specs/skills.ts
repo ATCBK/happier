@@ -1,12 +1,55 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { readRecord } from '../../inputs/inputRecords.js';
-import { SKILL_ACTION_INPUT_SCHEMAS_V1 as inputs, SKILL_ACTION_OUTPUT_SCHEMAS_V1 as outputs, type SkillLibraryActionIdV1, type SkillFileInputV1 } from '../../prompts/library/skills/skillActionSchemasV1.js';
+import { SKILL_ACTION_INPUT_SCHEMAS_V1 as inputs, SKILL_ACTION_OUTPUT_SCHEMAS_V1 as outputs, SkillFileInputV1Schema, SkillFileChangeV1Schema,
+  SkillInstallSourceV1Schema, type SkillLibraryActionIdV1, type SkillFileInputV1 } from '../../prompts/library/skills/skillActionSchemasV1.js';
 import { SKILL_MACHINE_ACTION_INPUT_SCHEMAS_V1 as machineInputs, SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1 as machineOutputs,
   type SkillMachineActionIdV1 } from '../../prompts/library/skills/skillActionSchemasV1.js';
 import { AgentIdV1Schema } from '../../agents/agentIdV1.js';
 import { SkillReadInputV1Schema, SkillReadResultV1Schema } from '../../prompts/library/skills/skillReadV1.js';
 import { decodeBase64 } from '../../crypto/base64.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+
+// Review history keeps readable text and file metadata, never executable encoded bytes.
+const reviewedFile = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(SkillFileInputV1Schema, { contentBase64: true }), {
+  sizeBytes: z.number().check(z.int(), z.nonnegative()), content: z.optional(z.string()),
+})));
+const reviewedFileInputs = {
+  'skills.create': lazyZodSchema(() => inputs['skills.create'].extend({ files: z.array(reviewedFile) }).strict()),
+  'skills.update': lazyZodSchema(() => inputs['skills.update'].extend({ files: z.optional(z.array(z.union([
+    z.strictObject({ kind: z.literal('upsert'), file: reviewedFile }), SkillFileChangeV1Schema._zod.def.options[1],
+  ]))) }).strict()),
+  'skills.install': lazyZodSchema(() => inputs['skills.install'].extend({ source: z.union([
+    SkillInstallSourceV1Schema._zod.def.options[0], SkillInstallSourceV1Schema._zod.def.options[1],
+    z.strictObject({ kind: z.literal('upload'), files: z.array(reviewedFile) }),
+  ]) }).strict()),
+};
+
+function skillReviewFields(id: SkillLibraryActionIdV1): NonNullable<PreNormalizedActionSpec['inputHints']>['fields'] {
+  switch (id) {
+    case 'skills.create': return [{ path: 'name', title: 'Name', widget: 'text', required: true },
+      { path: 'description', title: 'Description', widget: 'textarea' }, { path: 'files', title: 'Files', widget: 'json', required: true },
+      { path: 'where', title: 'Where it is on', widget: 'json' }];
+    case 'skills.update': return [{ path: 'skillId', title: 'Skill', widget: 'text', required: true },
+      { path: 'expectedRevision', title: 'Reviewed revision', widget: 'text', required: true },
+      { path: 'name', title: 'Name', widget: 'text' }, { path: 'description', title: 'Description', widget: 'textarea' },
+      { path: 'files', title: 'File changes', widget: 'json' }, { path: 'updatePolicy', title: 'Updates', widget: 'select', options: [
+        { value: 'manual', label: 'Review updates' }, { value: 'auto', label: 'Update automatically' }, { value: 'pinned', label: 'Keep this version' },
+      ] }];
+    case 'skills.install': return [{ path: 'source', title: 'Source', widget: 'json', required: true },
+      { path: 'selectPaths', title: 'Selected folders', widget: 'text_list', listSeparator: 'comma' }, { path: 'where', title: 'Where it is on', widget: 'json' },
+      { path: 'dryRun', title: 'Preview only', widget: 'boolean' }];
+    case 'skills.found.adopt': return [{ path: 'machineId', title: 'Machine', widget: 'text', required: true },
+      { path: 'items', title: 'Found skills', widget: 'json', required: true }, { path: 'where', title: 'Where it is on', widget: 'json' }];
+    case 'skills.duplicate': return [{ path: 'skillId', title: 'Skill', widget: 'text', required: true }];
+    case 'skills.delete': return [{ path: 'skillId', title: 'Skill', widget: 'text', required: true },
+      { path: 'expectedRevision', title: 'Reviewed revision', widget: 'text', required: true }];
+    case 'skills.updates.apply': return [{ path: 'skillId', title: 'Skill', widget: 'text', required: true },
+      { path: 'expectedRevision', title: 'Reviewed revision', widget: 'text', required: true },
+      { path: 'choices', title: 'File choices', widget: 'json' }];
+    default: return [];
+  }
+}
 
 /** The deciding user reads file contents; ordinary observations retain only identity. */
 function reviewSkillFile(file: SkillFileInputV1) {
@@ -42,13 +85,17 @@ function skillSpec<TId extends SkillLibraryActionIdV1>(id: TId, title: string, r
   return { id, title, approval: { result: read ? 'none' : 'required' }, approvalPolicy: id === 'skills.delete' ? { uiConfirmation: 'policy' } : {},
     safety: read ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'write', requiredAuthority: 'account_automation', executionPlacement: 'account', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, rpc: true, voice: false },
-    bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') }, inputSchema: inputs[id], outputSchema: outputs[id], inputHints: { fields: [] },
+    bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') }, inputSchema: inputs[id], outputSchema: outputs[id], inputHints: { fields: skillReviewFields(id) },
     projectObservationInput: project, projectObservationOutput: project,
-    approvalPresentation: { summary: () => null, projectInput: raw => projectSkillApprovalInput(id, raw) },
+    approvalPresentation: { summary: () => null, projectInput: raw => projectSkillApprovalInput(id, raw),
+      inputSchema: id === 'skills.create' ? reviewedFileInputs['skills.create']
+        : id === 'skills.update' ? reviewedFileInputs['skills.update']
+          : id === 'skills.install' ? reviewedFileInputs['skills.install'] : inputs[id],
+      ...(!read ? { retainInputOnSettlement: true as const } : {}) },
     cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] } };
 }
-const itemCli = z.object({ itemId: z.string().min(1), from: z.string().optional(), expectedRevision: z.string().optional(),
-  keepMine: z.array(z.string()).optional(), takeTheirs: z.array(z.string()).optional() }).strict();
+const itemCli = z.strictObject({ itemId: z.string().check(z.minLength(1)), from: z.optional(z.string()), expectedRevision: z.optional(z.string()),
+  keepMine: z.optional(z.array(z.string())), takeTheirs: z.optional(z.array(z.string())) });
 function itemCliBinding(raw: unknown) { const input = itemCli.parse(raw); return { skillId: input.itemId,
   ...(input.expectedRevision ? { expectedRevision: input.expectedRevision } : {}) }; }
 function identityCliBinding(raw: unknown) { return { skillId: itemCli.parse(raw).itemId }; }
@@ -63,12 +110,17 @@ function machineSkillSpec<TId extends Exclude<SkillMachineActionIdV1, 'skills.fo
     requiredAuthority: 'account_automation', executionPlacement: 'machine', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, rpc: true, voice: false },
     bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') },
-    inputSchema: machineInputs[id], outputSchema: machineOutputs[id], inputHints: { fields: [] },
+    inputSchema: machineInputs[id], outputSchema: machineOutputs[id], inputHints: { fields: [
+      { path: 'skillId', title: 'Skill', widget: 'text', required: true },
+      { path: 'machineId', title: 'Machine', widget: 'text', required: true },
+      ...(id === 'skills.machine.install' ? [{ path: 'agents', title: 'Agents', widget: 'text_list' as const, listSeparator: 'comma' as const }]
+        : [{ path: 'force', title: 'Remove modified files', widget: 'boolean' as const }]),
+    ] },
   };
 }
-const machineSkillCliInput = z.object({ itemId: z.string().min(1), machineId: z.string().min(1) }).strict();
-const machineInstallCliInput = machineSkillCliInput.extend({ agents: z.array(AgentIdV1Schema).optional() }).strict();
-const machineUninstallCliInput = machineSkillCliInput.extend({ force: z.boolean().optional() }).strict();
+const machineSkillCliInput = z.strictObject({ itemId: z.string().check(z.minLength(1)), machineId: z.string().check(z.minLength(1)) });
+const machineInstallCliInput = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(machineSkillCliInput, { agents: z.optional(z.array(AgentIdV1Schema)) }));
+const machineUninstallCliInput = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(machineSkillCliInput, { force: z.optional(z.boolean()) }));
 
 export const SKILL_ACTION_SPECS_V1 = [
   { id: 'skills.found.list', title: 'Find skills on a machine',
@@ -81,12 +133,12 @@ export const SKILL_ACTION_SPECS_V1 = [
     cli: { acceptsServerId: true, flagAliases: [{ path: 'machineId', aliases: ['--machine'] }, { path: 'directory', aliases: ['--dir'] }],
       commands: [{ path: ['skills', 'found', 'list'], visibility: 'canonical' }] } },
   { ...skillSpec('skills.found.read', 'Read a skill found on a machine', true), cli: { acceptsServerId: true,
-    inputSchema: z.object({ itemId: z.string().min(1), machineId: z.string().min(1) }).strict(),
+    inputSchema: z.strictObject({ itemId: z.string().check(z.minLength(1)), machineId: z.string().check(z.minLength(1)) }),
     bindInput: (raw: unknown) => { const input = readRecord(raw); return { machineId: input.machineId, path: input.itemId }; },
     flagAliases: [{ path: 'machineId', aliases: ['--machine'] }],
     commands: [{ path: ['skills', 'found', 'show'], positionals: ['itemId'], visibility: 'canonical' }] } },
   { ...skillSpec('skills.found.adopt', 'Add found skills to the library'), cli: { acceptsServerId: true,
-    inputSchema: z.object({ names: z.array(z.string().min(1)).min(1), machineId: z.string().min(1), off: z.boolean().optional() }).strict(),
+    inputSchema: z.strictObject({ names: z.array(z.string().check(z.minLength(1))).check(z.minLength(1)), machineId: z.string().check(z.minLength(1)), off: z.optional(z.boolean()) }),
     bindInput: (raw: unknown) => { const input = readRecord(raw); return { machineId: input.machineId, items: [],
       ...(input.off ? { where: { kind: 'replace', rules: [] } } : {}) }; },
     flagAliases: [{ path: 'machineId', aliases: ['--machine'] }],
@@ -108,7 +160,7 @@ export const SKILL_ACTION_SPECS_V1 = [
       }; },
       commands: [{ path: ['skills', 'machine-uninstall'], positionals: ['itemId'], visibility: 'canonical' }] } },
   { ...skillSpec('skills.list', 'List skills', true), cli: { acceptsServerId: true,
-    inputSchema: z.object({ query: z.string().optional(), state: z.enum(['in-use', 'off', 'updates', 'attention']).optional() }).strict(),
+    inputSchema: z.strictObject({ query: z.optional(z.string()), state: z.optional(z.enum(['in-use', 'off', 'updates', 'attention'])) }),
     bindInput: (raw: unknown) => { const input = readRecord(raw); return { ...input, ...(input.state ? { state: input.state === 'in-use' ? 'in_use' : input.state === 'attention' ? 'needs_attention' : input.state } : {}) }; },
     commands: [{ path: ['skills', 'list'], visibility: 'canonical' as const }] } },
   { id: 'skills.read', title: 'Read a skill', description: 'Read a library skill and its supporting files. By name, read only a skill delivered to the selected session.',
@@ -116,11 +168,11 @@ export const SKILL_ACTION_SPECS_V1 = [
     executionPlacementForInput: (raw: unknown) => SkillReadInputV1Schema.parse(raw).sessionId ? 'session' : 'account', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, rpc: true, voice: false }, bindings: { rpcMethod: 'skills.read', mcpToolName: 'skills_read' },
     toolExposure: { agent: 'direct', mcp: 'direct', cli: 'direct' }, inputSchema: SkillReadInputV1Schema, outputSchema: SkillReadResultV1Schema, inputHints: { fields: [] },
-    cli: { acceptsServerId: true, inputSchema: z.object({ itemId: z.string(), file: z.string().optional() }).strict(),
+    cli: { acceptsServerId: true, inputSchema: z.strictObject({ itemId: z.string(), file: z.optional(z.string()) }),
       bindInput: (raw: unknown) => { const input = readRecord(raw); return { skillId: input.itemId, ...(input.file ? { file: input.file } : {}) }; },
       commands: [{ path: ['skills', 'show'], positionals: ['itemId'], visibility: 'canonical' }, { path: ['skills', 'read'], visibility: 'alias' }] } },
   { ...skillSpec('skills.create', 'Create a skill'), cli: { acceptsServerId: true,
-    inputSchema: z.object({ name: z.string(), from: z.string(), off: z.boolean().optional() }).strict(),
+    inputSchema: z.strictObject({ name: z.string(), from: z.string(), off: z.optional(z.boolean()) }),
     bindInput: (raw: unknown) => { const input = readRecord(raw); return { name: input.name, files: [], ...(input.off ? { where: { kind: 'replace', rules: [] } } : {}) }; },
     commands: [{ path: ['skills', 'create'], positionals: ['name'], visibility: 'canonical' }] } },
   { ...skillSpec('skills.update', 'Update a skill'), cli: { acceptsServerId: true, inputSchema: itemCli,
@@ -130,12 +182,12 @@ export const SKILL_ACTION_SPECS_V1 = [
   { ...skillSpec('skills.duplicate', 'Duplicate a skill'), cli: { acceptsServerId: true, inputSchema: itemCli, bindInput: identityCliBinding, commands: [{ path: ['skills', 'duplicate'], positionals: ['itemId'], visibility: 'canonical' }] } },
   { ...skillSpec('skills.delete', 'Delete a skill'), cli: { acceptsServerId: true, inputSchema: itemCli, bindInput: itemCliBinding, commands: [{ path: ['skills', 'delete'], positionals: ['itemId'], visibility: 'canonical' }] } },
   { ...skillSpec('skills.install', 'Add a skill'), cli: { acceptsServerId: true,
-    inputSchema: z.object({ source: z.string(), path: z.array(z.string()).optional(), dryRun: z.boolean().optional(), off: z.boolean().optional() }).strict(),
+    inputSchema: z.strictObject({ source: z.string(), path: z.optional(z.array(z.string())), dryRun: z.optional(z.boolean()), off: z.optional(z.boolean()) }),
     bindInput: (raw: unknown) => { const input = readRecord(raw); return { source: { kind: 'link', url: input.source },
       ...(input.path ? { selectPaths: input.path } : {}), ...(input.dryRun ? { dryRun: true } : {}), ...(input.off ? { where: { kind: 'replace', rules: [] } } : {}) }; },
     commands: [{ path: ['skills', 'install'], positionals: ['source'], visibility: 'canonical' }] } },
   { ...skillSpec('skills.export', 'Export skills', true), cli: { acceptsServerId: true,
-    inputSchema: z.object({ names: z.array(z.string()).min(1), out: z.string() }).strict(), bindInput: (raw: unknown) => ({ skillIds: readRecord(raw).names }),
+    inputSchema: z.strictObject({ names: z.array(z.string()).check(z.minLength(1)), out: z.string() }), bindInput: (raw: unknown) => ({ skillIds: readRecord(raw).names }),
     commands: [{ path: ['skills', 'export'], variadicPositional: 'names', visibility: 'canonical' }] } },
   { ...skillSpec('skills.updates.diff', 'Review a skill update', true), cli: { acceptsServerId: true, inputSchema: itemCli, bindInput: identityCliBinding,
     commands: [{ path: ['skills', 'updates', 'diff'], positionals: ['itemId'], visibility: 'canonical' }] } },

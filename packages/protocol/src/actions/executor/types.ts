@@ -40,7 +40,7 @@ import type { WidgetInstanceRefV1, WidgetSurfaceRefV1 } from '../../widgets/widg
 import type { WidgetDefinitionActionDepsV1 } from '../../widgets/definitionActionsV1.js';
 import type { WidgetLayoutFragmentActionDepsV1 } from '../../widgets/fragmentActionsV1.js';
 import type { MachinesAgentsSignInStartInput, MachinesAgentsSignInStatusInput, MachinesAgentsSignInStartOutput, AgentSignInStatusResponse, MachinesAgentsSignInCancelInput, MachinesAgentsSignInCancelOutput } from '../../daemon/agentSignIn.js';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { AccountHomeContinuationInputV1 } from '../accountHomeContinuationV1.js';
 import type {
   ProjectSourcesListInputV1, ProjectSourcesReadInputV1, ProjectSourcesCreateInputV1,
@@ -1972,6 +1972,13 @@ export type ActionExecutorDeps = Readonly<{
     | { decision: 'reject'; request: ApprovalRequest; reason?: string }
     | { decision: 'canceled'; request: ApprovalRequest; reason?: string }
   >;
+
+  /** Render the canonical admitted UI default confirmation; explicit Ask-first retains Artifact custody. */
+  presentUserActionConfirmation?: (args: Readonly<{
+    actionId: ActionId;
+    input: unknown;
+    context: ActionExecutorContext;
+  }>) => Promise<boolean>;
 
   /**
    * Host Session permission transport for an exact Session-local Agent operation.

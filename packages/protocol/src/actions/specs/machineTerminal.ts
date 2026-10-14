@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import {
   DaemonTerminalEnsureRequestSchema, DaemonTerminalEnsureResponseSchema,
@@ -10,27 +10,28 @@ import { TerminalStreamReadRequestSchema, TerminalStreamReadResponseSchema } fro
 import { TerminalStreamInputRequestSchema, TerminalStreamInputResponseSchema } from '../../terminal/input.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import { RPC_METHODS } from '../../rpc/methods.js';
+import { readRecord } from '../../inputs/inputRecords.js';
 
 export const MACHINE_TERMINAL_ACTION_IDS = [
   'machines.terminal.open', 'machines.terminal.list', 'machines.terminal.read',
   'machines.terminal.write', 'machines.terminal.close', 'machines.terminal.restart',
 ] as const;
 export type MachineTerminalActionId = typeof MACHINE_TERMINAL_ACTION_IDS[number];
-const id = z.string().trim().min(1);
+const id = z.string().check(z.trim(), z.minLength(1));
 const routing = { serverId: id, machineId: id };
-export const MachineTerminalOpenInputSchema = lazyZodSchema(() => DaemonTerminalEnsureRequestSchema.safeExtend(routing).strict());
-export const MachineTerminalListInputSchema = lazyZodSchema(() => DaemonTerminalListRequestV1Schema.extend(routing).strict());
+export const MachineTerminalOpenInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(DaemonTerminalEnsureRequestSchema, routing)));
+export const MachineTerminalListInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DaemonTerminalListRequestV1Schema, routing)));
 export const MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS = {
   'machines.terminal.open': MachineTerminalOpenInputSchema,
   'machines.terminal.list': MachineTerminalListInputSchema,
-  'machines.terminal.read': lazyZodSchema(() => TerminalStreamReadRequestSchema.safeExtend(routing).strict()),
-  'machines.terminal.write': lazyZodSchema(() => TerminalStreamInputRequestSchema.extend(routing).strict()),
-  'machines.terminal.close': lazyZodSchema(() => DaemonTerminalCloseRequestSchema.extend(routing).strict()),
-  'machines.terminal.restart': lazyZodSchema(() => DaemonTerminalRestartRequestSchema.safeExtend(routing).strict()),
+  'machines.terminal.read': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(TerminalStreamReadRequestSchema, routing))),
+  'machines.terminal.write': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TerminalStreamInputRequestSchema, routing))),
+  'machines.terminal.close': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DaemonTerminalCloseRequestSchema, routing))),
+  'machines.terminal.restart': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(DaemonTerminalRestartRequestSchema, routing))),
 } as const;
 export const MACHINE_TERMINAL_ACTION_OUTPUT_SCHEMAS = {
   'machines.terminal.open': DaemonTerminalEnsureResponseSchema,
-  'machines.terminal.list': DaemonTerminalListResponseV1Schema.nullable(),
+  'machines.terminal.list': z.nullable(DaemonTerminalListResponseV1Schema),
   'machines.terminal.read': TerminalStreamReadResponseSchema,
   'machines.terminal.write': TerminalStreamInputResponseSchema,
   'machines.terminal.close': DaemonTerminalCloseResponseSchema,
@@ -41,12 +42,35 @@ type MachineTerminalSpec<TId extends MachineTerminalActionId> = PreNormalizedAct
   id: TId; inputSchema: (typeof MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS)[TId];
   outputSchema: (typeof MACHINE_TERMINAL_ACTION_OUTPUT_SCHEMAS)[TId];
 }>;
+/** The last folder name of a path on any platform, or null: the approval says where, never a raw key. */
+function terminalFolderName(input: unknown): string | null {
+  const record = readRecord(input);
+  const workspace = readRecord(record.workspace);
+  const path = typeof record.cwd === 'string' ? record.cwd : typeof workspace.rootPath === 'string' ? workspace.rootPath : '';
+  return path.split(/[\\/]/u).filter(Boolean).at(-1) ?? null;
+}
+
+/**
+ * What approving will do, in the words a person uses. The Machine is named by its Details row; the raw terminal key and daemon vocabulary stay out of the reading.
+ */
+function describeMachineTerminalApprovalSummary(actionId: MachineTerminalActionId, input: unknown): string | null {
+  const folder = terminalFolderName(input);
+  const where = folder ? ` in “${folder}”` : '';
+  switch (actionId) {
+    case 'machines.terminal.open': return `Open a terminal${where}.`;
+    case 'machines.terminal.restart': return `Restart the terminal${where}. Anything running in it stops.`;
+    case 'machines.terminal.close': return 'Close a terminal. Anything running in it stops.';
+    case 'machines.terminal.write': return 'Type into a terminal.';
+    default: return null;
+  }
+}
 function row<TId extends MachineTerminalActionId>(actionId: TId, title: string, rpcMethod: string, read = false): MachineTerminalSpec<TId> {
   return {
     id: actionId, approval: actionId === 'machines.terminal.open' || actionId === 'machines.terminal.restart' ? { result: 'required', flow: 'deferred' } : { result: 'required' },
     // Interactive present-user input uses the PTY's admitted custody. Keep
     // automation's danger floor and explicit per-surface Ask settings intact.
     approvalPolicy: actionId === 'machines.terminal.write' ? {} : { uiConfirmation: 'policy' }, title,
+    approvalPresentation: { summary: (input: unknown) => describeMachineTerminalApprovalSummary(actionId, input) },
     description: read ? 'Read only the authenticated requester’s current Machine terminals. No Session is required.'
       : 'Operate on a requester-owned Machine terminal through the canonical daemon PTY owner. Project shells retain their accepted checkout. Interactive input and resize remain under admitted terminal custody.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'danger',
