@@ -69,6 +69,18 @@ captured container identity retains incomplete cleanup until termination can be
 confirmed. The launcher feed and existing Services row presentation consume that
 same custody result after reload.
 
+## Service establishment diagnostics (0.3 development)
+
+Declared Service Start retains process exit evidence under the existing
+`plugin_managed_service_establishment_failed` refusal. Its strict optional
+`establishmentFailure` includes the observed exit code or signal and the last
+retained stderr line, sanitized against launch environment values. A recognized
+address-in-use failure also names its declared or observed port. The existing
+platform listener census and workspace containment owner supply a same-project
+association when available; an occupied port alone does not explain an unrelated
+process exit. The existing Services failure dialog and Details action consume
+this evidence. Start does not terminate the listener occupying the port.
+
 ## Session permission flags (0.3 development)
 
 `--auto` is an alias for `--permission-mode auto`, resolved by the common session
