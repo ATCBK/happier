@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
-import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import type { SkillListItemV1, SkillUnavailableItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useArtifacts } from '@/sync/domains/state/storage';
@@ -18,6 +18,8 @@ export type SkillsLibrary = Readonly<{
   status: SkillsLibraryStatus;
   /** Last-known items, kept through a refresh and through a failed refresh. */
   items: readonly SkillListItemV1[];
+  /** Known identities with unreadable content; no description, trust or cost is fabricated. */
+  unavailableItems?: readonly SkillUnavailableItemV1[];
   /** Items are from an earlier read while a newer one is pending or failed. */
   stale: boolean;
   errorCode: string | null;
@@ -26,7 +28,7 @@ export type SkillsLibrary = Readonly<{
   retry: () => void;
 }>;
 
-type Snapshot = Readonly<{ items: readonly SkillListItemV1[]; key: string; usageObservedSince: number | null }>;
+type Snapshot = Readonly<{ items: readonly SkillListItemV1[]; unavailableItems: readonly SkillUnavailableItemV1[]; key: string; usageObservedSince: number | null }>;
 /** Last-known `skills.list` result per Account, so reopening the page never flashes empty. */
 const lastKnown = new Map<string, Snapshot>();
 // Only active identical observations are joined; no response or extra cache survives settlement.
@@ -44,12 +46,13 @@ function readSkills(key: string, scope: NonNullable<SkillsLibrary['scope']>) {
   return pending;
 }
 const emptyItems: readonly SkillListItemV1[] = Object.freeze([]);
+const emptyUnavailableItems: readonly SkillUnavailableItemV1[] = Object.freeze([]);
 
 /** Reuse the previous row object for an unchanged item, so memoised rows keep their identity. */
-function reconcile(
-  previous: readonly SkillListItemV1[],
-  next: readonly SkillListItemV1[],
-): readonly SkillListItemV1[] {
+function reconcile<T extends Readonly<{ skillId: string }>>(
+  previous: readonly T[],
+  next: readonly T[],
+): readonly T[] {
   const byId = new Map(previous.map((item) => [item.skillId, item]));
   let changed = previous.length !== next.length;
   const merged = next.map((item, index) => {
@@ -148,6 +151,10 @@ export function useSkillsLibrary(): SkillsLibrary {
               : emptyItems;
           const snapshot: Snapshot = {
             items: reconcile(previous, parsed.items),
+            unavailableItems: reconcile(
+              prev.scopeKey === scopeKey ? prev.snapshot?.unavailableItems ?? emptyUnavailableItems : emptyUnavailableItems,
+              parsed.unavailableItems ?? emptyUnavailableItems,
+            ),
             key: sourceKey,
             usageObservedSince: parsed.usageObservedSince ?? null,
           };
@@ -199,6 +206,7 @@ export function useSkillsLibrary(): SkillsLibrary {
       scope,
       status: status === 'loading' && snapshot ? 'ready' : status,
       items: displayedItems,
+      unavailableItems: snapshot?.unavailableItems ?? emptyUnavailableItems,
       stale:
         snapshot !== null && (status !== 'ready' || snapshot.key !== sourceKey),
       errorCode: status === 'unavailable' ? errorCode : null,

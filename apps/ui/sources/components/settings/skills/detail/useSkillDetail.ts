@@ -14,6 +14,7 @@ import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { Modal } from '@/modal';
 import { t } from '@/text';
+import { saveFileBytes } from '@/sync/runtime/files/saveFileBytes';
 import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 
@@ -231,6 +232,22 @@ export function useSkillDetail(skillId: string | null) {
     ).skillId;
   }, [execute, skillId]);
 
+  /** "Export as .zip": the Agent Skills archive the one `skills.export` Action builds, handed to the person. */
+  const exportZip = React.useCallback(async (): Promise<boolean> => {
+    if (!skillId) return false;
+    const result = await execute('skills.export', { skillIds: [skillId] });
+    if (readSkillActionRefusal(result)) return false;
+    const archive = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.export'].parse(
+      result.ok ? result.result : null,
+    );
+    await saveFileBytes({
+      bytes: decodeBase64(archive.bytes),
+      fileName: archive.fileName,
+      mimeType: 'application/zip',
+    });
+    return true;
+  }, [execute, skillId]);
+
   /** "Move to folder": the personal folder tree's one placement Action (IR-83), then a fresh list. */
   const moveToFolder = React.useCallback(
     async (folderId: string | null): Promise<boolean> => {
@@ -292,6 +309,7 @@ export function useSkillDetail(skillId: string | null) {
     adopt,
     remove,
     duplicate,
+    exportZip,
     moveToFolder,
     checkNow,
     checkedAt,

@@ -1,0 +1,616 @@
+import * as React from 'react';
+import { View, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
+import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import type { SkillUpdateFileV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
+import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { getDiffStats } from '@/components/ui/code/model/diff/calculateDiff';
+import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
+import { resolveProseDiffPresentation } from '@/components/ui/code/diff/diffPresentationStyle';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemList } from '@/components/ui/lists/ItemList';
+import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { Text } from '@/components/ui/text/Text';
+import { useSkillsLibrary, type SkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
+import { t } from '@/text';
+import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
+import { fireAndForget } from '@/utils/system/fireAndForget';
+
+import { readSkillText } from '../detail/skillFileContent';
+import { SKILLS_COLLECTION_ROUTE, skillSource } from '../skillsCollectionModel';
+import {
+  defaultSkillFileChoices,
+  groupSkillUpdates,
+  skillUpdateApplyChoices,
+  type SkillFileChoice,
+} from './skillsUpdatesModel';
+import {
+  contentRefLabel,
+  provenanceRefLabel,
+  useSkillsUpdates,
+  type SkillsUpdatesController,
+  type SkillUpdateApplyState,
+  type SkillUpdateDiffState,
+} from './useSkillsUpdates';
+
+const NO_AGENTS: readonly string[] = Object.freeze([]);
+const NO_MACHINES: readonly Readonly<{ machineId: string; name: string }>[] =
+  Object.freeze([]);
+const NO_PROJECTS: readonly Readonly<{ projectKey: string; name: string }>[] =
+  Object.freeze([]);
+
+function formatTime(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(ms);
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  })
+    .format(value)
+    .toLowerCase();
+}
+
+function fileText(file: SkillUpdateFileV1['mine']): string {
+  if (!file) return '';
+  return file.contentKind === 'utf8' ? readSkillText(file.contentBase64) : '';
+}
+
+/** How many lines differ between the two sides of one file (the larger of added and removed). */
+function changedLines(file: SkillUpdateFileV1): number {
+  const stats = getDiffStats(fileText(file.mine), fileText(file.theirs));
+  return Math.max(stats.additions, stats.deletions);
+}
+
+/**
+ * `/settings/skills/updates` (P6 §4.6, lab su U/Up): newer versions from where skills came from. A skill
+ * the person never changed is one tap away ("Ready to update"); one they changed asks per file, with
+ * both sides shown (R5). Nothing changes until they choose.
+ */
+export const SkillsUpdatesScreen = React.memo(function SkillsUpdatesScreen() {
+  const library = useSkillsLibrary();
+  const updates = useSkillsUpdates(library);
+  return <SkillsUpdatesPage library={library} updates={updates} />;
+});
+
+/** The page over its library and operations (the dev specimen supplies fixtures for states real data can't reach). */
+export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
+  props: Readonly<{ library: SkillsLibrary; updates: SkillsUpdatesController }>,
+) {
+  const { library, updates } = props;
+  const router = useRouter();
+  const { names } = useWhereItsOnNames({
+    agentIds: NO_AGENTS,
+    machines: NO_MACHINES,
+    projects: NO_PROJECTS,
+  });
+  const groups = React.useMemo(
+    () => groupSkillUpdates(library.items),
+    [library.items],
+  );
+  // A skill just updated stays on the page with its receipt until the person leaves.
+  const applied = React.useMemo(
+    () =>
+      library.items.filter(
+        (item) =>
+          updates.applies.get(item.skillId)?.status === 'applied' &&
+          !groups.ready.includes(item) &&
+          !groups.needsChoice.includes(item),
+      ),
+    [groups, library.items, updates.applies],
+  );
+  const { loadDiff, diffs } = updates;
+  // A skill that asks per file needs both sides before anything can be chosen.
+  React.useEffect(() => {
+    if (!updates.ready) return;
+    for (const item of groups.needsChoice)
+      if (!diffs.has(item.skillId)) void loadDiff(item.skillId);
+  }, [diffs, groups.needsChoice, loadDiff, updates.ready]);
+
+  const leave = React.useCallback(() => {
+    const result = runGuardedNavigation(() =>
+      router.push(SKILLS_COLLECTION_ROUTE as never),
+    );
+    if (result !== true)
+      fireAndForget(result, { tag: 'SkillsUpdatesScreen.leave' });
+  }, [router]);
+
+  const loading = library.status === 'loading' && library.items.length === 0;
+  // A failed check that never succeeded says nothing about freshness: no "up to date" claim.
+  const nothing =
+    !loading &&
+    !(updates.check.failed && updates.check.checkedAt === null) &&
+    groups.ready.length === 0 &&
+    groups.needsChoice.length === 0 &&
+    applied.length === 0;
+
+  return (
+    <ItemList keyboardShouldPersistTaps="handled" pageColumn="wide">
+      <PageHeader
+        testID="skills.updates.header"
+        title={t('capabilities.skillsUpdates.updates.title')}
+        titleProminence="page"
+        alwaysShowTitle
+        description={t('capabilities.skillsUpdates.updates.purpose')}
+        actions={
+          <SectionActionButton
+            testID="skills.updates.checkNow"
+            title={
+              updates.check.checking
+                ? t('capabilities.skillsUpdates.updates.checking')
+                : t('capabilities.skillsUpdates.updates.checkNow')
+            }
+            icon="arrow-clockwise"
+            loading={updates.check.checking}
+            disabled={updates.check.checking || !updates.ready}
+            onPress={() => void updates.checkNow()}
+          />
+        }
+      />
+      {updates.check.failed ? (
+        <ItemGroup surface="none">
+          <SurfaceStateCard
+            testID="skills.updates.checkFailed"
+            size="line"
+            kind="error"
+            title={t('capabilities.skillsUpdates.updates.checkFailed')}
+            diagnosticCode={updates.check.code ?? undefined}
+            action={{
+              label: t('capabilities.skillsUpdates.updates.tryAgain'),
+              onPress: () => void updates.checkNow(),
+            }}
+          />
+        </ItemGroup>
+      ) : null}
+      {library.status === 'unavailable' && library.items.length === 0 ? (
+        <SurfaceStateCard
+          testID="skills.updates.loadFailed"
+          size="page"
+          kind="error"
+          title={t('capabilities.skills.loadFailed')}
+          action={{ label: t('common.retry'), onPress: library.retry }}
+        />
+      ) : nothing ? (
+        <ItemGroup surface="none">
+          <SurfaceStateCard
+            testID="skills.updates.upToDate"
+            size="line"
+            kind="empty"
+            title={
+              updates.check.checkedAt !== null
+                ? t('capabilities.skillsUpdates.updates.upToDateChecked', {
+                    time: formatTime(updates.check.checkedAt),
+                  })
+                : t('capabilities.skillsUpdates.updates.upToDate')
+            }
+          />
+        </ItemGroup>
+      ) : null}
+      {groups.ready.length > 0 || applied.length > 0 ? (
+        <ItemGroup
+          title={t('capabilities.skillsUpdates.updates.readyTitle')}
+          description={t('capabilities.skillsUpdates.updates.readyBody')}
+        >
+          {[...groups.ready, ...applied].flatMap((item) => [
+            <ReadyRow
+              key={item.skillId}
+              item={item}
+              machineName={names.machineName}
+              diff={diffs.get(item.skillId) ?? null}
+              applyState={updates.applies.get(item.skillId) ?? null}
+              onToggleDiff={(open) =>
+                open ? void loadDiff(item.skillId) : undefined
+              }
+              onUpdate={() => void updates.apply(item)}
+            />,
+          ])}
+        </ItemGroup>
+      ) : null}
+      {groups.needsChoice.map((item, index) => (
+        <ChoiceSection
+          key={item.skillId}
+          item={item}
+          first={index === 0}
+          diff={diffs.get(item.skillId) ?? null}
+          applyState={updates.applies.get(item.skillId) ?? null}
+          onRetryDiff={() => void loadDiff(item.skillId)}
+          onApply={(choices) => void updates.apply(item, choices)}
+          onNotNow={leave}
+        />
+      ))}
+    </ItemList>
+  );
+});
+
+function refWords(item: SkillListItemV1): string {
+  const from = provenanceRefLabel(item.provenance);
+  const to = contentRefLabel(item.upstream?.latest);
+  return from && to
+    ? t('capabilities.skillsUpdates.updates.refChange', { from, to })
+    : '';
+}
+
+function ReadyRow(
+  props: Readonly<{
+    item: SkillListItemV1;
+    machineName: (machineId: string) => string;
+    diff: SkillUpdateDiffState | null;
+    applyState: SkillUpdateApplyState | null;
+    onToggleDiff: (open: boolean) => void;
+    onUpdate: () => void;
+  }>,
+) {
+  const { item, diff, applyState } = props;
+  const [open, setOpen] = React.useState(false);
+  const changed =
+    diff?.status === 'ready'
+      ? diff.diff.files.filter((file) => file.changed)
+      : null;
+  const what =
+    changed === null
+      ? t('capabilities.skillsUpdates.updates.newerWaiting')
+      : changed.length === 1
+        ? t('capabilities.skillsUpdates.updates.linesChanged', {
+            count: changedLines(changed[0]!),
+            file: changed[0]!.path,
+          })
+        : t('capabilities.skillsUpdates.updates.filesChanged', {
+            count: changed.length,
+          });
+  const refs = refWords(item);
+  const applied = applyState?.status === 'applied';
+  const cost =
+    diff?.status === 'ready'
+      ? {
+          tokens:
+            diff.diff.costDelta.mine.descriptionTokens +
+            diff.diff.costDelta.mine.bodyTokens,
+          to:
+            diff.diff.costDelta.theirs.descriptionTokens +
+            diff.diff.costDelta.theirs.bodyTokens,
+        }
+      : null;
+  return (
+    <>
+      <CapabilityRow
+        testID={`skills.updates.ready.${item.skillId}`}
+        title={item.name}
+        description={
+          applied
+            ? t('capabilities.skillsUpdates.updates.applied', {
+                ref: applyState.ref ?? '',
+              })
+            : refs
+              ? `${what} · ${refs}`
+              : what
+        }
+        facts={{
+          presentation: 'row',
+          source: skillSource(item, props.machineName),
+          trust: item.trust,
+          ...(cost
+            ? cost.to === cost.tokens
+              ? { cost: { tokensWhenUsed: cost.to } }
+              : {
+                  extra: [
+                    `${formatCount(cost.tokens)} → ${t('capabilities.facts.tokensWhenUsed', { count: formatCount(cost.to) })}`,
+                  ],
+                }
+            : {}),
+        }}
+        action={
+          applied ? null : (
+            <View style={styles.actions}>
+              <TextLinkButton
+                testID={`skills.updates.ready.${item.skillId}.view`}
+                label={
+                  open
+                    ? t('capabilities.skillsUpdates.updates.hideChanges')
+                    : t('capabilities.skillsUpdates.updates.viewChanges')
+                }
+                expanded={open}
+                onPress={() => {
+                  setOpen(!open);
+                  if (!open && diff?.status !== 'ready')
+                    props.onToggleDiff(true);
+                }}
+              />
+              <RoundButton
+                testID={`skills.updates.ready.${item.skillId}.update`}
+                size="small"
+                display="secondary"
+                title={t('capabilities.skillsUpdates.updates.update')}
+                loading={applyState?.status === 'applying'}
+                disabled={applyState?.status === 'applying'}
+                onPress={props.onUpdate}
+              />
+            </View>
+          )
+        }
+      />
+      {applyState?.status === 'failed' ? (
+        <SectionContentRow continuesRow>
+          <SurfaceStateCard
+            size="line"
+            kind="error"
+            title={t('capabilities.skillsUpdates.updates.applyFailed')}
+            diagnosticCode={applyState.code}
+            action={{
+              label: t('capabilities.skillsUpdates.updates.tryAgain'),
+              onPress: props.onUpdate,
+            }}
+          />
+        </SectionContentRow>
+      ) : null}
+      {open && !applied ? (
+        <SectionContentRow
+          continuesRow
+          testID={`skills.updates.ready.${item.skillId}.changes`}
+        >
+          {diff === null || diff.status === 'loading' ? (
+            <SurfaceStateCard
+              size="line"
+              kind="loading"
+              title={t('capabilities.skillsUpdates.updates.checking')}
+            />
+          ) : diff.status === 'failed' ? (
+            <SurfaceStateCard
+              size="line"
+              kind="error"
+              title={t('capabilities.skillsUpdates.updates.diffFailed')}
+              diagnosticCode={diff.code}
+              action={{
+                label: t('capabilities.skillsUpdates.updates.tryAgain'),
+                onPress: () => props.onToggleDiff(true),
+              }}
+            />
+          ) : (
+            <View style={styles.diffs}>
+              {diff.diff.files
+                .filter((file) => file.changed)
+                .map((file) => (
+                  <SkillUpdateSides
+                    key={file.path}
+                    file={file}
+                    item={item}
+                    showPath={changed !== null && changed.length > 1}
+                  />
+                ))}
+            </View>
+          )}
+        </SectionContentRow>
+      ) : null}
+    </>
+  );
+}
+
+function ChoiceSection(
+  props: Readonly<{
+    item: SkillListItemV1;
+    first: boolean;
+    diff: SkillUpdateDiffState | null;
+    applyState: SkillUpdateApplyState | null;
+    onRetryDiff: () => void;
+    onApply: (choices: Readonly<Record<string, SkillFileChoice>>) => void;
+    onNotNow: () => void;
+  }>,
+) {
+  const { item, diff } = props;
+  const files = diff?.status === 'ready' ? diff.diff.files : null;
+  const [picked, setPicked] = React.useState<
+    Readonly<Record<string, SkillFileChoice>>
+  >({});
+  const defaults = React.useMemo(
+    () => (files ? defaultSkillFileChoices(files) : {}),
+    [files],
+  );
+  const keepMine = files
+    ? Object.values(skillUpdateApplyChoices(files, picked)).some(
+        (choice) => choice === 'mine',
+      )
+    : false;
+  const applying = props.applyState?.status === 'applying';
+  return (
+    <ItemGroup
+      {...(props.first
+        ? { title: t('capabilities.skillsUpdates.updates.choiceTitle') }
+        : {})}
+      description={t('capabilities.skillsUpdates.updates.choiceBody', {
+        name: item.name,
+      })}
+    >
+      {files === null ? (
+        <SectionContentRow>
+          {diff?.status === 'failed' ? (
+            <SurfaceStateCard
+              size="line"
+              kind="error"
+              title={t('capabilities.skillsUpdates.updates.diffFailed')}
+              diagnosticCode={diff.code}
+              action={{
+                label: t('capabilities.skillsUpdates.updates.tryAgain'),
+                onPress: props.onRetryDiff,
+              }}
+            />
+          ) : (
+            <SurfaceStateCard
+              size="line"
+              kind="loading"
+              title={t('capabilities.skillsUpdates.updates.checking')}
+            />
+          )}
+        </SectionContentRow>
+      ) : (
+        files.flatMap((file) =>
+          file.changed
+            ? [
+                <SegmentedChoiceItem<SkillFileChoice>
+                  key={file.path}
+                  testID={`skills.updates.choice.${item.skillId}.${file.path}`}
+                  testIDPrefix={`skills.updates.choice.${item.skillId}.${file.path}`}
+                  title={file.path}
+                  subtitle={
+                    file.mine === null
+                      ? t('capabilities.skillsUpdates.updates.fileTheirsOnly')
+                      : file.theirs === null
+                        ? t('capabilities.skillsUpdates.updates.fileMineOnly')
+                        : t('capabilities.skillsUpdates.updates.fileDiffers', {
+                            count: changedLines(file),
+                          })
+                  }
+                  options={[
+                    {
+                      id: 'mine',
+                      label: t(
+                        'capabilities.skillDetail.instructions.keepMine',
+                      ),
+                    },
+                    {
+                      id: 'theirs',
+                      label: t(
+                        'capabilities.skillDetail.instructions.takeTheirs',
+                      ),
+                    },
+                  ]}
+                  value={picked[file.path] ?? defaults[file.path] ?? 'mine'}
+                  onChange={(next) =>
+                    setPicked((previous) => ({
+                      ...previous,
+                      [file.path]: next,
+                    }))
+                  }
+                />,
+                <SectionContentRow key={`${file.path}:sides`} continuesRow>
+                  <SkillUpdateSides file={file} item={item} showPath={false} />
+                </SectionContentRow>,
+              ]
+            : [
+                <Item
+                  key={file.path}
+                  testID={`skills.updates.choice.${item.skillId}.${file.path}`}
+                  title={file.path}
+                  subtitle={t(
+                    'capabilities.skillsUpdates.updates.fileUnchanged',
+                  )}
+                  detail={t(
+                    'capabilities.skillsUpdates.updates.nothingToChoose',
+                  )}
+                  showChevron={false}
+                />,
+              ],
+        )
+      )}
+      <SectionContentRow testID={`skills.updates.choice.${item.skillId}.foot`}>
+        <View style={styles.foot}>
+          <Text variant="meta" style={styles.note}>
+            {keepMine
+              ? t('capabilities.skillsUpdates.updates.keepNote', {
+                  name: item.name,
+                })
+              : ''}
+          </Text>
+          <View style={styles.actions}>
+            <TextLinkButton
+              testID={`skills.updates.choice.${item.skillId}.notNow`}
+              label={t('capabilities.skillsUpdates.updates.notNow')}
+              onPress={props.onNotNow}
+            />
+            <RoundButton
+              testID={`skills.updates.choice.${item.skillId}.apply`}
+              size="small"
+              title={t('capabilities.skillsUpdates.updates.applyChoices')}
+              loading={applying}
+              disabled={files === null || applying}
+              onPress={() =>
+                files && props.onApply(skillUpdateApplyChoices(files, picked))
+              }
+            />
+          </View>
+        </View>
+        {props.applyState?.status === 'failed' ? (
+          <SurfaceStateCard
+            size="line"
+            kind="error"
+            title={t('capabilities.skillsUpdates.updates.applyFailed')}
+            diagnosticCode={props.applyState.code}
+          />
+        ) : null}
+      </SectionContentRow>
+    </ItemGroup>
+  );
+}
+
+/**
+ * R5: one file's two sides as prose, Yours beside Theirs (stacked on a phone, an accepted refinement),
+ * through the shared diff viewer.
+ */
+function SkillUpdateSides(
+  props: Readonly<{
+    file: SkillUpdateFileV1;
+    item: SkillListItemV1;
+    showPath: boolean;
+  }>,
+) {
+  // R5 prose: Yours beside Theirs down to the prose minimum, stacked under it (a phone).
+  const [width, setWidth] = React.useState<number | null>(null);
+  const onLayout = React.useCallback((event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width), []);
+  const theirsRef = contentRefLabel(props.item.upstream?.latest);
+  return (
+    <View style={styles.sides} onLayout={onLayout}>
+      {props.showPath ? (
+        <Text variant="label" style={styles.path}>
+          {props.file.path}
+        </Text>
+      ) : null}
+      <View style={styles.sideLabels}>
+        <Text variant="label" style={styles.sideLabel}>
+          {t('capabilities.skillDetail.instructions.yours')}
+        </Text>
+        <Text variant="label" style={styles.sideLabel}>
+          {theirsRef
+            ? `${t('capabilities.skillDetail.instructions.theirs')} · ${theirsRef}`
+            : t('capabilities.skillDetail.instructions.theirs')}
+        </Text>
+      </View>
+      <DiffViewer
+        mode="text"
+        oldText={fileText(props.file.mine)}
+        newText={fileText(props.file.theirs)}
+        filePath={props.file.path}
+        wrapLines
+        presentationStyleOverride={resolveProseDiffPresentation(width)}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  actions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s16 },
+  diffs: { gap: theme.space.s16 },
+  sides: { gap: theme.space.s8 },
+  sideLabels: { flexDirection: 'row' },
+  sideLabel: { flex: 1, color: theme.colors.text.secondary },
+  path: { color: theme.colors.text.primary },
+  foot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.space.s16,
+    flexWrap: 'wrap',
+  },
+  note: { flex: 1, minWidth: 200, color: theme.colors.text.secondary },
+}));
