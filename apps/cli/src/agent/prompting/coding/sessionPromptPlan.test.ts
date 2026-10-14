@@ -17,8 +17,6 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
-import { TranscriptRawRecordV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { applyInitialSessionCreationFactsToMetadata } from '@/agent/runtime/createSessionMetadata';
 import { createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1,
@@ -52,13 +50,15 @@ function createProjectedIdentityTestMetadata(params: Parameters<typeof projectSe
 describe('session prompt-plan producer', () => {
   afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
-  it('prepares a usable turn and commits a private-safe typed notice when optional library context is unavailable', async () => {
+  it('withdraws the prepared turn while optional or required selected context is unavailable, then recovers', async () => {
     const events: unknown[] = [];
     let required = false;
+    let available = false;
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       if (new URL(String(url)).pathname === '/v1/account/encryption')
         return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      return { status: 503, data: { error: 'unavailable' } };
+      return available ? { status: 200, data: plainPromptDocument('private-document', 'Current selected context') }
+        : { status: 503, data: { error: 'unavailable' } };
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token: 'optional-context-token', encryption: null } },
@@ -71,17 +71,17 @@ describe('session prompt-plan producer', () => {
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
-    const result = await resolve({ baseOverride: 'Required base instructions', includeAdmittedInventory: true });
-    expect(result.text).toContain('Required base instructions');
-    expect(result.admittedEntries).toMatchObject([{ outcome: 'unavailable', reason: 'unavailable' }]);
-    const record = TranscriptRawRecordV1Schema.parse({ role: 'agent', content: { type: 'event', id: 'notice', data: events[0] } });
-    expect(readSessionCapabilityNoticeV1(record.content.type === 'event' ? record.content.data : null)).toEqual({
-      v: 1, items: [{ kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' }],
-    });
-    expect(JSON.stringify(events)).not.toMatch(/private-entry|private-document|optional-context-token/);
+    await expect(resolve({ baseOverride: 'Required base instructions', includeAdmittedInventory: true }))
+      .rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
+    expect(resolve.readStartupInstructions?.()).toBeNull();
+    expect(resolve.readCodingPromptBehavior?.()).toBeNull();
+    expect(resolve.readComposition?.()).toBeNull();
     required = true;
     await expect(resolve({ baseOverride: 'Required base instructions' })).rejects.toMatchObject({ reason: 'unavailable' });
-    expect(events).toHaveLength(1);
+    expect(events).toEqual([]);
+    available = true;
+    expect(await resolve({ baseOverride: 'Required base instructions' })).toContain('Current selected context');
+    expect(resolve.readStartupInstructions?.()).not.toBeNull();
   });
 
   it('keeps opaque plan evidence scoped to the prepared Session and withdraws it with the current Profile', async () => {

@@ -410,20 +410,17 @@ it('refuses native open when the prepared Account lifetime retires during open a
   }
 });
 
-it('continues with required Session context and publishes a typed notice when optional Account library is unobserved', async () => {
+it('keeps an unobserved Account library pending without publishing a partial Session plan', async () => {
   selectedProfileId = null;
   const prepare = await resolver(true, false, false, undefined, false);
-  const result = await prepare({ baseOverride: 'CONTEXT_BASE', includeAdmittedInventory: true });
-  expect(result.text).toContain('CONTEXT_SESSION');
-  expect(result.text).not.toContain('CONTEXT_ACCOUNT');
-  expect(notices.map(readSessionCapabilityNoticeV1)).toEqual([{ v: 1, items: [
-    { kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' },
-  ] }]);
-  await prepare({ baseOverride: 'CONTEXT_BASE' });
-  expect(notices).toHaveLength(1);
-  artifactReadAvailable = false;
-  await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({ code: 'preparation_pending' });
-  expect(notices).toHaveLength(1);
+  await expect(prepare({ baseOverride: 'CONTEXT_BASE', includeAdmittedInventory: true }))
+    .rejects.toMatchObject({ code: 'context_source_unavailable', status: 'preparation_pending' });
+  expect(prepare.readStartupInstructions?.()).toBeNull();
+  expect(prepare.readCodingPromptBehavior?.()).toBeNull();
+  expect(prepare.readComposition?.()).toBeNull();
+  expect(notices).toEqual([]);
+  catalogReadAvailable = true;
+  expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).toContain('CONTEXT_ACCOUNT');
 });
 
 it.each([false, true])('prepares the first captured Account catalog without borrowing the saved route (catalog ready: %s)', async catalogReady => {
@@ -438,27 +435,24 @@ it.each([false, true])('prepares the first captured Account catalog without borr
     serverHttpBaseUrl: admittedRoute, isCurrent: async () => true });
   const prepare = await resolver(true, false, false, operationContext, false);
   artifactReadAvailable = false;
+  if (!catalogReady) {
+    await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({ status: 'preparation_pending' });
+    expect(prepare.readStartupInstructions?.()).toBeNull();
+    expect(notices).toEqual([]);
+    return;
+  }
   const result = await prepare({ baseOverride: 'CONTEXT_BASE' });
   expect(result).toContain('CONTEXT_SESSION');
-  if (catalogReady) expect(result).toContain('CONTEXT_ACCOUNT');
-  else expect(result).not.toContain('CONTEXT_ACCOUNT');
+  expect(result).toContain('CONTEXT_ACCOUNT');
   expect(prepare.readCodingPromptBehavior?.()).not.toBeNull();
   expect(() => prepare.assertPreparedPlanCurrent?.()).not.toThrow();
-  expect(notices.map(readSessionCapabilityNoticeV1)).toEqual(catalogReady ? [] : [{ v: 1, items: [
-    { kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' },
-  ] }]);
+  expect(notices).toEqual([]);
 });
 
-it('keeps selected Profile context required when optional Account library is unobserved', async () => {
+it('keeps Profile and Session context pending with unavailable Account admission', async () => {
   const prepare = await resolver(true, false, false, undefined, false);
-  const result = await prepare({ baseOverride: 'CONTEXT_BASE' });
-  expect(result).toContain('CONTEXT_PROFILE');
-  expect(result).toContain('CONTEXT_SESSION');
-  expect(result).not.toContain('CONTEXT_ACCOUNT');
-  expect(notices.map(readSessionCapabilityNoticeV1)).toHaveLength(1);
-  artifactReadAvailable = false;
-  await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({ code: 'preparation_pending' });
-  expect(notices).toHaveLength(1);
+  await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({ status: 'preparation_pending' });
+  expect(notices).toEqual([]);
 });
 
 it('does not omit a known required Account attachment or publish optional notice on its unavailable read', async () => {
@@ -480,7 +474,7 @@ it('does not discard a known required retained Account entry when its catalog is
   expect(notices).toEqual([]);
 });
 
-it('retains requiredness of a previously observed Account row until a ready selection confirms its deletion', async () => {
+it('requires current Account admission after previously observed selections or acknowledged deletion', async () => {
   selectedProfileId = null;
   sessionEntryIds = [];
   const prepare = await resolver(true, false);
@@ -497,11 +491,11 @@ it('retains requiredness of a previously observed Account row until a ready sele
     tombstones: [{ key: 'coding', revision: 2 }], diagnostics: [] } });
   expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).not.toContain('CONTEXT_ACCOUNT');
   commitActivePromptLibraryCatalog({ ...incumbent, catalog: { status: 'unavailable', reason: 'unreachable' } });
-  expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).not.toContain('CONTEXT_ACCOUNT');
-  expect(notices.map(readSessionCapabilityNoticeV1)).toHaveLength(1);
+  await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({ status: 'preparation_pending' });
+  expect(notices).toEqual([]);
 });
 
-it('uses current Protocol Memory-off eligibility instead of demanding a remembered required memory attachment', async () => {
+it('intentionally suppresses admitted Memory-off content but still requires current catalog admission', async () => {
   selectedProfileId = null;
   sessionEntryIds = [];
   memoryEnabled = false;
@@ -516,8 +510,37 @@ it('uses current Protocol Memory-off eligibility instead of demanding a remember
   if (!snapshot?.scopeKey) throw new Error('Account was not admitted');
   commitActivePromptLibraryCatalog({ scopeKey: snapshot.scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
     catalog: { status: 'unavailable', reason: 'unreachable' } });
-  expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).not.toContain('CONTEXT_ACCOUNT');
-  expect(notices.map(readSessionCapabilityNoticeV1)).toHaveLength(1);
+  await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({ status: 'preparation_pending' });
+  expect(notices).toEqual([]);
+});
+
+it('keeps an optional Account document pending on HTTP failure, skips only definitive absence, and recovers', async () => {
+  selectedProfileId = null;
+  sessionEntryIds = [];
+  const prepare = await resolver(true, false);
+  const { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
+    commitActivePromptLibraryCatalog } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+  const snapshot = getActiveAccountSettingsSnapshot();
+  if (!snapshot?.scopeKey) throw new Error('Account was not admitted');
+  commitActivePromptLibraryCatalog({ scopeKey: snapshot.scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+    catalog: { status: 'ready', rows: [{ revision: 2, record: PromptLibraryRecordV1Schema.parse({ key: 'coding',
+      value: { v: 1, scope: { kind: 'coding' }, entries: [{ ...entry('account'), required: false }] } }) }],
+      tombstones: [], diagnostics: [] } });
+  expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).toContain('CONTEXT_ACCOUNT');
+  artifactReadAvailable = false;
+  await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
+  expect(prepare.readStartupInstructions?.()).toBeNull();
+  expect(prepare.readCodingPromptBehavior?.()).toBeNull();
+  expect(prepare.readComposition?.()).toBeNull();
+  artifactReadAvailable = true;
+  const document = documents.find(candidate => candidate.id === 'account')!;
+  documents = documents.filter(candidate => candidate.id !== 'account');
+  const missing = await prepare({ baseOverride: 'CONTEXT_BASE', includeAdmittedInventory: true });
+  expect(missing.text).not.toContain('CONTEXT_ACCOUNT');
+  expect(missing.admittedEntries).toMatchObject([{ outcome: 'unavailable', reason: 'not_found' }]);
+  documents.push(document);
+  expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).toContain('CONTEXT_ACCOUNT');
+  expect(notices).toEqual([]);
 });
 
 it('consumes the strict daemon optional augmentation fact as one visible notice after required preparation succeeds', async () => {

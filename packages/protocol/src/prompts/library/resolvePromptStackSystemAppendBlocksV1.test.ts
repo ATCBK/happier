@@ -74,7 +74,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     })).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'wrong_kind' });
   });
 
-  it('skips unavailable optional entries with typed inventory while retaining required preparation failure', async () => {
+  it('keeps unavailable optional entries pending while retaining required preparation failure and cancellation', async () => {
     const scope = { serverId: 'home', accountId: 'account' };
     const readArtifact = async (ref: { artifactId: string }) => {
       if (ref.artifactId === 'optional') throw new Error('Home unavailable');
@@ -82,10 +82,9 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     };
     const input = { surface: 'coding' as const, scope,
       accountEntries: [entry('optional'), { ...entry('required'), required: true }], readArtifact };
-    await expect(resolvePromptStackSystemAppendBlocksV1(input)).resolves.toMatchObject({
-      blocks: ['required'], admittedEntries: [
+    await expect(resolvePromptStackSystemAppendBlocksV1(input)).rejects.toMatchObject({
+      code: 'preparation_pending', admittedEntries: [
         { entryId: 'optional', outcome: 'unavailable', reason: 'unavailable', revision: null },
-        { entryId: 'required', outcome: 'ready' },
       ],
     });
     await expect(resolvePromptStackSystemAppendBlocksV1({ ...input,
@@ -248,10 +247,10 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     ] });
   });
 
-  it('skips transient optional header/body reads without hiding required failures or cancellation', async () => {
+  it.each(['coding', 'voice'] as const)('keeps transient optional header/body reads pending on %s', async surface => {
     const scope = { serverId: 'home', accountId: 'account' };
     for (const memoryEnabled of [true, false]) {
-      const args = { surface: 'coding' as const, scope, memoryEnabled,
+      const args = { surface, scope, memoryEnabled,
         accountEntries: [entry('optional'), { ...entry('required'), required: true }],
         readArtifactHeader: async (ref: { artifactId: string }) => {
           if (ref.artifactId === 'optional') throw new Error('offline');
@@ -261,9 +260,8 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
           if (ref.artifactId === 'optional') throw new Error('offline');
           return artifact(ref.artifactId);
         } };
-      expect(await resolvePromptStackSystemAppendBlocksV1(args)).toMatchObject({ blocks: ['required'],
-        admittedEntries: [{ entryId: 'optional', outcome: 'unavailable', reason: 'unavailable' },
-          { entryId: 'required', outcome: 'ready' }] });
+      await expect(resolvePromptStackSystemAppendBlocksV1(args)).rejects.toMatchObject({ code: 'preparation_pending',
+        admittedEntries: [{ entryId: 'optional', outcome: 'unavailable', reason: 'unavailable' }] });
       await expect(resolvePromptStackSystemAppendBlocksV1({ ...args,
         accountEntries: [{ ...entry('optional'), required: true }] })).rejects.toMatchObject({ reason: 'unavailable' });
       const controller = new AbortController();
@@ -272,11 +270,11 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     }
   });
 
-  it('returns unavailable inventory only when failed scope admission has no required input', async () => {
-    const args = { surface: 'coding' as const, accountEntries: [entry('optional')],
+  it.each(['coding', 'voice'] as const)('keeps failed scope admission pending for optional and required entries on %s', async surface => {
+    const args = { surface, accountEntries: [entry('optional')],
       readScope: async () => { throw new Error('Home offline'); },
       readArtifact: async () => { throw new Error('Must not read without scope'); } };
-    expect(await resolvePromptStackSystemAppendBlocksV1(args)).toMatchObject({ blocks: [],
+    await expect(resolvePromptStackSystemAppendBlocksV1(args)).rejects.toMatchObject({ code: 'preparation_pending',
       admittedEntries: [{ entryId: 'optional', scope: null, outcome: 'unavailable', reason: 'unavailable' }] });
     await expect(resolvePromptStackSystemAppendBlocksV1({ ...args,
       sessionEntries: [{ ...entry('required'), required: true }] })).rejects.toMatchObject({ reason: 'unavailable' });
