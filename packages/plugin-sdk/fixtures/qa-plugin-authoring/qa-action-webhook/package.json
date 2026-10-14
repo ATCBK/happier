@@ -1,0 +1,31 @@
+{
+  "name": "@happier-qa/public-action-webhook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "QA-only public Action and verified webhook authoring fixture; not shipped.",
+  "keywords": ["happier-plugin"],
+  "happier": { "manifest": ".happier-plugin/plugin.json" },
+  "exports": { "./happier-plugin-ui/notes": "./ui/notes.tsx" },
+  "files": ["dist", "ui"],
+  "scripts": {
+    "build": "happier plugins dev build .",
+    "typecheck": "happier plugins dev typecheck .",
+    "test": "happier plugins test .",
+    "pack:plugin": "happier plugins pack ."
+  },
+  "dependencies": {
+    "@happier-dev/plugin-sdk": "0.0.0",
+    "@happier-dev/plugin-ui": "0.0.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-native": "0.83.5",
+    "react-native-web": "0.21.2"
+  },
+  "devDependencies": {
+    "@types/node": "25.0.10",
+    "@types/react": "19.2.0",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "typescript": "5.9.3"
+  }
+}

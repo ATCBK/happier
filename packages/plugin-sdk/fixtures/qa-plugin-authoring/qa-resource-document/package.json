@@ -1,0 +1,26 @@
+{
+  "name": "@happier-qa/resource-document",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "QA-only external author fixture for a live Resource document.",
+  "keywords": ["happier-plugin", "happier-qa"],
+  "happier": { "manifest": ".happier-plugin/plugin.json" },
+  "exports": { "./happier-plugin-ui/document-page-renderer": "./src/ui/DocumentPage.tsx" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "happier plugins dev build .",
+    "build:ui": "happier-plugin-build-ui --project-root .",
+    "typecheck": "happier plugins dev typecheck .",
+    "test": "happier plugins test ."
+  },
+  "dependencies": {
+    "@happier-dev/plugin-sdk": "0.0.0",
+    "@happier-dev/plugin-ui": "0.0.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-native": "0.83.5",
+    "react-native-web": "0.21.2"
+  },
+  "devDependencies": { "@types/node": "25.0.10", "@types/react": "19.2.0", "@typescript/native": "npm:typescript@7.0.2" }
+}
