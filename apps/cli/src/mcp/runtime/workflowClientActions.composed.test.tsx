@@ -13,6 +13,7 @@ import { AccountSettingsSchema, createActionExecutor, type ActionExecutorDeps, U
   projectSessionAccessCapabilitiesV1, WorkflowDefinitionV1Schema, WorkflowRunAcceptedContextV1Schema,
   WorkflowProgressEnvelopeV1Schema } from '@happier-dev/protocol';
 import { WorkflowDraftGetResultV1Schema } from '@happier-dev/protocol/actions/workflowAuthoringAction';
+import { bindExternalActionExecutionAuthorizationHttpPathV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '../../../../ui/sources/dev/testkit/harness/homeGovernanceHarness';
@@ -127,7 +128,19 @@ it.each(['legacy', 'legacy-terminal', 'current', 'malformed'] as const)('routes 
   issuer.decorate('resolveCurrentSessionMachine', async (input: { accountId: string; sessionId: string }) =>
     issuerStorage.state.publisherBound && input.accountId === accountId && input.sessionId === 'driver-session' ? machine.id : null);
   registerExternalActionRoutes(issuer, { dispatch: async () => { throw new Error('Minting must not execute the client Action'); } });
-  await issuer.ready();
+  let delayNextLibrarySet = false;
+  let delayedSetCount = 0;
+  // A slow Home is a network boundary. Keep the real authentication, mint and
+  // verifier behind TCP, including Axios's actual timeout/cancellation behavior.
+  issuer.addHook('onRequest', async (request: { url: string }) => {
+    if (delayNextLibrarySet && request.url === bindExternalActionExecutionAuthorizationHttpPathV1('workflow.library.view.set')) {
+      delayNextLibrarySet = false;
+      delayedSetCount += 1;
+      await new Promise(resolve => setTimeout(resolve, 16_000));
+    }
+  });
+  const issuerUrl = await issuer.listen({ port: 0, host: '127.0.0.1' });
+  const network = axios.create({ proxy: false });
   const minted: string[] = [];
   vi.spyOn(axios, 'get').mockImplementation(async url => {
     expect(String(url)).toBe(`${serverUrl}/v2/sessions/driver-session`);
@@ -137,13 +150,9 @@ it.each(['legacy', 'legacy-terminal', 'current', 'malformed'] as const)('routes 
   });
   vi.spyOn(axios, 'post').mockImplementation(async (url, body, config) => {
     const pathname = new URL(String(url)).pathname;
-    const headers = axios.AxiosHeaders.from(config?.headers).toJSON();
-    const response = await issuer.inject({ method: 'POST', url: pathname,
-      headers: Object.fromEntries(Object.entries(headers).map(([name, value]) => [name, String(value)])), payload: body });
-    if (!pathname.endsWith('/verify') && response.statusCode === 200) minted.push(decodeURIComponent(pathname.split('/').at(-2)!));
-    if (response.statusCode >= 400) throw new axios.AxiosError('Home issuer refused', undefined, undefined, undefined,
-      { status: response.statusCode, statusText: 'Refused', data: response.json(), headers: {}, config: { headers: new axios.AxiosHeaders() } });
-    return { status: response.statusCode, data: response.json() };
+    const response = await network.post(`${issuerUrl}${pathname}`, body, config);
+    if (!pathname.endsWith('/verify') && response.status === 200) minted.push(decodeURIComponent(pathname.split('/').at(-2)!));
+    return response;
   });
   let preparedRequest: Parameters<typeof prepareExternalActionRequesterAccountAuthorization>[0] | undefined;
   const execute = createDaemonSessionAccountActionExecutor({ serverId, serverHttpBaseUrl: serverUrl, token, machineId: machine.id,
@@ -152,7 +161,8 @@ it.each(['legacy', 'legacy-terminal', 'current', 'malformed'] as const)('routes 
         input: admission.operation.input, requestId: admission.operation.requestId, target, machineId: machine.id,
         sourceMachineId: machine.id, accountId, accountEncryptionMode: 'plain', tokenEpochHint: 0, token, serverId,
         serverIdentityId: 'srv_workflow', serverHttpBaseUrl: serverUrl, installationId: 'installation', privateKey: keys.secretKey,
-        sessionActionOrigin: admission.sessionActionOrigin, isCurrent: admission.isCallerCurrent };
+        sessionActionOrigin: admission.sessionActionOrigin, isCurrent: admission.isCallerCurrent,
+        ...(admission.authority.signal ? { signal: admission.authority.signal } : {}) };
       const authorization = await prepareExternalActionRequesterAccountAuthorization(preparedRequest);
       return authorization ? { authorization, target } : null;
     },
@@ -177,21 +187,34 @@ it.each(['legacy', 'legacy-terminal', 'current', 'malformed'] as const)('routes 
     const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
     if (request.operation.kind !== 'action.execute') throw new Error('Unexpected host request');
     serviceRequests.push(request.operation.actionId);
-    const outcome = await execute(request.operation, { sessionId: 'driver-session', isCurrent: async () => true });
-    outcomes.push(outcome);
-    return new Response(JSON.stringify({ ok: true, result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } }));
+    // Model the receiving HTTP request's cancellation without conflating the
+    // client fetch polyfill's signal type with the daemon's native signal.
+    const httpLifetime = new AbortController();
+    const cancelHttp = () => httpLifetime.abort();
+    init?.signal?.addEventListener('abort', cancelHttp, { once: true });
+    if (init?.signal?.aborted) cancelHttp();
+    try {
+      const outcome = await execute(request.operation, { sessionId: 'driver-session', isCurrent: async () => true,
+        ...(init?.signal ? { signal: httpLifetime.signal } : {}) });
+      outcomes.push(outcome);
+      return new Response(JSON.stringify({ ok: true, result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } }));
+    } finally {
+      init?.signal?.removeEventListener('abort', cancelHttp);
+    }
   });
   const settings = AccountSettingsSchema.parse({});
-  const mcp = createHappierMcpServer({ sessionId: 'driver-session', getServerBinding: () => ({ serverId, serverUrl }),
+  let turnId = 'turn';
+  const createMcp = () => createHappierMcpServer({ sessionId: 'driver-session', getServerBinding: () => ({ serverId, serverUrl }),
     rpcHandlerManager: new RpcHandlerManager({ scopePrefix: 'driver-session', encryptionMode: 'plain' }), updateMetadata() {},
     getMetadataSnapshot: () => createTestMetadata({ machineId: machine.id }), getWorkDepth: () => 1, getHostTurnWorkDepth: () => 2,
     getPermissionMode: () => 'default',
-    getActiveTurnPermissionWitness: () => ({ turnId: 'turn', causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } }),
-    getActiveTurnAdmissionWitness: () => ({ turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1],
+    getActiveTurnPermissionWitness: () => ({ turnId, causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } }),
+    getActiveTurnAdmissionWitness: () => ({ turnId, inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1],
       callerPermissionMode: 'default', causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
       agentStartCaller: { kind: 'session', sessionId: 'driver-session', starterDepth: 1, turnDepth: 2 } }),
     getStoredContentEncryptionContext: () => ({ mode: 'plain' }) }, { credentials: { token, encryption: null }, accountSettings: settings });
-  const client = new Client({ name: 'workflow-driver', version: '1' });
+  let mcp = createMcp();
+  let client = new Client({ name: 'workflow-driver', version: '1' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await mcp.mcp.connect(serverTransport);
   await client.connect(clientTransport);
@@ -217,6 +240,24 @@ it.each(['legacy', 'legacy-terminal', 'current', 'malformed'] as const)('routes 
     }
     expect(current, JSON.stringify(outcomes)).toMatchObject({ view: 'all', searchQuery: '' });
     await act(async () => { expect(await call('workflow.library.view.set', { searchQuery: 'QA-FIN36b' })).toMatchObject({ ok: true }); });
+    const firstSetRequestId = preparedRequest?.requestId;
+    expect(await call('workflow.library.view.get', {})).toMatchObject({ searchQuery: 'QA-FIN36b' });
+    // Native Agent turns create fresh MCP connections whose numeric JSON-RPC
+    // ids restart. Repeat the identical set under the next real turn origin.
+    await client.close();
+    await mcp.mcp.close();
+    turnId = 'next-turn';
+    mcp = createMcp();
+    client = new Client({ name: 'workflow-driver', version: '1' });
+    const [nextClientTransport, nextServerTransport] = InMemoryTransport.createLinkedPair();
+    await mcp.mcp.connect(nextServerTransport);
+    await client.connect(nextClientTransport);
+    expect(await call('workflow.library.view.get', {})).toMatchObject({ searchQuery: 'QA-FIN36b' });
+    delayNextLibrarySet = kind === 'current';
+    await act(async () => { expect(await call('workflow.library.view.set', { searchQuery: 'QA-FIN36b' })).toMatchObject({ ok: true }); });
+    expect(preparedRequest?.requestId).toBe(firstSetRequestId);
+    expect(preparedRequest?.sessionActionOrigin?.sourceTurnId).toBe('next-turn');
+    expect(delayedSetCount).toBe(kind === 'current' ? 1 : 0);
     expect(await call('workflow.library.view.get', {})).toMatchObject({ searchQuery: 'QA-FIN36b' });
     expect(minted).toContain('workflow.library.view.set');
     const scope = { serverId, accountId };
