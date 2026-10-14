@@ -5,6 +5,8 @@ import type { TeamMembershipHistoryActionIdV1, TeamMembershipHistoryInputV1 } fr
 import type { SessionConnectedServiceAuthSwitchRpcParams } from '../../connect/sessionConnectedServiceAuthSwitch.js';
 import type { MemoryWindowRequestV1 } from '../../memory/memoryWindow.js';
 import type { SessionModelMutationExpectedV1 } from '../../sessions/control/modelTransitionV1.js';
+import type { SessionGoalSetRequestV1 } from '../../sessions/work/state/sessionWorkStateRpc.js';
+import type { SessionResumeRequestV1 } from '../../sessions/control/sessionResumeRequestV1.js';
 import type { AcpCatalogSnapshotV1, AcpCatalogRowMutationV1 } from '../../acp/catalog/catalogRowsV1.js';
 import type { AcpCatalogCleanupV1 } from '../../acp/catalog/catalogMutationsV1.js';
 import type { RequesterWorkAttributionV1 } from '../../machines/requesterWorkAttributionV1.js';
@@ -132,7 +134,6 @@ import type {
 } from '../../approvals/approvalRequestV1.js';
 import type { PluginSourceCustodyV1 } from '../../plugins/runtime/sourceCustody.js';
 import type {
-  PromptAssetDeleteRequest,
 } from '../../prompts/library/promptAssetsV1.js';
 import type { ProviderConnectionId } from '../../providers/ids.js';
 import type { SessionBoardActionIdV1 } from '../../sessions/board/actionIds.js';
@@ -532,6 +533,8 @@ export type SessionPermissionRemoteActionArgs =
     }>;
 
 export type ActionExecutorContext = Readonly<{
+  /** Content-free observer installed by the host; never parsed from Action/RPC input. */
+  recordActionStartDiagnostic?: (event: import('./actionStartDiagnostics.js').ActionStartDiagnosticV1) => void;
   /** Host-captured Account identity for this invocation; never Action input or RPC authority. */
   expectedAccountId?: string;
   /** Acquiring Account's own readable creation preference at origination only; never Action input or RPC authority. */
@@ -1308,7 +1311,7 @@ export type ActionExecutorDeps = Readonly<{
     actionRequestId?: string | null;
     approvedNewDirectoryCreation?: boolean;
     intent?: PublicActionInputById['session.open']['intent'];
-    resumeRequest?: PublicActionInputById['session.open']['resumeRequest'];
+    resumeRequest?: SessionResumeRequestV1;
     signal?: AbortSignal;
   }>, context?: ActionExecutorContext) => Promise<unknown>;
   sessionFork: (args: Readonly<
@@ -1776,7 +1779,7 @@ export type ActionExecutorDeps = Readonly<{
   sessionGoalSet?: (args: Readonly<{
     sessionId: string;
     objective?: string;
-    status?: string;
+    status?: SessionGoalSetRequestV1['status'];
     tokenBudget?: number | null;
     serverId?: string | null;
   }>) => Promise<unknown>;
@@ -2060,37 +2063,13 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<unknown>;
   promptBundleUpdate?: (args: PromptBundleUpdateActionInputV1 & Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
-  promptAssetExport?: (args: Readonly<{
-    artifactId: string;
-    machineId: string;
-    assetTypeId: string;
-    scope: 'user' | 'project';
-    serverId?: string | null;
-    directory?: string;
-    targetPath?: string;
-    targetName?: string;
-    installMode?: 'copy' | 'symlink';
-    signal?: AbortSignal;
-  }>) => Promise<unknown>;
   promptRegistryInstall?: (args: Readonly<{
     machineId: string;
     sourceId: string;
     itemId: string;
     serverId?: string | null;
-    installTarget?: Readonly<{
-      assetTypeId: string;
-      scope: 'user' | 'project';
-      directory?: string;
-      targetName: string;
-      installMode?: 'copy' | 'symlink';
-    }>;
     signal?: AbortSignal;
   }>, context: ActionExecutorContext) => Promise<unknown>;
-  daemonPromptAssetsDelete?: (args: Readonly<{
-    request: PromptAssetDeleteRequest;
-    signal?: AbortSignal;
-  }>) => Promise<unknown>;
-
   pluginsDevLoopAction?: (args: Readonly<{
     actionId: PluginDevLoopActionIdV1;
     input: unknown;

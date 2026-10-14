@@ -12,6 +12,8 @@ import {
   readAcpConfigOptionIntentFromMetadata,
 } from '@happier-dev/agents';
 import type { ExecutionRunAppliedParentSelection } from '@/agent/runtime/bridges/executionRun/runtime/openInputs';
+import type { ActionExecutorContext } from '@happier-dev/protocol';
+import type { WorkflowTargetUnavailableReasonV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 /** Host-produced identity; never accepted from an Action's input payload. */
 export type AgentStartRunCallerBinding =
@@ -35,17 +37,25 @@ export function resolveCliAgentStartContextV1(input: Readonly<{
   roleSourceInventory?: RoleSourceInventoryV1;
   availableAgentTargetKeys?: readonly string[];
   runCaller?: AgentStartRunCallerBinding | null;
+  recordActionStartDiagnostic?: ActionExecutorContext['recordActionStartDiagnostic'];
 }>): AgentStartContextV1 | null {
   const ceiling = input.callerPermissionMode ? parseAgentPermissionIntentV1Alias(input.callerPermissionMode) : null;
   const runCaller = input.runCaller;
   const backgroundRun = runCaller && 'hostSessionId' in runCaller ? runCaller : null;
   const workflowRun = runCaller && 'runId' in runCaller ? runCaller : null;
   const starterDepth = backgroundRun?.callingRunDepth ?? workflowRun?.runDepth ?? input.starterDepth;
-  if (!input.machineId || !input.directory || !input.backendTarget || !ceiling
-    || starterDepth === undefined || !Number.isSafeInteger(starterDepth) || starterDepth < 0
-    || (backgroundRun && (backgroundRun.hostSessionId !== input.sessionId || !backgroundRun.callingRunId.trim()))
-    || (workflowRun && !workflowRun.runId.trim())
-    || !Number.isSafeInteger(input.turnDepth) || input.turnDepth < 0) return null;
+  const refuse = (reason: WorkflowTargetUnavailableReasonV1) => {
+    input.recordActionStartDiagnostic?.({ phase: 'agent_start_context', refusalReason: reason });
+    return null;
+  };
+  if (!input.machineId) return refuse('caller_machine_unavailable');
+  if (!input.directory) return refuse('caller_workspace_unavailable');
+  if (!input.backendTarget) return refuse('caller_agent_unavailable');
+  if (!ceiling) return refuse('caller_permission_unavailable');
+  if (starterDepth === undefined || !Number.isSafeInteger(starterDepth) || starterDepth < 0
+    || !Number.isSafeInteger(input.turnDepth) || input.turnDepth < 0) return refuse('caller_depth_unavailable');
+  if ((backgroundRun && (backgroundRun.hostSessionId !== input.sessionId || !backgroundRun.callingRunId.trim()))
+    || (workflowRun && !workflowRun.runId.trim())) return refuse('caller_run_unavailable');
   // Detached steps have no Session configuration to inherit.
   const metadata = workflowRun ? {} : input.metadata ?? {};
   const agentTargetKey = buildBackendTargetKeyV2(input.backendTarget);
@@ -70,7 +80,8 @@ export function resolveCliAgentStartContextV1(input: Readonly<{
   const connectedServices = SessionSpawnNewInputV2Schema.shape.connectedServices.safeParse(metadata.connectedServices);
   const roles: Record<string, ResolvedRolesSnapshotV1[string]> = { ...input.roles };
   if (!input.roles) {
-    if (input.roleSourceInventory?.status !== 'ready' || input.accountRoleOverrides?.status !== 'ready') return null;
+    if (input.roleSourceInventory?.status !== 'ready') return refuse('role_source_incomplete');
+    if (input.accountRoleOverrides?.status !== 'ready') return refuse('role_overrides_unavailable');
     Object.assign(roles, resolveRolesSnapshotV1({ sessionRoles, roleSourceInventory: input.roleSourceInventory,
       settingsOverrides: input.accountRoleOverrides.overrides,
       defaultEngine: { agentTargetKey, ...(selectedModelId ? { modelId: selectedModelId } : {}) },

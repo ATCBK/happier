@@ -61,7 +61,7 @@ export type WorkflowMaterializationEffectsV1 = Readonly<{
 }>;
 export type WorkflowMaterializationAdmissionV1 =
   | Readonly<{ kind: 'user' }>
-  | Readonly<{ kind: 'agent'; admitRun?: () => Promise<AgentStartAdmissionV1>; admitLeaf: (leaf: MaterializedWorkflowLeafV1,
+  | Readonly<{ kind: 'agent'; admitRun?: (facts: Readonly<{ permissionCeiling: AgentPermissionIntentV1 }>) => Promise<AgentStartAdmissionV1>; admitLeaf: (leaf: MaterializedWorkflowLeafV1,
     facts: Readonly<{ permissionCeiling: AgentPermissionIntentV1; role?: ResolvedRoleV1 }>) => Promise<AgentStartAdmissionV1> }>
   | Readonly<{ kind: 'trigger'; workDepth: number; admitLeaf: (leaf: MaterializedWorkflowLeafV1,
     facts: Readonly<{ permissionCeiling: AgentPermissionIntentV1; role?: ResolvedRoleV1 }>) => Promise<AgentStartAdmissionV1> }>;
@@ -241,7 +241,7 @@ function projectActionStart(snapshot: Pick<WorkflowAcceptedSnapshotV1, 'machineI
       permissionMode: request.facts.permissionMode ?? 'default',
     };
     const target = facts.agentTarget;
-    if ((!target || target.kind === 'unresolved') && !deferAuthorityErrors) throw new WorkflowMaterializationFailureV1({ code: 'target_unavailable', blockId: leaf.blockId });
+    if ((!target || target.kind === 'unresolved') && !deferAuthorityErrors) throw new WorkflowMaterializationFailureV1({ code: 'target_unavailable', reason: 'selection_unavailable', blockId: leaf.blockId });
     const model = facts.modelSelection;
     const modelRef = model && !('kind' in model) ? ('ref' in model ? model.ref : model) : undefined;
     return [{ sourceKey: leaf.sourceKey, blockId: leaf.blockId, kind: 'action', actionId: leaf.actionId,
@@ -590,8 +590,8 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
     }));
   let workDepth = input.admission.kind === 'trigger' ? input.admission.workDepth : 0;
   if (input.admission.kind === 'agent' && agentStartLeaves.length === 0) {
-    const admitted = await input.admission.admitRun?.();
-    if (!admitted) return { ok: false, error: { code: 'target_unavailable' } };
+    const admitted = await input.admission.admitRun?.({ permissionCeiling });
+    if (!admitted) return { ok: false, error: { code: 'target_unavailable', reason: 'run_admission_unavailable' } };
     if (!admitted.ok) return { ok: false, error: admitted.refusal };
     workDepth = admitted.stamped.workDepth;
   }
