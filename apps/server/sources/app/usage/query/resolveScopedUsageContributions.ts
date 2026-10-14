@@ -133,7 +133,9 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
     const contributions: ScopedUsageContribution[] = [];
     let previous: ScopedUsageEventRow | undefined;
     let deltaIndex = 0;
+    let reportedCoverageStartIndex = 0;
     for (const snapshot of snapshots) {
+        const intervalStartIndex = contributions.length;
         let intervalTokens = createEmptyUsageTokens();
         let intervalCost = createEmptyUsageCost(snapshot.cost.currency);
         while (deltaIndex < deltas.length && compareChronologically(deltas[deltaIndex]!, snapshot) <= 0) {
@@ -146,6 +148,7 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
         const previousEpoch = previous && readUsageAccountingMetadata(previous.metadata)?.counterEpoch;
         const witnessedReset = previous && epoch !== undefined && previousEpoch !== undefined && epoch !== previousEpoch;
         const reset = previous && (witnessedReset || snapshot.tokens.total < previous.tokens.total);
+        if (reset) reportedCoverageStartIndex = intervalStartIndex;
         if (reset && !witnessedReset) reasons.add("counter_discontinuity");
         const baselineTokens = previous && !reset ? previous.tokens : createEmptyUsageTokens();
         const baselineCost = previous && !reset ? previous.cost : createEmptyUsageCost(snapshot.cost.currency);
@@ -155,14 +158,46 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
         if (increaseTokens.total < intervalTokens.total) reasons.add("ambiguous_overlap");
         const tokens = subtractUsageTokens(increaseTokens, intervalTokens);
         const cost = subtractUsageCost(subtractUsageCost(snapshot.cost, baselineCost), intervalCost);
-        if (usageHasAnyValue(tokens, cost)) {
+        const hasReportedTotal = snapshot.cost.reportedUsd > 0 || snapshot.cost.costSource === 'provider_reported'
+            || snapshot.cost.costSource === 'provider_reported_api_equivalent';
+        const coveredIds: string[] = [];
+        const hasResidual = usageHasAnyValue(tokens, { ...cost, reportedUsd: 0, invoiceUsd: 0 });
+        const totalId = hasResidual ? `${snapshot.id}:reported` : snapshot.id;
+        if (hasReportedTotal) {
+            // The counter's reported charge covers this epoch, not just its residual tokens.
+            // Earlier reported deltas already telescope in their own basis. Retain unlike
+            // raw/API facts, but never add their fallback charge to the whole reported total.
+            for (let index = reportedCoverageStartIndex; index < contributions.length; index++) {
+                const contribution = contributions[index]!;
+                const reported = contribution.cost.reportedUsd > 0 || contribution.cost.costSource === 'provider_reported'
+                    || contribution.cost.costSource === 'provider_reported_api_equivalent';
+                if (!reported && contribution.cost.currency === snapshot.cost.currency) {
+                    coveredIds.push(contribution.id);
+                    contributions[index] = { ...contribution, cost: { ...contribution.cost, reportedTotalId: totalId } };
+                }
+            }
+        }
+        const coverageReasons: UsageAccountingCoverageReason[] = missingBaseline ? ["missing_baseline"] : [];
+        if (coveredIds.length > 0) {
+            // Money is a whole-interval fact. Keep it separate from token residuals;
+            // the cost owner admits selection only with every covered contribution.
+            if (hasResidual) {
+                coveredIds.push(snapshot.id);
+                contributions.push({ ...asContribution({ ...snapshot, modelId: null, turnId: null }, tokens,
+                    { ...cost, reportedUsd: 0, invoiceUsd: 0,
+                        costSource: cost.estimatedUsd > 0 ? 'pricing_estimate' : 'none', reportedTotalId: totalId }), coverageReasons });
+            }
+            contributions.push({ ...asContribution({ ...snapshot, id: totalId, modelId: null, turnId: null }, createEmptyUsageTokens(),
+                { ...cost, estimatedUsd: 0, reportedTotalContributionIds: coveredIds }, hasResidual ? [] : [snapshot.id]), coverageReasons });
+        } else if (usageHasAnyValue(tokens, cost)) {
             // A session counter establishes amount, not an inference's model,
             // turn or exact earlier activity time. Retain that missing evidence.
             contributions.push({
                 ...asContribution({ ...snapshot, modelId: null, turnId: null }, tokens, cost),
-                coverageReasons: missingBaseline ? ["missing_baseline"] : [],
+                coverageReasons,
             });
         }
+        if (hasReportedTotal) reportedCoverageStartIndex = contributions.length;
         previous = snapshot;
     }
     for (; deltaIndex < deltas.length; deltaIndex++) contributions.push(asContribution(deltas[deltaIndex]!));

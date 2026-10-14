@@ -29,6 +29,7 @@ import { TEAM_CREDENTIAL_ONLY_USAGE_SOURCES } from "./usageSourceClassifier";
 import { buildUsageResultProjection } from "./query/buildUsageResultProjection";
 import { LegacyUsageReportDataSchema, legacyUsageReportCanonicalOrder, readLegacyUsageReportKey } from "./legacyUsageReportSchema";
 import { canonicalUsageModelPriceId } from "@happier-dev/protocol/usage/usageModelPriceCatalog";
+import { aggregateUsageContributionCosts } from '@happier-dev/protocol/usage/usageAggregation';
 
 function toPremiumEventRow(row: ScopedUsageContribution) {
     return row;
@@ -54,14 +55,13 @@ function resolveLatestContributionContext(
 
 function toUsageTotals(rows: ScopedUsageContribution[], costMode: UsageCostMode): UsageAnalyticsTotals {
     let tokens = createEmptyUsageTokens();
-    let cost = createEmptyUsageCost();
     const eventIds = new Set<string>();
 
     for (const row of rows) {
         tokens = addUsageTokens(tokens, row.tokens);
-        cost = addUsageCostForMode(cost, row.cost, costMode);
         for (const eventId of row.contributingEventIds) eventIds.add(eventId);
     }
+    const cost = aggregateUsageContributionCosts(rows, costMode);
 
     return {
         eventCount: eventIds.size,
