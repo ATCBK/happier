@@ -678,7 +678,9 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     const launcherFeed: typeof scannedLauncherFeed = {
         ...scannedLauncherFeed,
         async getSnapshot(request) {
-            await ensureFreshInventory();
+            // Exact managed custody is read from its supervisor, not listener evidence.
+            // Ordinary launch targets still require the canonical fresh inventory scan.
+            if (request?.projection !== 'managed_bindings') await ensureFreshInventory();
             return await scannedLauncherFeed.getSnapshot(request);
         },
     };

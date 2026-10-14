@@ -1173,7 +1173,35 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
         async function establishmentFailure(result: PluginProcessResult | undefined, declaredPort?: number): Promise<LocalServiceEstablishmentFailureV1> {
             const observed = result?.termination.observed;
             const stderr = result ? Buffer.from(result.stderr).toString('utf8') : '';
-            const lastLine = stderr.trim().split(/\r?\n/u).at(-1)?.trim();
+            // Retained stderr can end in a runtime footer, stack or error metadata.
+            // Keep the latest error summary, otherwise the latest substantive line.
+            let lastMeaningfulLine: string | undefined;
+            let lastErrorLine: string | undefined;
+            let pythonFrame = false;
+            for (const rawLine of stderr.split(/\r\n?|\n/u)) {
+                const line = rawLine.trim();
+                if (/^File ".+", line \d+(?:, in .+)?$/u.test(line)) {
+                    pythonFrame = true;
+                    continue;
+                }
+                // Python source excerpts and caret annotations belong to the preceding frame.
+                if (pythonFrame && /^\s+\S/u.test(rawLine)) continue;
+                pythonFrame = false;
+                if (!line
+                    || /^Node\.js v\d+\.\d+\.\d+(?:[-+]\S+)?$/u.test(line)
+                    || /^\s+at\s+/u.test(rawLine)
+                    || /^Traceback \(most recent call last\):$/u.test(line)
+                    || /^\s+from\s+.+:\d+:in\s/u.test(rawLine)
+                    || /^goroutine \d+ \[[^\]]+\]:$/u.test(line)
+                    || /^\s+.+\.go:\d+(?:\s+\+0x[\da-f]+)?$/iu.test(rawLine)
+                    || /^[\w./]+\.[\w.]+\([^)]*\)$/u.test(line)
+                    || /^exit status \d+$/u.test(line)
+                    || /^[{}\[\]];?$/u.test(line)
+                    || /^[~^]+$/u.test(line)) continue;
+                lastMeaningfulLine = line;
+                if (/\b[\w.]*Error(?:\s+\[[^\]]+\])?:|\b[\w.]*Exception:|^(?:panic|fatal error):|\([^()]+(?:Error|Exception)\)$/iu.test(line)) lastErrorLine = line;
+            }
+            const lastLine = lastErrorLine ?? lastMeaningfulLine;
             const lastStderrLine = lastLine ? sanitizeExecDiagnosticText(lastLine, 2_048, {
                 redactedValues: [...launchRedactedValues, ...(spec.mode.kind === 'managedSpawn'
                     ? readManagedServiceProcessCredentialRedactionValues(spec.mode.credential) : [])],

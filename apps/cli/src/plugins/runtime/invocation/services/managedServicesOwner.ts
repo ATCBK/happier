@@ -4116,6 +4116,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             requester,
             cwd: request.cwd,
             serviceId: request.serviceId,
+            ...(request.execution ? { execution: request.execution } : {}),
         });
         const entryKey = JSON.stringify([
             'project-service', workspace.serverId, workspace.machineId,

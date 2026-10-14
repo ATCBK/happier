@@ -17,6 +17,9 @@ import type { NormalizedLocalServiceInventorySnapshot } from './inventory/scanne
 import { createLocalServiceEndpointEnricher } from './inventory/endpoint';
 import { createLocalPageTitleEnricher } from './inventory/pageTitle';
 import { LocalServicePreviewResourceV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
+import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
 
 function previewServerBoundary() {
     const registrations = new Map<string, unknown>();
@@ -94,6 +97,34 @@ function buildSnapshot(
 }
 
 describe('createLocalServicesDaemonRuntime', () => {
+    it('reads exact managed bindings while listener hydration is pending, keeping ordinary launcher reads fresh', async () => {
+        let releaseScan!: () => void;
+        const scanned = new Promise<void>(resolve => { releaseScan = resolve; });
+        const owner = createManagedServicesOwner({
+            processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+            // No plugin dependency operation is reached by an empty Project binding observation.
+            dependencies: Object.freeze({}) as never, resolveScope: scope => scope,
+        });
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', startLoop: false,
+            inventoryEnabled: () => true, projectManagedServices: owner, runTargets: () => [],
+            scan: async () => { await scanned; return { listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp' as const }],
+                processes: new Map(), workspaces: [], diagnostics: [] }; } });
+        const inventory = runtime.refreshInventoryNow();
+        let bindings: unknown;
+        let ordinary: unknown;
+        const bindingRead = runtime.launcherRoutes.getSnapshot({ scope: 'workspace', workspaceRoot: '/source', projection: 'managed_bindings' })
+            .then(value => { bindings = LocalServiceLauncherSnapshotV1Schema.parse(value); });
+        const ordinaryRead = runtime.launcherRoutes.getSnapshot({ scope: 'machine' }).then(value => { ordinary = value; });
+        try {
+            await vi.waitFor(() => expect(bindings).toMatchObject({ machineId: 'machine-a', targets: [] }));
+            expect(ordinary).toBeUndefined();
+            releaseScan();
+            await Promise.all([inventory, bindingRead, ordinaryRead]);
+            expect(LocalServiceLauncherSnapshotV1Schema.parse(ordinary).targets).toEqual([
+                expect.objectContaining({ source: 'inventory_entry', state: 'available' }),
+            ]);
+        } finally { releaseScan(); await Promise.all([inventory, bindingRead, ordinaryRead]); await runtime.stop(); await owner.dispose(); }
+    });
     it('projects manifest and detected native services from actual accepted WorkspaceRefs without a Session', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-local-service-declarations-'));
         await mkdir(join(root, '.happier'));

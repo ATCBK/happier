@@ -157,6 +157,10 @@ export function createProjectServiceRelocationRoute(input: Readonly<{
                 } : { status: 'failed' as const, reasonCode: 'launcher_start_result_unavailable' };
             },
         });
-        return await coordinator(request, { signal: context.signal });
+        return await coordinator(request, {
+            signal: context.signal,
+            updateProgress: context.operationProgress?.update,
+            publishOwnerUpdate: context.operationOwnerUpdate?.update,
+        });
     };
 }

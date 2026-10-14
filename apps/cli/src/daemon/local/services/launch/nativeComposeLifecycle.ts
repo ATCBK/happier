@@ -110,6 +110,7 @@ export function createNativeComposeLifecycle(input: Readonly<{
     let prefix: readonly string[] = [];
     let ids: readonly string[] | undefined;
     let starterStarted = false;
+    let observedEmpty = false;
     let cleared = false;
     const run = (args: readonly string[], signal?: AbortSignal) => {
         if (!launch?.cwd) throw new Error('native_service_admission_required');
@@ -121,6 +122,9 @@ export function createNativeComposeLifecycle(input: Readonly<{
         const listed = await run(['ps', '--all', '--no-trunc', '--filter', `label=com.docker.compose.project=${project}`, '--format', '{{.ID}}'], signal);
         if (listed.exitCode !== 0) return null;
         const listedIds = listed.stdout.trim() ? listed.stdout.trim().split('\n') : [];
+        // A nonempty listing withdraws the earlier empty witness even when
+        // its identities cannot be decoded or belong to a replacement.
+        observedEmpty = listedIds.length === 0;
         if (listedIds.some(id => !/^[a-f0-9]{64}$/u.test(id)) || new Set(listedIds).size !== listedIds.length) return null;
         if (ids && listedIds.some(id => !ids!.includes(id))) return null;
         if (!listedIds.length) return [];
@@ -148,7 +152,7 @@ export function createNativeComposeLifecycle(input: Readonly<{
             ids = undefined;
             cleared = false;
         },
-        markStarted() { starterStarted = true; },
+        markStarted() { starterStarted = true; observedEmpty = false; },
         get redactedValues() { return Object.values(launch?.env ?? {}).filter((value): value is string => typeof value === 'string' && value.length > 0); },
         async logs(options) {
             const rows = await read(options?.signal);
@@ -172,10 +176,9 @@ export function createNativeComposeLifecycle(input: Readonly<{
                 if (cleared) return { status: 'stopped' };
                 const before = await read(options?.signal);
                 if (!before) {
-                    // Observe any recoverable incumbent first. An old Unknown
-                    // binding that never launched or captured a native resource
-                    // has nothing of ours to terminate when observation is down.
-                    if (!ids?.length && !starterStarted) { cleared = true; return { status: 'stopped' }; }
+                    // Local identity absence is not an absence witness for a
+                    // detached incumbent recovered by a new daemon controller.
+                    if (observedEmpty && !ids?.length && !starterStarted) { cleared = true; return { status: 'stopped' }; }
                     return { status: 'termination_incomplete' };
                 }
                 if (observe(before).phase === 'stopped') return { status: 'stopped' };
@@ -185,7 +188,7 @@ export function createNativeComposeLifecycle(input: Readonly<{
                 return { status: observe(await read(options?.signal)).phase === 'stopped' ? 'stopped' : 'termination_incomplete' };
             } catch (error) {
                 if (options?.signal?.aborted) throw error;
-                if (!ids?.length && !starterStarted) { cleared = true; return { status: 'stopped' }; }
+                if (observedEmpty && !ids?.length && !starterStarted) { cleared = true; return { status: 'stopped' }; }
                 return { status: 'termination_incomplete' };
             }
         },

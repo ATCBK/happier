@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { createServer } from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import nacl from 'tweetnacl';
 import { bindExternalActionExecutionAuthorizationHttpPathV1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -33,6 +33,7 @@ import { createLocalServicePreviewRegistry } from '../preview/registry';
 import { createLocalServiceLauncherHistoryStore } from './leaves';
 import { createLocalServiceActionRoutes } from '../actions/routes';
 import { createLocalServicesDaemonRuntimeActionExecutor } from '../actions/runtimeActionExecutor';
+import { createProjectServiceRelocationRoute } from '../actions/projectServiceRelocationRoute';
 import { createLocalServicesDaemonFeatureGate } from '../featureGate';
 import { createLocalServiceActionConfirmationNonceV1, createProjectServiceDeclarationTargetIdV1 } from '@happier-dev/protocol/local/services/actions/v1';
 import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol';
@@ -81,6 +82,9 @@ import { updateSettings } from '@/persistence';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 import { buildLocalServiceRows } from '../../../../../../../apps/ui/sources/sync/domains/local/services/serviceRow';
+import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { WorkspaceExecutionConfigMutationRequestV1Schema, type WorkspaceExecutionConfigContentV1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
+import type { LocalServicesRuntimeActionRoutes } from '../actions/runtimeActionExecutor';
 
 class ObservedSetupPty implements PtyProcess {
     readonly pid = 3456;
@@ -269,13 +273,14 @@ describe('accepted Project Service declaration starter', () => {
             runTargets: () => discoverLocalServiceRunTargets({ roots: [], acceptedWorkspaceRefs: [targetWorkspace] }) });
         const routes = createLocalServiceLauncherRoutes({ feed, history, ...starter });
         return { root, workspace, targetRoot, targetWorkspace, manifest, starter, routes, history, request, ingress, context, owner, post, setupProcesses, operationRuntime, runtime, admissionDrain,
-            async createRuntimeActionExecutor() {
+            async createRuntimeActionExecutor(relocateService?: LocalServicesRuntimeActionRoutes['relocateService']) {
                 const featureGate = createLocalServicesDaemonFeatureGate({ env: {}, resolveServerFeaturesSnapshot: () => ({ status: 'ready',
                     features: FeaturesResponseSchema.parse({ features: { localServices: { enabled: true, inventory: { enabled: true },
                         managed: { enabled: true }, actions: { enabled: true }, launcher: { enabled: true } },
                         browser: { enabled: true, viewTargets: { enabled: true } } }, capabilities: {} }) }) });
                 await featureGate.refresh();
-                return createLocalServicesDaemonRuntimeActionExecutor({ featureGate, ingress, routes: { launcherRoutes: routes } });
+                return createLocalServicesDaemonRuntimeActionExecutor({ featureGate, ingress,
+                    routes: { launcherRoutes: routes, ...(relocateService ? { relocateService } : {}) } });
             },
             copies: () => copies, withdrawRelationship() { relationshipCurrent = false; },
             changeCopiedManifest(value: unknown) { copyManifestOverride = value; },
@@ -287,6 +292,80 @@ describe('accepted Project Service declaration starter', () => {
             mintSourceEpoch(value: number) { mintedEpoch = value; },
             retireRegistryProjection() { projectionLifetime.abort(); } };
     }
+
+    it('retains admitted primary execution from the real starter through the installed Move route', async () => {
+        const f = await fixture();
+        const review = await f.routes.startTarget!(f.request, f.ingress, f.context);
+        const started = await f.routes.startTarget!({ ...f.request, expectedEffectDigest: review.reviewedEffectDigest }, f.ingress, f.context);
+        if (started.status !== 'succeeded' || !started.currentTarget) throw new Error('Service did not start');
+        expect(DaemonLocalServiceLauncherStartResponseV1Schema.safeParse(started).success).toBe(true);
+        const workspace = { serverId: f.workspace.serverId, refId: f.workspace.id };
+        const destination = { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'other-machine' } };
+        const move = createProjectServiceRelocationRoute({ serverBaseUrl: 'https://home.example',
+            credentials: f.runtime.credentials!, projectManagedServices: f.owner, resolveWorkspaceSyncHandoffAdapter: () => null });
+        expect(await move({ workspace, serviceName: 'worker', requestId: 'move-primary', currentTarget: started.currentTarget,
+            destination, selectedTarget: { machineId: 'other-machine' }, desiredPlacement: { workspace, serviceName: 'worker',
+                expectedRevision: 'absent', expected: { kind: 'absent' }, value: { runsOn: destination, unavailable: 'fail' } } }, f.context))
+            .toMatchObject({ ok: false, errorCode: 'primary_only' });
+        expect(f.owner.listProjectServices()[0]?.snapshot().state).toBe('running');
+    });
+
+    it('retains confirmed Stop and the incumbent binding through installed Move operation wiring when cancelled after Stop', async () => {
+        const f = await fixture(false, undefined, true, 'portable');
+        const review = await f.routes.startTarget!(f.request, f.ingress, f.context);
+        const started = await f.routes.startTarget!({ ...f.request, expectedEffectDigest: review.reviewedEffectDigest }, f.ingress, f.context);
+        if (started.status !== 'succeeded' || !started.currentTarget) throw new Error('Service did not start');
+        const old = f.owner.listProjectServices()[0]!;
+        expect(old.execution).toBe('portable');
+        expect(DaemonLocalServiceLauncherStartResponseV1Schema.safeParse(started).success).toBe(true);
+        let content: WorkspaceExecutionConfigContentV1 | null = null;
+        let revision = 0;
+        // Account row persistence is a network boundary; canonical compare/rebase and Action dispatch stay real.
+        vi.spyOn(axios, 'request').mockImplementation(async config => {
+            const path = new URL(String(config.url)).pathname;
+            if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+            if (path === '/v1/projects/execution/config/read') return { status: 200, data: content
+                ? { status: 'present', revision, content } : { status: 'absent' } };
+            expect(path).toBe('/v1/projects/execution/config/mutate');
+            const mutation = WorkspaceExecutionConfigMutationRequestV1Schema.parse(config.data);
+            expect(mutation.expectedRevision).toBe(content ? revision : 'absent');
+            content = mutation.content;
+            return { status: 200, data: { status: 'updated', revision: ++revision, cursor: revision } };
+        });
+        const relocateService = createProjectServiceRelocationRoute({ serverBaseUrl: 'https://home.example',
+            credentials: f.runtime.credentials!, projectManagedServices: f.owner, resolveWorkspaceSyncHandoffAdapter: () => null });
+        const executor = createActionExecutor({
+            ...createAccountServerActionDeps({ token: f.runtime.credentials!.token, credentials: f.runtime.credentials!,
+                serverId: 'home', serverHttpBaseUrl: 'https://home.example' }),
+            runtimeActionExecute: await f.createRuntimeActionExecutor(relocateService),
+        });
+        const cancellation = new AbortController();
+        const phases: string[] = [];
+        const operations = createHostActionOperationRuntime({ machineId: f.workspace.machineId,
+            resolveAccountId: async () => 'owner', generateOperationId: () => 'move-progress' });
+        const workspace = { serverId: f.workspace.serverId, refId: f.workspace.id };
+        const destination = { kind: 'primary' as const };
+        const request = { workspace, serviceName: 'worker', requestId: 'cancel-after-stop', currentTarget: started.currentTarget,
+            destination, selectedTarget: { machineId: f.workspace.machineId }, desiredPlacement: { workspace, serviceName: 'worker',
+                expectedRevision: 'absent' as const, expected: { kind: 'absent' as const }, value: { runsOn: destination, unavailable: 'fail' as const } } };
+        await operations.observeExecution({ actionId: 'projects.service.relocate', input: request,
+            execute: context => executor.execute('projects.service.relocate', request, { ...f.context, ...context,
+                signal: AbortSignal.any([context.signal, cancellation.signal]), operationProgress: { update(update) {
+                    context.operationProgress.update(update);
+                    if (update.phase) phases.push(update.phase);
+                    if (update.phase === 'stopped') cancellation.abort();
+                } } }),
+        });
+        const settled = await operations.runner.waitForTerminal({ accountId: 'owner', machineId: f.workspace.machineId }, 'move-progress');
+        expect(old.snapshot().state).toBe('stopped');
+        expect(phases).toEqual(['stopping', 'stopped']);
+        expect(settled).toMatchObject({ state: 'cancelled', progress: { phase: 'stopped' }, domainRef: {
+            kind: 'projectService', purpose: 'relocation', currentTarget: started.currentTarget,
+            workspace: { machineId: f.targetWorkspace.machineId, workspaceId: f.targetWorkspace.id, rootPath: f.targetRoot },
+        } });
+        expect(f.copies()).toBe(1); // Only the original placed Start prepared a copy.
+        expect(f.owner.listProjectServices()).toHaveLength(0);
+    });
 
     it('honours the Service Start waiver without a second effect confirmation while preserving explicit policy and digest checks', async () => {
         const f = await fixture();
@@ -335,10 +414,81 @@ describe('accepted Project Service declaration starter', () => {
         assertActionOutputContract('localServices.launcher.start', result);
         expect(result).toMatchObject({ status: 'denied', reasonCode: 'plugin_managed_service_establishment_failed',
             establishmentFailure: { cause: 'port_in_use', port: address.port, sameProject: true, exitCode: 1,
-                lastStderrLine: expect.any(String) } });
+                lastStderrLine: `Error: listen EADDRINUSE: address already in use 127.0.0.1:${address.port}` } });
         expect(f.owner.listProjectServices()).toEqual([]);
         expect(occupant.exitCode).toBeNull();
     });
+
+    it.skipIf(process.platform === 'win32')('retains a real Unix-socket collision without blaming the declared TCP port', async () => {
+        const tcp = createServer();
+        await new Promise<void>(resolve => tcp.listen(0, '127.0.0.1', resolve));
+        const address = tcp.address();
+        if (!address || typeof address === 'string') throw new Error('Missing fixture TCP port');
+        await new Promise<void>((resolve, reject) => tcp.close(error => error ? reject(error) : resolve()));
+        const f = await fixture();
+        const socketPath = join(f.root, 'ipc.sock');
+        const listener = createServer();
+        await new Promise<void>(resolve => listener.listen(socketPath, resolve));
+        cleanups.push(async () => { if (listener.listening) await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve())); });
+        const script = `require('net').createServer().listen(${JSON.stringify(socketPath)})`;
+        await writeFile(join(f.root, '.happier/project.json'), JSON.stringify(ProjectManifestV1Schema.parse({
+            ...f.manifest, services: { worker: { source: { kind: 'command', command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}` }, port: address.port } },
+        })));
+        const executor = await f.createRuntimeActionExecutor();
+        const action = (input: unknown) => executor({ actionId: 'localServices.launcher.start', input, context: f.context, rpcContext: f.ingress });
+        const review = DaemonLocalServiceLauncherStartResponseV1Schema.parse(await action(f.request));
+        if (!review.reviewedEffectDigest) throw new Error('Missing Unix-socket service review');
+        const result = DaemonLocalServiceLauncherStartResponseV1Schema.parse(await action({ ...f.request, expectedEffectDigest: review.reviewedEffectDigest }));
+        assertActionOutputContract('localServices.launcher.start', result);
+        expect(result).toMatchObject({ status: 'denied', reasonCode: 'plugin_managed_service_establishment_failed',
+            establishmentFailure: { cause: 'process_exited', exitCode: 1, lastStderrLine: expect.stringContaining('EADDRINUSE') } });
+        expect(result.establishmentFailure).not.toHaveProperty('port');
+        expect(result.establishmentFailure).not.toHaveProperty('sameProject');
+        expect(listener.listening).toBe(true);
+        expect(f.owner.listProjectServices()).toEqual([]);
+    });
+
+    for (const [_runtime, executable, args, expected] of [
+        ['node', process.execPath, ['-e', "throw new Error('FX51 establishment failed')"], 'Error: FX51 establishment failed'],
+        ['python', process.platform === 'win32' ? 'python' : 'python3', ['-c', "import sys, traceback; traceback.print_exception(RuntimeError('FX51 establishment failed')); traceback.print_stack(); sys.exit(1)"], 'RuntimeError: FX51 establishment failed'],
+        ['go', 'go', ['run', 'fx51.go'], 'panic: FX51 establishment failed'],
+        ['ruby', 'ruby', ['-e', "def fail_sample; raise 'FX51 establishment failed'; end; fail_sample"], 'FX51 establishment failed (RuntimeError)'],
+    ] as const) {
+        // Optional installed runtimes add real qualification; Node/Python are required in this composed lane.
+        const probe = _runtime === 'go' || _runtime === 'ruby'
+            ? spawnSync(executable, _runtime === 'go' ? ['version'] : ['--version']) : undefined;
+        const notInstalled = probe?.error && 'code' in probe.error && probe.error.code === 'ENOENT';
+        it.skipIf(Boolean(notInstalled))(`retains the meaningful real ${_runtime} exception through declaration Start and its strict consumer`, async () => {
+            const reservation = createServer();
+            await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+            const address = reservation.address();
+            if (!address || typeof address === 'string') throw new Error('Missing fixture port');
+            await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+            const f = await fixture(false, { kind: 'command', command: [executable, ...args].map(value => JSON.stringify(value)).join(' ') });
+            if (_runtime === 'go') {
+                // This harness deliberately starts from an empty host environment.
+                // Go's required build cache belongs to the fixture, not the developer's home.
+                Object.assign(f.runtime.hostEnvironment, { GOCACHE: join(f.root, 'go-cache') });
+                await writeFile(join(f.root, 'fx51.go'), 'package main\nfunc main() { panic("FX51 establishment failed") }\n');
+            }
+            await writeFile(join(f.root, '.happier/project.json'), JSON.stringify(ProjectManifestV1Schema.parse({
+                ...f.manifest, services: { worker: { ...f.manifest.services!.worker, port: address.port } },
+            })));
+            const executor = await f.createRuntimeActionExecutor();
+            const action = (input: unknown) => executor({ actionId: 'localServices.launcher.start', input,
+                context: f.context, rpcContext: f.ingress });
+            const review = DaemonLocalServiceLauncherStartResponseV1Schema.parse(await action(f.request));
+            if (!review.reviewedEffectDigest) throw new Error('Missing service review');
+            const result = DaemonLocalServiceLauncherStartResponseV1Schema.parse(await action({
+                ...f.request, expectedEffectDigest: review.reviewedEffectDigest,
+            }));
+            assertActionOutputContract('localServices.launcher.start', result);
+            expect(result).toMatchObject({ status: 'denied', reasonCode: 'plugin_managed_service_establishment_failed',
+                establishmentFailure: { cause: 'process_exited', exitCode: 1,
+                    lastStderrLine: _runtime === 'ruby' ? expect.stringContaining(expected) : expected } });
+            expect(f.owner.listProjectServices()).toEqual([]);
+        });
+    }
 
     it.each(['ordinary', 'long_unicode'] as const)('emits registered launcher/Start/Stop outputs from real declaration discovery and supervision (%s)', async kind => {
         const script = `setInterval(() => {}, 1000); /* ${kind === 'long_unicode' ? '界🚀'.repeat(700) : 'service'} */`;
@@ -631,13 +781,14 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         h.setNativeTool({ executablePath: '/installed/docker' });
         let unavailable = false;
         let settled = false;
+        let identitiesVisible = captured;
         let project = '';
         const id = 'a'.repeat(64);
         Object.assign(h.runtime, { environmentIo: { ...h.runtime.environmentIo, async run(request: Parameters<ProjectFiniteActionRuntime['environmentIo']['run']>[0]) {
             if (unavailable) return { exitCode: 1, stdout: '', stderr: 'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock' };
             const filter = request.args.find(arg => arg.startsWith('label=com.docker.compose.project='));
             if (filter) project = filter.slice('label=com.docker.compose.project='.length);
-            const stdout = request.args.includes('ps') ? captured ? id : 'invalid-container-list'
+            const stdout = request.args.includes('ps') ? identitiesVisible ? id : 'invalid-container-list'
                 : request.args.includes('inspect') ? JSON.stringify([{ Id: id,
                     Config: { Labels: { 'com.docker.compose.project': project, 'com.docker.compose.service': 'worker' } },
                     State: { Status: settled ? 'exited' : 'running' }, NetworkSettings: { Ports: {} } }]) : '';
@@ -656,13 +807,18 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         try {
             const result = await routes.execute({ ...stop, confirmationNonce: createLocalServiceActionConfirmationNonceV1(stop) });
             assertActionOutputContract('localServices.actions.stopManaged', result);
-            expect(result).toMatchObject(captured ? { status: 'failed', reasonCode: 'plugin_managed_server_termination_incomplete' } : { status: 'succeeded' });
+            expect(result).toMatchObject({ status: 'failed', reasonCode: 'plugin_managed_server_termination_incomplete' });
             const snapshot = await h.routes.getSnapshot();
             assertActionOutputContract('localServices.launcher.snapshot', snapshot);
             const rows = buildLocalServiceRows({ inventoryRows: [], launchTargets: snapshot.targets, sessionId: null, scope: 'workspace' });
             expect(rows).toHaveLength(1);
-            expect(rows[0]).toMatchObject({ status: captured ? 'unavailable' : 'stopped' });
-            expect(h.owner.listProjectServices()).toHaveLength(captured ? 1 : 0);
+            expect(rows[0]).toMatchObject({ status: 'unavailable' });
+            expect(h.owner.listProjectServices()).toHaveLength(1);
+            unavailable = false; identitiesVisible = true; settled = true;
+            const recovered = await routes.execute({ ...stop, confirmationNonce: createLocalServiceActionConfirmationNonceV1(stop) });
+            assertActionOutputContract('localServices.actions.stopManaged', recovered);
+            expect(recovered).toMatchObject({ status: 'succeeded' });
+            expect(h.owner.listProjectServices()).toHaveLength(0);
         } finally { unavailable = false; settled = true; }
     });
 

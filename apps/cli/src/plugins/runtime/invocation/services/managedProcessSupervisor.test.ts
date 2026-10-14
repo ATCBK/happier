@@ -8,6 +8,7 @@ import type {
     PluginProcessResult,
 } from '@happier-dev/plugin-sdk/exec';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { LocalServiceEstablishmentFailureV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import {
     createManagedServiceProcessSupervisorHost as createProductionManagedServiceProcessSupervisorHost,
@@ -158,8 +159,48 @@ describe('createManagedServiceProcessSupervisorHost', () => {
     });
 
     it.each([
+        ['Node Windows CRLF', 'Error: fixture failed\r\n    at start (C:\\work\\server.js:8:2)\r\n\r\nNode.js v24.21.0\r\n', 'Error: fixture failed'],
+        ['Node macOS frames after a retained error', 'TypeError: fixture failed\n    at start (/Users/fixture/server.js:8:2)\n', 'TypeError: fixture failed'],
+        ['Python traceback frames after a retained error', 'RuntimeError: fixture failed\nTraceback (most recent call last):\n  File "C:\\work\\server.py", line 8, in start\n    fail()\n    ^^^^^^\n', 'RuntimeError: fixture failed'],
+        // Ruby 3.4 Exception#full_message, adapted from https://ruby-doc.org/3.4/Exception.html.
+        ['Ruby exception before frames', "t.rb:3:in 'Integer#/': divided by 0 (ZeroDivisionError)\n\tfrom t.rb:10:in 'Object#bar'\n\tfrom t.rb:12:in '<main>'\n", "t.rb:3:in 'Integer#/': divided by 0 (ZeroDivisionError)"],
+        ['latest error before trailing metadata', 'Error: first failure\nError: final failure\n  code: \'FIXTURE\',\n  port: 49152\n}\n', 'Error: final failure'],
+        ['unstructured output', 'initializing\nconfiguration unavailable\n\n', 'configuration unavailable'],
+        ['known structural output only', '\n    at start (/work/server.js:8:2)\nNode.js v24.21.0\n', undefined],
+        ['Python frames and source only', 'Traceback (most recent call last):\n  File "server.py", line 8, in start\n    fail()\n    ^^^^^^\n', undefined],
+        ['Go frames and footer only', 'goroutine 1 [running]:\nmain.main()\n\t/work/server.go:2 +0x25\nexit status 2\n', undefined],
+        ['indented unstructured output', '  configuration unavailable\n', 'configuration unavailable'],
+        ['empty output', '', undefined],
+        ['bounded redacted exception', `Error: fixture-private-value ${'界'.repeat(1500)}\n    at start (/work/server.js:8:2)\nNode.js v24.21.0`, 'Error: [REDACTED]'],
+    ] as const)('selects meaningful retained establishment stderr (%s)', async (_shape, stderr, expected) => {
+        // Supplied terminal bytes replace only the OS output boundary; supervision stays real.
+        const terminal = deferred<PluginProcessResult>();
+        terminal.resolve({ ...CLEAN_EXIT, termination: { observed: { kind: 'exit', exitCode: 23 }, requestedBy: { kind: 'none' } },
+            stderr: Buffer.from(stderr) });
+        const { servers } = createHarness([createProcess(42, terminal)]);
+        const failure: unknown = await servers.supervise(managedSpec('diagnostic', {
+            mode: { kind: 'managedSpawn', endpointDetection: { kind: 'detectAfterLaunch', minimumConfidence: 'high' } },
+            launch: { executable: { kind: 'systemTool', id: 'fixture.server' }, env: { PRIVATE_TOKEN: 'fixture-private-value' } },
+        })).catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(PluginError);
+        if (!(failure instanceof PluginError)) throw failure;
+        const details = failure.details;
+        const evidence = LocalServiceEstablishmentFailureV1Schema.parse(details && typeof details === 'object' && !Array.isArray(details)
+            ? details.establishmentFailure : undefined);
+        expect(evidence).toMatchObject({ cause: 'process_exited', exitCode: 23 });
+        if (_shape === 'bounded redacted exception') {
+            expect(evidence.lastStderrLine).toMatch(/^Error: /u);
+            expect(evidence.lastStderrLine).not.toContain('fixture-private-value');
+            expect(Buffer.byteLength(evidence.lastStderrLine!)).toBeLessThanOrEqual(2_048);
+        } else expect(evidence.lastStderrLine).toBe(expected);
+    });
+
+    it.each([
         ['macOS Node', 'Error: listen EADDRINUSE: address already in use :::49152\nerrno: -48\nport: 49152', 'port_in_use'],
         ['Windows Winsock', 'bind: Only one usage of each socket address (protocol/network address/port) is normally permitted. (10048)', 'port_in_use'],
+        ['Unix socket', "Error: listen EADDRINUSE: address already in use /tmp/service.sock\naddress: '/tmp/service.sock',\nport: -1", 'process_exited'],
+        ['Unix socket without metadata', 'Error: listen EADDRINUSE: address already in use /tmp/service.sock', 'process_exited'],
+        ['Windows named pipe', "Error: listen EADDRINUSE: address already in use \\\\.\\pipe\\service\nport: -1", 'process_exited'],
         ['unrelated exit on an occupied port', 'Configuration failed: fixture-private-value', 'process_exited'],
     ] as const)('retains exit evidence without inventing collision causality (%s)', async (_shape, stderr, cause) => {
         // Only OS terminal output and the platform listener census are simulated.
@@ -181,8 +222,10 @@ describe('createManagedServiceProcessSupervisorHost', () => {
         } });
         if (cause === 'process_exited') {
             expect(failure.details.establishmentFailure).not.toHaveProperty('port');
+            expect(failure.details.establishmentFailure).not.toHaveProperty('sameProject');
             expect(failure.details.establishmentFailure.lastStderrLine).not.toContain('fixture-private-value');
         }
+        expect(LocalServiceEstablishmentFailureV1Schema.parse(failure.details.establishmentFailure).cause).toBe(cause);
     });
 
     it('discovers an owned endpoint after the former startup cutoff without an authored deadline', async () => {
