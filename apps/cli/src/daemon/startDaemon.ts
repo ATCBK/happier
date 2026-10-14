@@ -26,6 +26,7 @@ import {
   resolvePurposeTeamCredentialBindingIntentsFromHome,
 } from '@/session/services/spawnConnectedServicesDefaults';
 import { createDaemonKeepAwake } from './resources/daemonKeepAwake';
+import { createDaemonStorageVitalsBindings } from './resources/createDaemonStorageVitalsBindings';
 import { createDaemonGuard } from './guard/createDaemonGuard';
 import { createGuardSessionRestoration } from './guard/sessionRestoration';
 import { createGuardSessionStopReceipt } from './guard/sessionStopReceipt';
@@ -144,6 +145,7 @@ import type { ConnectedServiceId } from '@happier-dev/protocol';
 import { readIrohRelayConfigFromEnv } from '@happier-dev/iroh-native/node';
 import { readHomeApplicationCarrierEligibilityFromEnv } from '@happier-dev/cli-common/homeEnrollment';
 import { readOrCreateInstallationIdentity } from './identity/store';
+import { createInstalledProjectFiniteRuntime } from './startup/createInstalledProjectFiniteRuntime';
 import {
   startPluginWebhookDaemonWorkerV1,
   type PluginWebhookDaemonWorkerHandleV1,
@@ -157,7 +159,7 @@ import {
   type ProviderManagedCatalogRuntimeOwner,
 } from './startup/startDaemonSessionControlRuntime';
 import { prepareDaemonBootstrapContext } from './startup/prepareDaemonBootstrapContext';
-import { createDaemonMachineBootstrapRuntime, createProjectFiniteSourceManifestInspector } from './startup/createDaemonMachineBootstrapRuntime';
+import { createDaemonMachineBootstrapRuntime } from './startup/createDaemonMachineBootstrapRuntime';
 import { createProductionDaemonWorkflowRuntime } from './workflows/daemonRuntime';
 import { isWorkflowRuntimeEnabled } from './automation/workflowFeatureGate';
 import {
@@ -168,12 +170,8 @@ import { createDaemonWorkspaceSyncRuntimeCustody } from './startup/daemonWorkspa
 import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWorkerAdmission';
 import { createProjectWorkerAction } from '@/workspaces/execution/projectWorkerAction';
 import { createAccountServerMachineFinitePolicyClient } from '@/api/machine/accountServerMachineFinitePolicyClient';
-import { createAccountServerWorkspaceWorkerPreferenceClient } from '@/api/workspaces/workspaceWorkerPreferences';
-import { resolveExternalActionServerRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import { createProjectNativeIo } from '@/workspaces/projectSetup/projectNativeIo';
 import { readProjectFiniteIngressRefusal } from '@/workspaces/projectSetup/projectFiniteAction';
-import { readRequesterAccountActionContext, resolveAdmittedRequesterAccountReadRuntime } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
-import { createWorkspaceSyncWorkerPreparation } from '@/workspaces/sync/workspaceSyncPreparation';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readInstallationIdentityIfExistsSync } from './identity/store';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
@@ -2647,7 +2645,8 @@ export async function startDaemon(
       onError: error => logger.warn('[DAEMON RUN] Guard operation failed', error),
     });
     const currentGuard = daemonGuard;
-    guardSessionRestoration = createGuardSessionRestoration({ activity: currentGuard.activityLog });
+    guardSessionRestoration = createGuardSessionRestoration({ activity: currentGuard.activityLog,
+      readCustodianTarget: machineResourceTarget });
     machineRpcRouteAttachments.attachMachineGuardRoutes({ target: machineResourceTarget,
       guard: currentGuard.watch, activity: currentGuard.activityLog,
       keepRunning: async (request, _requester, signal, verifyCurrent) => {
@@ -2768,6 +2767,7 @@ export async function startDaemon(
           if (unresolvedRoot) return { status: 'unavailable' as const, projects };
           return { status: 'ready' as const, projects };
         };
+        const storageVitals = createDaemonStorageVitalsBindings(machineVitals);
         const hostBootedAt = machineVitals?.host()?.bootedAt;
         const storageIdle = async () => (await managedActivity.readDecision()).kind === 'idle'
           && scmWorktreeMutationActivity.isIdle();
@@ -2807,10 +2807,10 @@ export async function startDaemon(
           },
           maintenance: {
             subscribePolicy: listener => machineResourcesPolicy?.subscribe(listener) ?? (() => {}),
-            subscribeVolumes: listener => machineVitals?.subscribe(listener) ?? (() => {}),
+            subscribeVolumes: storageVitals.subscribeVolumes,
             isIdle: storageIdle, subscribeIdle: subscribeStorageIdle,
-            isOnPower: () => machineVitals?.latest()?.power?.onAC !== false,
-            subscribePower: listener => machineVitals?.subscribe(listener) ?? (() => {}),
+            isOnPower: storageVitals.isOnPower,
+            subscribePower: storageVitals.subscribePower,
             logs: createLogRetentionOwner({ happyHomeDir: home,
               currentLogPaths: async () => [logger.logFilePath, ...await readManagedServiceCurrentLogPaths()],
               onError: error => logger.warn('[DAEMON RUN] Storage log retention failed', error) }),
@@ -2909,14 +2909,11 @@ export async function startDaemon(
             },
             currentLogPaths: async () => [logger.logFilePath, ...await readManagedServiceCurrentLogPaths()],
           },
-          readVolumes: () => {
-            const disk = machineVitals?.latest()?.disk;
-            return disk?.reported ? disk.volumes : [];
-          },
-          readVolumesReported: () => machineVitals?.latest()?.disk.reported === true,
-          subscribeVolumeChanges: (listener: () => void) => machineVitals?.subscribe(listener) ?? (() => {}),
+          readVolumes: storageVitals.readVolumes,
+          readVolumesReported: storageVitals.readVolumesReported,
+          subscribeVolumeChanges: storageVitals.subscribeVolumeChanges,
           subscribeChanges: (listener: () => void) => {
-            const cleanup = [subscribeStorageRecordings(listener), sessionLiveWorkProducer.subscribe(listener), executionRunActivity.subscribe(listener), transferActivity.subscribe(listener),
+            const cleanup = [storageVitals.subscribeVolumes(listener), subscribeStorageRecordings(listener), sessionLiveWorkProducer.subscribe(listener), executionRunActivity.subscribe(listener), transferActivity.subscribe(listener),
               projectRows.subscribeActiveProjectAccountRowsSnapshot(listener), machineResourcesPolicy?.subscribe(listener)];
             return () => {
               for (const unsubscribe of cleanup) unsubscribe?.();
@@ -3172,12 +3169,7 @@ export async function startDaemon(
         requesterServerId: requesterRuntimeServerId,
         resolveCurrentMachineExecutionOriginContext,
         resolveRequesterSessionRuntimeContext,
-        onActivationRejected: async event => {
-          const target = machineResourceTarget();
-          const attribution = event.requester ?? (target && externalActionAccountId
-            ? { ...target, accountId: externalActionAccountId } : null);
-          if (attribution) await guardSessionRestoration?.onActivationRejected({ ...event, attribution });
-        },
+        onActivationRejected: async event => { await guardSessionRestoration?.onActivationRejected(event); },
         readRequesterSessionCredentialBindings: async () => {
           const installation = readInstallationIdentityIfExistsSync();
           if (!installation || configuration.activeServerId !== requesterRuntimeServerId) {
@@ -3752,72 +3744,20 @@ export async function startDaemon(
               admission, workspaceSync: runtime.workspaceSync,
               isFiniteExecutionLive: () => apiMachineForSessions?.isProjectFiniteExecutionLive() === true,
               isServiceExecutionLive: () => isProjectServiceExecutionLive?.() === true });
-            const createProjectFiniteRuntime: NonNullable<ApiMachineClientLifecycleDependencies['createProjectFiniteRuntime']> = async (ports, ingress) => {
-              if (!externalActionAccountId || !await isCurrent()) return null;
-              const installationId = readInstallationIdentityIfExistsSync()?.installationId;
-              const requester = ingress.callerInputAuthorization && installationId
-                ? await resolveAdmittedRequesterAccountReadRuntime({ ingress, serverId: finiteServerId,
-                  machineId: registeredMachineId, installationId, isInstalledCurrent: isCurrent }) : null;
-              if (ingress.callerInputAuthorization && !requester || !requester && readProjectFiniteIngressRefusal(ingress)) return null;
-              const currentCredentials = requester ? null : await readStoredCredentialsForServerId(finiteServerId).catch(() => null);
-              if (!requester && (!currentCredentials || !sameStoredCredentials(credentials, currentCredentials)) || !await isCurrent()) return null;
-              const runtimeCurrent = requester?.isCurrent ?? isCurrent;
-              const requesterContext = requester ? readRequesterAccountActionContext(requester.accountAuthorization) : null;
-              const io = createProjectNativeIo({ ownerRemainder });
-              const accountAccess = requester ?? (currentCredentials ? { serverId: finiteServerId, machineId: registeredMachineId,
-                accountId: externalActionAccountId, credentials: currentCredentials, serverHttpBaseUrl: finiteServerHttpBaseUrl } : null);
-              if (!accountAccess) return null;
-              return { ...ports, ...accountAccess, workerAdmission: admission, isCurrent: runtimeCurrent,
-                nativeIo: io.commandIo, environmentIo: io.environmentIo,
-                plugins: { async resolveProjectNativeAdapter(reference, role) {
-                  if (!await runtimeCurrent()) return { kind: 'refused', code: 'native_adapter_retired' };
-                  const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
-                    happyHomeDir: configuration.happyHomeDir, controller: pluginReloadController,
-                  });
-                  try {
-                    const selected = await lease.registry.resolveProjectNativeAdapter(reference, role);
-                    return await runtimeCurrent() ? selected : { kind: 'refused', code: 'native_adapter_retired' };
-                  } finally { await lease.release(); }
-                } },
-                successHomeDir: configuration.happyHomeDir,
-                ...(currentCredentials ? { inspectSourceProjectManifest: createProjectFiniteSourceManifestInspector({ api,
-                  credentials: currentCredentials, serverId: finiteServerId, serverHttpBaseUrl: finiteServerHttpBaseUrl,
-                  accountId: externalActionAccountId, ingress, isCurrent }),
-                  ...createWorkspaceSyncWorkerPreparation({ serverId: finiteServerId,
-                  serverHttpBaseUrl: finiteServerHttpBaseUrl, targetMachineId: registeredMachineId,
-                  credentials: currentCredentials, isCurrent,
-                  prepareBetween: (request, signal) => runtime.handoffAdapter.prepareBetween(request, signal) }) } : {}),
-                resolveWorkspaceExecutionConfig: async (context, currentIngress, actionId) => {
-                  const preferenceCredentials = requesterContext?.credentials ?? currentCredentials;
-                  if (!preferenceCredentials || !await runtimeCurrent()) return null;
-                  const origin = await resolveCurrentMachineExecutionOriginContext(currentIngress.signal);
-                  if (!origin || origin.machineId !== registeredMachineId || !await isCurrent()) return null;
-                  const authorization = currentIngress.callerInputAuthorization;
-                  const requestContext = { ...context, ...(authorization ? {
-                    externalActionExecutionAuthorization: authorization,
-                    externalActionTarget: authorization.binding.target,
-                  } : {}) };
-                  const installation = readInstallationIdentityIfExistsSync();
-                  return await createAccountServerWorkspaceWorkerPreferenceClient({
-                    token: preferenceCredentials.token, credentials: preferenceCredentials,
-                    serverHttpBaseUrl: accountAccess.serverHttpBaseUrl, signal: currentIngress.signal,
-                    context: requestContext, actionId, isCredentialCurrent: runtimeCurrent,
-                    ...(requesterContext ? { operationContext: requesterContext.savedSecretOperationContext } : {}),
-                    resolveRequestHeaders: async request => {
-                      if (requester) return await requester.accountAuthorization.requesterHttpProjection!.createRequestHeaders({
-                        effectActionId: request.effectActionId, method: request.method, path: request.path,
-                        ...(request.body === undefined ? {} : { body: request.body }), signal: currentIngress.signal,
-                      });
-                      const result = resolveExternalActionServerRequestHeaders({ ...request,
-                        daemonToken: preferenceCredentials.token, serverIdentityId: origin.serverIdentityId,
-                        ...(installation ? { privateKey: installation.privateKey, installationId: installation.installationId } : {}),
-                      });
-                      return result.ok ? result.headers : null;
-                    },
-                  });
-                },
-              };
-            };
+            const createProjectFiniteRuntime = createInstalledProjectFiniteRuntime({
+              api, credentials, externalActionAccountId, finiteServerId, finiteServerHttpBaseUrl,
+              registeredMachineId, admission, isCurrent, resolveCurrentMachineExecutionOriginContext,
+              nativeIo: createProjectNativeIo({ ownerRemainder }), successHomeDir: configuration.happyHomeDir,
+              prepareBetween: (request, signal) => runtime.handoffAdapter.prepareBetween(request, signal),
+              plugins: { async resolveProjectNativeAdapter(reference, role) {
+                if (!await isCurrent()) return { kind: 'refused', code: 'native_adapter_retired' };
+                const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
+                  happyHomeDir: configuration.happyHomeDir, controller: pluginReloadController,
+                });
+                try { return await lease.registry.resolveProjectNativeAdapter(reference, role); }
+                finally { await lease.release(); }
+              } },
+            });
             const readProjectFiniteLoad: NonNullable<ApiMachineClientLifecycleDependencies['readProjectFiniteLoad']> = async () => {
               const live = () => projectWorkerAdmission === admission
                 && apiMachineForSessions?.isProjectFiniteExecutionLive() === true;
