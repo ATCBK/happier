@@ -21,7 +21,6 @@ import type { SessionEncryption } from '@/sync/encryption/sessionEncryption';
 import { createSessionEncryptionUnavailableError } from '@/sync/encryption/sessionEncryptionUnavailableError';
 import { nowServerMs } from '@/sync/runtime/time';
 import {
-    RawRecordSchema,
     type RawRecord,
 } from "@happier-dev/session-core/raw";
 import { randomUUID } from '@/platform/randomUUID';
@@ -37,6 +36,7 @@ import {
     buildLocalOutboundPendingUserMessage,
     buildLocalOutboundAccountActor,
     buildOutgoingUserTextRecord,
+    OutgoingUserTextRecordSchema,
 } from '@/sync/domains/messages/outgoingUserMessage';
 import {
     collectCommittedTranscriptLocalIds,
@@ -49,7 +49,7 @@ import { SessionExecutionRunPendingEnqueueRequestV1Schema } from '@happier-dev/p
 import { normalizePendingDeliveryStatusV1, parsePendingDeliveryStatusV1, shouldExposePendingDeliveryInDiscardedHistoryV1, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { normalizePendingDeliveryBlockedReason, type PendingDeliveryBlockedReason } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
-import { PendingRequestedActionV1Schema, PendingResetStartSetResultV1Schema, DEFAULT_PENDING_REQUESTED_ACTION_V1, type PendingRequestedActionV1, type PendingResetStartSetResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { PendingRequestedActionV1Schema, PendingRequestedActionV1StoredSchema, PendingResetStartSetResultV1Schema, DEFAULT_PENDING_REQUESTED_ACTION_V1, type PendingRequestedActionV1, type PendingResetStartSetResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema, type SessionPendingMessageComposerAdmissionAcceptedRequestV1, type SessionPendingMessageComposerAdmissionPrepareResponseV1 } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { hasRawComposerAttachmentSelectionV1, HappierStructuredInputV1Schema, HappierStructuredInputV1StoredSchema, RawIngressStructuredInputV1Schema, RawIngressStructuredInputV1StoredSchema, readIngressComposerAttachmentSelectionV1, type RawIngressStructuredInputV1, type HappierStructuredInputV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { PendingMessageMutationFingerprintV1Schema } from '@happier-dev/protocol/sessions/pending/pendingMessageMutationFingerprintV1';
@@ -386,7 +386,7 @@ function buildPendingOutboxProjection(
 ): PendingMessage {
     const requestedAction = readPendingEnqueueRequestedAction(row.request.body);
     const frozenRawRecord = readPendingEnqueuePlainUserRecord(row);
-    const parsedRawRecord = RawRecordSchema.safeParse(row.rawRecord);
+    const parsedRawRecord = OutgoingUserTextRecordSchema.safeParse(row.rawRecord);
     const projectionRawRecord: RawRecord = frozenRawRecord
         ?? (parsedRawRecord.success && parsedRawRecord.data.role === 'user'
             ? parsedRawRecord.data
@@ -618,6 +618,7 @@ function createPendingServerUpgradeRequiredError(): Error & { code: 'server-upgr
 export function serializePendingEnqueueBodyForServerWire(
     canonicalBody: string,
     mode: PendingInputServerWireMode,
+    source: 'input' | 'stored' = 'input',
 ): string | null {
     let parsed: unknown;
     try {
@@ -640,7 +641,7 @@ export function serializePendingEnqueueBodyForServerWire(
     }
     const requestedActionResult = parsed.requestedAction === undefined
         ? { success: true as const, data: DEFAULT_PENDING_REQUESTED_ACTION_V1 }
-        : PendingRequestedActionV1Schema.safeParse(parsed.requestedAction);
+        : (source === 'stored' ? PendingRequestedActionV1StoredSchema : PendingRequestedActionV1Schema).safeParse(parsed.requestedAction);
     if (!requestedActionResult.success) {
         return null;
     }
@@ -704,7 +705,7 @@ function serializePersistedPendingEnqueueForServerWire(
     request: PersistedPendingOutboxMessage['request'],
     mode: PendingInputServerWireMode,
 ): string | null {
-    if (!request.recipient) return serializePendingEnqueueBodyForServerWire(request.body, mode);
+    if (!request.recipient) return serializePendingEnqueueBodyForServerWire(request.body, mode, 'stored');
     if (mode !== 'pending_input_v3' && mode !== 'pending_input_v4') throw createPendingTargetUpdateRequiredError();
     return request.body;
 }
@@ -834,7 +835,7 @@ function readPendingEnqueuePlainUserRecord(row: PersistedPendingOutboxMessage): 
         const parsed = JSON.parse(row.request.body) as unknown;
         if (!isPlainObject(parsed) || parsed.localId !== row.localId || !isPlainObject(parsed.content)) return null;
         if (parsed.content.t !== 'plain' || !('v' in parsed.content)) return null;
-        const record = RawRecordSchema.safeParse(parsed.content.v);
+        const record = OutgoingUserTextRecordSchema.safeParse(parsed.content.v);
         return record.success
             && record.data.role === 'user'
             && record.data.content.type === 'text'
@@ -851,7 +852,7 @@ function readPendingEnqueueRequestedAction(body: string): PendingRequestedAction
         if (!isPlainObject(parsed) || parsed.requestedAction === undefined || parsed.requestedAction === null) {
             return DEFAULT_PENDING_REQUESTED_ACTION_V1;
         }
-        const action = PendingRequestedActionV1Schema.safeParse(parsed.requestedAction);
+        const action = PendingRequestedActionV1StoredSchema.safeParse(parsed.requestedAction);
         return action.success ? action.data : null;
     } catch {
         return null;
@@ -1024,7 +1025,7 @@ function coerceDiscardReason(value: string | null): DiscardedPendingMessage['dis
 }
 
 function coercePendingUserTextRecord(decrypted: unknown): { rawRecord: RawRecord; text: string; displayText?: string } | null {
-    const parsed = RawRecordSchema.safeParse(decrypted);
+    const parsed = OutgoingUserTextRecordSchema.safeParse(decrypted);
     if (!parsed.success) return null;
     const record = parsed.data;
     if (record.role !== 'user') return null;
@@ -1087,10 +1088,14 @@ function captureCommittedTranscriptSeqForSession(sessionId: string): number | nu
 function readPendingSnapshotVersion(scope: ServerAccountScope, sessionId: string): number | null {
     const state = storage.getState();
     const row = readSessionListRowForServerId(state.sessionListRowsByServerId, scope.serverId, sessionId);
-    if (row?.pendingVersion !== undefined) return row.pendingVersion;
-    return areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
+    const sessionVersion = areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
         ? state.sessions[sessionId]?.pendingVersion ?? null
         : null;
+    // A mounted Session receives the socket revision before its list projection
+    // may catch up. Both represent the same monotone Pending frontier; catching
+    // up a projection must not invalidate a read of the already received revision.
+    if (row?.pendingVersion === undefined) return sessionVersion;
+    return sessionVersion === null ? row.pendingVersion : Math.max(row.pendingVersion, sessionVersion);
 }
 
 function collectCommittedTranscriptLocalIdsAboveSeq(sessionId: string, aboveSeq: number): ReadonlySet<string> {
@@ -1710,6 +1715,17 @@ function buildPendingDecryptFailureMessage(params: {
     };
 }
 
+function shouldRetirePendingOutboxEnqueueForServerMessage(
+    row: PersistedPendingOutboxMessage,
+    message: PendingMessage,
+): boolean {
+    // A handoff reservation or failure does not prove provider dispatch. An
+    // ordinary same-id row does establish a delivery-mode conflict instead.
+    return readPendingEnqueueDeliveryMode(row.request.body) !== 'external_handoff'
+        || (message.pendingDeliveryStatus !== 'external_handoff'
+            && message.pendingDeliveryStatus !== 'blocked');
+}
+
 async function reconcileServerPendingSnapshotWithLocalOutbound(params: Readonly<{
     sessionId: string;
     outboxScope: ServerAccountScope;
@@ -1734,10 +1750,15 @@ async function reconcileServerPendingSnapshotWithLocalOutbound(params: Readonly<
         .filter((row) => isPendingMessageForRecipient(row.request, params.recipient));
     for (const row of durableOutboxRows) {
         if (isPendingOutboxMessageQuarantined(row)) continue;
+        const serverMessage = serverPendingByLocalId.get(row.localId);
         if (
             row.operation === 'enqueue'
-            && (serverDiscardedLocalIds.has(row.localId) || serverPendingLocalIds.has(row.localId))
+            && (serverDiscardedLocalIds.has(row.localId)
+                || (serverMessage && shouldRetirePendingOutboxEnqueueForServerMessage(row, serverMessage)))
         ) {
+            // External handoff in a snapshot proves the server's reservation,
+            // not provider dispatch. Its enqueue ACK must retain local custody
+            // until it can return that claim to the sending caller.
             (await removePendingOutboxMessage(params.sessionId, row.localId, params.outboxScope, 'enqueue'));
         }
     }
@@ -2437,7 +2458,7 @@ async function enqueuePendingMessageV2Owned(params: {
                 allowedModels: params.allowedModels,
                 allowedPermissionModes: params.allowedPermissionModes,
             }));
-            const parsed = RawRecordSchema.safeParse(candidateRawRecord);
+            const parsed = OutgoingUserTextRecordSchema.safeParse(candidateRawRecord);
             const rawRecord = parsed.success && parsed.data.role === 'user' ? parsed.data : null;
             if (!rawRecord && !existingOutboxRow) {
                 throw new Error('Persisted pending outbox projection is invalid');
@@ -2722,11 +2743,11 @@ export async function replayPersistedPendingOutboxForSession(
     const persisted = (await loadPendingOutboxForSession(sessionId, outboxScope));
     if (persisted.length === 0) return [];
     const existing = storage.getState().sessionPending[sessionId]?.messages ?? [];
-    const serverOwnedLocalIds = new Set(existing
+    const serverOwnedMessagesByLocalId = new Map(existing
         .filter((message) =>
             message.source === 'server_pending'
             && isPendingOutboxProjectionInScope(message, outboxScope))
-        .map((message) => message.localId ?? message.id));
+        .map((message) => [message.localId ?? message.id, message]));
     const discardedServerOwnedLocalIds = new Set(
         (storage.getState().sessionPending[sessionId]?.discarded ?? [])
             .filter((message) =>
@@ -2754,7 +2775,9 @@ export async function replayPersistedPendingOutboxForSession(
             (await removePendingOutboxMessage(sessionId, row.localId, outboxScope, 'enqueue'));
             continue;
         }
-        if (row.operation === 'enqueue' && serverOwnedLocalIds.has(row.localId)) {
+        const serverMessage = serverOwnedMessagesByLocalId.get(row.localId);
+        if (row.operation === 'enqueue' && serverMessage
+            && shouldRetirePendingOutboxEnqueueForServerMessage(row, serverMessage)) {
             (await removePendingOutboxMessage(sessionId, row.localId, outboxScope, 'enqueue'));
             continue;
         }
@@ -2789,7 +2812,7 @@ export async function retryPendingOutboxOperationV2(params: {
     }
     const pendingLocalId = persisted.localId;
     const existing = findPendingOutboxProjection(sessionId, pendingLocalId, outboxScope);
-    const parsed = RawRecordSchema.safeParse(persisted.rawRecord);
+    const parsed = OutgoingUserTextRecordSchema.safeParse(persisted.rawRecord);
     const auxiliaryRawRecord = parsed.success && parsed.data.role === 'user' ? parsed.data : null;
     const deliveryMode = readPendingEnqueueDeliveryMode(persisted.request.body);
     const requestedAction = readPendingEnqueueRequestedAction(persisted.request.body);
@@ -3038,7 +3061,7 @@ export async function updatePendingMessageV2(params: {
     }
     let rawRecord: RawRecord = replacePendingEditStructuredInput((() => {
         if (existing.rawRecord) {
-            const parsed = RawRecordSchema.safeParse(existing.rawRecord);
+            const parsed = OutgoingUserTextRecordSchema.safeParse(existing.rawRecord);
             if (parsed.success && parsed.data.role === 'user' && parsed.data.content.type === 'text') {
                 const record = parsed.data;
                 const existingMeta = isPlainObject(record.meta) ? record.meta : {};
