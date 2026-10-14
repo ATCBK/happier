@@ -122,8 +122,8 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
     }));
     const motion = React.useMemo(() => ({
         x: pan.translateX, y: pan.translateY, anchorX: rect.x, anchorY: rect.y,
-        width, height, chromeHeight, overlay, onPortalActiveChange: setPortalActive,
-    }), [pan.translateX, pan.translateY, rect.x, rect.y, width, height, chromeHeight, overlay]);
+        width, height, chromeHeight, overlay: portalActive ? overlay : null, onPortalActiveChange: setPortalActive,
+    }), [pan.translateX, pan.translateY, rect.x, rect.y, width, height, chromeHeight, overlay, portalActive]);
 
     return <RetainedPresentationNativeMotionContext.Provider value={props.mode === 'docked' ? null : motion}>
         <GestureDetector gesture={pan.gesture}>
