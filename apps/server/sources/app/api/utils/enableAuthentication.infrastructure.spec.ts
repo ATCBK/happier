@@ -126,11 +126,11 @@ describe("authentication infrastructure failures", () => {
         if (!address || typeof address === "string") throw new Error("Missing test listener");
         const client = io(`http://127.0.0.1:${address.port}`, { auth: { token }, transports: ["websocket"], autoConnect: false });
         try {
-            const connected = once(client, "connect");
+            const connected = new Promise<void>((resolve) => client.once("connect", () => resolve()));
             client.connect();
             await connected;
             boundary.account.findUnique.mockRejectedValueOnce(Object.assign(new Error("private connection detail"), { code: "P1017" }));
-            const reconnected = once(client, "connect");
+            const reconnected = new Promise<void>((resolve) => client.once("connect", () => resolve()));
             const request = { sessionId: "session", localId: "accepted-input" };
             // No ACK timeout: disconnect must retire the original wait so its
             // incumbent custody can reoffer this exact operation on reconnect.
@@ -143,7 +143,7 @@ describe("authentication infrastructure failures", () => {
             // A real invalid credential keeps the existing terminal refusal.
             const serverSocket = [...server.sockets.sockets.values()][0]!;
             serverSocket.handshake.auth.token = "invalid-signature";
-            const disconnected = once(client, "disconnect");
+            const disconnected = new Promise<void>((resolve) => client.once("disconnect", () => resolve()));
             await expect(client.emitWithAck(event, request)).rejects.toThrow("disconnected");
             await disconnected;
             expect(client.active).toBe(false);
