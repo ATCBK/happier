@@ -202,9 +202,8 @@ describe('the Session Work operation source', () => {
             expect(hook.getCurrent()).toBe(current);
             const { TokenStorage } = await import('@/auth/storage/tokenStorage');
             const nextCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'next-account' })).toString('base64url')}.signature` };
-            // Secure credential storage is the harness's external boundary. Its real
-            // mutation path still retires and resolves the Work source's Account.
-            vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue(nextCredentials);
+            // Publish the replacement through credential custody, so subscribers
+            // retire and resolve the Account from the real stored credentials.
             await act(async () => {
                 expect(await TokenStorage.setCredentialsForServerUrl(connection.home.serverUrl, { serverId: connection.home.id }, nextCredentials)).toBe(true);
             });

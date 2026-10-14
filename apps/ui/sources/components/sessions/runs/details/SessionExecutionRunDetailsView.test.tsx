@@ -10,6 +10,7 @@ import {
     type ExecutionRunPublicState,
 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { StopSessionResultSchema } from '@happier-dev/protocol/sessionStop';
 import type { NormalizedMessage } from '@happier-dev/session-core/raw';
 
 import { createMachineFixture, createPendingMessageFixture, createSessionFixture, flattenTestStyle,
@@ -17,6 +18,7 @@ import { createMachineFixture, createPendingMessageFixture, createSessionFixture
 import { createSessionMessagesFixture, createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getStorage } from '@/sync/domains/state/storageStore';
@@ -227,7 +229,7 @@ beforeEach(async ({ task }) => {
             'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { available: true, protocolVersion: 2,
                 backends: { codex: { available: true, intents: ['review', 'delegate'] } } } },
         } };
-        if (method === RPC_METHODS.STOP_SESSION) return { ok: true };
+        if (method === RPC_METHODS.STOP_SESSION) return StopSessionResultSchema.parse({ status: 'stopped' });
         if (method === RPC_METHODS.KILL_SESSION) return { status: 'requested' };
         return { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' };
     });
@@ -242,6 +244,8 @@ beforeEach(async ({ task }) => {
                     accountStoredContentCompatibility: { v: 1, currentProtocolVersion: 3, minimumProtocolVersion: 3, declarationTransport: 'http-header-and-socket-auth-v1' } },
             }));
             if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (request.path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'm1', accountId: 'account-1' })]);
+            if (request.path === '/v1/machines/m1') return Response.json({ machine: createPlainMachineRowFixture({ id: 'm1', accountId: 'account-1' }) });
             if (request.path === '/v2/sessions/s1' && !httpSessionAvailable) return new Response(null, { status: 404 });
             if (request.path === '/v2/sessions/s1') return Response.json(V2SessionByIdResponseSchema.parse({ session: {
                 id: 's1', encryptionMode: 'plain', metadata: JSON.stringify(getStorage().getState().sessions.s1?.metadata ?? {}),
@@ -733,12 +737,13 @@ describe('Neighboring user Run Stop admission', () => {
             return async () => { await act(async () => screen.findByTestId('session-subagent-actions:execution_run:run_1')!.props.onSelect('stop')); };
         }
         const { router } = await import('expo-router');
-        router.setParams(surface === 'machine' ? { id: 'm1', serverId } : {});
+        // Runs now live on the Machine's Project work sub-page, not its Overview.
+        router.setParams(surface === 'machine' ? { id: 'm1', page: 'work', serverId } : {});
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
         const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl);
         const Screen = surface === 'runs' ? (await import('@/app/(app)/runs')).default
-            : (await import('@/app/(app)/machines/[id]')).WorkspaceRouteBody;
+            : (await import('@/app/(app)/machines/[id]/[page]')).WorkspaceRouteBody;
         screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><AppPaneProvider><Screen /></AppPaneProvider></InjectedAuthProvider>);
         await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length,
             screen.getTextContent()).toBeGreaterThan(0));
@@ -778,15 +783,14 @@ describe('Neighboring user Run Stop admission', () => {
         await stop();
         expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1);
         expect(vi.mocked(Modal.confirm)).toHaveBeenCalledOnce();
-        // The canonical Machine page enters the public Session-stop strategy;
-        // this fixture reaches its runner fallback. The Runs page retains its daemon
-        // fallback, so assert each real strategy's exact Home and target.
-        const method = surface === 'machine' ? RPC_METHODS.KILL_SESSION : RPC_METHODS.STOP_SESSION;
+        // Both surfaces reach the real daemon Session-stop producer. A valid
+        // stopped response must not fall through to a second runner stop.
+        const method = RPC_METHODS.STOP_SESSION;
         await vi.waitFor(() => expect(calls(method)).toHaveLength(1));
         expect(boundary.requests.filter(request => request.method === method)).toEqual([
-            { serverUrl: home.homes.home!.serverUrl, targetId: surface === 'machine' ? 's1' : 'm1', method,
-                payload: surface === 'machine' ? {} : { sessionId: 's1' } },
+            { serverUrl: home.homes.home!.serverUrl, targetId: 'm1', method, payload: { sessionId: 's1' } },
         ]);
+        expect(calls(RPC_METHODS.KILL_SESSION)).toEqual([]);
     });
 });
 
