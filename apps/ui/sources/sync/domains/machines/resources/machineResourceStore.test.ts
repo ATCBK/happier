@@ -38,6 +38,28 @@ async function settle() { for (let turn = 0; turn < 8; turn++) await Promise.res
 describe('machine resources subscription owner', () => {
     afterEach(() => { vi.useRealTimers(); });
 
+    it('holds the last measured CPU across unreported samples without filling history gaps or another machine', async () => {
+        const h = harness();
+        const missing = snapshot(75_000);
+        missing.sample!.cpu = { reported: false, reason: 'unavailable' };
+        missing.series5m.cpu = [{ t: 75_000, y: null }];
+        await h.store.read(key);
+        h.snapshotClient.mockResolvedValueOnce({ ok: true, value: missing });
+        await h.store.read(key);
+        expect(h.store.getState(key).summary?.cpu.busyPct).toBe(20);
+        expect(h.store.getState(key).snapshot?.sample?.cpu.reported).toBe(false);
+        expect(h.store.getState(key).summary?.cpu.series.at(-1)?.y).toBeNull();
+        h.snapshotClient.mockResolvedValueOnce({ ok: true, value: missing });
+        await h.store.read({ ...key, machineId: 'never-measured' });
+        expect(h.store.getState({ ...key, machineId: 'never-measured' }).summary?.cpu.busyPct).toBeNull();
+        const recovered = snapshot(90_000);
+        recovered.sample!.cpu = { reported: true, busyPct: 0 };
+        h.snapshotClient.mockResolvedValueOnce({ ok: true, value: recovered });
+        await h.store.read(key);
+        expect(h.store.getState(key).summary?.cpu.busyPct).toBe(0);
+        h.store.reset();
+    });
+
     it('retains the typed read refusal for diagnosis and clears it after recovery', async () => {
         const h = harness();
         h.snapshotClient.mockResolvedValueOnce({ ok: false, reason: 'request_failed', errorCode: 'action_disabled' });

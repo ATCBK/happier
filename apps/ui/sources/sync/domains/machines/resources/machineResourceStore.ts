@@ -93,7 +93,8 @@ function applySnapshot(state: MachineResourceState, incoming: MachineVitalsSnaps
     const projected = projectMachineResourceSummaryV1(snapshot);
     const summary = state.summary && projected ? retain(state.summary, {
         ...projected,
-        cpu: retain(state.summary.cpu, projected.cpu), memory: retain(state.summary.memory, projected.memory),
+        // Missing samples stay gaps in history; the figure keeps the last measurement.
+        cpu: retain(state.summary.cpu, { ...projected.cpu, busyPct: projected.cpu.busyPct ?? state.summary.cpu.busyPct }), memory: retain(state.summary.memory, projected.memory),
         disk: retain(state.summary.disk, projected.disk), network: retain(state.summary.network, projected.network),
     }) : projected;
     const next: MachineResourceState = { status: 'ready', snapshot, summary, stale: false, samples: sample ? appendSamples(state.samples, [sample]) : state.samples };

@@ -78,7 +78,8 @@ export const MachineSummaryStrip = React.memo(function MachineSummaryStrip(props
                     layout={layout}
                     // One caption names the instruments; labels return only where one or four metrics show (MPG-20).
                     labelled={props.layout === 'tiles' || ((props.layout === 'under' || props.layout === 'preview') && (shown.length === 1 || shown.length === 4))}
-                    neverSampled={props.availability?.kind === 'never_sampled'}
+                    neverSampled={props.availability?.kind === 'never_sampled'
+                        || props.availability?.kind === 'reporting' && !instruments?.[metric]?.figure}
                     color={theme.colors.text.secondary}
                 />
             ))}
