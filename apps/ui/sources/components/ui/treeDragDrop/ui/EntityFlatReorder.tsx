@@ -98,6 +98,10 @@ type FlatContext = Readonly<{
     getBounds(): WindowBounds | null;
     measure(): Promise<void>;
     autoscroll(pointer: WindowPointer): void;
+    /** The last place a row of this list admitted a carried source, so a pending move can settle there. */
+    resolved: React.MutableRefObject<Readonly<{ sourceId: string; position: AnchoredListPositionV1 }> | null>;
+    /** The row released and waiting at its new slot for its owner's list to show the move. */
+    landedItemId: string | null;
 }>;
 const FlatContext = React.createContext<FlatContext | null>(null);
 
@@ -187,19 +191,54 @@ export function EntityFlatReorderList(props: Readonly<{
         return () => { window.removeEventListener('scroll', refresh, true); window.removeEventListener('resize', refresh); };
     }, [measure]);
     const pointerInteraction = isHoverCapablePrimaryPointer();
-    const context = React.useMemo(() => ({ id, runtime, binding: props.binding, organizing, pointerInteraction, registry, getBounds, measure, autoscroll }), [id, runtime, props.binding, organizing, pointerInteraction, registry, getBounds, measure, autoscroll]);
+    const resolved = React.useRef<FlatContext['resolved']['current']>(null);
+    // A released row waits where it was dropped until its owner's list shows the move (or the move is refused):
+    // the owner's acknowledged write lands after the drag runtime has settled, and the old slot would read as ignored.
+    const orderKey = props.binding.items.map(item => item.id).join('\u0000');
+    const orderRef = React.useRef(orderKey);
+    orderRef.current = orderKey;
+    const [landed, setLanded] = React.useState<Readonly<{ itemId: string; position: AnchoredListPositionV1; baseOrder: string }> | null>(null);
+    React.useEffect(() => runtime.subscribe(() => {
+        const snapshot = runtime.getSnapshot();
+        const itemId = latest.current.binding.items.find(item => rowSourceId({ id }, item.id) === snapshot.sourceId)?.id ?? null;
+        if (snapshot.phase === 'pending' && itemId !== null && resolved.current?.sourceId === itemId) {
+            const { position } = resolved.current;
+            setLanded(previous => previous ?? { itemId, position, baseOrder: orderRef.current });
+        } else if (snapshot.phase === 'carrying' || (snapshot.phase === 'settled' && snapshot.outcome?.status !== 'applied')) setLanded(null);
+    }), [runtime, id]);
+    React.useEffect(() => { if (landed && landed.baseOrder !== orderKey) setLanded(null); }, [landed, orderKey]);
+    const landedItemId = landed?.itemId ?? null;
+    const context = React.useMemo(() => ({ id, runtime, binding: props.binding, organizing, pointerInteraction, registry, getBounds, measure, autoscroll, resolved, landedItemId }), [id, runtime, props.binding, organizing, pointerInteraction, registry, getBounds, measure, autoscroll, landedItemId]);
+    const children = React.useMemo(
+        () => projectFlatChildren(props.children, props.binding.items.map(item => item.id), landed),
+        [props.children, props.binding.items, landed],
+    );
     // Organize is for coarse pointers only, and only when there is something to organize: hover-capable
     // pointers already have the grip on every row (lab K1h; a control with an empty target set is hidden).
     const canOrganize = !pointerInteraction && props.binding.scope !== null && props.binding.items.length > 1;
     return <FlatContext.Provider value={context}>
         <View ref={node} testID={props.testID} onLayout={() => { void measure(); }}>
-            {props.children}
+            {children}
             <FlatFeedback context={context} testID={props.testID} />
         </View>
         {canOrganize ? <RoundButton testID={`${props.testID}.organize`} size="small" display="secondary"
             title={t(organizing ? 'entityDragDrop.organize.done' : 'entityDragDrop.organize.enter')}
             onPress={() => { if (props.binding.items.some(item => rowSourceId(context, item.id) === runtime.getSnapshot().sourceId)) runtime.cancel('organize-exit'); setOrganizing(value => !value); }} /> : null}
     </FlatContext.Provider>;
+}
+
+/**
+ * The list's rows, in the order a landed move will leave them (rows are keyed by their item id). The rows always go
+ * through the same key normalisation, so a row keeps its identity whether or not a move is waiting; the order is
+ * left alone when any row is not keyed by an item id.
+ */
+function projectFlatChildren(children: React.ReactNode, ids: readonly string[], landed: Readonly<{ itemId: string; position: AnchoredListPositionV1 }> | null): React.ReactNode {
+    const rows = React.Children.toArray(children);
+    if (!landed) return rows;
+    const next = resolveAnchoredListMoveV1(ids, landed.itemId, landed.position);
+    const keyOf = (row: React.ReactNode) => React.isValidElement(row) && typeof row.key === 'string' ? row.key.slice(row.key.lastIndexOf('$') + 1) : null;
+    if (!next || rows.some(row => keyOf(row) === null || !ids.includes(keyOf(row)!))) return rows;
+    return [...rows].sort((a, b) => next.indexOf(keyOf(a)!) - next.indexOf(keyOf(b)!));
 }
 
 function rowTargetId(context: Pick<FlatContext, 'id'>, id: string): string { return JSON.stringify([context.id, 'target', id]); }
@@ -224,6 +263,8 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
     const sourceId = rowSourceId(context, id);
     const targetId = rowTargetId(context, id);
     const active = useEntityDragSourceState(runtime, sourceId);
+    // Released and waiting: at its new slot and half-dimmed until the owner's list shows it.
+    const waiting = active.phase === 'pending' || context.landedItemId === id;
     const settledMatch = React.useMemo(() => ({ sourceId }), [sourceId]);
     const [chooserOpen, setChooserOpen] = React.useState(false);
     const rowNode = React.useRef<View>(null);
@@ -256,6 +297,7 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
             const parsed = AnchoredListPositionV1Schema.safeParse(destination);
             const position = pointer && bounds ? resolveEntityFlatRowPosition(id, bounds, pointer) : parsed.success ? parsed.data : null;
             resolvedPosition.current = position;
+            if (position) latest.current.resolved.current = { sourceId: source, position };
             return position ? latest.current.binding.resolve(source, position) : entityReorderRefused('reorder_target_gone');
         }, execute: effect => latest.current.binding.execute(effect), autoscroll: context.autoscroll });
     React.useEffect(() => () => registry.unregisterRow(id), [registry, id]);
@@ -361,7 +403,7 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
             const list = latest.current.getBounds();
             if (row && list) registry.registerRow({ id, containerId: context.id, parentId: null, depth: 0, kind: 'leaf', bounds: { x: row.x - list.x, y: row.y - list.y, width: row.width, height: row.height } });
         });
-    }} style={{ opacity: active.active ? HAPPIER_CARRIED_SOURCE_OPACITY : 1 }}>
+    }} style={{ opacity: waiting ? PENDING_SOURCE_OPACITY : active.active ? HAPPIER_CARRIED_SOURCE_OPACITY : 1 }}>
         {contents}<FlatRowIndicator runtime={runtime} targetId={targetId} position={resolvedPosition} />
     </View>;
     // Lab ST4: a move its owner refused late stays under this row in words.
@@ -370,10 +412,14 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
     </EntityDropSettledFeedback>;
 }
 
+/** A write on its way: the row sits at its new place, half-dimmed (a carried source is dimmer). */
+const PENDING_SOURCE_OPACITY = 1 - (1 - HAPPIER_CARRIED_SOURCE_OPACITY) / 2;
+
 function FlatRowIndicator(props: Readonly<{ runtime: EntityDragDropRuntime; targetId: string; position: React.RefObject<AnchoredListPositionV1 | null> }>) {
     const edge = React.useSyncExternalStore(props.runtime.subscribe, () => {
         const snapshot = props.runtime.getSnapshot();
-        if (snapshot.phase !== 'carrying' && snapshot.phase !== 'pending') return null;
+        // The insertion line belongs to the carry; once released the row itself shows where it landed.
+        if (snapshot.phase !== 'carrying') return null;
         if (snapshot.targetId !== props.targetId || snapshot.admission?.status !== 'allowed') return null;
         const pointer = props.runtime.getPointer();
         // Semantic admission changes only; this leaf never subscribes to pointer frames.

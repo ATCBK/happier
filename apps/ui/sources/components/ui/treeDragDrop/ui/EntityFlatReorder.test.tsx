@@ -138,7 +138,8 @@ describe('shared flat reorder UI binding', () => {
             await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
             await act(async () => { pan.__handlers.onEnd!({ absoluteX: 10, absoluteY: 90 }, true); });
             expect(runtime.getSnapshot().phase).toBe('pending');
-            expect(screen.root.findAllByType(TreeDropIndicatorLine)).toHaveLength(1);
+            // Released: the insertion line is gone and the row itself shows where it landed (see the next test).
+            expect(screen.root.findAllByType(TreeDropIndicatorLine)).toHaveLength(0);
             await screen.pressByTestIdAsync('grip:a');
             await flushHookEffects({ cycles: 1, frames: 1 });
             expect(screen.root.findAllByType(DropdownMenu).every(menu => !menu.props.open)).toBe(true);
@@ -151,6 +152,31 @@ describe('shared flat reorder UI binding', () => {
             await flushHookEffects({ cycles: 1, frames: 1 });
             expect(screen.root.findAllByType(DropdownMenu).some(menu => menu.props.open)).toBe(true);
         } finally { acknowledgement.resolve(); }
+    });
+
+    it('keeps the released row at its new slot until the owner\'s list shows the move, then follows the owner', async () => {
+        const acknowledgement = createDeferred<void>();
+        const f = fixture(undefined, acknowledgement.promise);
+        const screen = await mount(f);
+        const pan = gesture(screen, 'a');
+        const order = () => [...new Set(screen.root.findAll(node => typeof node.props?.testID === 'string' && node.props.testID.startsWith('grip:'))
+            .map(node => String(node.props.testID)))];
+        try {
+            expect(order()).toEqual(['grip:a', 'grip:b', 'grip:c']);
+            await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+            await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+            await act(async () => { pan.__handlers.onEnd!({ absoluteX: 10, absoluteY: 90 }, true); });
+            expect(runtime.getSnapshot().phase).toBe('pending');
+            expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+        } finally { acknowledgement.resolve(); }
+        await act(async () => { await acknowledgement.promise; });
+        expect(runtime.getSnapshot().phase).toBe('settled');
+        // The drag runtime has settled, but the owner's list has not shown the move yet: the row stays where it landed.
+        expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+        // The owner's own list then carries the move, and the row follows it.
+        f.model.ids = ['b', 'a', 'c'];
+        await act(async () => { screen.tree.update(f.render()); });
+        expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
     });
 
     it('keeps repeated row drops in the foreground list over smaller underlying widget targets', async () => {
