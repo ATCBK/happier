@@ -25,7 +25,7 @@ import { ESCAPE_LAYER_PRIORITIES, EscapeLayerProvider, useEscapeLayer } from '@/
 import { type FocusReturnRef, useRestoreFocusToTrigger } from '@/keyboard/focusReturn';
 import { visuallyHiddenDomStyle } from '@/components/ui/accessibility/visuallyHiddenStyle';
 import { SheetDismissProvider } from './card/sheetDragDismiss';
-import { MODAL_Z_INDEX } from '@/components/ui/overlays/overlayLayers';
+import { MODAL_Z_INDEX, resolveModalWebPortalTarget } from '@/components/ui/overlays/overlayLayers';
 
 const BASE_MODAL_FOCUS_RETURN = { kind: 'activation-time' } as const;
 
@@ -188,9 +188,7 @@ export function BaseModal({
 
         const resolvedWebPortalTarget: ModalPortalTarget = (() => {
             if (webPortalTarget) return webPortalTarget;
-            if (inheritedWebPortalTarget) return inheritedWebPortalTarget;
-            if (typeof document === 'undefined') return null;
-            return document.body ?? null;
+            return resolveModalWebPortalTarget(inheritedWebPortalTarget, typeof document === 'undefined' ? null : document.body ?? null);
         })();
 
         const { Branch: DismissableLayerBranch, Root: DismissableLayer } = radixDismissableLayer!;

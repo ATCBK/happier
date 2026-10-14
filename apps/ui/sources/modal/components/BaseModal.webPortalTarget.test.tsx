@@ -97,6 +97,43 @@ describe('BaseModal web portal target', () => {
         expect((createPortalMock.mock.calls as any[][])[0]?.[1]).toBe(inheritedPortalTarget);
     });
 
+    it('stacks above every screen popover layer: a body-level popover host is not its portal target', async () => {
+        // A dialog opened from inside a popover (Add → Session, Add → confirm) must sit above it whatever
+        // order the screens' popover hosts were appended to the body in.
+        const { BaseModal } = await import('./BaseModal');
+        const { ModalPortalTargetProvider } = await import('@/modal/portal/ModalPortalTarget');
+        const previousDocument = (globalThis as any).document;
+
+        createPortalMock.mockReset();
+        const body = { nodeType: 1, style: {} };
+        (globalThis as any).document = {
+            body,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            activeElement: null,
+        } as any;
+        const screenPopoverHost = {
+            nodeType: 1,
+            parentElement: body,
+            hasAttribute: (name: string) => name === 'data-happy-popover-portal-host',
+        } as unknown as Element;
+
+        try {
+            await renderScreen(
+                <ModalPortalTargetProvider target={screenPopoverHost}>
+                    <BaseModal visible={true}>
+                        <div />
+                    </BaseModal>
+                </ModalPortalTargetProvider>,
+            );
+        } finally {
+            (globalThis as any).document = previousDocument;
+        }
+
+        expect(createPortalMock).toHaveBeenCalled();
+        expect((createPortalMock.mock.calls as any[][])[0]?.[1]).toBe(body);
+    });
+
     it('renders into the provided web portal target when supplied', async () => {
         const { BaseModal } = await import('./BaseModal');
         const { ModalPortalTargetProvider } = await import('@/modal/portal/ModalPortalTarget');
