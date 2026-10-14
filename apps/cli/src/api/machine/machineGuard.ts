@@ -2,6 +2,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions';
 import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { MACHINE_GUARD_ACTION_INPUT_SCHEMAS, MACHINE_GUARD_ACTION_OUTPUT_SCHEMAS, type MachineGuardActionId } from '@happier-dev/protocol/actions/specs/machineGuard';
 import { executeCapturedMachineAction } from './capturedMachineAction';
+import { resolveMachineGuardOperationTimeoutMs } from '@happier-dev/protocol/machines/guard/actionIdsV1';
 
 /** The existing exact-Machine transport owns credentials, admission, and Home placement. */
 export async function executeMachineGuardAction(input: Readonly<{
@@ -14,8 +15,7 @@ export async function executeMachineGuardAction(input: Readonly<{
   const raw = await executeCapturedMachineAction({ actionId: input.actionId, assertCurrent: input.assertCurrent,
     invoke: options => input.call({ machineId: request.machineId, method: getActionSpec(input.actionId).bindings!.rpcMethod!,
       input: { ...request, serverId: input.serverId }, ...options,
-      // The composed census and live Session reads follow caller cancellation, not a generic acknowledgement cutoff.
-      ...(input.actionId === 'machines.guard.get' ? { timeoutMs: null } : {}) }) });
+      ...(resolveMachineGuardOperationTimeoutMs(input.actionId) === null ? { timeoutMs: null } : {}) }) });
   const failure = ActionExecuteFailureSchema.safeParse(raw);
   if (failure.success) return failure.data;
   const deferred = ActionApprovalRequestCreatedResultSchema.safeParse(raw);
