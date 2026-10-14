@@ -1,4 +1,7 @@
 import * as z from 'zod/mini';
+import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from './actionStartDiagnostics.js';
+export { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from './actionStartDiagnostics.js';
+export type { ActionStartDiagnosticV1, ActionStartPhaseV1 } from './actionStartDiagnostics.js';
 import { admitAgentStartV1, AgentStartSessionCallerV1Schema, type AgentStartFactsV1, type AgentStartContextV1, type AgentStartRequestV1, type Unresolved } from '../../account/settings/admitAgentStartV1.js';
 import { SessionAgentSpawnPolicyV1StrictSchema } from '../../account/settings/sessionAgentSpawnPolicyV1.js';
 import { BackendTargetKeyV2Schema, PersistedBackendTargetRefV2Schema, buildBackendTargetKeyV2, parseBackendTargetKeyV2, type PersistedBackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
@@ -404,14 +407,19 @@ export function spawnStartFactsV1(input: Readonly<SpawnStartFactsInput>): AgentS
     };
 }
 export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutorDeps, 'resolveAgentStartContext'> & Partial<Pick<ActionExecutorDeps, 'sessionList'>>, context: ActionExecutorContext, targetSessionId?: string) {
-    let resolved = context.agentStartContext ?? await deps.resolveAgentStartContext?.(context) ?? null;
+    let resolved = context.agentStartContext ?? await measureActionStartPhaseV1(context, 'agent_start_context',
+      async () => await deps.resolveAgentStartContext?.(context) ?? null);
     if (context.actionCaller?.kind === 'session') {
         const caller = context.actionCaller;
-        if (!resolved || resolved.caller.kind !== 'session' || resolved.caller.sessionId !== caller.sessionId)
+        if (!resolved || resolved.caller.kind !== 'session' || resolved.caller.sessionId !== caller.sessionId) {
+            if (resolved) context.recordActionStartDiagnostic?.({ phase: 'agent_start_context', refusalReason: 'caller_witness_invalid' });
             return null;
+        }
         const original = AgentStartSessionCallerV1Schema.safeParse(caller);
-        if (!original.success)
+        if (!original.success) {
+            context.recordActionStartDiagnostic?.({ phase: 'agent_start_context', refusalReason: 'caller_witness_invalid' });
             return null;
+        }
         resolved = { ...resolved, caller: original.data };
     }
     if (!resolved || targetSessionId === undefined)
@@ -428,10 +436,12 @@ export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutor
 export function admitActionAgentStartV1(context: ActionExecutorContext, request: AgentStartRequestV1, resolved: AgentStartContextV1 | null) {
     const policy = SessionAgentSpawnPolicyV1StrictSchema.safeParse(context.sessionAgentSpawnPolicyV1 ?? {});
     if (!resolved || !policy.success)
-        return { ok: false as const, refusal: { code: 'target_unavailable' as const }, error: {
-                ok: false as const, errorCode: 'target_unavailable', error: 'target_unavailable',
-            } satisfies ActionExecuteFailure };
+        return { ok: false as const, refusal: { code: 'target_unavailable' as const },
+            error: actionStartTargetUnavailableV1(context, 'agent_start_context',
+              !resolved ? 'agent_start_context_unavailable' : 'spawn_policy_invalid') };
     const admission = admitAgentStartV1(policy.data, request, resolved);
+    if (!admission.ok && admission.refusal.code === 'target_unavailable' && admission.refusal.reason)
+        context.recordActionStartDiagnostic?.({ phase: 'agent_start_context', refusalReason: admission.refusal.reason });
     return admission.ok ? admission : { ok: false as const, refusal: admission.refusal, error: {
             ok: false as const, errorCode: admission.refusal.code, error: admission.refusal.code, details: admission.refusal,
         } satisfies ActionExecuteFailure };

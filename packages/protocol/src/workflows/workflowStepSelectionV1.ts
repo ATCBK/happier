@@ -73,7 +73,7 @@ export function resolveWorkflowStepSelectionV1(input: ResolveWorkflowStepSelecti
       const target = targetKey.success ? parseBackendTargetKeyV2(targetKey.data) : null;
       const identity = target?.kind === 'agent' ? target.identity : parseQualifiedPluginContributionKey(role.engine?.agentTargetKey);
       if (identity === null || role.engine === undefined) {
-        throw new WorkflowStepSelectionErrorV1({ code: 'target_unavailable', roleId: role.roleId });
+        throw new WorkflowStepSelectionErrorV1({ code: 'target_unavailable', reason: 'engine_unavailable', roleId: role.roleId });
       }
       selection.agentTarget = { kind: 'agent', identity };
       if (role.engine.modelId !== undefined) {

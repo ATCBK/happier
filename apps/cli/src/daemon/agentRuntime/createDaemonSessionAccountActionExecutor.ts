@@ -13,6 +13,11 @@ import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { logger } from '@/ui/logger';
+import type { StoredCredentials } from '@/persistence';
+import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import { resolveCliActionCallerWorkflowTarget } from '@/session/actions/resolveCliActionCallerSession';
+import { WorkflowActionFailureV1Schema, WorkflowTargetUnavailableDetailsV1Schema, type WorkflowTargetUnavailableReasonV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import type { ActionStartDiagnosticV1, ActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 
 type SessionActionOperation = Extract<AgentRuntimeDaemonServiceRequestV1['operation'], { kind: 'action.execute' }>;
 type SessionActionAuthority = Readonly<{ sessionId: string; isCurrent(): Promise<boolean>; signal?: AbortSignal }>;
@@ -28,6 +33,17 @@ type SessionAccountActionRefusalReason =
   | 'external_authorization_binding_mismatch'
   | 'external_authorization_preparation_failed'
   | 'action_executor_refused';
+/** The single content-free projection for the existing Session Action refusal line. */
+export function logDaemonSessionAccountActionRefusalV1(operation: SessionActionOperation, sessionId: string,
+  diagnostic: Readonly<{ reason: SessionAccountActionRefusalReason; errorCode?: 'target_unavailable';
+    refusalCode?: 'target_unavailable'; refusalReason?: WorkflowTargetUnavailableReasonV1;
+    refusalPhase?: ActionStartPhaseV1; elapsedSubphasesMs?: Partial<Record<ActionStartPhaseV1, number>>;
+    requesterRuntimeBound?: boolean }>) {
+  logger.warnLocalFile('[Session Account Action] Refused', {
+    actionId: operation.actionId, sessionId, requestId: operation.requestId, turnId: operation.witness.turnId,
+    ...diagnostic,
+  });
+}
 export type SessionAccountActionAuthorizationPreparation = Readonly<{
   operation: Pick<SessionActionOperation, 'actionId' | 'input' | 'requestId' | 'surface'>;
   authority: SessionActionAuthority;
@@ -35,6 +51,8 @@ export type SessionAccountActionAuthorizationPreparation = Readonly<{
   sessionActionOrigin: SessionActionRpcOriginV1;
   /** Selected by the existing host target owner, never by an author-provided authority field. */
   targetMachineId?: string;
+  /** Caller workspace resolved under authenticated Session custody, before Home minting. */
+  workflowTarget?: Extract<ExternalActionTargetV1, { kind: 'machine' }>;
 }>;
 
 /** Adapts authenticated Session custody to the existing credentialed Account executor. */
@@ -42,8 +60,11 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
   serverId: string;
   serverHttpBaseUrl: string;
   token: string;
+  credentials?: StoredCredentials;
   /** The installed daemon producer, independent of optional public-API proof. */
   machineId?: string;
+  /** Content-free observations from the startup requester-runtime binding. */
+  initialStartDiagnostic?: ActionStartDiagnosticV1;
   createExecutor: (getCurrentTurnWorkDepth: (turnId?: string) => number | undefined,
     isCallerCurrent: () => Promise<boolean>) => Pick<ReturnType<typeof createActionExecutor>, 'execute'>;
   /** Host-only producer of original Home authority; author input cannot install this port. */
@@ -55,9 +76,23 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
     scopeKey: resolveAccountSettingsScopeKeyForToken(params.token),
   }));
   return async (operation: SessionActionOperation, authority: SessionActionAuthority): Promise<ActionExecuteResult> => {
-    const logRefusal = (reason: SessionAccountActionRefusalReason) => logger.warnLocalFile('[Session Account Action] Refused', {
-      actionId: operation.actionId, sessionId: authority.sessionId, requestId: operation.requestId,
-      turnId: operation.witness.turnId, reason,
+    const elapsedSubphasesMs: Partial<Record<ActionStartPhaseV1, number>> = {};
+    let firstRefusal: Pick<ActionStartDiagnosticV1, 'phase' | 'refusalReason'> | undefined;
+    let requesterRuntimeBound: boolean | undefined;
+    const recordActionStartDiagnostic = (event: ActionStartDiagnosticV1) => {
+      if (event.elapsedMs !== undefined && Number.isFinite(event.elapsedMs) && event.elapsedMs >= 0)
+        elapsedSubphasesMs[event.phase] = (elapsedSubphasesMs[event.phase] ?? 0) + event.elapsedMs;
+      if (event.refusalReason && !firstRefusal) firstRefusal = { phase: event.phase, refusalReason: event.refusalReason };
+      if (event.requesterRuntimeBound !== undefined) requesterRuntimeBound = event.requesterRuntimeBound;
+    };
+    if (params.initialStartDiagnostic) recordActionStartDiagnostic(params.initialStartDiagnostic);
+    const logRefusal = (reason: SessionAccountActionRefusalReason, failure?: Readonly<{
+      errorCode: 'target_unavailable'; refusalCode?: 'target_unavailable'; refusalReason?: WorkflowTargetUnavailableReasonV1;
+    }>) => logDaemonSessionAccountActionRefusalV1(operation, authority.sessionId, {
+      reason, ...failure,
+      ...(firstRefusal ? { refusalPhase: firstRefusal.phase, refusalReason: firstRefusal.refusalReason } : {}),
+      elapsedSubphasesMs,
+      ...(requesterRuntimeBound !== undefined ? { requesterRuntimeBound } : {}),
     });
     const refuse = (reason: SessionAccountActionRefusalReason,
       errorCode: 'target_unavailable' | 'cancelled' = 'target_unavailable'): ActionExecuteResult => {
@@ -109,6 +144,7 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
     });
     if (preferenceFailure) return preferenceFailure;
     const context: ActionExecutorContext = {
+      recordActionStartDiagnostic,
       surface: operation.surface ?? 'agent', authority: 'account_automation', serverId: params.serverId,
       actionCaller: caller.data,
       ...(params.machineId ? { defaultSessionMachineId: params.machineId } : {}),
@@ -126,8 +162,18 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
     catch { return refuse('session_action_origin_invalid'); }
     let external: Awaited<ReturnType<NonNullable<typeof params.prepareExternalActionAuthorization>>>;
     try {
+      const credentials = params.credentials;
+      const workflowTarget = operation.actionId === 'workflow.run.start' && credentials
+        ? await runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => resolveCliActionCallerWorkflowTarget({
+          credentials, context,
+          ...(params.machineId ? { target: { kind: 'machine', machineId: params.machineId } as const } : {}),
+          resolveTransportForSession: (sessionId, signal) => resolveSessionTransportContext({ credentials,
+            idOrPrefix: sessionId, ...(signal ? { signal } : {}) }),
+        })) : undefined;
+      if (operation.actionId === 'workflow.run.start' && !workflowTarget) return refuse('external_authorization_preparation_failed');
       external = params.prepareExternalActionAuthorization
-        ? await params.prepareExternalActionAuthorization({ operation, authority, isCallerCurrent, sessionActionOrigin }) : undefined;
+        ? await params.prepareExternalActionAuthorization({ operation, authority, isCallerCurrent, sessionActionOrigin,
+          ...(workflowTarget ? { workflowTarget } : {}) }) : undefined;
     } catch (error) {
       logRefusal('external_authorization_preparation_failed');
       throw error;
@@ -165,7 +211,18 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
       ...(source ? { defaultSessionMachineId: source.machineId } : {}),
       ...(external ? { externalActionExecutionAuthorization: external.authorization, externalActionTarget: external.target } : {}),
     });
-    if (!outcome.ok && outcome.errorCode === 'target_unavailable') logRefusal('action_executor_refused');
+    if (!outcome.ok && outcome.errorCode === 'target_unavailable') {
+      // Only closed Workflow codes/reasons enter the existing diagnostic.
+      // Error text and arbitrary details can contain prompts or credentials.
+      const workflowFailure = operation.actionId === 'workflow.run.start' ? WorkflowActionFailureV1Schema.safeParse(outcome) : null;
+      const targetFailure = workflowFailure?.success && workflowFailure.data.errorCode === 'target_unavailable'
+        ? WorkflowTargetUnavailableDetailsV1Schema.safeParse(workflowFailure.data.details) : null;
+      logRefusal('action_executor_refused', {
+        errorCode: 'target_unavailable',
+        ...(firstRefusal ? { refusalCode: 'target_unavailable' as const } : {}),
+        ...(targetFailure?.success ? { refusalCode: targetFailure.data.code, refusalReason: targetFailure.data.reason } : {}),
+      });
+    }
     return outcome;
   };
 }

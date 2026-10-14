@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RoleArtifactV1Schema, type RoleArtifactV1 } from './roleArtifactV1.js';
 import { WorkflowRoleV1Schema } from './rolesV1.js';
 import { resolveRoleSelectionV1, readSessionWorkspaceWritesV1 } from './resolveRoleSelectionV1.js';
+import { WorkflowActionFailureV1Schema } from '../../workflows/workflowProgressV1.js';
 
 const role: RoleArtifactV1 = { name: 'UI work', instructions: 'Settings instructions', engine: { agentTargetKey: 'agent:claude', modelId: 'settings-model' }, runsAs: { kind: 'session' }, workspaceWrites: 'allow', secondOpinion: 'off', enabled: true };
 
@@ -48,9 +49,13 @@ describe('resolveRoleSelectionV1', () => {
   it('distinguishes unknown/disabled roles from unavailable engines', () => {
     expect(resolveRoleSelectionV1({ roleId: 'unknown' })).toEqual({ ok: false, refusal: { code: 'role_target_unavailable', roleId: 'unknown' } });
     expect(resolveRoleSelectionV1({ roleId: 'disabled', settingsRoles: { disabled: { ...role, enabled: false } } })).toEqual({ ok: false, refusal: { code: 'role_target_unavailable', roleId: 'disabled' } });
-    expect(resolveRoleSelectionV1({ roleId: 'ui', settingsRoles: { ui: role }, availableAgentTargetKeys: ['agent:codex'] })).toEqual({ ok: false, refusal: { code: 'target_unavailable', roleId: 'ui', agentTargetKey: 'agent:claude' } });
+    const unavailable = resolveRoleSelectionV1({ roleId: 'ui', settingsRoles: { ui: role }, availableAgentTargetKeys: ['agent:codex'] });
+    expect(unavailable).toEqual({ ok: false, refusal: { code: 'target_unavailable', reason: 'engine_unavailable', roleId: 'ui', agentTargetKey: 'agent:claude' } });
+    if (unavailable.ok) throw new Error('expected unavailable engine');
+    expect(WorkflowActionFailureV1Schema.safeParse({ ok: false, errorCode: 'target_unavailable',
+      error: 'target_unavailable', details: unavailable.refusal }).success).toBe(true);
     expect(resolveRoleSelectionV1({ roleId: 'builder', defaultEngine: { agentTargetKey: 'agent:codex' }, availableAgentTargetKeys: ['agent:codex'] })).toMatchObject({ ok: true, selection: { engine: { agentTargetKey: 'agent:codex' } } });
-    expect(resolveRoleSelectionV1({ roleId: 'builder', availableAgentTargetKeys: [] })).toEqual({ ok: false, refusal: { code: 'target_unavailable', roleId: 'builder' } });
+    expect(resolveRoleSelectionV1({ roleId: 'builder', availableAgentTargetKeys: [] })).toEqual({ ok: false, refusal: { code: 'target_unavailable', reason: 'engine_unavailable', roleId: 'builder' } });
   });
 
   it('falls through unset fields without letting another role id override the selection', () => {

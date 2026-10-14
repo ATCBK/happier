@@ -86,6 +86,11 @@ export type MaterializedWorkflowLeafV1 = Readonly<{
 
 export type AgentStartRequestV1 =
   | Readonly<{ kind: 'spawn_new'; facts: AgentStartFactsV1; targetSessionId?: string; roleId?: string }>
+  // A Run with no Agent starts still spends placement, permission and depth
+  // authority. It has no child engine or fabricated admission leaf.
+  | Readonly<{ kind: 'workflow_run'; targetSessionId?: string; facts: Readonly<{
+    machineId: string; directory: string; permissionMode: AgentPermissionIntentV1;
+  }> }>
   | Readonly<{ kind: 'execution_run'; facts: AgentStartFactsV1; source: 'execution_run' | 'review' | 'subagents_plan' | 'subagents_delegate' | 'voice_agent'; roleId?: string; backendTargets: readonly PersistedBackendTargetRefV2[]; intent: ExecutionRunIntent }>
   | (Readonly<{ kind: 'workflow_run_leaf'; targetSessionId?: string }> & (
     Readonly<{ leaf: MaterializedWorkflowLeafV1; selection?: undefined }>
@@ -143,15 +148,19 @@ export const AGENT_START_REFUSAL_CODES_V1 = [
 ] as const;
 export type AgentStartRefusalV1 = Readonly<{
   code: (typeof AGENT_START_REFUSAL_CODES_V1)[number];
+  reason?: 'selection_unavailable' | 'profile_unavailable' | 'engine_unavailable';
   field?: string;
   roleId?: string;
+  agentTargetKey?: string;
   blockId?: string;
   cause?: AgentStartRefusalV1;
 }>;
 export const AgentStartRefusalV1Schema: z.ZodType<AgentStartRefusalV1> = lazyZodSchema(() => z.object({
   code: z.enum(AGENT_START_REFUSAL_CODES_V1),
+  reason: z.enum(['selection_unavailable', 'profile_unavailable', 'engine_unavailable']).optional(),
   field: z.string().min(1).optional(),
   roleId: z.string().min(1).optional(),
+  agentTargetKey: z.string().min(1).optional(),
   blockId: z.string().min(1).optional(),
   cause: z.lazy(() => AgentStartRefusalV1Schema).optional(),
 }).strict());
@@ -220,22 +229,23 @@ export function admitAgentStartV1(
     materialized?: MaterializedWorkflowLeafV1,
     requestedIntent?: ExecutionRunIntent,
     deferredSelection = false,
+    requiresAgentSelection = true,
   ): AgentStartAdmissionV1 => {
     const role = roleId === undefined ? undefined : context.roles[roleId];
     if (roleId !== undefined && (!role || !role.enabled)) return refuse({ code: 'role_target_unavailable', roleId });
     if (role && directKind && role.runsAs.kind !== (directKind === 'spawn_new' ? 'session' : 'background_run')) {
       return refuse({ code: 'role_runs_as_mismatch', roleId });
     }
-    if (role?.profileUnavailable) return refuse({ code: 'target_unavailable', roleId });
+    if (role?.profileUnavailable) return refuse({ code: 'target_unavailable', reason: 'profile_unavailable', roleId });
     const engine = materialized?.engine ?? role?.engine;
-    if (role && directKind && !engine) return refuse({ code: 'target_unavailable', roleId });
+    if (role && directKind && !engine) return refuse({ code: 'target_unavailable', reason: 'engine_unavailable', roleId });
     let effectiveFacts = facts;
     let effectiveTargets = targets;
     if (engine) {
       const parsedTarget = (() => {
         try { return parseBackendTargetKeyV2(engine.agentTargetKey); } catch { return null; }
       })();
-      if (!parsedTarget) return refuse({ code: 'target_unavailable', ...(roleId ? { roleId } : {}) });
+      if (!parsedTarget) return refuse({ code: 'target_unavailable', reason: 'engine_unavailable', ...(roleId ? { roleId } : {}) });
       if (directKind) {
         const inheritedModel = modelRef(baseline.configuration?.modelSelection);
         const providerConnectionId = inheritedModel && !isUnresolved(inheritedModel)
@@ -286,12 +296,13 @@ export function admitAgentStartV1(
       return refuse({ code: 'policy_denied_field', field: 'roleId' });
     }
     const effectiveTarget = effectiveFacts.agentTarget ?? baseline.configuration?.agentTarget;
-    if (!deferredSelection && (Object.values(effectiveFacts).some(isUnresolved) || !effectiveTarget || isUnresolved(effectiveTarget))) {
-      return refuse({ code: 'target_unavailable' });
+    if (!deferredSelection && (Object.values(effectiveFacts).some(isUnresolved)
+      || requiresAgentSelection && (!effectiveTarget || isUnresolved(effectiveTarget)))) {
+      return refuse({ code: 'target_unavailable', reason: 'selection_unavailable' });
     }
     const allowedAgentTargetKeys = allowLists.allowedAgentTargetKeys;
     const knownTargets = effectiveTarget && !isUnresolved(effectiveTarget) ? [effectiveTarget, ...effectiveTargets] : effectiveTargets;
-    if (context.initiator !== 'user' && allowedAgentTargetKeys !== null && knownTargets
+    if (requiresAgentSelection && context.initiator !== 'user' && allowedAgentTargetKeys !== null && knownTargets
       .some((target) => !allowedAgentTargetKeys.includes(buildBackendTargetKeyV2(target)))) {
       return refuse({ code: 'policy_denied_field', field: 'agentTarget' });
     }
@@ -299,8 +310,8 @@ export function admitAgentStartV1(
       : context.initiator !== 'user' && !assertNonEscalatingPermissionMode({ requestedMode: permissionMode, callerMode: context.callerPermissionCeiling }).ok) {
       return refuse({ code: 'permission_exceeds_ceiling' });
     }
-    if (deferredSelection) return { ok: true, stamped: { workDepth } };
-    if (!effectiveTarget || isUnresolved(effectiveTarget)) return refuse({ code: 'target_unavailable' });
+    if (deferredSelection || !requiresAgentSelection) return { ok: true, stamped: { workDepth } };
+    if (!effectiveTarget || isUnresolved(effectiveTarget)) return refuse({ code: 'target_unavailable', reason: 'selection_unavailable' });
     const selection = modelRef(effectiveFacts.modelSelection ?? baseline.configuration?.modelSelection);
     const stampedEngine: RoleEngineV1 = engine ?? {
       agentTargetKey: buildBackendTargetKeyV2(effectiveTarget),
@@ -330,7 +341,9 @@ export function admitAgentStartV1(
     }
     return { ok: true, stamped: { workDepth } };
   }
-  const admission = request.kind === 'workflow_run_leaf'
+  const admission = request.kind === 'workflow_run'
+    ? checkSelection(request.facts, undefined, undefined, [], undefined, undefined, false, false)
+    : request.kind === 'workflow_run_leaf'
     ? checkSelection(request.leaf.facts, request.leaf.roleId, undefined, [], request.leaf, undefined, request.selection === 'deferred')
     : checkSelection(request.facts, request.roleId, request.kind, request.kind === 'execution_run' ? request.backendTargets : [], undefined, request.kind === 'execution_run' ? request.intent : undefined);
   if (!admission.ok) return admission;
