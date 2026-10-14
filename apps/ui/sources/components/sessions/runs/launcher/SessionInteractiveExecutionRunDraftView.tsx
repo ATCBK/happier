@@ -8,6 +8,8 @@ import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { backendTargetKeysMatch } from '@/agents/backendCatalog/backendTargetKeyV2';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { buildRolesRailPickerOption, ROLES_RAIL_PICKER_OPTION_ID } from '@/components/roles/rail/buildRolesRailPickerOption';
 import type { RoleRailItem } from '@/components/roles/rail/rolesRailTypes';
@@ -56,6 +58,7 @@ import { ExecutionRunLauncherOptions } from './ExecutionRunLauncherOptions';
 import {
     resolveExecutionRunLaunchTitle,
     resolveExecutionRunLauncherActionId,
+    resolveExecutionRunTargetFieldPath,
     type ExecutionRunIntent,
 } from './executionRunLauncherModel';
 import { createExecutionRunReportChip, createExecutionRunReviewerChip, createExecutionRunStartContentChip } from './executionRunStartChips';
@@ -79,7 +82,14 @@ import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composerRef
 import { useExecutionRunLaunchContext } from './useExecutionRunLaunchContext';
 import { useExactModelChoice } from '@/components/sessions/modelPicker/useExactModelChoice';
 import { useExecutionRunChildChoice } from './useExecutionRunChildChoice';
-import { applyExecutionRunChildSelection, type ExecutionRunChildSelection } from './executionRunChildChoice';
+import {
+    applyExecutionRunChildSelection,
+    clearExecutionRunChildSelection,
+    readExecutionRunChildChoice,
+    readExecutionRunFanoutMembers,
+    type ExecutionRunChildSelection,
+} from './executionRunChildChoice';
+import { ExecutionRunExactModelRow } from './ExecutionRunExactModelRow';
 import { ExecutionRunChildChoiceCard } from './ExecutionRunChildChoiceCard';
 
 type DraftIdentity = Readonly<{ correlationId: string; inputLocalId: string }>;
@@ -310,16 +320,27 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
      * canonical Action (several reviewers fan out there). The captured message is accepted only once
      * the Action returns a Run; a refusal leaves the draft as it was.
      */
+    const submitBoundedStartRef = React.useRef<(
+        boundedIntent: ExecutionRunIntent,
+        submission: ParticipantComposerPreparedSubmission,
+        retry?: Readonly<{ selection: ExecutionRunChildSelection; targetKeys?: readonly string[] }>,
+    ) => Promise<void>>();
     const submitBoundedStart = React.useCallback(async (
         boundedIntent: ExecutionRunIntent,
         submission: ParticipantComposerPreparedSubmission,
+        retry?: Readonly<{ selection: ExecutionRunChildSelection; targetKeys?: readonly string[] }>,
     ) => {
         if (submitInFlightRef.current) throw new Error(t('common.loading'));
-        const input: Record<string, unknown> = {
+        const targetFieldPath = resolveExecutionRunTargetFieldPath(boundedIntent);
+        const drafted: Record<string, unknown> = {
             ...actionInput,
             instructions: submission.text,
             ...(secretOverlayState.overlay ? { secretReferenceOverlay: secretOverlayState.overlay } : {}),
         };
+        // A chosen default or model is a fresh start of the refused targets only (D9).
+        const input = retry
+            ? applyExecutionRunChildSelection(retry.targetKeys ? { ...drafted, [targetFieldPath]: retry.targetKeys } : drafted, retry.selection)
+            : drafted;
         const validationError = resolveActionInputValidationError({
             sessionId: props.sessionId,
             input,
@@ -334,24 +355,33 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             throw new Error(t('common.unavailable'));
         }
         submitInFlightRef.current = true;
+        childChoice.begin();
         setError(null);
         setPhase('starting');
         try {
             const result = await startAction(options.actionId, input, identity.correlationId);
-            const output = result.ok && result.result && typeof result.result === 'object'
-                ? result.result as { results?: readonly { key?: unknown; ok?: boolean; result?: { runId?: unknown } }[] }
-                : null;
+            const members = readExecutionRunFanoutMembers(result);
+            // A target whose Agent can't follow this Session asks D9's question, with host proof that
+            // nothing started for it. Members that started keep their Runs and members of unknown
+            // outcome stay unknown: the draft keeps only the refused targets, so neither starts again.
+            const refused = members.filter((member) => member.choice !== null);
+            if (refused.length > 0) {
+                const refusedKeys = refused.length < members.length ? refused.map((member) => member.key) : undefined;
+                if (refusedKeys) setActionInput((previous) => ({ ...previous, [targetFieldPath]: refusedKeys }));
+                childChoice.offer(refused[0]!.choice, (selection) => submitBoundedStartRef.current?.(
+                    boundedIntent, submission, { selection, ...(refusedKeys ? { targetKeys: refusedKeys } : {}) }) ?? Promise.resolve());
+                throw new ParticipantComposerSubmissionHeld();
+            }
             // Several reviewers start as one group (`display.groupId`); its pane shows them all, so
             // any member that started opens it, and the start is accepted. Members that didn't
             // start are said out loud, not dropped; only a start where none did is refused.
-            const runId = output?.results?.find((item) => item.ok === true)?.result?.runId;
-            if (typeof runId !== 'string' || !runId.trim()) {
+            const runId = members.find((member) => member.runId !== null)?.runId;
+            if (!runId) {
                 throw new Error(resolveActionExecutionFailureMessage(result, t('common.requestFailed')) ?? t('common.requestFailed'));
             }
-            const notStarted = (output?.results ?? []).filter((item) => item.ok !== true).map((item) => {
-                const key = typeof item.key === 'string' ? item.key : '';
-                return options.backendChoices.find((choice) => choice.targetKey === key)?.title ?? key;
-            });
+            const notStarted = members.filter((member) => member.runId === null).map((member) => (
+                options.backendChoices.find((choice) => choice.targetKey === member.key || choice.backendId === member.key)?.title ?? member.key
+            ));
             submission.onOutboundHandoff();
             setPhase('idle');
             props.onRunStarted(runId, undefined, {
@@ -368,6 +398,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             }
         } catch (cause) {
             setPhase('idle');
+            if (cause instanceof ParticipantComposerSubmissionHeld) throw cause;
             const failureLabelKey = getSessionInputFailureLabelKey(cause);
             setError(failureLabelKey
                 ? t(failureLabelKey)
@@ -376,7 +407,9 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         } finally {
             submitInFlightRef.current = false;
         }
-    }, [accountLifetime, startAction, identity.correlationId, actionInput, options.actionId, options.actionSpec, options.backendChoices, options.fields, props.onRunStarted, props.sessionId, secretOverlayState.overlay, secretOverlayState.readiness.ok, teamCredential.available]);
+    }, [accountLifetime, childChoice.begin, childChoice.offer, startAction, identity.correlationId, actionInput, options.actionId, options.actionSpec, options.backendChoices, options.fields, props.onRunStarted, props.sessionId, secretOverlayState.overlay, secretOverlayState.readiness.ok, teamCredential.available]);
+
+    submitBoundedStartRef.current = submitBoundedStart;
 
     const submitConversationStartRef = React.useRef<(submission: ParticipantComposerPreparedSubmission, childSelection?: ExecutionRunChildSelection) => Promise<void>>();
     const submitConversationStart = React.useCallback(async (submission: ParticipantComposerPreparedSubmission,
@@ -442,7 +475,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                         && readExecutionRunStartRunCreation(started.details) === 'noRunCreated';
                     // The Agent can't follow this Session's route (D9): the draft stays and the
                     // chooser asks for its default or an exact model; that choice is a fresh start.
-                    if (knownNoRun && childChoice.offer(started, (selection) => submitConversationStartRef.current?.(submission, selection) ?? Promise.resolve())) {
+                    if (knownNoRun && childChoice.offer(readExecutionRunChildChoice(started), (selection) => submitConversationStartRef.current?.(submission, selection) ?? Promise.resolve())) {
                         setPhase('idle');
                         throw new ParticipantComposerSubmissionHeld();
                     }
@@ -663,6 +696,46 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             : null
     ), [engineOptions, intent, roleName, rolesRail, selectBackend, selectedChoice]);
 
+    // One exact-model chooser serves both asks: D9's after a refusal (the refused Agent's default or an
+    // exact model), and the Run's own model from the route chip. The route's list loads once asked for.
+    const pendingChildChoice = childChoice.choice;
+    const childChoiceAgent = pendingChildChoice
+        ? options.backendChoices.find((choice) => choiceRunsAgent(choice, pendingChildChoice.agentTargetKey)) ?? null
+        : null;
+    const [routeModelDemanded, setRouteModelDemanded] = React.useState(false);
+    const demandRouteModel = React.useCallback(() => setRouteModelDemanded(true), []);
+    const draftModelSelection = React.useMemo(() => {
+        const parsed = ProviderBoundModelRefSchema.safeParse(actionInput.modelSelection);
+        return parsed.success ? parsed.data : null;
+    }, [actionInput.modelSelection]);
+    const modelChoiceAgent = pendingChildChoice ? childChoiceAgent : intent === 'review' ? null : selectedChoice;
+    const exactModelChoice = useExactModelChoice({
+        agentTargetKey: pendingChildChoice?.agentTargetKey
+            ?? (modelChoiceAgent ? buildBackendTargetKeyV2(modelChoiceAgent.backendTarget) : null),
+        agentId: modelChoiceAgent?.agentId ?? null,
+        machineId,
+        serverId,
+        selected: pendingChildChoice ? null : draftModelSelection,
+        title: pendingChildChoice ? t('session.agentContinuation.childChoice.chooseModel') : t('agentInput.model.title'),
+        fallbackLabel: t('runPage.menu.selectionChoose'),
+        enabled: pendingChildChoice !== null || routeModelDemanded,
+    });
+    const openExactModel = exactModelChoice.open;
+    const chooseChild = childChoice.choose;
+    const startWithChild = React.useCallback((selection: ExecutionRunChildSelection) => {
+        // A failure is already said under the composer by the start itself.
+        chooseChild(selection).catch(() => undefined);
+    }, [chooseChild]);
+    const chooseChildModel = React.useCallback(() => openExactModel((ref) => {
+        if (ref) startWithChild(ref);
+    }), [openExactModel, startWithChild]);
+    const chooseDraftModel = React.useCallback(() => openExactModel((ref) => {
+        setError(null);
+        setActionInput((previous) => (ref ? applyExecutionRunChildSelection(previous, ref) : clearExecutionRunChildSelection(previous)));
+    }), [openExactModel]);
+    const exactModelPresentation = exactModelChoice.presentation;
+    const exactModelSubtitle = [exactModelPresentation.subtitle, exactModelPresentation.detail].filter(Boolean).join(' · ');
+
     const reportToSession = actionInput.notifyParentOnCompletion === true;
     const onPatch = options.onPatch;
     const chipRevision = JSON.stringify([actionInput, editable]);
@@ -768,7 +841,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 title: t('agentInput.model.title'),
                 testID: 'execution-run-start-route-chip',
                 disabled,
-                revision: `${chipRevision}:${routeChoice.label}:${routeChoice.inheritDetail ?? ''}`,
+                revision: `${chipRevision}:${routeChoice.label}:${routeChoice.inheritDetail ?? ''}:${exactModelSubtitle}`,
                 renderContent: () => (
                     <ExecutionRunRouteChoiceContent
                         inherits={inherits}
@@ -776,10 +849,16 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                         inheritDetail={routeChoice.inheritDetail}
                         onInherit={() => {
                             setError(null);
-                            setActionInput(({ modelSelection: _modelSelection, modelId: _modelId, teamCredentialModel: _teamCredentialModel,
-                                connectedServices: _connectedServices, connectedServicesByBackendTargetKey: _byTarget, ...rest }) => rest);
+                            setActionInput(clearExecutionRunChildSelection);
                         }}
-                        chooseContent={hasModelField ? renderOptions(['fields'], (path) => path === 'modelId') : null}
+                        chooseContent={hasModelField ? (
+                            <ExecutionRunExactModelRow
+                                subtitle={exactModelSubtitle}
+                                {...(exactModelPresentation.accessibilityLabel ? { accessibilityLabel: exactModelPresentation.accessibilityLabel } : {})}
+                                onDemand={demandRouteModel}
+                                onPress={chooseDraftModel}
+                            />
+                        ) : null}
                     />
                 ),
             }));
@@ -805,7 +884,9 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             disabled,
             onChange: (next) => onPatch({ notifyParentOnCompletion: next }),
         }));
-        const isAdvancedFieldPath = (path: string) => path !== 'permissionMode' && !isReviewScopeFieldPath(path);
+        // The route chip owns a Run's model (exact source and model); a review has no route chip.
+        const isAdvancedFieldPath = (path: string) => path !== 'permissionMode' && !isReviewScopeFieldPath(path)
+            && !(path === 'modelId' && intent !== 'review');
         const hasAdvancedFields = options.fields.some((field) => field.visible !== false && isAdvancedFieldPath(field.path)
             && !['backendTargetKeys', 'engineIds', 'instructions', 'notifyParentOnCompletion', 'secretReferenceOverlay', 'teamCredentialModel', 'teamCredentialSessionBindingConsent'].includes(field.path));
         if (options.profileChoices.length > 0 || hasAdvancedFields || teamCredential.picker) {
@@ -826,7 +907,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             }));
         }
         return chips;
-    }, [actionInput.changeType, chipRevision, editable, inheritedModelSelection, inheritedRoutePresentation, intent, onPatch, onSelectBackend, roleItem?.name, roleValue, rolesRail, options.backendChoices, options.fields, options.inheritedDraftRoutePresentation, options.profileChoices.length, options.selectedBackendChoice, options.selectedBackendTargetKeys, options.selectedPermissionMode, options.targetMatchesParent, options.visiblePermissionModeOptions, renderOptions, reportToSession, teamCredential.picker]);
+    }, [actionInput.changeType, chipRevision, editable, inheritedModelSelection, inheritedRoutePresentation, intent, onPatch, onSelectBackend, roleItem?.name, roleValue, rolesRail, options.backendChoices, options.fields, options.inheritedDraftRoutePresentation, options.profileChoices.length, options.selectedBackendChoice, options.selectedBackendTargetKeys, options.selectedPermissionMode, options.targetMatchesParent, options.visiblePermissionModeOptions, renderOptions, reportToSession, teamCredential.picker, exactModelSubtitle, exactModelPresentation.accessibilityLabel, demandRouteModel, chooseDraftModel]);
 
     // Why it can't start yet, said above the kept draft (lab `convo-ST` "Machine offline"): still
     // reading what the machine offers, or the reason agents can't start in this Session.
@@ -848,30 +929,6 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         : selectedChoice ? [selectedChoice.agentId] : [];
     const startCount = intent === 'review' ? Math.max(1, options.selectedBackendTargetKeys.length) : 1;
 
-    // D9's ask when the chosen Agent can't follow this Session: its default or an exact model.
-    const pendingChildChoice = childChoice.choice;
-    const childChoiceAgent = pendingChildChoice
-        ? options.backendChoices.find((choice) => choiceRunsAgent(choice, pendingChildChoice.agentTargetKey)) ?? null
-        : null;
-    const childModelChoice = useExactModelChoice({
-        agentTargetKey: pendingChildChoice?.agentTargetKey ?? null,
-        agentId: childChoiceAgent?.agentId ?? null,
-        machineId,
-        serverId,
-        selected: null,
-        title: t('session.agentContinuation.childChoice.chooseModel'),
-        fallbackLabel: t('runPage.menu.selectionChoose'),
-        enabled: pendingChildChoice !== null,
-    });
-    const chooseChild = childChoice.choose;
-    const startWithChild = React.useCallback((selection: ExecutionRunChildSelection) => {
-        // A failure is already said under the composer by the start itself.
-        chooseChild(selection).catch(() => undefined);
-    }, [chooseChild]);
-    const openChildModelChoice = childModelChoice.open;
-    const chooseChildModel = React.useCallback(() => openChildModelChoice((ref) => {
-        if (ref) startWithChild(ref);
-    }), [openChildModelChoice, startWithChild]);
     const childParentDetail = pendingChildChoice
         ? resolveExecutionRunRouteChoice({
             inherits: true,
