@@ -23,8 +23,9 @@ function runPreparedWidgetLayoutFragmentCommandV1(prepareGroup: () => WidgetLayo
 }
 
 export function runAddWidgetLayoutFragmentCommandV1(group: WidgetLayoutFragmentGroupV1, surface: WidgetSurfaceRefV1,
-    options: Readonly<{ toIndex?: number; area?: WidgetProjectAreaV1; signal?: AbortSignal }> = {}) {
-    return runPreparedWidgetLayoutFragmentCommandV1(() => group, surface, options);
+    options: Readonly<{ name?: string; toIndex?: number; area?: WidgetProjectAreaV1; signal?: AbortSignal }> = {}) {
+    return runPreparedWidgetLayoutFragmentCommandV1(() => ({ ...group,
+        ...(options.name === undefined ? {} : { title: options.name }) }), surface, options);
 }
 
 export function runCopyWidgetGroupCommandV1(group: WidgetLayoutGroupV1, surface: WidgetSurfaceRefV1,
