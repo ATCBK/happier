@@ -790,7 +790,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
               && sameStoredCredentials(credentials, await readCurrentCredentials()) })
         : undefined);
 
-    const isApprovalExecutionOriginCurrent = params.isApprovalExecutionOriginCurrent ?? (async (args) => {
+    const isApprovalExecutionOriginCurrent: NonNullable<ActionExecutorDeps['isApprovalExecutionOriginCurrent']> = async (args) => {
       // Account/client proposals belong to the deciding Account, not the old
       // runner. The signature authenticates unchanged proposal provenance.
       if (!requiresExactDaemonApprovalReplay(args.request)) {
@@ -818,6 +818,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           actionId: request.actionId, input: request.actionArgs, target: origin.target,
           signature: origin.externalActionInputSignature, publicKey });
       }
+      // A daemon's live-custody callback owns exact replay, not an Account proposal.
+      if (params.isApprovalExecutionOriginCurrent) return await params.isApprovalExecutionOriginCurrent(args);
       // A standalone fixed-Home terminal approval already names its exact
       // Machine. Reconcile that signed request through the existing selector;
       // the currentness checker still verifies Home, Account and installation.
@@ -846,7 +848,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           : {}),
       });
       return checker ? await checker(args) : false;
-    });
+    };
 
     const sessionFollowActionDeps = createSessionFollowActionDeps({
       token: credentials.token,

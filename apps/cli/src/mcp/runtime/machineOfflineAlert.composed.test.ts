@@ -11,8 +11,8 @@ import type { AccountSettingsStoredContentEnvelope, SessionOwnerMetadataEnvelope
 import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { ActionExecuteFailureSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { configuration } from '@/configuration';
+import * as persistence from '@/persistence';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { createHappierMcpServer } from '@/mcp/createHappierMcpServer';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
@@ -34,7 +34,7 @@ import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/ma
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import * as installationStore from '@/daemon/identity/store';
-import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
+import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials, createDaemonExternalActionTargetResolver } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 import { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -72,7 +72,7 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
     provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`,
     credentialProvenance: 'stored_session' as const, encryption: null };
   const decidingCredentials = { ...credentials, token: `e30.${Buffer.from(JSON.stringify({ sub: 'alert-account', tokenEpoch: 0,
-    provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature` };
+    provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.different-signature` };
   const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(42));
   // Installation-file custody is an OS boundary; signing and verification stay real.
   vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue({ version: 1, createdAt: 1,
@@ -91,6 +91,8 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
   let currentnessAvailable = true;
   let metadataPrivacyRefused = false;
   let currentInstallationId = 'alert-installation';
+  let sessionCallerCurrent = true;
+  let retiredApprovalRequestId: string | undefined;
   let metadata = JSON.stringify(createTestMetadata({ machineId, permissionMode: 'default' }));
   let metadataVersion = 1;
   let metadataLayoutVersion: 0 | 1 = 0;
@@ -105,7 +107,8 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
     if (config?.headers?.Authorization === undefined) {
       const actionId = String(config?.headers?.[EXTERNAL_ACTION_EFFECT_ACTION_HEADER]);
       expect(verifyExternalActionMachineRequestV1({ authorizationToken: 'alert-home-proof', effectActionId: actionId,
-        target: { kind: 'machine', machineId }, installationId: 'alert-installation', requestId: rootRequestIds.get(actionId)!,
+        target: actionId === 'session.title.set' ? { kind: 'session', sessionId } : { kind: 'machine', machineId },
+        installationId: 'alert-installation', requestId: rootRequestIds.get(actionId)!,
         method: 'GET', path: new URL(url).pathname, publicKey: keys.publicKey,
         signature: String(config?.headers?.[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]) })).toBe(true);
     } else expect([`Bearer ${credentials.token}`, `Bearer ${decidingCredentials.token}`]).toContain(config.headers.Authorization);
@@ -177,6 +180,10 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
       artifacts.set(String(artifact.id), { ...artifact, header: Reflect.get(body, 'header'), body: Reflect.get(body, 'body'), headerVersion, bodyVersion });
       return { status: 200, data: { success: true, headerVersion, bodyVersion } };
     }
+    // Home can retire executable Session custody while its signed Account proposal remains unchanged.
+    if (url.endsWith('/settings.set/execution-authorization/verify')
+      && retiredApprovalRequestId !== undefined && rootRequestIds.get('settings.set') === retiredApprovalRequestId)
+      return { status: 401, data: { error: 'invalid_token' } };
     if (url.endsWith('/verify')) return { status: 200, data: { ok: true } };
     if (url.endsWith('/execution-authorization')) {
       const actionId = url.split('/').at(-2)!;
@@ -233,7 +240,7 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
     createExecutor: (getCurrentTurnWorkDepth, isCallerCurrent) => {
       const currentness = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials, machineId,
         serverId, serverApiUrl: serverUrl,
-        isSessionCallerCurrent: async ({ caller }) => caller.sessionId === sessionId && await isCallerCurrent() });
+        isSessionCallerCurrent: async ({ caller }) => sessionCallerCurrent && caller.sessionId === sessionId && await isCallerCurrent() });
       if (!currentness) throw new Error('Missing canonical approval currentness');
       accountExecutor = createCliActionExecutorFromCredentials({ credentials,
       serverId, serverApiUrl: serverUrl, serverIdentityId: 'srv_alert', machineId,
@@ -271,6 +278,14 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
   const service = createDaemonControlApp({ getChildren: () => [tracked], machineId,
     stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'success', sessionId }),
     requestShutdown() {}, onHappySessionWebhook() {}, controlToken: 'A'.repeat(43),
+    externalActionApi: { currentServerId: serverId, currentAccountId: 'alert-account',
+      terminalPolicyScope: { token: credentials.token, serverHttpBaseUrl: serverUrl },
+      verifyPat: async () => { throw new Error('Private CLI ingress must not use PAT verification'); },
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials, serverApiUrl: serverUrl }),
+      executor: { execute: async (...args) => {
+        if (!accountExecutor) throw new Error('Missing composed daemon executor');
+        return accountExecutor.execute(...args);
+      } } },
     agentRuntimeDaemonServices: { dispatch: async (raw, context) => {
       const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(raw);
       if (request.operation.kind !== 'action.execute') throw new Error('Unexpected private request');
@@ -285,6 +300,8 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
   await service.listen({ port: 0, host: '127.0.0.1' });
   const address = service.server.address();
   if (!address || typeof address === 'string') throw new Error('Missing private service address');
+  vi.spyOn(persistence, 'readDaemonState').mockResolvedValue({ pid: process.pid, httpPort: address.port,
+    controlToken: 'A'.repeat(43), startedAt: 1, startedWithCliVersion: 'test' });
   await publishAgentRuntimeDaemonServiceAuthority({ ...authority, httpPort: address.port, capability: 'A'.repeat(43) });
   vi.stubEnv('HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE', path);
   const runtime = createHappierMcpServer({ sessionId, updateMetadata() {}, getServerBinding: () => ({ serverId, serverUrl }),
@@ -353,6 +370,10 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
     content = { t: 'plain', v: { ...content.v, favoriteMachines: ['during-approval'] } };
     version += 1;
     if (installationChanged) currentInstallationId = 'replacement-installation';
+    // The recorded Account proposal survives retirement of live runner custody.
+    sessionCallerCurrent = false;
+    if (open.v !== 2) throw new Error('Expected canonical approval origin');
+    retiredApprovalRequestId = open.executionOriginV1.requestId;
     machineRpc.mockImplementation((event, args) => {
       if (event !== SOCKET_RPC_EVENTS.CALL) return;
       const [raw, callback] = args;
