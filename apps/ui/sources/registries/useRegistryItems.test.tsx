@@ -5,12 +5,16 @@ import { MarketplaceIndexSourceSnapshotV1Schema, deriveMarketplaceSourceId } fro
 import { HAPPIER_PICKS_SOURCE_ID } from '@happier-dev/protocol/registries';
 import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL } from '@happier-dev/protocol/marketplace';
 import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createRegistryPluginCatalogFixture } from '@/dev/testkit/fixtures/registryPluginCatalog';
 import { installPromptRegistriesCommonModuleMocks } from '@/components/settings/prompts/registries/promptRegistriesScreenTestHelpers';
 
 const platform = vi.hoisted(() => ({ value: 'web' }));
+const confirmation = vi.hoisted(() => ({ accepted: true }));
 installPromptRegistriesCommonModuleMocks({ storage: original => original(), reactNative: async () =>
     (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { get OS() { return platform.value; } } }), modal: async () =>
-    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module });
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
+        spies: { confirm: vi.fn(async () => confirmation.accepted) },
+    }).module });
 vi.mock('@react-navigation/native', async () =>
     (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
 const { createPlainPromptLibraryCatalogHomeFixture } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
@@ -19,43 +23,21 @@ const { createPlainPromptLibraryCatalogHomeFixture } = await import('@/dev/testk
 await Promise.all([import('@/auth/storage/tokenStorage'), import('@/sync/domains/server/serverRuntime'),
     import('@/sync/domains/state/storage'), import('@/utils/system/runtimeFetch'),
     import('@/sync/runtime/orchestration/appliedActiveServerRuntime')]);
-const [{ useRegistryItems }, { useRegistrySourceMutations }, { useRegistrySuggestions }, { useSkillsHomepageModel }] = await Promise.all([
+const [{ useRegistryItems }, { useRegistrySourceMutations }, { useRegistrySuggestions }, { useSkillsHomepageModel }, { useRegistryItem }] = await Promise.all([
     import('./useRegistryItems'), import('./useRegistrySourceMutations'), import('./useRegistrySuggestions'),
     import('@/components/settings/skills/useSkillsHomepageModel'),
+    import('./useRegistryItem'),
 ]);
 const [{ usePluginSettingsScreenState }, { usePromptLibraryCatalogValue }] = await Promise.all([
     import('@/components/settings/plugins/model/usePluginSettingsScreenState'), import('@/sync/store/usePromptLibraryCatalog'),
 ]);
 const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
-const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
-
-async function confirmRemoval(fixture: Awaited<ReturnType<typeof createPlainPromptLibraryCatalogHomeFixture>>,
-    remove: () => Promise<unknown>) {
-    let mutation: Promise<unknown> | undefined;
-    await act(async () => { mutation = remove(); });
-    await waitForHomeGovernance(() => expect(fixture.boundary.list()).toHaveLength(1));
-    const artifactId = fixture.boundary.list()[0]!.id;
-    const decision = await decideApprovalAsInbox(fixture.home.id, artifactId, 'approve');
-    expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
-    await act(async () => { await mutation; });
-}
 
 async function setupHome(suffix: string) {
     const serverUrl = `https://registry-refresh-${suffix}.test`;
     const sourceUrl = `${serverUrl}/catalog.json`;
     const sourceId = deriveMarketplaceSourceId(sourceUrl);
-    const catalog = MarketplaceIndexSourceSnapshotV1Schema.parse({
-        source: { id: sourceId, title: 'Private catalog', kind: 'user', sourceUrl },
-        freshness: { state: 'fresh', fetchedAtMs: 1 }, diagnostics: [], entries: [{
-            pluginId: 'sample.plugin', publisher: { id: 'sample', displayName: 'Sample' },
-            display: { title: 'Sample Plugin', description: 'A catalog entry' },
-            distribution: { kind: 'npm', registryOrigin: 'https://registry.npmjs.org', packageName: 'sample-plugin', version: '1.2.3',
-                integrity: 'sha512-AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ==' },
-            manifestDigest: 'sha256:' + 'a'.repeat(64), compatibility: { happier: '>=1', platforms: ['web'] },
-            summary: { contributions: ['agents'], requiredHostAccess: [], optionalHostAccess: [], executableRealms: ['daemon'] },
-            review: { status: 'unreviewed', reviewedAt: null }, categories: ['agents'], media: [], updatePolicy: 'allowed', links: {},
-        }],
-    });
+    const catalog = createRegistryPluginCatalogFixture({ sourceUrl });
     let unavailable = false;
     let rateLimited = false;
     const fixture = await createPlainPromptLibraryCatalogHomeFixture(serverUrl, {
@@ -86,6 +68,73 @@ async function setup(suffix: string, refresh = true) {
 }
 
 describe('registry item last-known reads through the Account and HTTP owners', () => {
+    it('reads the first skills.sh detail through the real mounted Action before the source catalog is warm', async () => {
+        const { createPromptRegistrySkillFixture } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+        const { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/registries');
+        const skill = createPromptRegistrySkillFixture({ sourceId: 'builtin:skills-sh', itemId: 'review', title: 'review',
+            files: [{ path: 'SKILL.md', content: '---\nname: review\ndescription: Review changes\n---\nRead the diff.' }] });
+        if (skill.item.payload.kind !== 'skill') throw new Error('Expected the canonical skill fixture');
+        const payload = skill.item.payload.skill;
+        const requests: string[] = [];
+        const fixture = await createPlainPromptLibraryCatalogHomeFixture('https://registry-cold-detail.test', {
+            key: 'registry-sources', value: { v: 2, sources: [], disabledSourceIds: [] },
+        }, 'updated', { handleExternalRequest: async url => {
+            requests.push(url);
+            if (url === DEFAULT_CURATED_MARKETPLACE_SOURCE_URL) return new Response(null, { status: 503 });
+            if (url.startsWith('https://api.github.com/repos/fixture/skills/commits/')) return Response.json({ sha: payload.ref.commit });
+            if (url.includes('/git/trees/')) return Response.json({ sha: payload.ref.treeSha, tree: [
+                { path: 'review', type: 'tree', mode: '040000', sha: payload.ref.treeSha },
+                ...payload.files.map(file => ({
+                path: `review/${file.path}`, type: 'blob', mode: file.unixMode === 0o755 ? '100755' : '100644', sha: file.blobSha, size: file.size,
+            }))] });
+            if (url.startsWith('https://raw.githubusercontent.com/fixture/skills/')) return new Response(payload.skillMarkdown);
+            return null;
+        } });
+        onTestFinished(async () => { await standardCleanup(); await fixture.dispose(); });
+        const hook = await renderHook(() => useRegistryItem({ kind: 'skill', sourceId: 'builtin:skills-sh', itemId: 'fixture/skills/review' }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().loading).toBe(false));
+        expect(hook.getCurrent().error).toBeNull();
+        const read = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.items.read'].parse({ item: hook.getCurrent().item });
+        expect(read.item.summary).toMatchObject({ itemId: 'fixture/skills/review', version: payload.ref.commit });
+        expect(read.item.payload).toMatchObject({ kind: 'skill', skill: { skillMarkdown: payload.skillMarkdown } });
+        expect(requests.some(url => url.startsWith('https://api.github.com/repos/fixture/skills/commits/'))).toBe(true);
+        expect(fixture.requests.some(request => request.path.startsWith('/v1/machines'))).toBe(false);
+    });
+    it('keeps a rate-limited detail read typed with its reset time and recovers through Retry', async () => {
+        const { createPromptRegistrySkillFixture } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+        const skill = createPromptRegistrySkillFixture({ sourceId: 'builtin:skills-sh', itemId: 'review', title: 'review',
+            files: [{ path: 'SKILL.md', content: '---\nname: review\ndescription: Review changes\n---\nRead the diff.' }] });
+        if (skill.item.payload.kind !== 'skill') throw new Error('Expected the canonical skill fixture');
+        const payload = skill.item.payload.skill;
+        let limited = true;
+        const resetSeconds = Math.floor(Date.now() / 1000) + 2;
+        const fixture = await createPlainPromptLibraryCatalogHomeFixture('https://registry-limited-detail.test', {
+            key: 'registry-sources', value: { v: 2, sources: [], disabledSourceIds: [] },
+        }, 'updated', { handleExternalRequest: async url => {
+            if (url === DEFAULT_CURATED_MARKETPLACE_SOURCE_URL) return new Response(null, { status: 503 });
+            if (limited && url.startsWith('https://api.github.com/')) return Response.json({ message: 'API rate limit exceeded' },
+                { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(resetSeconds) } });
+            if (url.startsWith('https://api.github.com/repos/fixture/skills/commits/')) return Response.json({ sha: payload.ref.commit });
+            if (url.includes('/git/trees/')) return Response.json({ sha: payload.ref.treeSha, tree: [
+                { path: 'review', type: 'tree', mode: '040000', sha: payload.ref.treeSha },
+                ...payload.files.map(file => ({
+                path: `review/${file.path}`, type: 'blob', mode: file.unixMode === 0o755 ? '100755' : '100644', sha: file.blobSha, size: file.size,
+            }))] });
+            if (url.startsWith('https://raw.githubusercontent.com/fixture/skills/')) return new Response(payload.skillMarkdown);
+            return null;
+        } });
+        onTestFinished(async () => { await standardCleanup(); await fixture.dispose(); });
+        const hook = await renderHook(() => useRegistryItem({ kind: 'skill', sourceId: 'builtin:skills-sh', itemId: 'fixture/skills/review' }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().loading).toBe(false));
+        expect(hook.getCurrent().item).toBeNull();
+        expect(hook.getCurrent().status).toEqual({ state: 'rate_limited', retryAt: resetSeconds * 1000 });
+        limited = false;
+        // The host keeps the known reset for this origin; Retry after it reads again.
+        await new Promise(resolve => setTimeout(resolve, Math.max(0, resetSeconds * 1000 - Date.now()) + 50));
+        await act(async () => { await hook.getCurrent().refresh(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().item).not.toBeNull());
+        expect(hook.getCurrent().status).toBeNull();
+    });
     it('reads curated skill picks through the mounted Action and real target adapter with no Machine', async () => {
         const catalog = MarketplaceIndexSourceSnapshotV1Schema.parse({ source: {
             id: HAPPIER_PICKS_SOURCE_ID, title: 'Happier picks', kind: 'curated', sourceUrl: DEFAULT_CURATED_MARKETPLACE_SOURCE_URL,
@@ -217,13 +266,24 @@ describe('registry item last-known reads through the Account and HTTP owners', (
     it.each(['disable', 'remove'] as const)('withdraws old summaries when the real Account source row changes during an HTTP outage: %s', async operation => {
         const { fixture, hook, sourceId } = await setup(operation, false);
         if (operation === 'disable') await act(async () => { await hook.getCurrent().mutations.update({ sourceId, enabled: false }); });
-        else await confirmRemoval(fixture, () => hook.getCurrent().mutations.delete(sourceId));
+        else await act(async () => { expect(await hook.getCurrent().mutations.delete(sourceId)).toEqual({ removed: true }); });
         expect(fixture.read().revision).toBe(5);
         if (operation === 'disable') expect(fixture.read().record.value).toMatchObject({ sources: [{ id: sourceId, enabled: false }] });
         else expect(fixture.read().record.value).toMatchObject({ sources: [] });
         await waitForHomeGovernance(() => expect(hook.getCurrent().items).toEqual([]));
         expect(hook.getCurrent().pages).toEqual([]);
         expect(hook.getCurrent().hasNextPage).toBe(false);
+    });
+    it('keeps the source and its shown items when the present user cancels removal', async () => {
+        const { fixture, hook, sourceId, lastKnown } = await setup('cancel-remove', false);
+        confirmation.accepted = false;
+        onTestFinished(() => { confirmation.accepted = true; });
+        await act(async () => {
+            await expect(hook.getCurrent().mutations.delete(sourceId)).rejects.toMatchObject({ code: 'approval_canceled' });
+        });
+        expect(fixture.mutations).toEqual([]);
+        expect(fixture.read()).toMatchObject({ revision: 4, record: { value: { sources: [{ id: sourceId, enabled: true }] } } });
+        expect(hook.getCurrent().items).toBe(lastKnown);
     });
     it.each(['disable', 'remove'] as const)('withdraws the controller rich card in the first visible render of the changed source revision: %s', async operation => {
         const { fixture, sourceId, setUnavailable } = await setupHome(`controller-${operation}`);
@@ -244,7 +304,7 @@ describe('registry item last-known reads through the Account and HTTP owners', (
         setUnavailable();
         observations.length = 0;
         if (operation === 'disable') await act(async () => { await hook.getCurrent().setMarketplaceSourceEnabled(sourceId, false); });
-        else await confirmRemoval(fixture, () => hook.getCurrent().removeMarketplaceSource(sourceId));
+        else await act(async () => { await hook.getCurrent().removeMarketplaceSource(sourceId); });
         expect(fixture.read().revision).toBe(5);
         const changedRevision = observations.filter(observation => observation.revision === 5);
         expect(changedRevision.length).toBeGreaterThan(0);
