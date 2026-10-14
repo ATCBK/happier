@@ -215,7 +215,7 @@ function resolveHappierMenuInitialSelection<Item extends HappierMenuInteractionI
   allowEmptySelection: boolean;
 }>): number {
   const preferredId = input.initialSelectedId ?? null;
-  if (preferredId) {
+  if (preferredId !== null) {
     const preferredIndex = input.items.findIndex((item) => item.id === preferredId && !item.disabled);
     if (preferredIndex >= 0) return preferredIndex;
   }
@@ -261,10 +261,14 @@ export function useHappierMenuInteraction<Item extends HappierMenuInteractionIte
     initialSelectedId: input.initialSelectedId,
     allowEmptySelection,
   }), [allowEmptySelection, input.initialSelectedId, input.items]);
-  const [selectedIndex, setSelectedIndexState] = useState(initialSelectedIndex);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(input.items[initialSelectedIndex]?.id ?? null);
+  const selectedIndex = useMemo(() => {
+    if (selectedItemId === null && allowEmptySelection) return -1;
+    const index = input.items.findIndex((item) => item.id === selectedItemId && !item.disabled);
+    return index >= 0 ? index : initialSelectedIndex;
+  }, [allowEmptySelection, initialSelectedIndex, input.items, selectedItemId]);
   const itemsRef = useRef(input.items);
   itemsRef.current = input.items;
-  const selectedItemIdRef = useRef<string | null>(input.items[initialSelectedIndex]?.id ?? null);
   const typeaheadRef = useRef<{ value: string; timer: ReturnType<typeof setTimeout> | null }>({ value: '', timer: null });
   const typeaheadItems = useMemo(() => input.items.map((item) => ({
     id: item.id,
@@ -278,8 +282,7 @@ export function useHappierMenuInteraction<Item extends HappierMenuInteractionIte
     typeaheadRef.current.timer = null;
   }, []);
   const commitSelection = useCallback((index: number) => {
-    selectedItemIdRef.current = itemsRef.current[index]?.id ?? null;
-    setSelectedIndexState(index);
+    setSelectedItemId(itemsRef.current[index]?.id ?? null);
   }, []);
 
   useEffect(() => clearTypeahead, [clearTypeahead]);
@@ -288,22 +291,22 @@ export function useHappierMenuInteraction<Item extends HappierMenuInteractionIte
       clearTypeahead();
       return;
     }
-    commitSelection(initialSelectedIndex);
-  }, [clearTypeahead, commitSelection, initialSelectedIndex, input.open, input.resetKey]);
+    commitSelection(resolveHappierMenuInitialSelection({
+      items: itemsRef.current,
+      initialSelectedId: input.initialSelectedId,
+      allowEmptySelection,
+    }));
+    // Item positions can change while the user's selection intent stays the same.
+    // Reset by that intent; the item effect below retains the highlighted id.
+  }, [allowEmptySelection, clearTypeahead, commitSelection, input.initialSelectedId, input.open, input.resetKey]);
 
-  // Keep a highlighted logical item current across reorder, removal, or a
-  // newly-disabled row. This observes item identity, not raw array identity,
-  // so an inline array rerender cannot steal a user's current highlight.
+  // Resolve indices from the logical id during render, before row layout can
+  // reveal a different item at the old index. Retire removed/disabled ids to
+  // the existing fallback so their later return cannot reclaim the highlight.
   useEffect(() => {
-    const selectedId = selectedItemIdRef.current;
-    if (!selectedId) return;
-    const currentIndex = input.items.findIndex((item) => item.id === selectedId && !item.disabled);
-    if (currentIndex >= 0) {
-      if (currentIndex !== selectedIndex) commitSelection(currentIndex);
-      return;
-    }
-    commitSelection(initialSelectedIndex);
-  }, [commitSelection, initialSelectedIndex, input.items, selectedIndex]);
+    const resolvedId = input.items[selectedIndex]?.id ?? null;
+    if (resolvedId !== selectedItemId) commitSelection(selectedIndex);
+  }, [commitSelection, input.items, selectedIndex, selectedItemId]);
 
   const setSelectedIndex = useCallback((index: number) => {
     commitSelection(clampHappierMenuSelection({

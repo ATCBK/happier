@@ -112,7 +112,7 @@ export function useScrollRectIntoViewRegistry(params: Readonly<{
 
     const ensureActiveItemVisible = React.useCallback(() => {
         const activeKey = activeKeyRef.current;
-        if (!activeKey) return;
+        if (activeKey === null) return;
         if (params.once === true && settledActiveKeyRef.current === activeKey) return;
         const rect = itemLayoutsRef.current.get(activeKey);
         if (!rect) return;

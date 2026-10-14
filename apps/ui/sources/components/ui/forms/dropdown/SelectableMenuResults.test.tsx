@@ -257,7 +257,7 @@ describe('SelectableMenuResults', () => {
 
         rowFrame?.props?.onLayout?.({ nativeEvent: { layout: { y: 64, height: 40 } } });
 
-        expect(registerItemLayout).toHaveBeenCalledWith('0');
+        expect(registerItemLayout).toHaveBeenCalledWith('a');
     });
 
     it('opens submenu rows through a row-edge anchor without selecting the parent item', async () => {
