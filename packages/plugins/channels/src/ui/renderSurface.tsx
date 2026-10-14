@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useSessionCandidatePages, type SessionCandidate as BindingCreateSessionCandidate } from './useSessionCandidatePages.js';
 import { pluginUiTargetedContributionOperationKey } from '@happier-dev/plugin-sdk/ui';
 import type { AgentPermissionIntentV1 } from '@happier-dev/plugin-sdk/sessions';
 import type {
@@ -99,6 +100,7 @@ import {
   conversationSessionBindingDeliveryModeForOmittedFieldV1,
   CONVERSATION_CORE_PLUGIN_ID_V1,
   MAX_CONVERSATION_OBSERVATION_AGE_MS,
+  DEFAULT_CONVERSATION_OBSERVATION_AGE_MS,
   MIN_CONVERSATION_OBSERVATION_AGE_MS,
   type ConversationBindingTargetV1,
   type ConversationBindingV1,
@@ -2229,26 +2231,20 @@ function ConversationStartForm(props: Readonly<{
 }>): React.ReactElement {
   const { t } = props;
   const startAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart);
-  const sessionsAction = useExecutePluginAction('session.list');
+  const sessionPages = useSessionCandidatePages();
   const [groupId, setGroupId] = React.useState(props.groups[0]?.id ?? '');
   const [subject, setSubject] = React.useState('');
   const [message, setMessage] = React.useState('');
-  const [sessions, setSessions] = React.useState<readonly BindingCreateSessionCandidate[] | undefined>();
   const [sessionId, setSessionId] = React.useState<string | undefined>();
   const [outcome, setOutcome] = React.useState<'sent' | 'failed' | 'unknown' | undefined>();
-  const executeSessions = sessionsAction.execute;
+  const loadSessions = sessionPages.load;
   React.useEffect(() => {
-    let cancelled = false;
-    void executeSessions({ limit: 100, includeLastMessagePreview: false }).then((settled) => {
-      if (cancelled) return;
-      const page = settled.status === 'success' ? parseBindingCreateSessionPage(settled.result) : undefined;
-      setSessions(page?.candidates ?? []);
-      setSessionId((current) => current ?? page?.candidates[0]?.id);
-    }).catch(() => {
-      if (!cancelled) setSessions([]);
-    });
-    return () => { cancelled = true; };
-  }, [executeSessions]);
+    void loadSessions();
+  }, [loadSessions]);
+  const sessions = sessionPages.candidates;
+  React.useEffect(() => {
+    setSessionId((current) => current ?? sessions[0]?.id);
+  }, [sessions]);
   const pending = startAction.execution.status === 'pending';
   const ready = groupId !== '' && subject.trim() !== '' && message.trim() !== '' && sessionId !== undefined;
   const audience = props.groups.find((group) => group.id === groupId);
@@ -2295,7 +2291,7 @@ function ConversationStartForm(props: Readonly<{
           label={t('plugins.channels.page.routerStartSession', 'Replies go to')}
           options={(sessions ?? []).map((session) => ({ value: session.id, label: session.label }))}
           value={sessionId ?? ''}
-          disabled={pending || sessions === undefined || sessions.length === 0}
+          disabled={pending || sessionPages.loading || sessions.length === 0}
           onChange={(value) => {
             const selected = readActionInputOptionValue(value);
             if (typeof selected === 'string') setSessionId(selected);
@@ -2945,11 +2941,6 @@ type BindingCreateTarget =
     label: string;
     execution: BindingCreateAutomationExecution;
   }>;
-type BindingCreateSessionCandidate = Readonly<{ id: string; label: string }>;
-type BindingCreateSessionPage = Readonly<{
-  candidates: readonly BindingCreateSessionCandidate[];
-  nextCursor?: string;
-}>;
 type BindingCreateAutomationCandidate = Readonly<{
   automationId: string;
   label: string;
@@ -3235,6 +3226,7 @@ function BindingEditConfirmationSummary(props: Readonly<{
  */
 function useBindingNewSessionRecipeSelection(input: Readonly<{
   signal: AbortSignal;
+  draft?: () => SelectActionInputRequest['draft'];
   /**
    * Read at press time, not at declaration time, so the one owner can sit above
    * the caller's own `actionLocked` computation while still refusing to start
@@ -3268,8 +3260,10 @@ function useBindingNewSessionRecipeSelection(input: Readonly<{
     current.onStarted?.();
     void (async () => {
       try {
+        const draft = current.draft?.();
         const selected = await hostApi.selectActionInput({
           hostAction: { action: 'session.spawn_new', projection: 'serverStartDraft' },
+          ...(draft === undefined ? {} : { draft }),
         }, { signal: current.signal });
         if (!mountedRef.current || current.signal.aborted || selected.kind === 'cancelled') return;
         if (selected.kind !== 'serverStartDraft') {
@@ -3610,6 +3604,11 @@ function ThreadRouterControls(props: Readonly<{
   const recipeRequestRef = React.useRef<number | 'new' | undefined>(undefined);
   const recipeSelection = useBindingNewSessionRecipeSelection({
     signal: props.signal,
+    draft: () => {
+      const request = recipeRequestRef.current;
+      const recipe = typeof request === 'number' ? target.routes[request]?.recipe : undefined;
+      return recipe === undefined ? undefined : { existingDraft: recipe };
+    },
     isLocked: () => props.disabled,
     onUnavailable: props.onRecipeUnavailable,
     onSelected: (recipe) => {
@@ -3967,29 +3966,6 @@ function bindingCreatePrincipalSelection(
   return {
     query,
     selected: [{ id: candidate.id, kind: candidate.kind }],
-  };
-}
-
-function parseBindingCreateSessionPage(value: unknown): BindingCreateSessionPage | undefined {
-  if (!isRecord(value) || !Array.isArray(value.sessions) || value.sessions.length > 100) return undefined;
-  if (value.nextCursor !== undefined && value.nextCursor !== null && !isNonEmptyString(value.nextCursor)) {
-    return undefined;
-  }
-  const seen = new Set<string>();
-  const candidates: BindingCreateSessionCandidate[] = [];
-  for (const entry of value.sessions) {
-    if (!isRecord(entry) || !isNonEmptyString(entry.id) || seen.has(entry.id)) continue;
-    seen.add(entry.id);
-    // Session titles are the only user-facing session fact this flow needs.
-    // In particular, it never asks for or reads a transcript preview.
-    candidates.push({
-      id: entry.id,
-      label: isNonEmptyString(entry.title) ? entry.title : 'Session',
-    });
-  }
-  return {
-    candidates,
-    ...(isNonEmptyString(value.nextCursor) ? { nextCursor: value.nextCursor } : {}),
   };
 }
 
@@ -4755,7 +4731,12 @@ function BindingCreateJourney(props: Readonly<{
   const resolveAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve);
   const createAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate);
   const pairingAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate);
-  const sessionsAction = useExecutePluginAction('session.list');
+  const sessionsAction = useSessionCandidatePages({
+    signal: props.signal,
+    isLocked: () => actionLocked,
+    onStarted: () => setFeedback(undefined),
+    onUnavailable: () => setFeedback('sessionUnavailable'),
+  });
   const automationAction = useExecutePluginAction('automation.conversation.targets.list');
   const [stage, setStage] = React.useState<BindingCreateStage>('closed');
   const stageFocusTarget = usePluginUiFocusTarget();
@@ -4772,8 +4753,12 @@ function BindingCreateJourney(props: Readonly<{
   const [pairingRequired, setPairingRequired] = React.useState(false);
   const [pairingContext, setPairingContext] = React.useState<BindingCreatePairingContext | undefined>();
   const [pairingCreateRequest, setPairingCreateRequest] = React.useState<BindingCreatePairingRequest | undefined>();
-  const [sessionCandidates, setSessionCandidates] = React.useState<readonly BindingCreateSessionCandidate[]>([]);
-  const [sessionNextCursor, setSessionNextCursor] = React.useState<string | undefined>();
+  const {
+    candidates: sessionCandidates,
+    nextCursor: sessionNextCursor,
+    load: loadSessions,
+    reset: resetSessionPages,
+  } = sessionsAction;
   const [automationCandidates, setAutomationCandidates] = React.useState<readonly BindingCreateAutomationCandidate[]>([]);
   const [automationNextCursor, setAutomationNextCursor] = React.useState<string | undefined>();
   const [target, setTarget] = React.useState<BindingCreateTarget | undefined>();
@@ -4886,8 +4871,7 @@ function BindingCreateJourney(props: Readonly<{
     setPairingRequired(false);
     setPairingContext(undefined);
     setPairingCreateRequest(undefined);
-    setSessionCandidates([]);
-    setSessionNextCursor(undefined);
+    resetSessionPages();
     setAutomationCandidates([]);
     setAutomationNextCursor(undefined);
     setTarget(undefined);
@@ -4901,7 +4885,7 @@ function BindingCreateJourney(props: Readonly<{
     setLinkPreviewPolicy('suppress');
     setSenderFeedback('off');
     setFeedback(undefined);
-  }, []);
+  }, [resetSessionPages]);
 
   const cancelJourney = React.useCallback(() => {
     restoreOpenerFocusRef.current = true;
@@ -5087,36 +5071,6 @@ function BindingCreateJourney(props: Readonly<{
       setFeedback('resolverUnavailable');
     }
   }, [actionLocked, currentConnection, endpointSelection, principalQuery, props.signal, resolveAction]);
-
-  const loadSessions = React.useCallback(async (cursor?: string) => {
-    if (actionLocked || props.signal.aborted) return;
-    setFeedback(undefined);
-    const settled = await sessionsAction.execute({
-      limit: 100,
-      includeLastMessagePreview: false,
-      ...(cursor === undefined ? {} : { cursor }),
-    });
-    if (!mountedRef.current || props.signal.aborted) return;
-    if (settled.status !== 'success') {
-      setFeedback('sessionUnavailable');
-      return;
-    }
-    const page = parseBindingCreateSessionPage(settled.result);
-    if (page === undefined || (cursor === undefined && page.candidates.length === 0)) {
-      setFeedback('sessionUnavailable');
-      return;
-    }
-    setSessionCandidates((previous) => {
-      if (cursor === undefined) return page.candidates;
-      const seen = new Set(previous.map((candidate) => candidate.id));
-      return [...previous, ...page.candidates.filter((candidate) => {
-        if (seen.has(candidate.id)) return false;
-        seen.add(candidate.id);
-        return true;
-      })];
-    });
-    setSessionNextCursor(page.nextCursor);
-  }, [actionLocked, props.signal, sessionsAction]);
 
   const loadAutomationTargets = React.useCallback(async (cursor?: string) => {
     if (actionLocked || props.signal.aborted) return;
@@ -6149,7 +6103,12 @@ function BindingEditJourney(props: Readonly<{
   const readAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead);
   const updateAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate);
   const resolveAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve);
-  const sessionsAction = useExecutePluginAction('session.list');
+  const sessionsAction = useSessionCandidatePages({
+    signal: props.signal,
+    isLocked: () => actionLocked,
+    onStarted: () => setFeedback(undefined),
+    onUnavailable: () => setFeedback('sessionUnavailable'),
+  });
   const automationAction = useExecutePluginAction('automation.conversation.targets.list');
   const stageFocusTarget = usePluginUiFocusTarget();
   const feedbackFocusTarget = usePluginUiFocusTarget();
@@ -6169,8 +6128,11 @@ function BindingEditJourney(props: Readonly<{
   const [principalCandidates, setPrincipalCandidates] = React.useState<readonly BindingCreatePrincipalCandidate[]>([]);
   const [selectedPrincipals, setSelectedPrincipals] = React.useState<readonly BindingEditorPrincipalCandidate[]>([]);
   const [audienceResolution, setAudienceResolution] = React.useState<BindingEditorAudienceResolution>('none');
-  const [sessionCandidates, setSessionCandidates] = React.useState<readonly BindingCreateSessionCandidate[]>([]);
-  const [sessionNextCursor, setSessionNextCursor] = React.useState<string | undefined>();
+  const {
+    candidates: sessionCandidates,
+    nextCursor: sessionNextCursor,
+    load: loadSessions,
+  } = sessionsAction;
   const [automationCandidates, setAutomationCandidates] = React.useState<readonly BindingCreateAutomationCandidate[]>([]);
   const [automationNextCursor, setAutomationNextCursor] = React.useState<string | undefined>();
   const [reloadPhase, setReloadPhase] = React.useState<
@@ -6515,36 +6477,6 @@ function BindingEditJourney(props: Readonly<{
     setFeedback(undefined);
     setStage('policies');
   }, [actionLocked, audienceResolution, currentConnection, endpointLabel, endpointSelection, principalQuery, selectedPrincipals]);
-
-  const loadSessions = React.useCallback(async (cursor?: string) => {
-    if (actionLocked || props.signal.aborted) return;
-    setFeedback(undefined);
-    const settled = await sessionsAction.execute({
-      limit: 100,
-      includeLastMessagePreview: false,
-      ...(cursor === undefined ? {} : { cursor }),
-    });
-    if (!mountedRef.current || props.signal.aborted) return;
-    if (settled.status !== 'success') {
-      setFeedback('sessionUnavailable');
-      return;
-    }
-    const page = parseBindingCreateSessionPage(settled.result);
-    if (page === undefined || (cursor === undefined && page.candidates.length === 0)) {
-      setFeedback('sessionUnavailable');
-      return;
-    }
-    setSessionCandidates((previous) => {
-      if (cursor === undefined) return page.candidates;
-      const seen = new Set(previous.map((candidate) => candidate.id));
-      return [...previous, ...page.candidates.filter((candidate) => {
-        if (seen.has(candidate.id)) return false;
-        seen.add(candidate.id);
-        return true;
-      })];
-    });
-    setSessionNextCursor(page.nextCursor);
-  }, [actionLocked, props.signal, sessionsAction]);
 
   // "Link another session" opens the editor on its target step, once its
   // detail has been read and while a target change is possible at all.
@@ -11365,7 +11297,7 @@ function ProviderSetupPicker(props: Readonly<{
               : null,
             supportedTransports,
             selectedTransport,
-            maximumObservationAgeMs: String(recommendedMaximumObservationAgeMs ?? MAX_CONVERSATION_OBSERVATION_AGE_MS),
+            maximumObservationAgeMs: String(recommendedMaximumObservationAgeMs ?? DEFAULT_CONVERSATION_OBSERVATION_AGE_MS),
             presentation: {
               providerDisplayName: resolveProviderDisplayName(operation.contributor.pluginId)
                 ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider'),

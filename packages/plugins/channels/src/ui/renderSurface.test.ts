@@ -9,7 +9,7 @@ import {
   CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_ID_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_VERSION_V1,
   ConversationBindingReadResultV1Schema,
-  MAX_CONVERSATION_OBSERVATION_AGE_MS,
+  DEFAULT_CONVERSATION_OBSERVATION_AGE_MS,
 } from '@happier-dev/channels-protocol/v1';
 import {
   createPluginUiTestkit,
@@ -1542,7 +1542,7 @@ describe('Channels mounted provider setup recovery', () => {
         selectedTransport: 'socket',
         // Setup seeds the Channels domain freshness default, not the smallest
         // value an owner is allowed to configure.
-        maximumObservationAgeMs: MAX_CONVERSATION_OBSERVATION_AGE_MS,
+        maximumObservationAgeMs: DEFAULT_CONVERSATION_OBSERVATION_AGE_MS,
       });
       expect(createRequest?.selectedActionInput).toEqual(selectedActionInput);
       // Prepare may reuse the exact selected settlement. Create is the one
@@ -2830,6 +2830,54 @@ describe('Channels mounted binding creation', () => {
       await expect(fixture.getByRole('button', { name: 'Add binding' })).resolves.toBeDefined();
     } finally {
       await fixture.dispose();
+    }
+  });
+
+  it('requires an explicit retry after a Session candidate page fails during pairing', async () => {
+    let sessionReads = 0;
+    let finishUnexpectedRead: ((value: JsonValue) => void) | undefined;
+    const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve) {
+        return (input as Readonly<{ kind?: unknown }>).kind === 'endpoint'
+          ? { kind: 'endpointCandidates', candidates: [bindingEndpointCandidate] }
+          : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
+      }
+      if (action === 'session.list') {
+        sessionReads += 1;
+        if (sessionReads === 1) throw new PluginError('plugin_service_unavailable', 'Session listing unavailable');
+        return new Promise((resolve) => { finishUnexpectedRead = resolve; });
+      }
+      throw new Error(`Unexpected mounted Action: ${String(action)}`);
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'session-page-retry', mountNonce: 'session-page-retry-mount' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsSurfaceContext(),
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction,
+        readResource: bindingResourceReader(),
+      },
+    });
+    try {
+      await openBindingEndpointSelection(fixture);
+      await searchBindingPrincipal(fixture);
+      await vi.waitFor(() => {
+        expect(sessionReads).toBeGreaterThan(0);
+      });
+      await act(async () => { await Promise.resolve(); });
+      expect(sessionReads).toBe(1);
+      await fixture.press(await fixture.getByRole('button', { name: 'Reload Sessions' }));
+      await vi.waitFor(() => { expect(sessionReads).toBe(2); });
+      await act(async () => {
+        finishUnexpectedRead?.({ sessions: [{ id: 'recovered-session', title: 'Recovered Session' }], nextCursor: null });
+      });
+      await expect(fixture.getByRole('button', { name: 'Recovered Session' })).resolves.toBeDefined();
+    } finally {
+      await fixture.dispose();
+      finishUnexpectedRead?.({ sessions: [], nextCursor: null });
     }
   });
 
@@ -5490,6 +5538,65 @@ describe('Channels thread router conversation', () => {
       expect(update.target?.kind).toBe('threadRouter');
       expect(update.target?.routes.map((route) => route.id)).toEqual(['route-conversation', 'route-intake']);
       expect(update.target?.principalGroups).toEqual(routerBinding.target.principalGroups);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('seeds the current route recipe through the host selector and saves its strict edited settlement', async () => {
+    const recipe = {
+      executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+      directory: { kind: 'path', path: '/srv/wilson/intake' },
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+      profileId: 'intake', allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny',
+      organizationPlacement: { folderId: 'intake', tagIds: ['email'] },
+      capabilitySelection: { mcp: { v: 1, managedServersEnabled: false,
+        forceIncludeServerIds: ['wilson-intake'], forceExcludeServerIds: [] } },
+    };
+    const editedRecipe = { ...recipe, directory: { kind: 'path', path: '/srv/edited' } };
+    const readReply = ConversationBindingReadResultV1Schema.parse({ kind: 'ready', revision: 1,
+      binding: { ...routerBinding, target: { ...routerBinding.target,
+        routes: [{ ...routerBinding.target.routes[0], recipe }] } } });
+    const updateInputs: unknown[] = [];
+    const selectActionInput = vi.fn(async (input: PluginUiTestkitSelectActionInputInput) => {
+      expect(input.request).toEqual({
+        hostAction: { action: 'session.spawn_new', projection: 'serverStartDraft' },
+        draft: { existingDraft: recipe },
+      });
+      return { kind: 'serverStartDraft' as const, draft: editedRecipe };
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-router-recipe', mountNonce: 'fixture-router-recipe' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' }, surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(), subPath: 'router-1', adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput,
+        executeAction: async ({ action, input }) => {
+          if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) return readReply;
+          if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
+            updateInputs.push(input);
+            return { kind: 'updated', bindingId: 'router-1', revision: 2, authorityEpoch: 1 };
+          }
+          throw new Error(`Unexpected mounted Action: ${String(action)}`);
+        },
+        readResource: bindingResourceReader(() => routerBindingsResource),
+      },
+    });
+    try {
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('1. People in sales, forwarded mail')).resolves.toBeDefined();
+      });
+      await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
+      await vi.waitFor(async () => {
+        const choose = await fixture.getByRole('button', { name: 'Choose recipe' });
+        expect(choose.state?.disabled).not.toBe(true);
+      });
+      await fixture.press(await fixture.getByRole('button', { name: 'Choose recipe' }));
+      await vi.waitFor(() => expect(selectActionInput).toHaveBeenCalledOnce());
+      await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
+      await vi.waitFor(() => expect(updateInputs).toHaveLength(1));
+      expect(updateInputs[0]).toMatchObject({ target: { routes: [{ recipe: editedRecipe }] } });
     } finally {
       await fixture.dispose();
     }
