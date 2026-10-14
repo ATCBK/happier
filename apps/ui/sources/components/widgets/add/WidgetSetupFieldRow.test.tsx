@@ -20,6 +20,9 @@ import type { WidgetSetupField } from './widgetSetupModel';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// The field's choices float in the host's Popover; render it in place so the real rows are driven.
+vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal as never) as never);
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key: string) => key }));
@@ -155,7 +158,7 @@ describe('widget setup fields share the typed-field owners', () => {
         expect(onChange).toHaveBeenLastCalledWith({ kind: 'pin', value: { relative: '7days' } });
         await screen.unmount();
     });
-    it('uses the typed Session picker from the real Usage declaration in both Add and Edit', async () => {
+    it('chooses the Usage Session in place from the real Usage declaration in both Add and Edit, with no picker dialog', async () => {
         const candidate = selectBuiltinWidgetCandidates().find(candidate => candidate.definition?.kind === 'builtin'
             && candidate.definition.id === 'usage_daily')!;
         const before = { period: { startMs: 100, endMs: 200 }, session: ['saved'], metric: 'cost' };
@@ -173,34 +176,25 @@ describe('widget setup fields share the typed-field owners', () => {
                 const entry = setup.fields.find(entry => entry.field.path === path)!;
                 const saved = draft.bindings[path];
                 const current = saved?.kind === 'value' ? saved.value : undefined;
-                let settlement: unknown = { kind: 'cancelled' };
                 const port = createInputTypePickerPort({
                     resolveType: () => { throw new Error('Usage is a host input'); },
                     canOpenPicker: () => { throw new Error('Usage is a host input'); },
                     openPicker: async () => { throw new Error('Usage is a host input'); },
-                    // This is the modal boundary; picker admission and Add/Edit binding logic stay real.
-                    openHostPicker: async request => {
-                        expect(request.value).toEqual(current);
-                        return settlement;
-                    },
+                    openHostPicker: async () => { throw new Error('The Session chooses in place'); },
                 });
                 const onChange = vi.fn((change: WidgetSetupFieldChange) => { draft = setWidgetSetupBinding(draft, path, change); });
+                const options = [{ value: 'chosen', label: 'Orchard and meadow' }];
                 const screen = await renderScreen(<HappierInputPickerProvider port={port}>
                     <WidgetSetupFieldRow entry={entry}
-                        row={describeWidgetSetupRow({ entry, draft, resolution: setup.resolve(draft), options: [] })}
-                        options={[]} optionsStatus="ready" plainValue={current} phone={false}
+                        row={describeWidgetSetupRow({ entry, draft, resolution: setup.resolve(draft), options })}
+                        options={options} optionsStatus="ready" plainValue={current} phone={false}
                         onChange={onChange} testID={`usage.${path}`} />
                 </HappierInputPickerProvider>);
-                expect(screen.findByTestId(`usage.${path}.control-picker`)).not.toBeNull();
-                const choose = async () => act(async () => {
-                    screen.findByTestId(`usage.${path}.control-picker`)!.props.onPress();
-                    await new Promise(resolve => setTimeout(resolve, 0));
-                });
-                await choose();
-                expect(onChange).not.toHaveBeenCalled();
-                settlement = { kind: 'completed', input: selected };
-                await choose();
-                expect(draft.bindings[path]).toEqual({ kind: 'value', value: selected });
+                expect(screen.root.findAll(node => typeof node.type === 'string' && node.props.testID === `usage.${path}.control-picker`)).toHaveLength(0);
+                await screen.pressByTestIdAsync(`usage.${path}.control.trigger`);
+                await screen.pressByTestIdAsync(`usage.${path}.option.0`);
+                const [pinned] = selected;
+                expect(draft.bindings[path]).toEqual({ kind: 'value', value: pinned });
                 expect(draft.bindings.metric).toEqual({ kind: 'value', value: 'cost' });
                 await screen.unmount();
             }

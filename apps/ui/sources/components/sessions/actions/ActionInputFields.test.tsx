@@ -36,6 +36,9 @@ const choiceRow = (screen: Awaited<ReturnType<typeof renderScreen>>, label: stri
             && String(node.props.accessibilityLabel ?? '').startsWith(label);
     });
 
+// The field's choices float in the host's Popover; render it in place so the real rows are driven.
+vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal as never) as never);
 describe('ActionInputFields', () => {
     it('retains one array-valued group choice and writes its replacement as one choice', async () => {
         const { ActionInputFields } = await import('./ActionInputFields');

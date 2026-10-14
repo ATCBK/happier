@@ -41,11 +41,11 @@ export function createInputTypePickerPort(host: InputTypePickerPortHost): Happie
     };
     return {
         describe: (field) => (field.inputType && 'hostType' in field.inputType
-            // A Usage field with its own few choices (the Period) offers them in place; only a real
-            // picker (the Session list) opens the host's dialog. The Period is named too, because a
-            // group saved before its choices were declared still carries the older hint.
+            // A Usage field (the Period, the Session) offers its choices in place from its type's own
+            // source; only a whole Usage query opens the host's dialog. The field is named by its type,
+            // because a group saved before its choices were declared still carries the older hint.
             ? field.inputType.hostType === 'usageQuery' && host.openHostPicker !== undefined
-                && field.inputType.field !== 'period' && field.optionsSourceId === undefined && field.options === undefined
+                && field.inputType.field === undefined && field.optionsSourceId === undefined && field.options === undefined
             : pickerFor(field.inputType) !== null) ? {
             label: t('inputPicker.browse'),
             accessibilityLabel: t('inputPicker.browseField', { field: field.title }),

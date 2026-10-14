@@ -61,7 +61,7 @@ export type HappierInputFieldProps<Value> = Readonly<{
   /** The control's test id (text input or toggle). */
   controlTestID?: string;
   testID?: string;
-  /** The host's reading of a value the options cannot name; a picker-only field shows it in its trigger. */
+  /** The host's reading of the value: a picker-only field shows it in its trigger, and a choice field while its options cannot name it (still loading, or gone). */
   valueLabel?: string;
   /** A host's request to show the choices now (a repair, a keyboard hand-off); each new positive value opens them. */
   openRequest?: number;
@@ -178,6 +178,7 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
         minimumSelections={presentation.multiple && field.required ? 1 : undefined}
         required={field.required}
         placeholder={field.placeholder}
+        {...(props.valueLabel === undefined ? {} : { reading: props.valueLabel })}
         {...(props.testID === undefined ? {} : { testID: props.testID })}
         {...(props.openRequest === undefined ? {} : { openRequest: props.openRequest })}
         disabled={disabled || !optionsSettled || noChoices}

@@ -24,6 +24,9 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const accessibilityBoundary = vi.hoisted(() => ({ os: 'web', announce: vi.fn() }));
+// The field's choices float in the host's Popover; render it in place so the real rows are driven.
+vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal as never) as never);
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
     Platform: { get OS() { return accessibilityBoundary.os; } },
     AccessibilityInfo: { announceForAccessibility: accessibilityBoundary.announce },

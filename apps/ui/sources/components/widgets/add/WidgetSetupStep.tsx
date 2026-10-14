@@ -22,6 +22,7 @@ import { WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl'
 import { useFailureExplainedByUnreachableHome } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
+import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { WidgetSetupFieldRow, type WidgetSetupFieldChange } from './WidgetSetupFieldRow';
 import {
     describeWidgetSetupBlocker,
@@ -191,6 +192,7 @@ export function WidgetSetupStep(props: Readonly<{
         <InputTypePickerHostProvider enabled={setup.fields.some(({ field }) => field.inputType !== undefined)}
             {...options.resolveOptions.pickerContext}
             contextKey={JSON.stringify([consumer, draft, options.snapshot])}>
+        <CoreCollectionScope>
         <ListPresentationProvider value="page">
             {/* In the Add pane the inputs' sheet shares the title's and the preview's edges (lab A2/A2p). */}
             <ItemGroup surface={pane ? 'sheet' : 'none'} density="compact" {...(pane ? { style: PANE_SHEET_FLUSH } : {})}>
@@ -228,6 +230,7 @@ export function WidgetSetupStep(props: Readonly<{
                 })}
             </ItemGroup>
         </ListPresentationProvider>
+        </CoreCollectionScope>
         </InputTypePickerHostProvider>
     );
 

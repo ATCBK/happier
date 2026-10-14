@@ -177,7 +177,8 @@ function findValue(values: readonly WidgetSetupValue[], value: JsonValue | undef
 function plainLabel(value: JsonValue | undefined, field: InputFieldHint, options: readonly WidgetSetupValue[] = []): string | null {
     const choiceLabel = describeBuiltinInputOptionValue(field.optionsSourceId, value);
     if (choiceLabel !== null) return choiceLabel;
-    if (field.widget === 'multiselect' && Array.isArray(value)) {
+    // A list names its choices; a one-choice field an older save kept as a list ([id]) names it too, not "1 selected".
+    if (Array.isArray(value) && (field.widget === 'multiselect' || (value.length > 0 && value.every(selected => findValue(options, selected) !== null)))) {
         if (!value.length) return field.placeholder ?? null;
         return value.map(selected => findValue(options, selected)?.label ?? plainLabel(selected, field)).filter(Boolean).join(' · ');
     }

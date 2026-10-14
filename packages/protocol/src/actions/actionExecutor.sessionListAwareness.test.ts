@@ -9,7 +9,11 @@ import { encodeV2SessionListCursorV1 } from '../sessions/listing/cursor.js';
 import { projectSessionAwarenessV1 } from '../sessions/awareness/projectV1.js';
 
 function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
-  return createActionExecutor({
+  return createActionExecutor(createExecutorDeps(overrides));
+}
+
+function createExecutorDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutorDeps {
+  return ({
     executionRunStart: async () => ({}),
     executionRunList: async () => ({}),
     executionRunGet: async () => ({}),
@@ -126,6 +130,22 @@ describe('session.list execution', () => {
       { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false } },
       { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false, cursor } },
     ]);
+  });
+
+  it('offers the Usage Session filter the same Home sessions by name, valued as the session id it stores', async () => {
+    // The type's own source (`inputTypeOptionsSourceId`), which a Usage Session field reads by default.
+    const { resolveInputOptions } = await import('../inputs/inputOptions.js');
+    const deps = createExecutorDeps({ sessionList: async () => buildSessionAwarenessListResultV1({
+      sessions: [{ v: 1, sessionId: 'orchard', title: 'Orchard and meadow', lifecycle: 'active', runtime: 'idle', freshness: 'live',
+        operational: { primary: 'none', reasons: [] }, encryption: 'plain', availability: 'complete' }],
+      nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+    }) });
+    await expect(resolveInputOptions({ deps, ctx: { surface: 'ui', authority: 'present_user', serverId: 'home-current' },
+      actionId: null, optionsSourceId: 'host-input:usageQuery:session', input: {},
+      readFailure: () => null, resolveSessionId: () => null, reviewScope: () => undefined,
+    })).resolves.toMatchObject({ ok: true, result: [
+      { value: 'orchard', label: 'Orchard and meadow', description: 'Recent' },
+    ] });
   });
 
   it('does not return partial Session options when current read authority is refused on continuation', async () => {

@@ -49,6 +49,10 @@ describe('native reference input picker projection', () => {
     });
     const field = { path: 'query', title: 'Usage', widget: 'json' as const, inputType: { hostType: 'usageQuery' as const } };
     expect(port.describe(field)).not.toBeNull();
+    // The Usage Period and Session choose in place from their type's source, also from an older saved hint.
+    for (const projection of ['period', 'session'] as const) {
+        expect(port.describe({ path: projection, title: projection, widget: 'select', inputType: { hostType: 'usageQuery', field: projection } })).toBeNull();
+    }
     expect(await port.pick({ field, value: undefined, signal: new AbortController().signal })).toMatchObject({
       status: 'selected', value: { agents: ['a', 'b'], metric: 'cost' },
     });

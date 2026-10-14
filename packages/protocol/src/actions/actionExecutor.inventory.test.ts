@@ -315,9 +315,9 @@ describe('createActionExecutor (inventory/discovery)', () => {
       surface: { ...surface, accountId: 'other' } } }, { serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
     expect(await executor.execute('action.options.resolve', request, { serverId: 'other-home' })).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
   });
-  it('discovers every Home machine including offline choices through the typed widget input', async () => {
+  it('discovers every Home machine including offline choices, available ones first, through the typed widget input', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
-    const machines = Array.from({ length: 251 }, (_, index) => ({ serverId: 'home', machineId: `m-${index}`, label: `Machine ${index}`, active: index !== 250 }));
+    const machines = Array.from({ length: 251 }, (_, index) => ({ serverId: 'home', machineId: `m-${index}`, label: `Machine ${index}`, active: index !== 0 }));
     const executor = createActionExecutor({ ...createDeps(), machinesList: async () => ({ items: machines }),
       widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) });
     const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
@@ -326,8 +326,9 @@ describe('createActionExecutor (inventory/discovery)', () => {
     if (!result.ok) return;
     const options = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result).options;
     expect(options).toHaveLength(251);
-    expect(options[0]).toEqual({ value: { serverId: 'home', machineId: 'm-0' }, label: 'Machine 0', description: 'Online' });
-    expect(options.at(-1)).toEqual({ value: { serverId: 'home', machineId: 'm-250' }, label: 'Machine 250', description: 'Offline' });
+    // A machine that can answer now leads; the offline ones follow in their listed order.
+    expect(options[0]).toEqual({ value: { serverId: 'home', machineId: 'm-1' }, label: 'Machine 1', description: 'Online' });
+    expect(options.at(-1)).toEqual({ value: { serverId: 'home', machineId: 'm-0' }, label: 'Machine 0', description: 'Offline' });
   });
   it('requires a qualified machine before discovering its volume choices from the vitals owner', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };

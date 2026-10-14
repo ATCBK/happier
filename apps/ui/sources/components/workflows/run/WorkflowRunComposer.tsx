@@ -14,6 +14,7 @@ import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput
 import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
 import { useInputFieldOptions } from '@/components/sessions/actions/useInputFieldOptions';
 import { InputTypePickerHostProvider } from '@/components/sessions/actions/InputTypePickerHostProvider';
+import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { SurfaceStateCard } from '@/components/ui/surfaces';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { PluginContextualResourceStoreProvider } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
@@ -419,7 +420,7 @@ export function WorkflowRunInputs(props: Readonly<{
     return <InputTypePickerHostProvider enabled={props.fields.some((field) => field.definition.inputType !== undefined)}
         {...resolveOptions.pickerContext}
         contextKey={JSON.stringify([props.optionsConsumer, props.values, snapshot])}>
-        <View style={styles.fields}>{props.fields.map((field) => {
+        <CoreCollectionScope><View style={styles.fields}>{props.fields.map((field) => {
         const definition = field.definition;
         const presentation = props.presentation?.[definition.name];
         const title = presentation?.title ?? definition.name;
@@ -473,5 +474,5 @@ export function WorkflowRunInputs(props: Readonly<{
                 inputMode={definition.valueType === 'number' ? 'decimal' : undefined}
                 editable={!props.pending} onChangeText={(text) => props.onChangeText(definition.name, text)} />
         </FieldItem>;
-    })}</View></InputTypePickerHostProvider>;
+    })}</View></CoreCollectionScope></InputTypePickerHostProvider>;
 }
