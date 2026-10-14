@@ -88,12 +88,12 @@ function useNativeDownloads(fs: ReturnType<typeof createFs>, data: (url: string)
   // Bytes native reports written; error responses write their body, which can exceed the asset size.
   writtenBytes?: (url: string) => number;
   // Holds the native transfer open so tests can observe how many run at once.
-  inFlight?: () => Promise<void>;
+  inFlight?: (url: string) => Promise<void>;
 } = {}) {
   nativeDownload.mockImplementation((url, destination, options, onProgress) => ({
     async downloadAsync() {
       requested.push(url);
-      await transfer.inFlight?.();
+      await transfer.inFlight?.(url);
       fs.files.set(destination, new Uint8Array(data(url)));
       const written = transfer.writtenBytes?.(url);
       if (written !== undefined) onProgress?.({ totalBytesWritten: written, totalBytesExpectedToWrite: written });
@@ -202,7 +202,8 @@ describe('modelPacks installer (native)', () => {
       })).rejects.toThrow('aborted');
       expect(openHandles.size).toBe(0);
       expect(files.has(`${PACK_URI}/pack.json`)).toBe(false);
-      expect(files.has(fileUri)).toBe(state === 'existing');
+      // Cancelling discards the partial pack, including files kept from an earlier interrupted attempt.
+      expect(files.has(fileUri)).toBe(false);
     });
   });
 
@@ -277,19 +278,40 @@ describe('modelPacks installer (native)', () => {
     });
 
     it('stops the pack on a non-retryable failure and reports that failure rather than sibling cancellation', async () => {
-      const { bytes, manifest: remote } = await packOf(24);
+      const { bytes, manifest: remote } = await packOf(48);
       const fs = createFs();
       const requested: string[] = [];
       useNativeDownloads(fs, () => bytes, requested, {
         status: (url) => (url === 'https://example.com/f1' ? 404 : 200),
-        inFlight: () => new Promise((resolve) => setTimeout(resolve, 5)),
+        // The failing file answers last, so earlier siblings have verified by then.
+        inFlight: (url) => new Promise((resolve) => setTimeout(resolve, url.endsWith('/f1') ? 30 : 5)),
       });
       await expect(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
         fs, fetch: fetchManifest(remote),
       })).rejects.toThrow('model_pack_download_failed:404');
       expect(requested.filter((url) => url === 'https://example.com/f1')).toHaveLength(1);
-      expect(requested.length).toBeLessThan(24);
+      expect(requested.length).toBeLessThan(48);
       expect(fs.files.has(`${PACK_URI}/pack.json`)).toBe(false);
+      // Unlike a cancellation, a failure keeps verified files so retrying resumes.
+      expect(fs.files.has(`${PACK_URI}/espeak-ng-data/lang/f0`)).toBe(true);
+    });
+
+    it('discards every downloaded file when the user cancels an install', async () => {
+      const { bytes, manifest: remote } = await packOf(24);
+      const fs = createFs();
+      const controller = new AbortController();
+      let completed = 0;
+      useNativeDownloads(fs, () => bytes, [], {
+        inFlight: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          completed += 1;
+          if (completed === 8) controller.abort();
+        },
+      });
+      await expect(ensureModelPackInstalled({ ...installOptions, signal: controller.signal }, {
+        fs, fetch: fetchManifest(remote),
+      })).rejects.toThrow('aborted');
+      expect([...fs.files.keys()].filter((uri) => uri.startsWith(`${PACK_URI}/`))).toEqual([]);
     });
 
     it('never reports more progress than the pack size when a failed response body is larger than the asset', async () => {
@@ -426,6 +448,34 @@ describe('modelPacks installer (native)', () => {
       fs.files.set(leftover, new Uint8Array([9]));
       await ensureModelPackInstalled({ ...updateOptions, signal: new AbortController().signal }, { fs, fetch: fetchManifest(installed) });
       expect(fs.files.has(leftover)).toBe(false);
+    });
+
+    it('discards staged update files but keeps the installed pack when the user cancels an update', async () => {
+      const fs = createFs();
+      const original = new Uint8Array([2]);
+      const installed = await installedPack(fs, [{ path: 'a.bin', bytes: original }, { path: 'b.bin', bytes: original }]);
+      const next = new Uint8Array([7]);
+      const remote = manifest([
+        { path: 'a.bin', url: 'https://example.com/v2/a.bin', sha256: await sha256Hex(next), sizeBytes: 1 },
+        { path: 'b.bin', url: 'https://example.com/v2/b.bin', sha256: await sha256Hex(next), sizeBytes: 1 },
+      ], 'v2');
+      const controller = new AbortController();
+      useNativeDownloads(fs, () => next, [], {
+        // a.bin finishes; cancelling while b.bin is in flight leaves a staged file behind without cleanup.
+        inFlight: async (url) => {
+          if (!url.endsWith('b.bin')) return;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          controller.abort();
+        },
+      });
+
+      await expect(ensureModelPackInstalled({ ...updateOptions, signal: controller.signal }, {
+        fs, fetch: fetchManifest(remote),
+      })).rejects.toThrow('aborted');
+
+      expect([...fs.files.keys()].filter((uri) => uri.includes('/modelPackUpdates/'))).toEqual([]);
+      expect(fs.files.get(`${PACK_URI}/a.bin`)).toEqual(original);
+      expect(JSON.parse(await new fs.File(PACK_URI, 'pack.json').text()).manifest).toEqual(installed);
     });
 
     it('keeps the installed pack usable when an update download fails', async () => {

@@ -35,6 +35,15 @@ async function readInstalledManifest(meta: any): Promise<ModelPackManifest | nul
   }
 }
 
+function deletePack(fs: InstallerFs, id: string): void {
+  try {
+    getPackRootDir(fs, id).delete({ idempotent: true });
+  } catch {
+    // ignore
+  }
+  removePackUpdateDir(fs, id);
+}
+
 function removePackUpdateDir(fs: InstallerFs, id: string): void {
   try {
     getPackUpdateDir(fs, id).delete({ idempotent: true });
@@ -78,14 +87,19 @@ async function applyPackUpdate(opts: {
     // ignore
   }
   // The installed pack stays untouched until every changed file is verified; staged files survive a
-  // failed attempt, so retrying the update resumes instead of starting over.
-  await downloadManifestFiles({
-    fs: opts.fs,
-    rootDir: stagingDir,
-    manifest: { ...opts.remote, files: changed },
-    signal: opts.signal,
-    onProgress: opts.onProgress,
-  });
+  // failed attempt, so retrying the update resumes instead of starting over. Cancelling discards them.
+  try {
+    await downloadManifestFiles({
+      fs: opts.fs,
+      rootDir: stagingDir,
+      manifest: { ...opts.remote, files: changed },
+      signal: opts.signal,
+      onProgress: opts.onProgress,
+    });
+  } catch (error) {
+    if (opts.signal.aborted) removePackUpdateDir(opts.fs, opts.id);
+    throw error;
+  }
 
   // While files move the pack is not installed, so an interrupted swap reinstalls instead of loading a
   // mix of builds; the reinstall reuses files that already verify.
@@ -184,13 +198,19 @@ export async function ensureModelPackInstalled(
   }
   assertManifestPathsSafe(manifest);
 
-  await downloadManifestFiles({
-    fs,
-    rootDir,
-    manifest,
-    signal: opts.signal,
-    onProgress: opts.onProgress,
-  });
+  try {
+    await downloadManifestFiles({
+      fs,
+      rootDir,
+      manifest,
+      signal: opts.signal,
+      onProgress: opts.onProgress,
+    });
+  } catch (error) {
+    // Cancelling discards the partial pack; after a failure verified files stay so retrying resumes.
+    if (opts.signal.aborted) deletePack(fs, id);
+    throw error;
+  }
   writeInstalledManifest(meta, manifest);
   removePackUpdateDir(fs, id);
 
@@ -254,14 +274,6 @@ export async function getModelPackInstallSummary(
 export async function removeModelPack(opts: { packId: string | null }, overrides: InstallerOverrides = {}): Promise<void> {
   const fs = await getFs(overrides);
   const id = normalizePackId(opts.packId);
-  const rootDir = getPackRootDir(fs, id);
-  try {
-    if (rootDir.exists) {
-      rootDir.delete({ idempotent: true });
-    }
-  } catch {
-    // ignore
-  }
-  removePackUpdateDir(fs, id);
+  deletePack(fs, id);
 }
 
