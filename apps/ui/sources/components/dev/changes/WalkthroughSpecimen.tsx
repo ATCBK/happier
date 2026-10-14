@@ -181,6 +181,7 @@ function Lifecycle() {
             <LifecycleCell caption={`${L} 6 · Stale after a later edit`} reading={{ ...COMPLETE, reviewed: reviewed(1) }} view={{ stale: { onRefresh: noop } }} />
             <LifecycleCell caption={`${L} 7 · Failed`} reading={FAILED} view={{ onRetry: noop, onChooseModel: noop }} />
             <LifecycleCell caption={`${L} 8 · Machine offline`} reading={{ ...COMPLETE, reviewed: reviewed(2) }} view={{ offline: { machine: 'MacBook Pro', time: '10:42' }, scopeDetail: 'from 10:42' }} />
+            <LifecycleCell caption={`WT3-D4 · Generator ended`} reading={{ ...COMPLETE, reviewed: reviewed(1) }} view={{ endedConversation: { onStartNew: noop, onAskSession: noop } }} />
             <LifecycleCell caption={`${L} · Not written yet`} reading={{ ...COMPLETE, walkthrough: null, reviewed: null }} view={{ onShowFiles: noop }} />
         </ScrollView>
     );
@@ -266,9 +267,9 @@ export const WALKTHROUGH_SPECIMEN_FRAMES: readonly WalkthroughSpecimenFrame[] = 
 
 const styles = StyleSheet.create((theme) => ({
     fill: { flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 24, padding: 24 },
-    cell: { width: 575, gap: 8 },
-    cellCaption: { fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') },
+    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s24, padding: theme.space.s24 },
+    cell: { width: 575, gap: theme.space.s8 },
+    cellCaption: { ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary,  },
     cellFrame: {
         height: 420,
         borderRadius: 12,
@@ -288,7 +289,7 @@ const styles = StyleSheet.create((theme) => ({
         borderTopRightRadius: 18,
         backgroundColor: theme.colors.surface.base,
     },
-    grabber: { alignSelf: 'center', width: 36, height: 5, borderRadius: 3, marginTop: 8, backgroundColor: theme.colors.border.strong },
+    grabber: { alignSelf: 'center', width: 36, height: 5, borderRadius: 3, marginTop: theme.space.s8, backgroundColor: theme.colors.border.strong },
     update: { fontSize: 13, lineHeight: 19, color: theme.colors.text.secondary, ...Typography.default() },
     updateStrong: { color: theme.colors.text.primary, ...Typography.default('semiBold') },
 }));

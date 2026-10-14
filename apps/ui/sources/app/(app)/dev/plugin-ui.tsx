@@ -372,20 +372,21 @@ function PluginStateSamples() {
                 <CollectionPreviewSample />
             </Sample>
             <Sample title="Plugin State — loading">
-                <PluginState resource={{ status: 'loading' }} />
+                <PluginState resource={{ freshness: 'unknown', pending: 'initial', subscription: 'unsupported' }} />
             </Sample>
             <Sample title="Plugin State — empty">
                 <PluginState
-                    resource={{ status: 'empty' }}
+                    resource={{ freshness: 'fresh', pending: 'idle', subscription: 'unsupported' }}
                     empty={<PluginEmptyState title="No findings" description="This project is clean." testID="plugin-empty-state" />}
                 />
             </Sample>
             <Sample title="Plugin State — error">
-                <PluginState resource={{ status: 'error', message: 'The review service did not answer.' }} />
+                <PluginState resource={{ freshness: 'unknown', pending: 'idle', subscription: 'unsupported', error: { message: 'The review service did not answer.' } }} />
             </Sample>
             <Sample title="Plugin State — ready">
-                <PluginState resource={{ status: 'ready', value: '4 findings' }}>
-                    {(value: string) => <PluginText value={value} testID="plugin-state-ready" />}
+                <PluginState resource={{ freshness: 'fresh', pending: 'idle', subscription: 'unsupported',
+                    value: { contentType: 'text/plain', digest: 'sample-ready', bytes: new TextEncoder().encode('4 findings') } }}>
+                    {(value) => <PluginText value={new TextDecoder().decode(value.bytes)} testID="plugin-state-ready" />}
                 </PluginState>
             </Sample>
             <Sample title="Plugin LoadingState with copy">
@@ -850,7 +851,7 @@ export default function PluginUiSharedPresentationScreen() {
                     </Sample>
                     <Sample title="Core foundation presentation">
                         <HappierUiEnvironmentProvider environment={corePresentationEnvironment}>
-                            <View style={{ gap: 8 }}>
+                            <View style={{ gap: theme.space.s8 }}>
                                 <HappierHeading level={2} theme={presentationTheme}>Presentation status</HappierHeading>
                                 <HappierHeading level={6} theme={presentationTheme}>Shared with plugin adapters</HappierHeading>
                                 <HappierDivider color={presentationTheme.colors.divider} />
@@ -912,11 +913,11 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.background.canvas,
     },
     content: {
-        padding: 16,
-        gap: 24,
+        padding: theme.space.s16,
+        gap: theme.space.s24,
     },
     section: {
-        gap: 12,
+        gap: theme.space.s12,
     },
     sectionTitle: {
         fontSize: 18,
@@ -924,24 +925,24 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     sample: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     sideBySide: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 16,
+        gap: theme.space.s16,
     },
     sideColumn: {
         flexGrow: 1,
         flexShrink: 1,
         flexBasis: 380,
         minWidth: 0,
-        gap: 6,
+        gap: theme.space.s6,
     },
     // The plugin half sits on the same paper a core page does.
     pluginPaper: {
         backgroundColor: theme.colors.surface.base,
-        paddingBottom: 24,
+        paddingBottom: theme.space.s24,
         // The public Stack root keeps its natural content height. A column
         // stretches it to this pane's width rather than its intrinsic row width.
         flexDirection: 'column',
@@ -954,7 +955,7 @@ const styles = StyleSheet.create((theme) => ({
     columnPair: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 16,
+        gap: theme.space.s16,
     },
     // A column of the shell's width and a short list's height, on the column's own plane.
     navigationColumn: {
