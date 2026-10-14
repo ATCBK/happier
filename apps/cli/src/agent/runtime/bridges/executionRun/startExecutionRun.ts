@@ -31,6 +31,7 @@ import { prepareSessionMemoryInheritance } from '@/agent/prompting/coding/sessio
 import { readWorktreeChangeFingerprint } from '@/scm/readWorktreeChangeFingerprint';
 import { runScmCommand } from '@/scm/runtime';
 import type { ExecutionRunHostRuntime } from './executionRunHostRuntime';
+import type { RegisterExecutionRunOccurrence } from './runOccurrenceWitness';
 import type {
   ExecutionRunManagerStartParams,
   ExecutionRunStartResult,
@@ -251,6 +252,7 @@ type StartExecutionRunArgs = Readonly<{
   childSelectionContext?: Readonly<{
     lifecycle: 'attached' | 'independent';
     readAppliedParentSelection?: () => Promise<ExecutionRunAppliedParentSelection> | ExecutionRunAppliedParentSelection;
+    resolvedSelection?: ResolvedExecutionRunChildSelection;
   }>;
   admitInheritedProviderSelection?: (selection: ResolvedExecutionRunChildSelection, runId: string) => Promise<void>;
   profileCatalog?: ExecutionRunProfileContributionCatalog;
@@ -322,6 +324,8 @@ type StartExecutionRunArgs = Readonly<{
    * occurrence became current. It returns the occurrence's release operation.
    */
   attachRetainedRunSessionInput?: AttachRetainedRunSessionInput;
+  /** Register the current controller before native provisioning can compose MCP. */
+  registerRunOccurrence?: RegisterExecutionRunOccurrence;
 }>;
 
 export async function startExecutionRun(args: StartExecutionRunArgs): Promise<ExecutionRunStartResult> {
@@ -374,7 +378,7 @@ async function startAdmittedExecutionRun(
       ? await prepareSessionMemoryInheritance({ metadata: readRecord(args.params.roleSessionMetadata),
         credentials: args.params.promptCredentials })
       : null;
-    if (role || inheritedMemory?.promptStack.length) {
+    if (args.params.launchProfileId || role || inheritedMemory?.promptStack.length) {
       const plan = await resolveEffectiveCodingPromptPlan({
         toolDelivery: resolveAgentToolsDelivery(resolveExecutionRunRuntimeBackendId(args.params.backendTarget)),
         credentials: args.params.promptCredentials,
@@ -442,7 +446,7 @@ async function startAdmittedExecutionRun(
   let parent: ExecutionRunAppliedParentSelection | undefined;
   try {
     const lifecycle = args.childSelectionContext?.lifecycle ?? 'independent';
-    if (lifecycle === 'attached') {
+    if (lifecycle === 'attached' && !args.childSelectionContext?.resolvedSelection) {
       try {
         parent = await args.childSelectionContext?.readAppliedParentSelection?.() ?? { status: 'unavailable' };
       } catch {
@@ -456,7 +460,7 @@ async function startAdmittedExecutionRun(
     if (originalParams.childSelection === 'agentDefault' && !originalParams.accountSettings) {
       throw Object.assign(new Error('The child Account defaults are unavailable. Choose an explicit model.'), { code: 'execution_run_child_default_unavailable' });
     }
-    childSelection = resolveExecutionRunChildSelection({
+    childSelection = args.childSelectionContext?.resolvedSelection ?? resolveExecutionRunChildSelection({
       backendTarget: originalParams.backendTarget,
       lifecycle,
       modelId: originalParams.intent === 'voice_agent' ? originalParams.modelId ?? originalParams.chatModelId : originalParams.modelId,
@@ -801,6 +805,7 @@ async function startAdmittedExecutionRun(
       // reach that exact start occurrence while provision/READY awaits are live.
       const ctrl: ExecutionRunVoiceAgentController = {
         kind: 'voice_agent',
+        ...(args.profileCatalog ? { profileCatalog: args.profileCatalog } : {}),
         controllerOccurrenceId,
         voiceAgentId: runId,
         cancelled: false,
@@ -816,6 +821,8 @@ async function startAdmittedExecutionRun(
       };
       args.controllers.set(runId, ctrl);
       registeredController = ctrl;
+      const releaseOccurrence = args.registerRunOccurrence?.({ runId, sidechainId, controller: ctrl });
+      if (releaseOccurrence) ctrl.releaseSessionInputAttachment = async () => releaseOccurrence();
 
       const startedVoice = await args.voiceAgentManager.start({
         voiceAgentId: runId,
@@ -1010,6 +1017,7 @@ async function startAdmittedExecutionRun(
     });
     ctrl = {
       kind: 'backend',
+      ...(args.profileCatalog ? { profileCatalog: args.profileCatalog } : {}),
       ...(args.params.workflowRunId ? { workflowRunId: args.params.workflowRunId } : {}),
       controllerOccurrenceId,
       backend,
@@ -1052,6 +1060,8 @@ async function startAdmittedExecutionRun(
     args.controllers.set(runId, ctrl);
     registeredController = ctrl;
     backendBeforeControllerRegistration = null;
+    const releaseOccurrence = args.registerRunOccurrence?.({ runId, sidechainId, controller: ctrl });
+    if (releaseOccurrence) ctrl.releaseSessionInputAttachment = async () => releaseOccurrence();
     // A lazy host runtime may have to spawn/connect to the native backend before it can
     // answer its resume capabilities. The run is already accepted and registered, so keep
     // that optional discovery inside controller-owned provisioning instead of withholding
@@ -1149,7 +1159,10 @@ async function startAdmittedExecutionRun(
           }
 
           void args
-            .executeBoundedRun({ runId, callId, sidechainId, startedAtMs, params: startParams })
+            .executeBoundedRun({ runId, callId, sidechainId, startedAtMs, params: {
+              ...startParams,
+              ...(startProfileSourceCustody ? { profileSourceCustody: startProfileSourceCustody } : {}),
+            } })
             .finally(async () => {
               // Converge with stop/disposal even if executeBoundedRun throws before its own settlement.
               await settleExecutionRunController({ runId, controller: ctrl, controllers: args.controllers });
@@ -1325,7 +1338,11 @@ async function startAdmittedExecutionRun(
             sidechainId,
             controller: ctrl,
           }) ?? null;
-          ctrl.releaseSessionInputAttachment = attachment?.release;
+          const releaseOccurrence = ctrl.releaseSessionInputAttachment;
+          ctrl.releaseSessionInputAttachment = async () => {
+            await releaseOccurrence?.();
+            await attachment?.release();
+          };
           if (initialInstructions.trim().length > 0) {
             const admission = attachment
               ? attachment.awaitInputAdmission(retainedInitialInputLocalId)

@@ -1883,6 +1883,11 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
             await open();
             const inputOrdinal = ++turnOrdinal;
             const localId = meta?.localId ?? `${runId}-input-${inputOrdinal}`;
+            const userMessageSeq = meta?.userMessageSeq !== undefined
+                ? meta.userMessageSeq
+                : params.options.scope === 'session_owned'
+                    ? params.options.sessionInteractionHost?.session.getCommittedUserMessageSeq?.(localId) ?? null
+                    : null;
             let resolvedInput: AgentSessionInput;
             try {
                 resolvedInput = params.createSessionContext.resolveStructuredInputForDispatch
@@ -1896,7 +1901,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 ...meta,
                 localId,
                 ...(resolvedInput.structuredInput === undefined ? {} : { structuredInput: resolvedInput.structuredInput }),
-                ...(meta?.userMessageSeq !== undefined ? { userMessageSeq: meta.userMessageSeq } : {}),
+                userMessageSeq,
                 ...(meta?.userMessageSeqs ? { userMessageSeqs: meta.userMessageSeqs } : {}),
                 ...(meta?.causalPermissionAuthority
                     ? { causalPermissionAuthority: meta.causalPermissionAuthority }

@@ -3036,7 +3036,21 @@ export function createNativeAgentSessionOperations(
     };
     let subscription: ReturnType<AgentSessionRuntime['watch']> | null = null;
     const ensureSubscription = (): void => {
-        subscription ??= session.watch(observeNativeEvent);
+        if (subscription) return;
+        let current = true;
+        const watch = session.watch((event) => {
+            if (current && !disposeStarted) observeNativeEvent(event);
+        });
+        subscription = {
+            dispose() {
+                current = false;
+                try {
+                    watch.dispose();
+                } catch {
+                    logger.debug('[NativeAgentSession] failed to dispose native event watch (non-fatal)');
+                }
+            },
+        };
     };
     const readPendingNewTurnId = (): string | null => {
         const pendingTurnIds = new Set(
