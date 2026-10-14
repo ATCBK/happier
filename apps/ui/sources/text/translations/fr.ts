@@ -4390,6 +4390,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       },
     },
     quota: {
+      refreshing: "Actualisation de l’utilisation…",
       loading: "Chargement…",
       error: ({ message }: { message: string }) => `Erreur : ${message}`,
       lastUpdated: ({ time }: { time: string }) =>
@@ -12956,9 +12957,9 @@ settingsSession: {
       mediatorVerbosityBalanced: "Équilibré",
       mediatorIdleTtl: "TTL d’inactivité de l’agent vocal",
       mediatorIdleTtlSubtitle:
-        "Arrêter l’agent vocal après inactivité (60–21600 s)",
-      mediatorIdleTtlDescription: "Saisis un nombre entre 60 et 21600.",
-      mediatorIdleTtlInvalid: "Saisis un nombre entre 60 et 21600.",
+        "Arrêter l’agent vocal après inactivité",
+      mediatorIdleTtlDescription: "Saisis un nombre entier positif de secondes.",
+      mediatorIdleTtlInvalid: "Saisis un nombre entier positif de secondes.",
       mediatorChatModelSource: "Source du modèle de chat de l’agent vocal",
       mediatorChatModelSourceSubtitle:
         "Utiliser le modèle de la session, ou un modèle rapide personnalisé",

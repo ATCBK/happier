@@ -13,7 +13,7 @@ import {
 import { VoiceConnectionSection } from './VoiceConnectionSection';
 
 describe('VoiceConnectionSection', () => {
-  it('edits the request timeout in seconds and keeps it inside the setting’s admitted range', async () => {
+  it('edits the request timeout in seconds without a sixty-second ceiling', async () => {
     const setVoice = vi.fn();
     const screen = await renderScreen(<VoiceConnectionSection voice={voiceSettingsDefaults} setVoice={setVoice} />);
     const field = () => screen.findByTestId('settings.voice.local.networkTimeoutMs.field');

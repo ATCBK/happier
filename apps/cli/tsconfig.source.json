@@ -4,9 +4,9 @@
     "composite": true,
     "noEmit": false,
     "emitDeclarationOnly": true,
-    "disableSourceOfProjectReferenceRedirect": true,
     "outDir": "node_modules/.cache/tsc/cli.source.declarations",
-    "tsBuildInfoFile": "node_modules/.cache/tsc/cli.source.typecheck.tsbuildinfo"
+    "tsBuildInfoFile": "node_modules/.cache/tsc/cli.source.typecheck.tsbuildinfo",
+    "disableSourceOfProjectReferenceRedirect": true
   },
   "references": [
     {
@@ -75,6 +75,7 @@
     "../../packages/plugin-sdk/src/actions/dtos/inventoryActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/launchProfilesActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/listReorderActionDtos.generated.ts",
+    "../../packages/plugin-sdk/src/actions/dtos/localDaemonServicesActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/localServicesActionsActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/localServicesInventoryActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/localServicesLauncherActionDtos.generated.ts",
@@ -127,6 +128,7 @@
     "../../packages/plugin-sdk/src/actions/dtos/scmRepositoryActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/scopeActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/sessionAccessActionDtos.generated.ts",
+    "../../packages/plugin-sdk/src/actions/dtos/sessionAgentTransitionActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/sessionAttentionActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/sessionAuthoringActionDtos.generated.ts",
     "../../packages/plugin-sdk/src/actions/dtos/sessionBoardActionDtos.generated.ts",
@@ -176,6 +178,7 @@
     "../../packages/plugin-sdk/src/agentRuntime/registration.ts",
     "../../packages/plugin-sdk/src/agentRuntime/runtime.ts",
     "../../packages/plugin-sdk/src/agentRuntime/session.ts",
+    "../../packages/plugin-sdk/src/agentRuntime/sessionIdentity.ts",
     "../../packages/plugin-sdk/src/agentRuntime/surfaces.ts",
     "../../packages/plugin-sdk/src/agents.ts",
     "../../packages/plugin-sdk/src/automations.ts",
@@ -532,6 +535,7 @@
     "src/daemon/agentRuntime/runnerManagedProviderPublicHandoff.fixture.ts",
     "src/daemon/computer/driver/nativeComputerBoundary.testkit.ts",
     "src/daemon/connectedServices/continuation/continuationRecoveryIdentity.ts",
+    "src/daemon/connectedServices/refresh/ConnectedServiceRefreshCoordinator.qualifiedRefresh.testkit.ts",
     "src/daemon/connectedServices/refresh/serviceRefreshers.ts",
     "src/daemon/connectedServices/stateSharing/connectedServiceStateSharingLock.ts",
     "src/daemon/connectedServices/switchContinuityContext.ts",
@@ -687,6 +691,7 @@
     "src/session/handoff/agentBundle/catalogHooks.ts",
     "src/session/replay/decryptTranscriptTextItems.ts",
     "src/session/replay/hydrateReplayDialogFromTranscript.ts",
+    "src/session/replay/replayMessagesFixture.testkit.ts",
     "src/session/services/getSessionRecentMessages.ts",
     "src/session/usageLimitRecoveryControls/resolveUsageLimitRecoveryMaxAttemptsExhaustion.ts",
     "src/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit.ts",

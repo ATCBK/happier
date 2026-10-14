@@ -36,7 +36,7 @@ import {
 } from './index.js';
 
 describe('rpc wire compatibility', () => {
-  it('pins negotiation literals used by mixed-version daemon and ui clients', () => {
+  it('pins the current negotiation and Session access refusal literals', () => {
     expect(RPC_ERROR_CODES).toEqual({
       UPDATE_REQUIRED: 'RPC_UPDATE_REQUIRED',
       METHOD_NOT_AVAILABLE: 'RPC_METHOD_NOT_AVAILABLE',

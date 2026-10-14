@@ -35,9 +35,9 @@ type Authentication = Partial<TeamOperationAuthenticationContext>;
 type SourceRow = NonNullable<Awaited<ReturnType<Tx['projectSource']['findUnique']>>>;
 // Canonically admitted DTOs contain JSON only; remove optional undefined fields at the DB boundary.
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
-const unavailable = (): ProjectSourcesFailureV1 => ({ ok: false, error: 'source_unavailable' });
-const invalid = (): ProjectSourcesFailureV1 => ({ ok: false, error: 'source_invalid' });
-const denied = (): ProjectSourcesFailureV1 => ({ ok: false, error: 'source_access_denied' });
+const unavailable = (): ProjectSourcesFailureV1 & { error: 'source_unavailable' } => ({ ok: false, error: 'source_unavailable' });
+const invalid = (): ProjectSourcesFailureV1 & { error: 'source_invalid' } => ({ ok: false, error: 'source_invalid' });
+const denied = (): ProjectSourcesFailureV1 & { error: 'source_access_denied' } => ({ ok: false, error: 'source_access_denied' });
 
 function sourceFromRow(row: SourceRow) {
     return ProjectSourceV1StoredSchema.safeParse({
@@ -216,7 +216,7 @@ export async function createProjectSourceInTx(tx: Tx, actorAccountId: string, in
 }
 
 /** Read disclosure is admitted from current Account, Team and Group lifetimes. */
-export async function readProjectSourceInTx(tx: Tx, actorAccountId: string, input: unknown, authentication: Authentication = {}): Promise<ProjectSourcesReadOutputV1> {
+export async function readProjectSourceInTx(tx: Tx, actorAccountId: string, input: unknown, authentication: Authentication = {}): Promise<Extract<ProjectSourcesReadOutputV1, { ok: true }> | (ProjectSourcesFailureV1 & { error: 'source_invalid' | 'source_unavailable' })> {
     const parsed = ProjectSourcesReadInputV1Schema.safeParse(input);
     if (!parsed.success) return invalid();
     const loaded = await loadInTx(tx, actorAccountId, parsed.data.sourceId, authentication);
@@ -260,7 +260,7 @@ export async function updateProjectSourceInTx(tx: Tx, actorAccountId: string, in
 }
 
 /** Removing metadata never invokes daemon, filesystem, setup, or Artifact deletion. */
-export async function deleteProjectSourceInTx(tx: Tx, actorAccountId: string, input: unknown, authentication: Authentication = {}): Promise<ProjectSourcesDeleteOutputV1> {
+export async function deleteProjectSourceInTx(tx: Tx, actorAccountId: string, input: unknown, authentication: Authentication = {}): Promise<Extract<ProjectSourcesDeleteOutputV1, { ok: true }> | (ProjectSourcesFailureV1 & { error: 'source_invalid' | 'source_unavailable' | 'source_access_denied' | 'source_conflict' })> {
     const parsed = ProjectSourcesDeleteInputV1Schema.safeParse(input);
     if (!parsed.success) return invalid();
     const loaded = await loadInTx(tx, actorAccountId, parsed.data.sourceId, authentication);
@@ -277,7 +277,7 @@ export async function deleteProjectSourceInTx(tx: Tx, actorAccountId: string, in
 }
 
 /** Search and coverage are over admitted metadata, not an unfiltered database page. */
-export async function listProjectSourcesInTx(tx: Tx, actorAccountId: string, input: unknown, authentication: Authentication = {}): Promise<ProjectSourcesListOutputV1> {
+export async function listProjectSourcesInTx(tx: Tx, actorAccountId: string, input: unknown, authentication: Authentication = {}): Promise<Extract<ProjectSourcesListOutputV1, { ok: true }> | (ProjectSourcesFailureV1 & { error: 'source_invalid' | 'source_unavailable' })> {
     const parsed = ProjectSourcesListInputV1Schema.safeParse(input);
     if (!parsed.success) return invalid();
     const rows = await tx.projectSource.findMany({ orderBy: { id: 'asc' }, ...(parsed.data.cursor ? { where: { id: { gt: parsed.data.cursor } } } : {}) });

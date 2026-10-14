@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { ProviderErrorV1 } from '@happier-dev/protocol';
+import { createProviderErrorV1, type ProviderErrorV1 } from '@happier-dev/protocol';
 import type { DaemonProviderConnectionViewV1 } from '@happier-dev/protocol/rpc';
 
 import {
@@ -8,6 +8,8 @@ import {
 } from '@/providers/hooks/targetMachine';
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { registerProviderConnectionReader, type ProviderConnectionReadTarget } from './providerConnectionRefresh';
 import {
     captureActiveServerAccountScopeLifetime,
@@ -23,8 +25,13 @@ type ProviderConnectionMachineViewsState = Readonly<{
     scopeKey: string | null;
     accountLifetime: ActiveServerAccountScopeLifetime | null;
     byTargetKey: Readonly<Record<string, ProviderConnectionMachineViewState>>;
+    accountScopesByTargetKey: Readonly<Record<string, ServerAccountScope>>;
     loading: boolean;
 }>;
+
+const sameAccountScope = (left: ServerAccountScope | undefined, right: ServerAccountScope | undefined) => (
+    (!left && !right) || areServerAccountScopesEqual(left, right)
+);
 
 /**
  * Per-machine daemon facts for one Provider connection. Each row is addressed
@@ -43,6 +50,7 @@ export function useProviderConnectionMachineViews(input: Readonly<{
         scopeKey: null,
         accountLifetime: null,
         byTargetKey: {},
+        accountScopesByTargetKey: {},
         loading: false,
     });
     const generation = React.useRef(0);
@@ -56,11 +64,31 @@ export function useProviderConnectionMachineViews(input: Readonly<{
             .map((row) => [providerSettingsMachineRowKey(row.target), row.serverId] as const)
             .sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0)),
     );
-    const { describeProviderConnections, ready, pendingApproval, scopeKey: actionScopeKey } = useProviderActionClient(input.targets.map(row => row.serverId));
+    const { describeProviderConnections, ready, pendingApproval, scopeStates: credentialStates, scopeKey: actionScopeKey } = useProviderActionClient(input.targets.map(row => row.serverId));
     const scopeKey = JSON.stringify([input.enabled, input.connectionId, targetsKey, actionScopeKey]);
+    const accountScopesByTargetKey = React.useMemo(() => {
+        const scopes: Record<string, ServerAccountScope> = {};
+        for (const row of input.targets) {
+            const resolution = credentialStates.get(resolveServerProfileScopeIdForIdentifier(row.serverId))?.resolution;
+            if (resolution?.kind === 'bound') scopes[providerSettingsMachineRowKey(row.target)] = resolution.scope;
+        }
+        return scopes;
+    }, [credentialStates, targetsKey]);
     const scopeEnabled = input.enabled && input.targets.length > 0;
     const stateMatchesScope = state.scopeKey === scopeKey
         && state.accountLifetime === accountLifetime;
+    const stateMatchesPeerAccounts = Object.keys(state.byTargetKey).every(key => sameAccountScope(
+        state.accountScopesByTargetKey[key], accountScopesByTargetKey[key],
+    ));
+    const byTargetKey = React.useMemo(() => {
+        if (!stateMatchesScope) return {};
+        if (stateMatchesPeerAccounts) return state.byTargetKey;
+        return Object.fromEntries(Object.entries(state.byTargetKey).map(([key, view]) => [key,
+            sameAccountScope(state.accountScopesByTargetKey[key], accountScopesByTargetKey[key])
+                ? view
+                : { status: 'loading', connection: null } satisfies ProviderConnectionMachineViewState,
+        ]));
+    }, [accountScopesByTargetKey, state, stateMatchesPeerAccounts, stateMatchesScope]);
     const currentAccountLifetimeRef = React.useRef(accountLifetime);
     currentAccountLifetimeRef.current = accountLifetime;
 
@@ -69,7 +97,7 @@ export function useProviderConnectionMachineViews(input: Readonly<{
             if (currentAccountLifetimeRef.current !== accountLifetime) return;
             generation.current += 1;
             setState((current) => current.accountLifetime === accountLifetime
-                ? { scopeKey: null, accountLifetime: null, byTargetKey: {}, loading: false }
+                ? { scopeKey: null, accountLifetime: null, byTargetKey: {}, accountScopesByTargetKey: {}, loading: false }
                 : current);
         });
         return () => registration?.dispose();
@@ -85,7 +113,7 @@ export function useProviderConnectionMachineViews(input: Readonly<{
         );
         if (!requestStillCurrent()) return;
         if (!input.enabled || targetsRef.current.length === 0) {
-            setState({ scopeKey, accountLifetime, byTargetKey: {}, loading: false });
+            setState({ scopeKey, accountLifetime, byTargetKey: {}, accountScopesByTargetKey: {}, loading: false });
             return;
         }
         const targets = requestedTargets
@@ -104,9 +132,12 @@ export function useProviderConnectionMachineViews(input: Readonly<{
             return {
                 scopeKey,
                 accountLifetime,
+                accountScopesByTargetKey,
                 byTargetKey: { ...previousByTargetKey, ...Object.fromEntries(targets.map((row) => {
                     const key = providerSettingsMachineRowKey(row.target);
-                    const previous = previousByTargetKey[key];
+                    const previous = sameAccountScope(current.accountScopesByTargetKey[key], accountScopesByTargetKey[key])
+                        ? previousByTargetKey[key]
+                        : undefined;
                     return [key, {
                         status: 'loading',
                         connection: previous?.status === 'success' || previous?.status === 'loading'
@@ -120,26 +151,26 @@ export function useProviderConnectionMachineViews(input: Readonly<{
         const entries = await Promise.all(targets.map(async (row) => {
             const key = providerSettingsMachineRowKey(row.target);
             const machineId = row.target.machineId;
+            const binding = credentialStates.get(resolveServerProfileScopeIdForIdentifier(row.serverId))?.binding;
+            if (!binding || !binding.isCurrent()) {
+                return [key, { status: 'error', error: createProviderErrorV1('provider_authorization_changed', {
+                    connectionId: input.connectionId, machineId,
+                }) } satisfies ProviderConnectionMachineViewState] as const;
+            }
             try {
                 const result = await describeProviderConnections({
-                    machineId,
-                    serverId: row.serverId,
-                    connectionId: input.connectionId,
+                    machineId, serverId: row.serverId, connectionId: input.connectionId,
                 });
+                if (!binding.isCurrent()) return [key, { status: 'error',
+                    error: createProviderErrorV1('provider_authorization_changed', { connectionId: input.connectionId, machineId }),
+                } satisfies ProviderConnectionMachineViewState] as const;
                 return [key, result.status === 'success'
-                    ? {
-                        status: 'success',
-                        connection: result.connections.find((connection) => connection.connectionId === input.connectionId) ?? null,
-                    } satisfies ProviderConnectionMachineViewState
+                    ? { status: 'success', connection: result.connections.find(connection => connection.connectionId === input.connectionId) ?? null } satisfies ProviderConnectionMachineViewState
                     : { status: 'error', error: result.error } satisfies ProviderConnectionMachineViewState] as const;
             } catch (caught) {
-                return [key, {
-                    status: 'error',
-                    error: providerErrorFromRpcFailure(caught, {
-                        connectionId: input.connectionId,
-                        machineId,
-                    }),
-                } satisfies ProviderConnectionMachineViewState] as const;
+                return [key, { status: 'error', error: providerErrorFromRpcFailure(caught, {
+                    connectionId: input.connectionId, machineId,
+                }) } satisfies ProviderConnectionMachineViewState] as const;
             }
         }));
         if (!requestStillCurrent()) return;
@@ -151,7 +182,7 @@ export function useProviderConnectionMachineViews(input: Readonly<{
             }
             return { ...current, byTargetKey, loading: Object.values(byTargetKey).some(entry => entry.status === 'loading') };
         });
-    }, [accountLifetime, describeProviderConnections, input.connectionId, input.enabled, ready, scopeKey, targetsKey]);
+    }, [accountLifetime, accountScopesByTargetKey, credentialStates, describeProviderConnections, input.connectionId, input.enabled, ready, scopeKey, targetsKey]);
 
     React.useEffect(() => {
         const unregister = input.active !== false && scopeEnabled
@@ -172,8 +203,8 @@ export function useProviderConnectionMachineViews(input: Readonly<{
     const refresh = React.useCallback(async () => { await read(); }, [read]);
 
     return {
-        byTargetKey: stateMatchesScope ? state.byTargetKey : {},
-        loading: input.active !== false && scopeEnabled && (!stateMatchesScope || state.loading),
+        byTargetKey,
+        loading: input.active !== false && scopeEnabled && (!stateMatchesScope || !stateMatchesPeerAccounts || state.loading),
         refresh,
         pendingApproval,
     };

@@ -16,16 +16,22 @@ import { resolvePublishedMachineEncryptionContext } from '@/api/machine/machineD
 import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { openExternalActionRequesterAccountContextV1, sealExternalActionRequesterAccountContextV1,
-  type ExternalActionRequesterAccountContextPurposeV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+  type ExternalActionRequesterAccountContextPurposeV1,
+  type ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import type { PrepareExternalActionRequesterAccountContext, ResolveExternalActionEncryption } from '../externalActions/executeExternalAction';
 import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import type { RpcHandlerContext } from '@/api/rpc/types';
+import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
+import { decodeBase64 } from '@/api/encryption';
+import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 
 export type RequesterAccountActionAuthorizationInput = Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
+  invocation?: ExternalActionRequesterInvocationV1;
   /** Observed stable identity for the admitted bootstrap's exact Home. */
   serverIdentityId: string;
   bootstrap: Pick<AdmittedRequesterSessionBootstrap,
@@ -106,7 +112,8 @@ async function projectAdmittedAccountCustody(input: RequesterAccountActionAuthor
         if (request.authorization.binding.accountId !== stamp.accountId
           || request.authorization.binding.serverIdentityId !== input.serverIdentityId || !await isCurrent()) return null;
         try {
-          const sealed = sealExternalActionRequesterAccountContextV1({ ...request,
+        const sealed = sealExternalActionRequesterAccountContextV1({ ...request,
+          ...(input.invocation ? { invocation: input.invocation } : {}),
             credentials: { ...encodeStoredCredentials(bootstrap.credentials), token: bootstrap.credentials.token },
             randomBytes: length => new Uint8Array(randomBytes(length)) });
           return await isCurrent() ? sealed : null;
@@ -192,6 +199,7 @@ export async function resolveAdmittedRequesterAccountReadRuntime(input: Readonly
 
 /** Finite Account custody at an admitted ingress, never a Session or a credential store. */
 export type RequesterAccountActionContext = Readonly<{
+  invocation?: ExternalActionRequesterInvocationV1;
   credentials: StoredCredentials;
   accountSettingsContext: AccountSettingsContext;
   savedSecretOperationContext: SavedSecretOperationContextV1;
@@ -215,6 +223,7 @@ export function readRequesterAccountActionContext(authorization?: ExternalAction
 
 export async function admitRequesterAccountActionContext(input: Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
+  invocation?: ExternalActionRequesterInvocationV1;
   credentials: StoredCredentials;
   serverId: string;
   serverIdentityId: string;
@@ -263,6 +272,7 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     })() : undefined;
     const wire = { ...root, ...(wakeFacts ? { managedFiniteWake: wakeFacts } : {}) };
     const authorization = await projectAdmittedAccountCustody({ authorization: wire,
+      ...(input.invocation ? { invocation: input.invocation } : {}),
       serverIdentityId: input.serverIdentityId, bootstrap: {
       credentials: input.credentials, serverHttpBaseUrl: input.serverHttpBaseUrl, isCurrent,
       attribution: { serverId: input.serverId, accountId: profile.id, machineId: wire.binding.machineId,
@@ -298,11 +308,12 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     // HTTP projection retains this exact private Account facet. Its symbol is
     // not an authorization input and never enters the public carrier schema.
     const projection = { ...authorization.requesterAccountProjection! };
-    const carrier: ExternalActionExecutionAuthorizationV1 = Object.defineProperties({}, {
+    const carrier: ExternalActionExecutionAuthorizationV1 = Object.defineProperties({ ...authorization }, {
       ...Object.getOwnPropertyDescriptors(authorization),
       requesterAccountProjection: { value: projection, enumerable: false },
     });
     const context: RequesterAccountActionContext = Object.freeze({ credentials: input.credentials, accountSettingsContext, savedSecretOperationContext,
+      ...(input.invocation ? { invocation: input.invocation } : {}),
       authorization: carrier, resolveEncryption,
       refreshAccountSettings,
       serverHttpBaseUrl: input.serverHttpBaseUrl,
@@ -326,6 +337,37 @@ export function isOriginalOwnAccountActionCustody(binding: ExternalActionExecuti
 }
 
 /** One installed ingress for both existing Action and Machine-RPC authorization carriers. */
+export async function prepareInstalledRequesterAccountActionContext(input: Readonly<{
+  authorization: ExternalActionExecutionAuthorizationV1;
+  purpose: ExternalActionRequesterAccountContextPurposeV1;
+  machineId: string;
+  serverId: string;
+  serverHttpBaseUrl: string;
+  ownCredentials?: StoredCredentials;
+  resolveCurrentMachineExecutionOriginContext(signal?: AbortSignal): Promise<CurrentMachineExecutionOriginContext | null>;
+  createExecutor(context: RequesterAccountActionContext, installation: NonNullable<ReturnType<typeof readInstallationIdentityIfExistsSync>>):
+    NonNullable<ExternalActionExecutionAuthorizationV1['requesterAccountExecutor']>;
+  signal?: AbortSignal;
+}>): ReturnType<PrepareExternalActionRequesterAccountContext> {
+  const installation = readInstallationIdentityIfExistsSync();
+  const origin = await input.resolveCurrentMachineExecutionOriginContext(input.signal);
+  if (!installation || !origin || origin.machineId !== input.machineId) return null;
+  return await prepareRequesterAccountActionContext({ ...input, installationId: installation.installationId,
+    serverIdentityId: origin.serverIdentityId, installationPrivateKey: decodeBase64(installation.privateKey, 'base64url'),
+    isCurrent: async () => {
+      const next = readInstallationIdentityIfExistsSync();
+      const current = await input.resolveCurrentMachineExecutionOriginContext(input.signal);
+      if (next?.installationId !== installation.installationId || next.privateKey !== installation.privateKey
+        || current?.machineId !== input.machineId || current.serverIdentityId !== origin.serverIdentityId) return false;
+      return await verifyExternalActionExecutionAuthorizationCurrent({ authorization: input.authorization,
+        effectActionId: input.authorization.binding.actionId, target: input.authorization.binding.target,
+        installationId: installation.installationId, privateKey: installation.privateKey,
+        serverHttpBaseUrl: input.serverHttpBaseUrl,
+        ...(input.purpose.kind === 'managed_finite_wake' ? { managedFiniteWakeTarget: input.purpose.target } : {}),
+        ...(input.signal ? { signal: input.signal } : {}) });
+    }, createExecutor: admitted => input.createExecutor(admitted, installation) });
+}
+
 export async function prepareRequesterAccountActionContext(input: Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
   purpose: ExternalActionRequesterAccountContextPurposeV1;
@@ -352,16 +394,17 @@ export async function prepareRequesterAccountActionContext(input: Readonly<{
   if (recipient.machineId !== input.machineId || recipient.installationId !== input.installationId) return null;
   const regularOwnAccount = isOriginalOwnAccountActionCustody(root.data.binding);
   const hasBox = finiteWake ? Boolean(finiteWake.requesterAccountContext) : Boolean(root.data.requesterAccountContext);
-  const encoded = hasBox ? openExternalActionRequesterAccountContextV1(input) : null;
+  const encoded = hasBox ? openExternalActionRequesterAccountContextV1({ ...input, includeInvocation: true }) : null;
   const credentials = hasBox
-    ? encoded ? decodeStoredCredentials(encoded) : null
+    ? encoded ? decodeStoredCredentials(encoded.credentials) : null
     : !finiteWake && regularOwnAccount && input.ownCredentials
       // Admission binds invocation scope in place. Borrow a private copy so
       // installed custody stays current, preserving any existing private scope.
       ? Object.defineProperties({ ...input.ownCredentials }, Object.getOwnPropertyDescriptors(input.ownCredentials))
       : null;
   if (!credentials) return null;
-  const admitted = await admitRequesterAccountActionContext({ ...input, credentials });
+  const admitted = await admitRequesterAccountActionContext({ ...input, credentials,
+    ...(encoded?.invocation ? { invocation: encoded.invocation } : {}) });
   if (!admitted) return null;
   try {
     // Named native preparation proves controller custody, not a generic HTTP
@@ -378,6 +421,7 @@ export async function prepareRequesterAccountActionContext(input: Readonly<{
       requesterHttpProjection: projected.requesterHttpProjection, requesterAccountExecutor: executor })) {
       if (value) Object.defineProperty(authorization, key, { value, enumerable: false });
     }
-    return { authorization: Object.freeze(authorization), executor, dispose: admitted.dispose, resolveEncryption: admitted.resolveEncryption };
+    return { authorization: Object.freeze(authorization), executor, dispose: admitted.dispose, resolveEncryption: admitted.resolveEncryption,
+      ...(encoded?.invocation ? { invocation: encoded.invocation } : {}) };
   } catch { await admitted.dispose(); return null; }
 }

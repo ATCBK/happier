@@ -26,6 +26,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
         input.serverId,
         input.agentTargetKey,
     ]);
+    const invocationLifetime = React.useMemo(() => ({ controller: new AbortController() }), [accountLifetime, scopeKey]);
     const activeScopeKey = React.useRef(scopeKey);
     const activeAccountLifetime = React.useRef(accountLifetime);
     const mounted = React.useRef(false);
@@ -48,20 +49,24 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
     activeScopeKey.current = scopeKey;
     activeAccountLifetime.current = accountLifetime;
     React.useEffect(() => {
+        if (invocationLifetime.controller.signal.aborted) invocationLifetime.controller = new AbortController();
+        const controller = invocationLifetime.controller;
         mounted.current = true;
         pendingAttemptId.current += 1;
         setPending(false);
         setFailure(null);
         const registration = accountLifetime?.onRetire(() => {
+            controller.abort();
             pendingAttemptId.current += 1;
             setPending(false);
             setFailure(null);
         });
         return () => {
+            controller.abort();
             mounted.current = false;
             registration?.dispose();
         };
-    }, [accountLifetime, scopeKey]);
+    }, [accountLifetime, invocationLifetime, scopeKey]);
 
     const persist = React.useCallback(async (
         confirmation: SessionModelPickerExperimentalConfirmation,
@@ -94,7 +99,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
                     modelId: confirmation.modelId,
                     compatibilityFingerprint: confirmation.compatibilityFingerprint,
                 },
-            });
+            }, { retainInvocationSignal: invocationLifetime.controller.signal });
         } catch (caught) {
             if (!isCurrentScope()) return false;
             const error = providerErrorFromRpcFailure(caught, {
@@ -129,7 +134,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
         if (!isCurrentScope()) return false;
         commitSelection();
         return true;
-    }, [accountLifetime, mutateProviderModelSettings, input.agentTargetKey, input.enabled, input.machineId, input.refresh, input.serverId, scopeKey]);
+    }, [accountLifetime, invocationLifetime, mutateProviderModelSettings, input.agentTargetKey, input.enabled, input.machineId, input.refresh, input.serverId, scopeKey]);
 
     const runPending = React.useCallback(async (operation: () => Promise<boolean>): Promise<boolean> => {
         const attemptId = pendingAttemptId.current + 1;

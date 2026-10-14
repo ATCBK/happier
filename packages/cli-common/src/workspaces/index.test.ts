@@ -1,9 +1,11 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -19,6 +21,7 @@ import {
   bundleInstalledPackageWithRuntimeDependencies,
   bundleWorkspacePackage,
   bundleWorkspacePackageWithRuntimeDependencies,
+  bundleWorkspacePackagesWithRuntimeDependencies,
   hasBundledWorkspacePackagesHealthy,
   materializePrepublicationWorkspacePackageRoots,
   resolveWorkspaceBundlesFromPackageJson,
@@ -270,12 +273,14 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
     ], { cwd: hostDir, encoding: 'utf8' }).trim();
 
     publish();
-    expect(readSource()).toBe('source');
+    expect(readSource()).toBe('dist');
+    expect(readFileSync(join(destinationDir, 'src/private/value.js'), 'utf8')).toContain('source');
     expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
     writeFileSync(join(sourceDir, 'src/private/value.js'), 'export const selected = "updated";\n');
     expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
     publish();
-    expect(readSource()).toBe('updated');
+    expect(readSource()).toBe('dist');
+    expect(readFileSync(join(destinationDir, 'src/private/value.js'), 'utf8')).toContain('updated');
     expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
     rmSync(join(destinationDir, 'src/private/value.js'));
     expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
@@ -283,36 +288,61 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
     rmSync(sourceDir, { recursive: true });
     expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
     rmSync(join(destinationDir, 'src/index.js'));
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
+    rmSync(join(destinationDir, 'dist/index.js'));
     expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
   });
 
-  it('preserves conditional package imports and their package-root runtime targets', () => {
+  it.each(['live', 'artifact'] as const)('preserves conditional package imports and their package-root runtime targets for %s publication', (publicationMode) => {
     const root = createTempRoot('workspace-package-imports-');
     const sourceDir = join(root, 'packages', 'sdk');
     const destinationDir = join(root, 'apps', 'cli', 'node_modules', '@happier-dev', 'sdk');
     const imports = {
-      '#http': { node: './runtime/node.js', default: './dist/fetch.js' },
+      '#http': { 'happier-source': './src/http.js', node: './runtime/node.js', default: './dist/fetch.js' },
       '#fs': 'fs',
       '#disabled': null,
     };
-    writePackage(sourceDir, {
+    const sourceManifest = {
       name: '@happier-dev/sdk', version: '0.0.0', type: 'module',
-      exports: { '.': './dist/connect.js' }, imports,
-    }, {
+      exports: { '.': { browser: { 'happier-source': './src/connect.js', default: './dist/connect.js' }, 'happier-source': './src/connect.js', default: './dist/connect.js' } }, imports,
+      scripts: { build: 'authored package compiler' },
+    };
+    const sourceFiles = {
       'dist/connect.js': 'import { transport } from "#http"; import { existsSync } from "#fs"; export const selected = transport + ":" + typeof existsSync;\n',
       'dist/fetch.js': 'export const transport = "fetch";\n',
       'runtime/node.js': 'export const transport = "node";\n',
-    });
-    bundleWorkspacePackageWithRuntimeDependencies({
-      packageName: '@happier-dev/sdk', srcDir: sourceDir, destDir: destinationDir,
-      dereferenceRootDir: root,
+      'src/authored.ts': 'export const authoredSource = true;\n',
+      'src/connect.js': 'export { selected } from "./private.js";\n',
+      'src/http.js': 'export { transport } from "./private.js";\n',
+      'src/private.js': 'export const selected = "source"; export const transport = "source";\n',
+    };
+    writePackage(sourceDir, sourceManifest, sourceFiles);
+    const authoredManifestBytes = readFileSync(join(sourceDir, 'package.json'));
+    // Both publication modes detach workspace links before publishing private
+    // compiled contents, preserving the linked author's original files.
+    const linkedRoot = publicationMode === 'artifact' ? sourceDir : join(root, 'mounted', 'sdk');
+    if (publicationMode === 'live') writePackage(linkedRoot, sourceManifest, sourceFiles);
+    mkdirSync(dirname(destinationDir), { recursive: true });
+    symlinkSync(linkedRoot, destinationDir, process.platform === 'win32' ? 'junction' : 'dir');
+    bundleWorkspacePackagesWithRuntimeDependencies({
+      publicationMode,
+      bundles: [{
+        packageName: '@happier-dev/sdk', srcDir: sourceDir, destDir: destinationDir,
+        dereferenceRootDir: root,
+      }],
     });
 
+    expect(lstatSync(destinationDir).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(sourceDir, 'package.json'))).toEqual(authoredManifestBytes);
+    expect(readFileSync(join(sourceDir, 'src/authored.ts'), 'utf8')).toBe(sourceFiles['src/authored.ts']);
+
     // Real Node resolution observes the published manifest, not Vitest's resolver.
-    expect(execFileSync(process.execPath, ['--input-type=module', '-e',
-      `const module = await import(${JSON.stringify(pathToFileURL(join(destinationDir, 'dist/connect.js')).href)}); console.log(module.selected);`,
-    ], { encoding: 'utf8' }).trim()).toBe('node:function');
-    expect(readPackageJson(destinationDir).imports).toEqual(imports);
+    expect(execFileSync(process.execPath, ['--conditions=happier-source', '--conditions=browser', '--input-type=module', '-e',
+      'const module = await import("@happier-dev/sdk"); console.log(module.selected);',
+    ], { cwd: join(root, 'apps', 'cli'), encoding: 'utf8' }).trim()).toBe('node:function');
+    expect(readPackageJson(destinationDir).imports).toEqual({
+      ...imports, '#http': { node: './runtime/node.js', default: './dist/fetch.js' },
+    });
     expect(readFileSync(join(destinationDir, 'dist/fetch.js'), 'utf8')).toContain('fetch');
     const hostDir = join(root, 'apps', 'cli');
     writePackage(hostDir, { bundledDependencies: ['@happier-dev/sdk'] });

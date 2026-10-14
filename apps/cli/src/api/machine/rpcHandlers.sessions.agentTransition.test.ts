@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionAgentTransitionRequestV1Schema } from '@happier-dev/protocol/sessions/agentTransition';
 import type { SessionInputAdmissionResultV1 } from '@happier-dev/protocol';
 
 import type { RpcHandler } from '@/api/rpc/types';
@@ -133,7 +134,8 @@ vi.mock('@/persistence', async (importOriginal) => ({
   readStoredCredentials: mocks.readStoredCredentials,
 }));
 
-import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
+import { encryptSessionPayload, openSessionStoredContent } from '@/session/transport/encryption/sessionEncryptionContext';
+import { SessionPendingEnqueueByMachineRequestV1Schema } from '@happier-dev/protocol';
 import { buildAgentCatalogContribution } from '@/session/agentTransition/sessionAgentTransitionTestkit';
 
 import { registerMachineSessionRpcHandlers } from './rpcHandlers.sessions';
@@ -200,13 +202,13 @@ function createCapturingRegistrar() {
 }
 
 function buildTransitionRequest() {
-  return {
+  return SessionAgentTransitionRequestV1Schema.parse({
     v: 1,
     sessionId: SESSION_ID,
     expectedCurrentAgentId: 'claude',
     selection: { v: 1, agentId: 'codex' },
     input: { text: 'continue with codex', localId: LOCAL_ID },
-  };
+  });
 }
 
 function registerTransitionHandler(
@@ -287,12 +289,11 @@ describe('registered session.agentTransition machine RPC handler', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: RequestInit) => {
       expect(String(input)).toMatch(/\/v1\/features$/);
       expect(init).toMatchObject({ method: 'GET' });
-      return {
-        ok: true,
+      return new Response(JSON.stringify(AGENT_SWITCHING_FEATURES_SNAPSHOT), {
         status: 200,
-        json: async () => AGENT_SWITCHING_FEATURES_SNAPSHOT,
-      };
-    }) as unknown as typeof fetch);
+        headers: { 'content-type': 'application/json' },
+      });
+    }));
   });
 
   it('publishes the incumbent exact-daemon spawn transport for host Action ingress', () => {
@@ -368,6 +369,38 @@ describe('registered session.agentTransition machine RPC handler', () => {
       }),
     );
     expect(mocks.enqueuePendingQueueV2MessageViaHttp).not.toHaveBeenCalled();
+  });
+
+  it('carries the trusted daemon caller ceiling through real encrypted input admission when no permission was authored', async () => {
+    mocks.sessionMode = 'e2ee';
+    mocks.decryptOwnerMetadataView.mockImplementation(() => ({
+      ...(mocks.cutoverApplied ? TARGET_METADATA : SOURCE_METADATA), permissionMode: 'yolo',
+    }));
+    let admittedContent: unknown;
+    const handler = registerTransitionHandler(async (raw) => {
+      const request = SessionPendingEnqueueByMachineRequestV1Schema.parse(raw);
+      admittedContent = openSessionStoredContent({ mode: 'e2ee', ctx: SESSION_CRYPTO_CTX, content: request.content });
+      return { status: 'accepted', localId: request.localId };
+    });
+    await expect(handler(buildTransitionRequest(), {
+      signal: new AbortController().signal,
+      callerAuthority: 'account_automation',
+      sessionActionOrigin: {
+        v: 1, caller: { kind: 'session', sessionId: 'source-session', starterDepth: 0, turnDepth: 0 },
+        sourceTurnId: 'source-turn', callerPermissionMode: 'yolo', requestId: 'switch-request',
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' },
+      },
+    })).resolves.toEqual({ type: 'accepted', localId: LOCAL_ID });
+    expect(admittedContent).toMatchObject({
+      content: { type: 'text', text: 'continue with codex' },
+      meta: {
+        happierProvenanceV1: { kind: 'happierSession', sourceSessionId: 'source-session' },
+        happierInputRequestV1: {
+          producer: 'sessionAction', sourceSession: { sourceSessionId: 'source-session', sourceTurnId: 'source-turn' },
+          permission: { requestedPermissionCeiling: 'read-only' },
+        },
+      },
+    });
   });
 
   it('leaves an E2EE transition committed-but-unadmitted when the registration withholds the transport', async () => {

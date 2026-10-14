@@ -1,4 +1,5 @@
-import { readAiLaunchProfileCollection, readAiLaunchProfileRecords, readAiLaunchProfileEnabledV1, loadAiLaunchProfileArtifacts } from '@happier-dev/protocol/profiles/read';
+import { readAiLaunchProfileCollection, readAiLaunchProfileRecords, readAiLaunchProfileEnabledV1, loadAiLaunchProfileArtifacts,
+  type AiLaunchProfileCollectionReadResult, type AiLaunchProfileCollectionEntry } from '@happier-dev/protocol/profiles/read';
 import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import { isCanonicalProviderSavedSecretIdV1 } from '@happier-dev/protocol/providers/settings/v1';
 import { resolveVisibleBuiltInAiLaunchProfilesV1 } from '@happier-dev/protocol/profiles/visibilityV1';
@@ -56,7 +57,7 @@ export function readProfileSettingsForAccount(input: Readonly<{ settings: unknow
 
 /** One input port for listing and admission; raw Settings is predecessor-only. */
 export function readProfileCollectionFromAccountSnapshot(settings: unknown,
-  artifactsById?: ReadonlyMap<string, ArtifactSharingResourceV1>, profileCatalog?: ProfileCatalogSnapshotV1) {
+  artifactsById?: ReadonlyMap<string, ArtifactSharingResourceV1>, profileCatalog?: ProfileCatalogSnapshotV1): AiLaunchProfileCollectionReadResult {
   if (profileCatalog) {
     if (profileCatalog.status !== 'ready') throw new ProfileCatalogUnavailableError(profileCatalog.status);
     if (profileCatalog.source === 'destination') {
@@ -68,8 +69,13 @@ export function readProfileCollectionFromAccountSnapshot(settings: unknown,
       const rawPreferences = isPlainRecord(settings) && isPlainRecord(settings.profileEnabledById) ? settings.profileEnabledById : {};
       const preferences = Object.fromEntries(Object.entries(rawPreferences)
         .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'));
-      return { ...collection, entries: collection.entries.map((entry) => entry.kind === 'opaque' ? entry
-        : { ...entry, profile: { ...entry.profile, enabled: readAiLaunchProfileEnabledV1(entry.profile, preferences) } }) };
+      return { ...collection, entries: collection.entries.map((entry): AiLaunchProfileCollectionEntry => {
+        if (entry.kind === 'opaque') return entry;
+        if (entry.kind === 'legacy') return {
+          ...entry, profile: { ...entry.profile, enabled: readAiLaunchProfileEnabledV1(entry.profile, preferences) },
+        };
+        return { ...entry, profile: { ...entry.profile, enabled: readAiLaunchProfileEnabledV1(entry.profile, preferences) } };
+      }) };
     }
     if (profileCatalog.source !== 'legacy') throw new ProfileCatalogUnavailableError('unavailable');
   }

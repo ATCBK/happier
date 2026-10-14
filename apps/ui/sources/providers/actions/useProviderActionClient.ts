@@ -67,8 +67,8 @@ export function useProviderActionClient(serverId: string | null | readonly (stri
     const methods = React.useMemo(() => {
         function bind<Input extends Readonly<{ serverId: string | null }>, Output>(
             method: (input: Input, approval?: client.ProviderActionApprovalOptions) => Promise<Output>,
-        ): (input: Input) => Promise<Output> {
-            return async input => {
+        ): (input: Input, options?: Readonly<{ retainInvocationSignal: AbortSignal }>) => Promise<Output> {
+            return async (input, options) => {
                 const targetServerId = input.serverId ?? (requestedServerIds.length === 1 ? requestedServerIds[0] : null);
                 const lifetime = targetServerId ? lifetimes.get(resolveServerProfileScopeIdForIdentifier(targetServerId)) : undefined;
                 const binding = lifetime?.binding;
@@ -80,6 +80,7 @@ export function useProviderActionClient(serverId: string | null | readonly (stri
                 return method(input, {
                     scope: binding.scope,
                     signal: lifetime.controller.signal,
+                    ...(options ? { retainInvocationSignal: options.retainInvocationSignal } : {}),
                     onApprovalPending: registration => {
                         if (!binding.isCurrent() || lifetime.controller.signal.aborted) return;
                         const artifactId = typeof registration === 'string' ? registration : registration.artifactId;
@@ -114,12 +115,20 @@ export function useProviderActionClient(serverId: string | null | readonly (stri
     const pendingApproval = React.useMemo<ProviderPendingApproval | null>(() => (
         approval.approvalId && pendingApprovalHref ? { artifactId: approval.approvalId, href: pendingApprovalHref } : null
     ), [approval.approvalId, pendingApprovalHref]);
+    const resolvedServerId = requestedServerIds.length === 1 ? requestedServerIds[0] : null;
+    const accountScope = resolvedServerId
+        ? scopeStates.get(resolveServerProfileScopeIdForIdentifier(resolvedServerId))
+        : undefined;
     // Readiness means the credential read settled, not that it authorized an
     // Action. Terminal refusals must reach bind's typed error rather than leave
     // every read hook waiting forever. bind remains the authority check.
-    return { ...methods, scopeKey, pendingApproval, retryReadiness, ready: requestedServerIds.every(id => {
+    return { ...methods, scopeKey, scopeStates, accountScope: accountScope ?? { resolution: { kind: resolvedServerId ? 'resolving' as const : 'unknown_home' as const }, binding: null }, pendingApproval, retryReadiness, ready: initiatingLifetime !== null && requestedServerIds.length > 0 && requestedServerIds.every(id => {
         const state = scopeStates.get(resolveServerProfileScopeIdForIdentifier(id));
         if (!state || state.resolution.kind === 'resolving') return false;
-        return state.resolution.kind !== 'bound' || state.binding?.isCurrent() === true;
+        if (state.resolution.kind === 'unavailable') return true;
+        const binding = state.binding;
+        return state.resolution.kind === 'bound' && binding?.isCurrent() === true
+            && (!initiatingLifetime || (initiatingLifetime.isCurrent()
+                && areServerAccountScopesEqual(initiatingLifetime.scope, binding.scope)));
     }) };
 }

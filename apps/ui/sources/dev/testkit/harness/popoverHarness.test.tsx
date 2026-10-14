@@ -14,7 +14,7 @@ describe('popoverHarness', () => {
         standardCleanup();
     });
 
-    it('installs immediate web globals for Popover tests and restores the previous values afterward', async () => {
+    it('installs controlled web globals for Popover tests and restores the previous values afterward', async () => {
         const harnessModule = await import('./popoverHarness');
         const withPopoverWebGlobals = Reflect.get(harnessModule, 'withPopoverWebGlobals');
 
@@ -55,6 +55,47 @@ describe('popoverHarness', () => {
 
         expect(globalThis.window).toBe(previousWindow);
         expect(getFrameScheduler()).toBe(previousFrameScheduler);
+    });
+
+    it('defers default frames and cancels them without running canceled callbacks', async () => {
+        const { withPopoverWebGlobals } = await import('./popoverHarness');
+        vi.useFakeTimers();
+        const restore = withPopoverWebGlobals();
+        try {
+            const frames: string[] = [];
+            const canceledFrame = globalThis.requestAnimationFrame(() => frames.push('canceled'));
+            const nextFrame = globalThis.requestAnimationFrame(() => {
+                frames.push('first');
+                globalThis.requestAnimationFrame(() => frames.push('next'));
+            });
+            expect(frames).toEqual([]);
+            globalThis.cancelAnimationFrame(canceledFrame);
+            await vi.runOnlyPendingTimersAsync();
+            expect(frames).toEqual(['first']);
+            await vi.runOnlyPendingTimersAsync();
+            expect(frames).toEqual(['first', 'next']);
+            globalThis.cancelAnimationFrame(nextFrame);
+        } finally {
+            restore();
+            vi.useRealTimers();
+        }
+    });
+
+    it('restores the platform globals when its callback throws before returning a Promise', async () => {
+        const { withPopoverWebGlobals } = await import('./popoverHarness');
+        const previousWindow = { previous: true };
+        const previousFrameScheduler: FrameScheduler = vi.fn(() => 9);
+        const previousCancelFrame = vi.fn();
+        vi.stubGlobal('window', previousWindow);
+        vi.stubGlobal('requestAnimationFrame', previousFrameScheduler);
+        vi.stubGlobal('cancelAnimationFrame', previousCancelFrame);
+        const failure = new Error('Platform consumer failed synchronously');
+
+        await expect((async () => withPopoverWebGlobals(() => { throw failure; }))()).rejects.toBe(failure);
+
+        expect(globalThis.window).toBe(previousWindow);
+        expect(globalThis.requestAnimationFrame).toBe(previousFrameScheduler);
+        expect(globalThis.cancelAnimationFrame).toBe(previousCancelFrame);
     });
 
     it('returns the first host node matching a testID when wrappers and host nodes share the same props', async () => {

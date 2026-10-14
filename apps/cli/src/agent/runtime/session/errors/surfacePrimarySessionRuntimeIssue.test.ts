@@ -270,7 +270,7 @@ describe('surfacePrimarySessionRuntimeIssue', () => {
         planType: 'plus',
         action: { kind: 'open_url', url: 'https://chatgpt.com/codex/settings/usage' },
         connectedService: {
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'work',
           groupId: 'pool',
         },

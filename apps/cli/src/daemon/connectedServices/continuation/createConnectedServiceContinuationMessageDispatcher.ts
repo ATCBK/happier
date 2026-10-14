@@ -12,7 +12,8 @@ export type { ConnectedServiceContinuationInterruption } from './continuationRes
 
 type ConnectedServiceContinuationMessageDispatcherDeps = Readonly<{
   credentials: StoredCredentials;
-  sendMessage?: typeof sendSessionMessage;
+  // Continuations use the ordinary overload, never protected input admission.
+  sendMessage?: (...args: Parameters<typeof sendSessionMessage>) => ReturnType<typeof sendSessionMessage>;
 }>;
 
 function createContinuationLocalId(sessionId: string, attemptId: string, interruptedOriginId: string): string {

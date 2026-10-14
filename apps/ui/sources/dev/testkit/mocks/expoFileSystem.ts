@@ -14,11 +14,11 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
         files.set(uri, []);
     });
     const writes = vi.fn((_uri: string, _bytes: Uint8Array) => {});
-    const writeBytes = vi.fn((uri: string, bytes: Uint8Array) => {
+    const writeBytes = vi.fn((uri: string, bytes: Uint8Array, offset?: number) => {
         const content = files.get(uri);
         if (!content) throw new Error('File does not exist');
         writes(uri, bytes);
-        content.push(...bytes);
+        content.splice(Math.min(offset ?? content.length, content.length), bytes.length, ...bytes);
     });
     class Directory {
         readonly uri: string;
@@ -55,20 +55,35 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
             return new Uint8Array(bytes);
         }
         open() {
+            if (!files.has(this.uri)) throw new Error('File does not exist');
             open(this.uri);
+            let offset = 0;
+            let closed = false;
+            const requireOpen = () => {
+                if (closed) throw new Error('File handle is closed');
+            };
             const uri = this.uri;
             return {
-                offset: 0,
-                get size() { return files.get(uri)?.length ?? 0; },
+                get offset() { return closed ? null : offset; },
+                set offset(value: number | null) {
+                    requireOpen();
+                    if (value === null) throw new TypeError('An open file offset must be a number');
+                    offset = value;
+                },
+                get size() { return closed ? null : files.get(uri)!.length; },
                 readBytes(length: number) {
-                    const content = files.get(uri);
-                    if (!content) throw new Error('File does not exist');
-                    const bytes = new Uint8Array(content.slice(this.offset, this.offset + length));
-                    this.offset += bytes.byteLength;
+                    requireOpen();
+                    const bytes = new Uint8Array(files.get(uri)!.slice(offset, offset + length));
+                    offset += bytes.length;
                     return bytes;
                 },
-                writeBytes: (bytes: Uint8Array) => writeBytes(uri, bytes),
-                close: () => close(uri),
+                writeBytes(bytes: Uint8Array) {
+                    requireOpen();
+                    offset = Math.min(offset, files.get(uri)!.length);
+                    writeBytes(uri, bytes, offset);
+                    offset += bytes.length;
+                },
+                close() { closed = true; close(uri); },
             };
         }
     }

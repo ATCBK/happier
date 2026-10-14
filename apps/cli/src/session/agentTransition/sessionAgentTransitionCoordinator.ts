@@ -1,4 +1,7 @@
 import { buildTrustedHostSessionInputAdmissionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { assertNonEscalatingPermissionMode } from '@happier-dev/protocol/actions/permissionPrivilege';
+import { isPermissionModeGrantedV1, isModelRefGrantedV1, type CallerInputConstraintsV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { parseSessionPermissionModeAlias } from '@happier-dev/protocol/sessions/metadata/permission-modes';
 import { beginSessionAgentTransitionEffects } from '@happier-dev/protocol/sessions/agentTransitionEffectStage';
 import { buildSessionAgentTransitionDividerLocalId, matchesSessionAgentTransitionDividerAgentsV1, readSessionAgentTransitionDividerFromStoredRecordV1 } from '@happier-dev/protocol/sessions/agentTransitionDivider';
 import { isSessionStopConfirmed } from '@happier-dev/protocol/sessions/control/contract';
@@ -22,6 +25,11 @@ import type { CatalogAgentId } from '@/agent/catalog/ids';
 import { buildProviderInputGenerationEpochId } from '@/agent/runtime/session/input/providerInputGenerationAdmission';
 import { findTranscriptEncryptedMessageByLocalIdV2 } from '@/api/session/transcriptMessageLookup';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { isAuthenticationError } from '@/api/client/httpStatusError';
+import { fetchForkTranscriptSegments } from '@/session/replay/fetchForkTranscriptSegments';
+import { DEFAULT_REPLAY_FORK_CHAIN_MAX_DEPTH } from '@/session/replay/hydrateReplayDialogFromForkChain';
+import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActionExecutionAuthorization';
+import type { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { callSessionProviderInputAdmission } from '@/daemon/startup/providerInputAdmissionRuntime';
 import { resolveCliFeatureDecisionForServer } from '@/features/featureDecisionService';
 import {
@@ -155,6 +163,13 @@ export type SessionAgentTransitionDeps = Readonly<{
 export type SessionAgentTransitionParams = Readonly<{
   credentials: StoredCredentials;
   request: SessionAgentTransitionRequestV1;
+  /** Host-private authenticated input provenance and permission ceiling. */
+  inputAdmission?: Parameters<typeof sendSessionMessage>[0]['inputAdmission'];
+  callerInputAuthorization?: Parameters<typeof sendSessionMessage>[0]['callerInputAuthorization'];
+  callerInputConstraints?: CallerInputConstraintsV1;
+  credentialInputConstraints?: CallerInputConstraintsV1;
+  /** Same admitted invocation and installed signer retained through every material effect. */
+  externalAction?: Parameters<typeof callSessionRpc>[0]['externalAction'];
   /** Required for protected E2EE input admission; absent means plain-only. */
   machineAdmissionTransport?: Parameters<typeof sendSessionMessage>[0]['machineAdmissionTransport'];
   strictIdleTimeoutMs?: number;
@@ -391,6 +406,7 @@ async function readDividerEvidence(params: Readonly<{
   sessionId: string;
   dividerLocalId: string;
   crypto: SessionStoredContentCryptoContext;
+  resolveAuthorizationHeaders?: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'];
   expected: Readonly<{
     fromAgentId: string;
     toAgentId: string;
@@ -401,6 +417,7 @@ async function readDividerEvidence(params: Readonly<{
     serverUrl: params.deps.resolveServerHttpBaseUrl(),
     sessionId: params.sessionId,
     localId: params.dividerLocalId,
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
   }).catch(() => ({ type: 'protocol_error' as const, error: null }));
 
   if (outcome.type === 'not_found') return { status: 'absent' };
@@ -461,6 +478,9 @@ async function admitExactInput(params: Readonly<{
   sessionId: string;
   request: SessionAgentTransitionRequestV1;
   machineAdmissionTransport: SessionAgentTransitionParams['machineAdmissionTransport'];
+  inputAdmission: SessionAgentTransitionParams['inputAdmission'];
+  callerInputAuthorization: SessionAgentTransitionParams['callerInputAuthorization'];
+  resolveAuthorizationHeaders?: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'];
   timeoutMs: number;
   /** Proof that the target current view is committed; the source of every arm here. */
   committed: SessionAgentTransitionCurrentViewCommitted;
@@ -487,7 +507,9 @@ async function admitExactInput(params: Readonly<{
     requestedAction: resolveSessionUserMessageRequestedAction({ deliveryIntent: 'runtime_bootstrap' }),
     timeoutMs: params.timeoutMs,
     ...(params.request.input.meta ? { messageMeta: params.request.input.meta } : {}),
-    inputAdmission: buildTrustedHostSessionInputAdmissionV1('ui'),
+    inputAdmission: params.inputAdmission ?? buildTrustedHostSessionInputAdmissionV1('ui'),
+    ...(params.callerInputAuthorization ? { callerInputAuthorization: params.callerInputAuthorization } : {}),
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     ...(params.machineAdmissionTransport
       ? { machineAdmissionTransport: params.machineAdmissionTransport }
       : {}),
@@ -536,6 +558,10 @@ async function activateTargetAndAdmitInput(params: Readonly<{
   credentials: StoredCredentials;
   request: SessionAgentTransitionRequestV1;
   machineAdmissionTransport: SessionAgentTransitionParams['machineAdmissionTransport'];
+  inputAdmission: SessionAgentTransitionParams['inputAdmission'];
+  callerInputAuthorization: SessionAgentTransitionParams['callerInputAuthorization'];
+  externalAction: SessionAgentTransitionParams['externalAction'];
+  resolveAuthorizationHeaders?: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'];
   admissionFence: Readonly<{ serviceId: string; groupId: string; epochId: string }>;
   inputAdmissionTimeoutMs: number;
   /** Proof that the target current view is committed; the source of every arm here. */
@@ -557,6 +583,8 @@ async function activateTargetAndAdmitInput(params: Readonly<{
     groupId: params.admissionFence.groupId,
     epochId: params.admissionFence.epochId,
     applicationSettled: true,
+    ...(params.externalAction ? { externalAction: params.externalAction } : {}),
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
   }).catch(() => undefined);
 
   const admitted = await admitExactInput({
@@ -565,6 +593,9 @@ async function activateTargetAndAdmitInput(params: Readonly<{
     sessionId,
     request,
     machineAdmissionTransport: params.machineAdmissionTransport,
+    inputAdmission: params.inputAdmission,
+    callerInputAuthorization: params.callerInputAuthorization,
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     timeoutMs: params.inputAdmissionTimeoutMs,
     committed,
   });
@@ -573,6 +604,7 @@ async function activateTargetAndAdmitInput(params: Readonly<{
   const targetSession = await deps.resolveSessionTransportContext({
     credentials,
     idOrPrefix: sessionId,
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
   }).catch(() => null);
   if (!targetSession?.ok) return committed.committed('target_start_failed');
 
@@ -590,6 +622,8 @@ async function activateTargetAndAdmitInput(params: Readonly<{
       localId,
       rawSession: targetSession.rawSession,
       metadata: targetMetadata,
+      ...(params.externalAction ? { externalAction: params.externalAction,
+        executionAuthority: params.externalAction.context.authority } : {}),
     }).catch(() => null);
     if (!resumed?.ok) return committed.committed('target_start_failed');
   }
@@ -615,6 +649,10 @@ async function reconcileAlreadyTargetedSession(params: Readonly<{
   request: SessionAgentTransitionRequestV1;
   transport: TransportContext;
   machineAdmissionTransport: SessionAgentTransitionParams['machineAdmissionTransport'];
+  inputAdmission: SessionAgentTransitionParams['inputAdmission'];
+  callerInputAuthorization: SessionAgentTransitionParams['callerInputAuthorization'];
+  externalAction: SessionAgentTransitionParams['externalAction'];
+  resolveAuthorizationHeaders?: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'];
   admissionFence: Readonly<{ serviceId: string; groupId: string; epochId: string }>;
   inputAdmissionTimeoutMs: number;
   effects: SessionAgentTransitionSourceUntouched;
@@ -630,6 +668,7 @@ async function reconcileAlreadyTargetedSession(params: Readonly<{
     sessionId: params.request.sessionId,
     dividerLocalId: buildSessionAgentTransitionDividerLocalId(params.request.input.localId),
     crypto: readCryptoContext(params.transport),
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     expected: {
       fromAgentId: params.request.expectedCurrentAgentId,
       toAgentId: params.request.selection.agentId,
@@ -644,6 +683,10 @@ async function reconcileAlreadyTargetedSession(params: Readonly<{
     credentials: params.credentials,
     request: params.request,
     machineAdmissionTransport: params.machineAdmissionTransport,
+    inputAdmission: params.inputAdmission,
+    callerInputAuthorization: params.callerInputAuthorization,
+    externalAction: params.externalAction,
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     admissionFence: params.admissionFence,
     inputAdmissionTimeoutMs: params.inputAdmissionTimeoutMs,
     committed,
@@ -655,6 +698,15 @@ export async function runSessionAgentTransition(
 ): Promise<SessionAgentTransitionResultV1> {
   const deps = resolveDeps(params.deps);
   const { credentials, request } = params;
+  const externalAction = params.externalAction;
+  const root = externalAction?.context.externalActionExecutionAuthorization;
+  const effectTarget = externalAction?.context.externalActionTarget;
+  const resolveAuthorizationHeaders: Parameters<typeof sendSessionMessage>[0]['resolveAuthorizationHeaders'] = root && effectTarget && externalAction
+    ? request => createExternalActionAuthorizedRequestHeaders({ authorization: root, effectActionId: externalAction.effectActionId,
+      target: effectTarget, installationId: externalAction.installationId, privateKey: externalAction.privateKey, ...request })
+    : undefined;
+  const resolveTransport = () => deps.resolveSessionTransportContext({ credentials, idOrPrefix: request.sessionId,
+    ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}) });
   const localId = request.input.localId;
   const sessionId = request.sessionId;
   // Both windows are operator-tunable through the canonical session-timeout
@@ -669,6 +721,8 @@ export async function runSessionAgentTransition(
   // One effect ledger per invocation. The handle in scope is the proof of how
   // far the transition got, and it is the ONLY source of result arms.
   const effects = beginSessionAgentTransitionEffects({ localId });
+  const constraints = [params.callerInputConstraints, params.credentialInputConstraints]
+    .filter((value): value is CallerInputConstraintsV1 => value !== undefined);
 
   // Trusted input preserves the authored metadata at admission. Validate an
   // explicit permission through the canonical intent owner before stopping
@@ -678,6 +732,12 @@ export async function runSessionAgentTransition(
     if (typeof permissionMode !== 'string' || !parsePermissionIntentAlias(permissionMode)) {
       return effects.rejected('unsupported_operation');
     }
+    const ceiling = params.inputAdmission?.request?.permission.requestedPermissionCeiling;
+    if (ceiling !== undefined && !assertNonEscalatingPermissionMode({ requestedMode: permissionMode, callerMode: ceiling }).ok) {
+      return effects.rejected('forbidden');
+    }
+    const mode = parseSessionPermissionModeAlias(permissionMode);
+    if (!mode || constraints.some(value => !isPermissionModeGrantedV1(value, mode))) return effects.rejected('forbidden');
   }
 
   // The server-owned feature decision is the admission boundary for this
@@ -708,7 +768,7 @@ export async function runSessionAgentTransition(
    * 7.1 Preflight. Nothing below this block may touch the source runtime.
    * --------------------------------------------------------------------- */
 
-  const transport = await deps.resolveSessionTransportContext({ credentials, idOrPrefix: sessionId })
+  const transport = await resolveTransport()
     .catch(() => null);
   if (!transport) return effects.rejected('unsupported_operation');
   if (!transport.ok) return effects.rejected(mapTransportResolutionFailure(transport.code));
@@ -775,6 +835,10 @@ export async function runSessionAgentTransition(
       request,
       transport,
       machineAdmissionTransport: params.machineAdmissionTransport,
+      inputAdmission: params.inputAdmission,
+      callerInputAuthorization: params.callerInputAuthorization,
+      externalAction: params.externalAction,
+      ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
       admissionFence,
       inputAdmissionTimeoutMs,
       effects,
@@ -795,6 +859,7 @@ export async function runSessionAgentTransition(
   });
   if (!providerPreflight.ok) return effects.rejected('target_unavailable');
   const modelSelectionRef = providerPreflight.ref;
+  if (constraints.some(value => !isModelRefGrantedV1(value, modelSelectionRef ?? 'automatic'))) return effects.rejected('forbidden');
   const sourceAgentId = currentAgentId;
   const targetConnectedServices = await resolveTargetConnectedServiceBinding({
     credentials,
@@ -803,10 +868,28 @@ export async function runSessionAgentTransition(
   });
   if (!targetConnectedServices.ok) return effects.rejected('target_unavailable');
 
+  // A scoped caller must be able to acquire the replay lineage before any
+  // source effect. Use the replay reader itself, including its native-return
+  // boundary, rather than borrowing the child's grant for a fork ancestor.
+  if (params.callerInputAuthorization && 'grant' in params.callerInputAuthorization.binding) {
+    const nativeReturn = target.configuredBackend ? null : await resolveAgentNativeReturnIdentity({
+      store: deps.localAgentNativeResumeRecordStore, sessionId, targetAgentId: target.agentId,
+      sourceMetadata, accountSettings: deps.readAccountSettings(),
+    });
+    const lineage = await fetchForkTranscriptSegments({ credentials, startingSessionId: sessionId,
+      accountEncryptionMode: transport.accountEncryptionCurrentness.mode,
+      startingRawSession: transport.rawSession, startingMetadata: sourceMetadata,
+      afterSeqExclusive: nativeReturn?.departureSeqInclusive ?? null, maxDepth: DEFAULT_REPLAY_FORK_CHAIN_MAX_DEPTH,
+      ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
+    });
+    if (isAuthenticationError(lineage.acquisitionError)) return effects.rejected('forbidden');
+  }
+
   const idle = await deps.waitForSessionIdle({
     credentials,
     idOrPrefix: sessionId,
     timeoutMs: params.strictIdleTimeoutMs ?? resolveSessionControlStopTimeoutMs(),
+    ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
   }).catch(() => null);
   if (!idle?.ok) return effects.rejected('source_not_idle');
 
@@ -827,6 +910,8 @@ export async function runSessionAgentTransition(
       serviceId: admissionFence.serviceId,
       groupId: admissionFence.groupId,
       epochId: admissionFence.epochId,
+      ...(externalAction ? { externalAction } : {}),
+      ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
     }).catch(() => undefined);
   });
 
@@ -838,6 +923,8 @@ export async function runSessionAgentTransition(
     serviceId: admissionFence.serviceId,
     groupId: admissionFence.groupId,
     epochId: admissionFence.epochId,
+    ...(externalAction ? { externalAction } : {}),
+    ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
   }).catch(() => null);
   // `enforce` returns only once in-flight provider dispatches and pending
   // materialization turns have quiesced. Anything else is a missing ANSWER, not
@@ -857,7 +944,7 @@ export async function runSessionAgentTransition(
   // Recheck currentness immediately before stop: the drain above may have taken
   // arbitrary time, and a concurrent transition or metadata write invalidates
   // the expected source.
-  const preStop = await deps.resolveSessionTransportContext({ credentials, idOrPrefix: sessionId })
+  const preStop = await resolveTransport()
     .catch(() => null);
   if (!preStop?.ok) {
     return await fenced.rejected('stale_selection');
@@ -900,7 +987,8 @@ export async function runSessionAgentTransition(
     });
   }
 
-  const stop = await deps.requestSessionStop({ credentials, idOrPrefix: sessionId })
+  const stop = await deps.requestSessionStop({ credentials, idOrPrefix: sessionId,
+    ...(externalAction ? { externalAction } : {}), ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}) })
     .catch(() => null);
   if (stop === null) {
     // The stop call itself failed in a way that proves nothing. The source may
@@ -933,7 +1021,7 @@ export async function runSessionAgentTransition(
 
   const stopped = fenced.stopConfirmed();
 
-  const stoppedSession = await deps.resolveSessionTransportContext({ credentials, idOrPrefix: sessionId })
+  const stoppedSession = await resolveTransport()
     .catch(() => null);
   // Section 6.1 partitions this depth by CAUSE, not by convenience: a bounded
   // source read/decryption failure is `context_unavailable`; `cutover_conflict`
@@ -975,6 +1063,8 @@ export async function runSessionAgentTransition(
   const brief = await Promise.resolve(deps.buildActivationBrief({
     credentials,
     sessionId,
+    accountSettings: deps.readAccountSettings(),
+    ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
     // Head U is captured AFTER the confirmed stop. Later rows remain canonical
     // history even when they were too late for the already-built brief.
     transcriptHeadSeqInclusive: transcriptHeadSeq,
@@ -1053,6 +1143,7 @@ export async function runSessionAgentTransition(
       sessionId,
       currentView: sealed.currentView,
       divider,
+      ...(externalAction ? { externalAction } : {}),
       ...(targetConnectedServices.teamCredentialBindings
         ? { teamCredentialBindings: targetConnectedServices.teamCredentialBindings }
         : {}),
@@ -1062,7 +1153,7 @@ export async function runSessionAgentTransition(
   let cutover = await commitCutover(stoppedSession);
   if (cutover.ok === false && cutover.effect === 'none' && cutover.error === 'version-mismatch') {
     // Exactly one refetch-and-rebuild. A second loss is a conflict, not a loop.
-    const refreshed = await deps.resolveSessionTransportContext({ credentials, idOrPrefix: sessionId })
+    const refreshed = await resolveTransport()
       .catch(() => null);
     const refreshedMetadata = refreshed?.ok
       ? deps.decryptOwnerMetadataView({
@@ -1103,6 +1194,10 @@ export async function runSessionAgentTransition(
     credentials,
     request,
     machineAdmissionTransport: params.machineAdmissionTransport,
+    inputAdmission: params.inputAdmission,
+    callerInputAuthorization: params.callerInputAuthorization,
+    externalAction: params.externalAction,
+    ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
     admissionFence,
     inputAdmissionTimeoutMs,
     committed: stopped.cutoverCommitted(),

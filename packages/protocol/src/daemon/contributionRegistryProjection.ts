@@ -2666,7 +2666,20 @@ export const PluginProjectedFamilyV2Schema = lazyZodSchema(() => z.union([
 ]));
 export type PluginProjectedFamilyV2 = z.infer<typeof PluginProjectedFamilyV2Schema>;
 
-export const PluginProjectionV2Schema = lazyZodSchema(() => z.object({
+export const PluginProjectionV2Schema: z.ZodObject<{
+  v: z.ZodLiteral<2>;
+  generation: z.ZodNumber;
+  installedPackagesById: z.ZodDefault<z.ZodRecord<z.ZodString, typeof PluginProjectionInstalledPackageV2Schema>>;
+  agentsById: z.ZodDefault<z.ZodRecord<z.ZodString, typeof PluginProjectedAgentV2Schema>>;
+  actionsById: z.ZodDefault<z.ZodRecord<z.ZodString, typeof PluginProjectedActionV2Schema>>;
+  toolsById: z.ZodDefault<z.ZodRecord<z.ZodString, typeof PluginProjectedToolV2Schema>>;
+  commandsById: z.ZodDefault<z.ZodRecord<z.ZodString, typeof PluginProjectedCommandV2Schema>>;
+  resourcesById: z.ZodDefault<z.ZodRecord<z.ZodString, typeof PluginProjectedResourceV2Schema>>;
+  settingsById: z.ZodDefault<z.ZodRecord<z.ZodString, typeof PluginProjectedSettingsV2Schema>>;
+  familiesById: typeof PluginProjectedFamiliesByIdV2Schema;
+  contributionIntrospection: z.ZodOptional<typeof PluginContributionIntrospectionProjectionV1Schema>;
+  diagnostics: z.ZodDefault<z.ZodArray<typeof PluginDiagnosticRecordV1Schema>>;
+}, z.core.$strict> = lazyZodSchema(() => z.object({
   v: z.literal(2),
   generation: z.number().int().nonnegative(),
   installedPackagesById: z.record(z.string(), PluginProjectionInstalledPackageV2Schema).default({}),

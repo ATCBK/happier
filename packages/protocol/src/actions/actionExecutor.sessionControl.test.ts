@@ -8,6 +8,8 @@ import { getActionSpec } from './actionSpecs.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { AgentStartSessionCallerV1Schema, type AgentStartContextV1 } from '../account/settings/admitAgentStartV1.js';
+import { ActionsSettingsV1Schema } from './actionSettings.js';
+import { RpcError, RPC_ERROR_CODES } from '../rpc/errors.js';
 
 function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
   return createActionExecutor({
@@ -77,6 +79,21 @@ describe('createActionExecutor (session control)', () => {
         .toEqual({ ok: true, result: { ok: true } });
       expect(writes.pop()).toMatchObject({ sessionId: 's1', fieldId: 'view.transcriptToolCalls', value: false });
     }
+  });
+  it.each([
+    { kind: 'typed domain refusal', failure: new RpcError('native refused', 'permission_request_not_found'), expectedCode: 'permission_request_not_found' },
+    { kind: 'untyped domain carrier', failure: { rpcErrorCode: 'permission_request_not_found', message: 'native refused', details: { private: 'do-not-publish' } }, expectedCode: 'action_failed' },
+    { kind: 'transport carrier', failure: { rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN, message: 'native refused' }, expectedCode: RPC_ERROR_CODES.FORBIDDEN },
+  ])('preserves admitted Session RPC refusal identity for $kind', async ({ failure, expectedCode }) => {
+    // Only the declared host's Session delivery boundary is replaced; Action
+    // input, caller authority, approval and thrown-result admission stay real.
+    const executor = createActionExecutor({ sessionPermissionRespond: async () => { throw failure; } });
+    const result = await executor.execute('session.permission.respond', {
+      sessionId: 's1', requestId: 'permission-1', decision: 'deny',
+    }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'session.permission.respond': ['ui'] } }),
+    });
+    expect(result).toEqual({ ok: false, errorCode: expectedCode, error: 'native refused' });
   });
   it.each([
     { error: 'Session not found or not owned by user', code: 'session_absent' },
@@ -310,6 +327,9 @@ describe('createActionExecutor (session control)', () => {
         ok: false, errorCode: 'unsupported_action',
       });
     }
+    await expect(createExecutor().execute('workspace.tabs.list', {}, { surface: 'cli' })).resolves.toMatchObject({
+      ok: false, errorCode: 'action_disabled', details: { reason: 'unsupported_surface', surface: 'cli' },
+    });
   });
   it('admits tab reorder on the advertised client surfaces and rejects it without a mounted workspace', async () => {
     // The mounted workspace port is the host boundary; canonical Action parsing remains real.
@@ -368,6 +388,8 @@ describe('createActionExecutor (session control)', () => {
     await expect(executor.execute('ui.command_palette.invoke', { commandId: 'account' }, { surface: 'mcp' }))
       .resolves.toEqual({ ok: true, result: { invoked: true } });
     await expect(createExecutor().execute('ui.command_palette.invoke', { commandId: 'account' }, { surface: 'agent' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    await expect(createExecutor().execute('ui.command_palette.invoke', { commandId: 'account' }, { surface: 'cli' }))
       .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
   });
   it('controls Find through the mounted client adapter and distinguishes headless absence from zero results', async () => {
@@ -826,7 +848,7 @@ describe('createActionExecutor (session control)', () => {
     }));
   });
 
-  it('routes the Session permission policy Action on the trusted plugin and present-user CLI surfaces', async () => {
+  it('routes Session permission intent from a host-stamped plugin caller and the present-user CLI', async () => {
     const sessionPermissionModeSet = vi.fn(async () => ({ ok: true }));
     const executor = createExecutor({ sessionPermissionModeSet });
 
@@ -838,14 +860,20 @@ describe('createActionExecutor (session control)', () => {
         actionCaller: { kind: 'plugin', pluginId: 'acme.channels', contributionLocalId: 'inbound' },
       },
     )).resolves.toEqual({ ok: true, result: { ok: true } });
-    expect(sessionPermissionModeSet).toHaveBeenCalledTimes(1);
+    expect(sessionPermissionModeSet).toHaveBeenCalledWith({
+      sessionId: 'target', permissionMode: 'read-only', context: {
+        surface: 'plugin', actionCaller: { kind: 'plugin', pluginId: 'acme.channels', contributionLocalId: 'inbound' },
+      },
+    });
 
     await expect(executor.execute(
       'session.permission_mode.set',
       { sessionId: 'target', permissionMode: 'read-only' },
       { surface: 'cli', authority: 'present_user' },
     )).resolves.toEqual({ ok: true, result: { ok: true } });
-    expect(sessionPermissionModeSet).toHaveBeenCalledTimes(2);
+    expect(sessionPermissionModeSet).toHaveBeenLastCalledWith({
+      sessionId: 'target', permissionMode: 'read-only', context: { surface: 'cli', authority: 'present_user' },
+    });
   });
 
   it('refuses mediated source authority from a non-plugin caller instead of dropping it', async () => {
@@ -1670,7 +1698,7 @@ describe('createActionExecutor (session control)', () => {
     expect(sessionTranscriptGet).not.toHaveBeenCalled();
   });
 
-  it('routes public Session reads and permission-mode control for trusted plugin callers', async () => {
+  it('routes public Session reads and permission intent for host-stamped plugin callers', async () => {
     const sessionTranscriptGet = vi.fn(async () => ({ ok: true }));
     const sessionEventsGet = vi.fn(async () => ({ ok: true }));
     const sessionPermissionModeSet = vi.fn(async () => ({ ok: true }));
@@ -1702,7 +1730,9 @@ describe('createActionExecutor (session control)', () => {
       { sessionId: 's1', permissionMode: 'yolo' },
       pluginContext,
     )).resolves.toEqual({ ok: true, result: { ok: true } });
-    expect(sessionPermissionModeSet).toHaveBeenCalledTimes(1);
+    expect(sessionPermissionModeSet).toHaveBeenCalledWith({
+      sessionId: 's1', permissionMode: 'yolo', context: pluginContext,
+    });
   });
 
   it('executes session.events.get via deps.sessionEventsGet', async () => {
@@ -2580,35 +2610,54 @@ describe('createActionExecutor (session control)', () => {
     },
   );
 
-  it.each(['api', 'plugin'] as const)(
-    'prevents %s automation from directly answering a present-user action request',
-    async (surface) => {
-      const sessionUserActionAnswer = vi.fn(async () => ({ ok: true }));
-      const executor = createExecutor({ sessionUserActionAnswer });
+  it('rejects API automation from answering a present-user action request', async () => {
+    const sessionUserActionAnswer = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({ sessionUserActionAnswer });
 
-      const res = await executor.execute(
-        'session.user_action.answer' as any,
-        surface === 'plugin'
-          ? { requestId: 'request-1', decision: 'approve' }
-          : { sessionId: 's1', requestId: 'request-1', decision: 'approve' },
-        {
-          surface,
-          authority: 'account_automation',
-          defaultSessionId: surface === 'plugin' ? 's1' : null,
-          ...(surface === 'api'
-            ? { actionCaller: { kind: 'host' } }
-            : { actionCaller: { kind: 'plugin', pluginId: 'acme.test' } }),
-        } as any,
-      );
+    const res = await executor.execute(
+      'session.user_action.answer',
+      { sessionId: 's1', requestId: 'request-1', decision: 'approve' },
+      {
+        surface: 'api',
+        authority: 'account_automation',
+        defaultSessionId: null,
+        actionCaller: { kind: 'host' },
+      },
+    );
 
-      expect(res).toEqual({
-        ok: false,
-        errorCode: surface === 'plugin' ? 'approvals_not_supported' : 'present_user_required',
-        error: surface === 'plugin' ? 'approvals_not_supported' : 'present_user_required',
-      });
-      expect(sessionUserActionAnswer).not.toHaveBeenCalled();
-    },
-  );
+    expect(res).toEqual({
+      ok: false,
+      errorCode: 'present_user_required',
+      error: 'present_user_required',
+    });
+    expect(sessionUserActionAnswer).not.toHaveBeenCalled();
+  });
+
+  it('requires human consent for a plugin action answer even when the approval hint is false', async () => {
+    const sessionUserActionAnswer = vi.fn(async () => ({ ok: true }));
+    const approvalsCreate = vi.fn<NonNullable<ActionExecutorDeps['approvalsCreate']>>(async () => ({ artifactId: 'human-answer-approval' }));
+    const executor = createExecutor({ sessionUserActionAnswer, approvalsCreate });
+    const input = { requestId: 'request-1', decision: 'approve' };
+    expect(await createExecutor({ sessionUserActionAnswer }).execute('session.user_action.answer', input, {
+      surface: 'plugin', authority: 'account_automation', defaultSessionId: 's1',
+      actionCaller: { kind: 'plugin', pluginId: 'acme.test' },
+    })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    const result = await executor.execute('session.user_action.answer', input, {
+      surface: 'plugin', authority: 'account_automation', serverId: 'home-1', defaultSessionId: 's1',
+      actionRequestId: 'plugin-answer-request-1',
+      actionCaller: { kind: 'plugin', pluginId: 'acme.test', contributionLocalId: 'answers',
+        sourceCustody: { kind: 'managed', immutableGenerationId: 'answers-generation-1', installSource: 'npm' } },
+    });
+    expect(result).toEqual({ ok: true, result: {
+      kind: 'approval_request_created', artifactId: 'human-answer-approval', actionId: 'session.user_action.answer',
+    } });
+    expect(approvalsCreate).toHaveBeenCalledWith(expect.objectContaining({ request: expect.objectContaining({
+      actionId: 'session.user_action.answer', actionArgs: { ...input, sessionId: 's1' },
+      approval: expect.objectContaining({ flow: 'deferred' }),
+      executionOriginV1: expect.objectContaining({ authority: 'account_automation', sessionId: 's1' }),
+    }) }));
+    expect(sessionUserActionAnswer).not.toHaveBeenCalled();
+  });
 
   it('returns unsupported_action when session.user_action.answer is not implemented by deps', async () => {
     const executor = createExecutor({ sessionUserActionAnswer: undefined as any });

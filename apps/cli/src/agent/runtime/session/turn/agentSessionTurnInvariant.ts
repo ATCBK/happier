@@ -129,7 +129,7 @@ export function createAgentSessionTurnInvariant(params: Readonly<{
     let lastTerminalTurn: Readonly<{
         turnId: string;
         state: KnownTurn;
-        completed: boolean;
+        rollbackBoundaryAllowed: boolean;
     }> | null = null;
     let providerSessionId: string | null = null;
     /**
@@ -286,7 +286,7 @@ export function createAgentSessionTurnInvariant(params: Readonly<{
                 lastTerminalTurn = Object.freeze({
                     turnId: event.turnId,
                     state: turn,
-                    completed: event.kind === 'turn-complete',
+                    rollbackBoundaryAllowed: event.kind === 'turn-complete' || event.kind === 'turn-cancelled',
                 });
                 activeTurnId = null;
                 return accept(event);
@@ -310,7 +310,7 @@ export function createAgentSessionTurnInvariant(params: Readonly<{
                     if (event.kind !== 'turn-rollback-boundary') {
                         return reject('agent_runtime_turn_not_active', event);
                     }
-                    if (!lastTerminalTurn.completed) {
+                    if (!lastTerminalTurn.rollbackBoundaryAllowed) {
                         return reject('agent_runtime_rollback_boundary_terminal_conflict', event);
                     }
                     const identityFailure = validateAgentTurnId(lastTerminalTurn.state, event);

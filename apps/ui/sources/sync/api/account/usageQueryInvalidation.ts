@@ -28,6 +28,8 @@ export function getUsageProjectionNextReadAtMs(input: Readonly<{
  */
 export function observeUsageProjection(input: Readonly<{
     serverId: string;
+    /** The caller already awaited an admitted read before attaching this observation. */
+    initialReadCompleted?: boolean;
     read(): Promise<unknown>;
     busy(): boolean;
     nextReadAtMs(): number;
@@ -36,7 +38,7 @@ export function observeUsageProjection(input: Readonly<{
     publish?(): void;
 }>): Readonly<{ reconcile(): void; invalidate(): void; dispose(): void }> {
     let disposed = false;
-    let pending = true;
+    let pending = input.initialReadCompleted !== true;
     let active = isRuntimeActive();
     let timer: ReturnType<typeof setTimeout> | null = null;
     function reconcile(): void {

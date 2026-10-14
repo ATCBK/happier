@@ -86,8 +86,8 @@ export function resolveCliAgentStartContextV1(input: Readonly<{
       agentTarget: input.backendTarget, modelSelection: model, permissionMode: ceiling,
       agentModeId: mode, configOptions,
       ...(typeof metadata.profileId === 'string' ? { profileId: metadata.profileId } : {}),
-      connectedServices: input.appliedChildSelection !== undefined ? applied?.teamCredentialModel ? undefined : applied?.connectedServices
-        : connectedServices.success ? connectedServices.data : undefined,
+      connectedServices: (input.appliedChildSelection !== undefined ? applied?.teamCredentialModel ? undefined : applied?.connectedServices
+        : connectedServices.success ? connectedServices.data : undefined) ?? undefined,
       capabilitySelection: readSessionCapabilitySelectionFromMetadataV1(metadata),
       ...(metadata.transcriptStorage === 'direct' || metadata.transcriptStorage === 'persisted' ? { transcriptStorage: metadata.transcriptStorage } : {}),
     } } : {}) },

@@ -79,6 +79,8 @@ export async function runWorkspacePackageBuild({
     const workspaceNames = [...new Set([...preparedPackageNames, ...result.built, ...refreshed])];
     const published = await publishBundledPluginArtifactsAfterWorkspaceBuildImpl({
       repoRoot,
+      // Successful admission includes current dist trees whose separately-owned
+      // plugin artifacts are absent. Compilation alone is not publication readiness.
       workspaceNames,
       pluginFailures: results.flatMap((prepared) => prepared.pluginFailures ?? []),
       env,
@@ -101,7 +103,8 @@ export async function runWorkspacePackageBuild({
         env,
       });
     }
-    // Publish generated plugin outputs before strict component copies consume them.
+    // Generated-source repair and plugin publication must settle before strict
+    // copies can consume the package's complete declared runtime inventory.
     for (const prepared of preparedComponents) {
       await syncWorkspaceComponentBundledDependencies(prepared.componentDir, {
         env, publicationMode: 'live', pluginFailures: prepared.pluginFailures,

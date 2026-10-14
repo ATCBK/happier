@@ -127,11 +127,12 @@ export function projectTriageCurrentUiContextV1(input: Readonly<{
     }));
   }
 
+  const linkedSessionsDetail = input.linkedSessions === undefined || selectedKey === null ? undefined : {
+    linkedSessionIds: [...input.linkedSessions.ids], selectedLinkedSessionId: input.linkedSessions.selectedId,
+  };
   const mountedDetail = { ...detail,
     ...(input.mountedAction === undefined ? {} : { mountedAction: input.mountedAction }),
-    ...(input.linkedSessions === undefined || selectedKey === null ? {} : {
-      linkedSessionIds: [...input.linkedSessions.ids], selectedLinkedSessionId: input.linkedSessions.selectedId,
-    }),
+    ...linkedSessionsDetail,
   };
   return Object.freeze({
     ...base,

@@ -1,18 +1,16 @@
-import {
-    CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
-    FeatureGatesSchema,
-    DEFAULT_BROWSER_CAPABILITIES,
-    DEFAULT_DEVICE_CAPABILITIES,
-    DEFAULT_LOCAL_SERVICE_CAPABILITIES,
-    DEFAULT_MACHINE_LIVE_STREAM_CAPABILITIES,
-    DEFAULT_MACHINE_TUNNEL_CAPABILITIES,
-    DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS,
-    DEFAULT_PEER_MEDIATION_CAPABILITIES,
-    DEFAULT_PETS_CAPABILITIES,
-    DEFAULT_SESSION_CAPABILITIES,
-    DEFAULT_SHARING_CAPABILITIES,
-    type FeaturesResponse as RootLayoutFeatures,
-} from '@happier-dev/protocol';
+import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
+import { FeatureGatesSchema } from '@happier-dev/protocol/features/payload/featureGatesSchema';
+import { DEFAULT_BROWSER_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/browserCapabilities';
+import { DEFAULT_DEVICE_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/deviceCapabilities';
+import { DEFAULT_LOCAL_SERVICE_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/localServiceCapabilities';
+import { DEFAULT_MACHINE_LIVE_STREAM_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/machineLiveStreamCapabilities';
+import { DEFAULT_MACHINE_TUNNEL_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
+import { DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS } from '@happier-dev/protocol/activity/live/remoteUpdateCapabilities';
+import { DEFAULT_PEER_MEDIATION_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/peerMediationCapabilities';
+import { DEFAULT_PETS_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/petsCapabilities';
+import { DEFAULT_SESSION_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/sessionCapabilities';
+import { DEFAULT_SHARING_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/sharingCapabilities';
+import { type FeaturesResponse as RootLayoutFeatures } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 export const DEFAULT_AUTH_KEY_CHALLENGE_CAPABILITIES = {
     v2: false,

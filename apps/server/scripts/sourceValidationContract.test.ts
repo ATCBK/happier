@@ -23,6 +23,16 @@ describe('server source validation', () => {
         for (const config of [unitConfig, integrationConfig, externalSessionMaterializeConfig]) {
             const plugin = workspaceSourcesPlugin(config);
             expect(plugin?.resolveId?.('@happier-dev/protocol')).toContain('/packages/protocol/src/index.ts');
+            expect(plugin?.resolveId?.('@happier-dev/plugins-kiro/agent/acp/transport'))
+                .toContain('/packages/plugins/kiro/src/agent/acp/transport.ts');
+            expect(plugin?.resolveId?.('@happier-dev/sync-client'))
+                .toContain('/packages/sync-client/src/index.ts');
+            expect(plugin?.resolveId?.('@happier-dev/sdk'))
+                .toContain('/packages/sdk/src/index.public.ts');
+            expect(plugin?.resolveId?.('@happier-dev/channels-protocol/v1'))
+                .toContain('/packages/channels-protocol/src/v1/index.ts');
+            expect(plugin?.resolveId?.('@happier-dev/plugin-sdk/host/fs/json-owner-file-lock'))
+                .toContain('/packages/plugin-sdk/src/host/fs/json-owner-file-lock/index.public.ts');
         }
     });
 

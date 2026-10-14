@@ -95,7 +95,7 @@ import type { CapabilityId } from '@/sync/api/capabilities/capabilitiesProtocol'
 import { getSecretSatisfaction } from '@/utils/secrets/secretSatisfaction';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { resolveNewSessionShouldBottomAnchor } from '@/components/sessions/new/navigation/newSessionPresentation';
-import { assertLaunchProfileReviewCurrent, LaunchProfileEnvironmentUnavailableError, materializeLaunchProfileEnvironment, useProfileMap } from '@/components/sessions/new/modules/profileHelpers';
+import { readCurrentLaunchProfileForReview, LaunchProfileEnvironmentUnavailableError, materializeLaunchProfileEnvironment, useProfileMap } from '@/components/sessions/new/modules/profileHelpers';
 import { newSessionScreenStyles } from '@/components/sessions/new/newSessionScreenStyles';
 import { resolveNewSessionCapabilityServerId } from '@/components/sessions/new/modules/resolveNewSessionCapabilityServerId';
 import { composeConnectedServiceTeamCredentialBindingIntents } from '@/components/sessions/new/modules/connectedServicesNewSessionBindings';
@@ -3204,11 +3204,11 @@ export function useNewSessionScreenModel(input?: Readonly<{
                 let reviewedAuthoring = effectiveCurrentAuthoringDraft;
                 const reviewedProfileId = reviewedAuthoring.profileId?.trim() ?? '';
                 if (reviewedProfileId) {
-                    const currentProfiles = (await context.readLaunchProfiles(exactAccountSettings?.profiles)).map(projectAiLaunchProfileForLegacyUi);
-                    const currentProfile = currentProfiles.find((candidate) => candidate.id === reviewedProfileId)
-                        ?? getBuiltInProfile(reviewedProfileId);
-                    assertLaunchProfileReviewCurrent(selectedProfile, currentProfile);
-                    const currentSecretBindings = projectCurrentSecretBindingsByProfileId(exactAccountSettings ?? {}, currentProfiles);
+                    const { profile: currentProfile, profiles: currentProfiles } = await readCurrentLaunchProfileForReview({
+                        context, profileId: reviewedProfileId,
+                        reviewedProfile: selectedProfile, signal,
+                    });
+                    const currentSecretBindings = projectCurrentSecretBindingsByProfileId(currentProfiles);
                     const sharedSecrets = getMaterializedSavedSecrets(temporaryComputerTargetScope);
                     const personalSecrets = exactAccountSettings?.secrets ?? [];
                     const launchSecrets = sharedSecrets.length === 0

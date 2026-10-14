@@ -19,6 +19,7 @@ Canonical UI-local testing surface for `apps/ui`.
 
 - Prefer importing from `@/dev/testkit` in new tests.
 - Import a bucket module directly only when its helper is intentionally not part of the root testkit surface.
+- Import `homeGovernanceHarness` and `providerSettingsHarness` from their own `harness/` modules. They load domain runtime state and are deliberately not exported by the lightweight root surface.
 - Prefer `renderSettingsView` or `renderScreen` over file-local `findByTestId` helpers.
 - Prefer `renderHook` and `flushHookEffects` over local `renderer.create` hook harnesses and bespoke promise loops.
 - Prefer canonical mock factories for `@/text`, `@/modal`, `expo-router`, `react-native`, `react-native-unistyles`, and `@/sync/domains/state/storage`.
@@ -49,10 +50,11 @@ const { ProviderConnectionsSettingsScreen } = await import(
 );
 ```
 
-The installers reject already imported real transports with a `[testkit]` error naming the installer
-and module. `vi.doMock` affects later imports; it cannot replace references already held by a screen.
-Move the premature import rather than using `vi.resetModules` to reload part of the runtime graph.
-Reinstalling a boundary that was correctly installed remains supported; its delegates read the current
-harness at call time, even after Vitest evicts a cached mock. For a suite that must statically import a Socket consumer, use the hoisted
+Home HTTP installation updates the real `runtimeFetch` port, so already imported HTTP clients use the
+current boundary without reloading their runtime graph. The Socket installer rejects already imported
+real Socket transports with a `[testkit]` error naming the installer and module: `vi.doMock` affects
+later imports and cannot replace references held by a screen. Move the premature Socket import rather
+than using `vi.resetModules`. Reinstalling a correctly installed boundary remains supported; its
+delegates read the current harness at call time. For a suite that must statically import a Socket consumer, use the hoisted
 `vi.mock('socket.io-client', ...)` factory documented in `serverAccountConnectionHarness.ts` before
 configuring it with `installDisconnectedServerSocketBoundary`.

@@ -534,6 +534,7 @@ function createExecutionRunRuntimeFromConversation<Event extends AgentExecutionR
       return;
     }
     if (event.kind !== 'message-delta'
+      && event.kind !== 'transcript-message-committed'
       && event.kind !== 'turn-progress'
       && event.kind !== 'turn-complete'
       && event.kind !== 'turn-failed'
@@ -543,7 +544,13 @@ function createExecutionRunRuntimeFromConversation<Event extends AgentExecutionR
     if (event.turnId !== activeTurnId) return;
     switch (event.kind) {
       case 'message-delta':
-        lifecycle.emit({ kind: 'output-delta', channel: event.channel, text: event.text }, event.emittedAtMs);
+        lifecycle.emit({ kind: 'output-delta', channel: event.channel, text: event.text,
+          ...(event.messageId ? { messageId: event.messageId } : {}) }, event.emittedAtMs);
+        return;
+      case 'transcript-message-committed':
+        if (event.role !== 'assistant' || event.sidechainId) return;
+        lifecycle.emit({ kind: 'output-message-committed', channel: 'assistant',
+          messageId: event.messageId, text: event.text }, event.emittedAtMs);
         return;
       case 'turn-progress':
         lifecycle.emit({ kind: 'run-progress' }, event.emittedAtMs);

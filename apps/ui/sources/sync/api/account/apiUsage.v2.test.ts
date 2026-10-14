@@ -40,7 +40,7 @@ describe('apiUsage v2 analytics query', () => {
 
     it('queries the v2 analytics endpoint with structured date range and breakdowns', async () => {
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-        await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'tab' });
+        await upsertAndActivateServer({ serverUrl: 'https://api.example.test' });
 
         const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
             v: 1,
@@ -69,7 +69,7 @@ describe('apiUsage v2 analytics query', () => {
         expect(UsageAnalyticsQueryRequestSchema.safeParse(body).success).toBe(true);
         expect(body).toMatchObject({
             granularity: 'day',
-            timeZoneOffsetMinutes: -new Date().getTimezoneOffset() || 0,
+            timeZoneOffsetMinutes: new Date().getTimezoneOffset() === 0 ? 0 : -new Date().getTimezoneOffset(),
             includeSeries: true,
             includeInsights: true,
             includeActivity: true,
@@ -89,7 +89,7 @@ describe('apiUsage v2 analytics query', () => {
 
     it('falls back to the legacy v1 usage query when the v2 analytics endpoint is unavailable', async () => {
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-        await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'tab' });
+        await upsertAndActivateServer({ serverUrl: 'https://api.example.test' });
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
             const url = String(input);
@@ -132,7 +132,7 @@ describe('apiUsage v2 analytics query', () => {
     it('uses a year-long date range with month granularity for the year filter and downgrades legacy fallback grouping to day', async () => {
         vi.stubEnv('TZ', 'UTC');
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-        await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'tab' });
+        await upsertAndActivateServer({ serverUrl: 'https://api.example.test' });
 
         vi.spyOn(Date, 'now').mockReturnValue(1_735_689_600_000);
 

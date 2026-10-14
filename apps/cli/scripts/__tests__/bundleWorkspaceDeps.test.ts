@@ -28,6 +28,10 @@ import { resolveWorkspacePackageBuildLockPath } from '../../../../scripts/worksp
 
 const execFileAsync = promisify(execFile);
 
+// Prepare the real implementation graph before fixture case clocks begin. A cold
+// cli-common dependency build belongs to suite setup, not a target sandbox test.
+await loadCliCommonWorkspacesModule(resolve(import.meta.dirname, '../../../..'));
+
 describe('bundleWorkspaceDeps', () => {
   it.skipIf(process.platform !== 'linux')('prepares packages unreserved before owning the runtime copy lease', async () => {
     const sandbox = createPackageLayoutSandbox('cli-bundle-joint-order-');

@@ -238,6 +238,7 @@ export const CODEX_PLUGIN = definePlugin({
             nonInteractiveStatusProbe: true,
             loginLaunches: [{ kind: 'primary', args: ['login'] }],
           },
+          commandPolicy: AGENT_DEFINITION.commandPolicy,
         },
         primary: 'sessions',
         catalog: {

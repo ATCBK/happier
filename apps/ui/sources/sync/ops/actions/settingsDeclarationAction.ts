@@ -8,7 +8,7 @@ import type { ActionExecutorContext } from '@happier-dev/protocol/actions/execut
 import { isAccountSettingActionSurfaceAllowedV1 } from '@happier-dev/protocol/actions/accountSettingDeclarations';
 
 import { getSettingsPageDeclarations } from '@/components/settings/catalog/settingsPageDeclarations';
-import { buildSettingHref, settingRendersOnHost, settingTargetKinds, type SettingRef, type SettingsHost, type SettingsMutationServices } from '@/components/settings/catalog/settingDeclarations';
+import { buildSettingHref, settingRendersOnHost, settingTargetKinds, SETTING_VALUE_UNAVAILABLE, type SettingRef, type SettingsHost, type SettingsMutationServices } from '@/components/settings/catalog/settingDeclarations';
 import { flattenSettingsPageCatalog, SETTINGS_PAGE_CATALOG } from '@/components/settings/catalog/pageCatalog';
 import type { SettingsPageGate } from '@/components/settings/catalog/types';
 import { resolveSettingsPageGateUnavailableReason } from '@/components/settings/catalog/settingsPageGateAvailability';
@@ -476,7 +476,12 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                 if (!parsedValue.success) return refuse('invalid_setting_value');
                 if (binding.kind === 'localOwner') {
                     throwIfAborted(context?.signal);
-                    await binding.commit(owner.readLocalSettings(), parsedValue.value, owner.writeLocalSettings);
+                    if (!isCurrent()) return refuse('setting_not_bound');
+                    if (binding.read(owner.readLocalSettings()) === SETTING_VALUE_UNAVAILABLE) return refuse('setting_value_unavailable');
+                    const committed = await binding.commit(owner.readLocalSettings(), parsedValue.value, owner.writeLocalSettings, { signal: context?.signal, isCurrent });
+                    throwIfAborted(context?.signal);
+                    if (!isCurrent()) return refuse('setting_not_bound');
+                    if (committed === SETTING_VALUE_UNAVAILABLE) return refuse('setting_value_unavailable');
                     return { anchor: ref.anchor, value: parsedValue.value };
                 }
                 const mutate = binding.prepare

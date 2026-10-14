@@ -129,8 +129,8 @@ describe('shared Account workflow run owner', () => {
       details: { code: 'target_unavailable', reason: 'workspace_unavailable' } });
   });
   it.each([
-    ['Review & converge', REVIEW_AND_CONVERGE_WORKFLOW_V1, { engines: ['agent:happier.agent.codex/codex'] }, 4],
-    ['Plan with a panel', PLAN_WITH_A_PANEL_WORKFLOW_V1, { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex'] }, 4],
+    ['Review & converge', REVIEW_AND_CONVERGE_WORKFLOW_V1, { engines: ['agent:happier.agent.codex/codex'] }, 4, true],
+    ['Plan with a panel', PLAN_WITH_A_PANEL_WORKFLOW_V1, { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex'] }, 4, true],
     ...(['review.start', 'subagents.plan.start'] as const).map(actionId => [actionId, {
       version: 1, defaults: {}, blocks: [
         { kind: 'wait', id: 'choose', document: { text: 'Choose engines', references: [], attachments: [] },
@@ -144,12 +144,14 @@ describe('shared Account workflow run owner', () => {
           instructions: { kind: 'literal', value: 'Plan or review the change' },
         } },
       ],
-    }, {}, 2] as const),
-  ] as const)('admits and reauthorizes an agent-started %s with invoke-time choices', async (_name, authored, inputs, workDepthLimit) => {
+    }, {}, 2, false] as const),
+  ] as const)('preserves proved authority for agent-started %s with invoke-time choices', async (_name, authored, inputs, workDepthLimit, admitted) => {
     let committed: ReturnType<typeof runSnapshot> | undefined;
+    const storageOperations: string[] = [];
     const target = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
     const owner = createWorkflowAccountRunActionOwner({
       ...ownerDeps({ execute: async operation => {
+        storageOperations.push(operation.operation);
         if (operation.operation === 'get') {
           if (!committed) throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
           return committed;
@@ -176,6 +178,15 @@ describe('shared Account workflow run owner', () => {
         sessionAgentSpawnPolicyV1: SessionAgentSpawnPolicyV1StrictSchema.parse({}),
         actionCaller: { kind: 'session' as const, sessionId: 'origin-1', starterDepth: 1, turnDepth: 1 }, defaultSessionId: 'origin-1',
         externalActionTarget: { kind: 'machine' as const, machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } } } };
+    // Future Wait-picked engines are a valid definition, but not proved Agent authority.
+    expect(validateWorkflowDefinition(authored).valid).toBe(true);
+    if (!admitted) {
+      await expect(owner.execute(args)).rejects.toMatchObject({ code: 'definition_exceeds_authority',
+        details: { code: 'definition_exceeds_authority', blockId: 'panel', cause: { code: 'target_unavailable' } } });
+      expect(committed).toBeUndefined();
+      expect(storageOperations.filter(operation => operation !== 'get' && operation !== 'invocations.list')).toEqual([]);
+      return;
+    }
     await expect(owner.execute(args)).resolves.toMatchObject({ admission: 'created' });
     const opened = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
       envelope: parseWorkflowStoredContentEnvelopeV1(committed!.acceptedEnvelope)!,

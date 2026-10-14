@@ -713,7 +713,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                 result: unavailable('plugin_action_generation_retired', 'Plugin action occurrence is no longer current'),
             });
             let operationProgress = invocation.operationProgress;
-            let correlationId = randomUUID();
+            let correlationId: string = randomUUID();
             const lifetime = createPluginInvocationLifetime(invocation.signal);
             let diagnosticScope = Object.freeze({
                 pluginId: indexed.registration.pluginId,

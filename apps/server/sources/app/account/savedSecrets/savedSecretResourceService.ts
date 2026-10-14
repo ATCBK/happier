@@ -1950,7 +1950,7 @@ async function validatePersonalPromotionSourcesInTx(tx: Tx, input: PromoteSavedS
     const carriers = [...presets.map(preset => preset.environment), ...snapshots];
     if (removed.some(secretId => carriers.some(value => listSavedSecretReferenceCarrierPathsV1(value, { secretId }).length > 0))) return false;
     const snapshotEnvironments = snapshots.map(setup => setup !== null && typeof setup === 'object' && !Array.isArray(setup)
-        && 'environment' in setup ? (setup as Prisma.JsonObject).environment ?? null : null);
+        && 'environment' in setup ? setup.environment ?? null : null);
     if (snapshots.some((setup, index) => [...mapped].some(secretId =>
         listSavedSecretReferenceCarrierPathsV1(setup, { secretId }).length !== listSavedSecretReferenceCarrierPathsV1(snapshotEnvironments[index], { secretId }).length))) return false;
     const environments = [...presets.map(preset => preset.environment), ...snapshotEnvironments];
@@ -2080,7 +2080,7 @@ async function promoteCatalogOnlySavedSecretResourcesInTx(tx: Tx, input: Promote
     return { ok: true, value: receiptValue(fence.account.settingsVersion) };
 }
 
-function isPromotedMachineEnvironmentRewritable(value: Prisma.JsonValue, sourceIds: readonly string[]): boolean {
+function isPromotedMachineEnvironmentRewritable(value: unknown, sourceIds: readonly string[]): boolean {
     const reached = sourceIds.filter(secretId => listSavedSecretReferenceCarrierPathsV1(value, { secretId }).length > 0);
     if (reached.length === 0) return true;
     const parsed = MachineEnvironmentV1ReadSchema.safeParse(value);
@@ -2088,7 +2088,7 @@ function isPromotedMachineEnvironmentRewritable(value: Prisma.JsonValue, sourceI
         listSavedSecretReferenceCarrierPathsV1(value, { secretId }).length === listSavedSecretReferenceCarrierPathsV1(parsed.data, { secretId }).length);
 }
 
-function rewritePromotedMachineEnvironment(value: Prisma.JsonValue, promotions: ReadonlyMap<string, Readonly<{ ref: string; revision: number }>>): Prisma.InputJsonObject | null {
+function rewritePromotedMachineEnvironment(value: unknown, promotions: ReadonlyMap<string, Readonly<{ ref: string; revision: number }>>): Prisma.InputJsonObject | null {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
     const source = value as Prisma.JsonObject;
     const reached = [...promotions.keys()].filter(secretId => listSavedSecretReferenceCarrierPathsV1(value, { secretId }).length > 0);
@@ -2123,7 +2123,7 @@ async function rewritePromotedMachineReferencesInTx(tx: Tx, accountId: string,
         const setup = machine.environmentSetup;
         if (setup === null || typeof setup !== 'object' || Array.isArray(setup)
             || !('environment' in setup) || setup.environment === undefined) continue;
-        const environment = rewritePromotedMachineEnvironment((setup as Prisma.JsonObject).environment, promotions);
+        const environment = rewritePromotedMachineEnvironment(setup.environment, promotions);
         if (!environment) continue;
         const changed = await tx.managedMachine.updateMany({ where: { id: machine.id, environmentSetup: { equals: setup } },
             data: { environmentSetup: { ...setup, environment } } });

@@ -42,6 +42,8 @@ export type ConnectedServiceAuthGroupAccountUsageView = Readonly<{
     serviceId: ConnectedAccountServiceKey;
     groupId: string;
     activeProfileId: string | null;
+    lastSwitchReason?: string | null;
+    lastSwitchAt?: number | null;
     generation: number;
     policy: ConnectedServiceAuthGroupPolicyV1;
     members: readonly Readonly<{
@@ -60,6 +62,8 @@ export function buildQualifiedConnectedAccountAuthGroupAccountUsageView(
         serviceId: buildQualifiedPluginContributionKey(group.ref.service),
         groupId: group.ref.groupId,
         activeProfileId: group.activeConnectedAccountId,
+        lastSwitchReason: group.state.lastSwitchReason,
+        lastSwitchAt: group.state.lastSwitchAt,
         generation: group.generation,
         policy: group.policy,
         members: group.members.map((member) => ({
@@ -157,6 +161,8 @@ export function buildConnectedServiceAuthGroupSwitchStateFromAccountUsage(input:
             serviceId: input.group.serviceId,
             groupId: input.group.groupId,
             activeProfileId: input.group.activeProfileId,
+            lastSwitchReason: input.group.lastSwitchReason,
+            lastSwitchAt: input.group.lastSwitchAt,
             generation: input.group.generation,
             policy: normalizeConnectedServiceAuthGroupPolicy(input.group.policy),
             members: input.group.members.map((member) => ({

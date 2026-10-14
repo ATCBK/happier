@@ -118,7 +118,7 @@ export function createPreparedFilesystemEntryCopyDestination(
     };
     await validateMaterial(materialPath, destination.resolvedPath);
     let applyMaterialPath = materialPath;
-    let selectedExpectation = input.expectation;
+    let selectedExpectation: WorkspaceSyncEntryExpectationV1 = input.expectation;
     if (missingParent) {
       // Publish missing parents and the entry in one existing native apply,
       // never as preparatory public mkdir effects. This wrapper stays private.

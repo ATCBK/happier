@@ -25,6 +25,66 @@ function assistantTexts(events: ProjectedEvents): string[] {
 }
 
 describe('createPiRuntimeEventProjector assistant snapshots', () => {
+  it('commits an empty final snapshot to remove a streamed draft', () => {
+    const projector = createPiRuntimeEventProjector();
+    const draft = projector.project({
+      type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Removed draft' },
+    }, context);
+    const completed = projector.project({
+      type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: '' }] },
+    }, context);
+    expect(completed).toMatchObject([{
+      kind: 'transcript-message-committed', role: 'assistant', text: '',
+      messageId: expect.any(String),
+    }]);
+    const committed = completed.find((event) => event.kind === 'transcript-message-committed');
+    expect(draft).toMatchObject([{ kind: 'message-delta', messageId: committed?.messageId }]);
+  });
+
+  it('publishes the corrected final artifact under the streamed message identity without appending a divergent draft', () => {
+    const projector = createPiRuntimeEventProjector();
+    projector.project({ type: 'message_start', message: { role: 'assistant', content: [] } }, context);
+    const draft = projector.project({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta: 'Draft report' },
+    }, context);
+    const correction = projector.project({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'Corrected report' },
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Corrected report' }] },
+    }, context);
+    expect(assistantTexts(correction)).toEqual([]);
+    const completed = projector.project({
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Corrected report' }] },
+    }, context);
+    expect(completed).toMatchObject([{
+      kind: 'transcript-message-committed', role: 'assistant', text: 'Corrected report',
+      messageId: expect.any(String),
+    }]);
+    const committed = completed.find((event) => event.kind === 'transcript-message-committed');
+    expect(draft).toMatchObject([{ kind: 'message-delta', messageId: committed?.messageId }]);
+
+    projector.project({ type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'Read', args: {} }, context);
+    projector.project({ type: 'message_start', message: { role: 'assistant', content: [] } }, context);
+    const acknowledgment = projector.project({
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Artifact delivered.' }] },
+    }, context);
+    expect(acknowledgment).toMatchObject([{
+      kind: 'transcript-message-committed', text: 'Artifact delivered.',
+    }]);
+    const later = acknowledgment.find((event) => event.kind === 'transcript-message-committed');
+    expect(later?.messageId).not.toBe(committed?.messageId);
+    projector.resetTurn();
+    const nextTurn = projector.project({
+      type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Next turn' }] },
+    }, { ...context, turnId: 'turn-2' });
+    const nextCommitted = nextTurn.find((event) => event.kind === 'transcript-message-committed');
+    expect(nextCommitted?.messageId).not.toBe(committed?.messageId);
+    expect(nextCommitted?.messageId).not.toBe(later?.messageId);
+  });
+
   it('reconciles authoritative snapshots within each assistant segment across tool boundaries', () => {
     const projector = createPiRuntimeEventProjector();
 
@@ -70,10 +130,12 @@ describe('createPiRuntimeEventProjector assistant snapshots', () => {
       args: {},
     }, context);
 
-    expect(assistantTexts(projector.project({
+    expect(projector.project({
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Shared prefix continued' }] },
-    }, context))).toEqual(['Shared prefix continued']);
+    }, context)).toMatchObject([{
+      kind: 'transcript-message-committed', role: 'assistant', text: 'Shared prefix continued',
+    }]);
   });
 });
 

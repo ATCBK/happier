@@ -14,6 +14,10 @@ import type {
 
 export const PLUGIN_PROMPT_ASSET_EXPORT_NAME = 'PLUGIN_PROMPT_ASSET_DESCRIPTORS';
 
+export function bundledPluginManifestAssetRelativePath(pluginPackageId: string): string {
+  return `assets/bundled-plugin-manifests/${pluginPackageId}.json`;
+}
+
 export function renderCliBundledPluginManifestEntriesTs(params: Readonly<{
   pluginPackages: readonly BundledPluginPackage[];
 }>): string {
@@ -77,7 +81,7 @@ export function renderCliBundledPluginManifestEntriesTs(params: Readonly<{
   for (const entry of params.pluginPackages) {
     lines.push('  Object.freeze({');
     lines.push(`    pluginId: ${JSON.stringify(entry.pluginId)},`);
-    lines.push(`    manifestRelativePath: ${JSON.stringify(`assets/bundled-plugin-manifests/${entry.pluginPackageId}.json`)},`);
+    lines.push(`    manifestRelativePath: ${JSON.stringify(bundledPluginManifestAssetRelativePath(entry.pluginPackageId))},`);
     lines.push(`    manifestPath: ${JSON.stringify(`bundled:${entry.pluginId}`)},`);
     lines.push(`    daemonEntryPath: ${manifestDeclaresDaemonEntrypoint(entry.manifest) ? JSON.stringify(entry.packageName) : 'null'},`);
     lines.push('    sourceSpec: Object.freeze({');
@@ -100,7 +104,7 @@ export function renderCliBundledPluginManifestAssets(params: Readonly<{
   pluginPackages: readonly BundledPluginPackage[];
 }>): readonly Readonly<{ relativePath: string; out: string }>[] {
   return params.pluginPackages.map((entry) => ({
-    relativePath: `assets/bundled-plugin-manifests/${entry.pluginPackageId}.json`,
+    relativePath: bundledPluginManifestAssetRelativePath(entry.pluginPackageId),
     out: `${renderCompactJsonLiteral(entry.manifest)}\n`,
   }));
 }

@@ -57,8 +57,6 @@ import type { AccountSettingsHistorySavedSecretTransferV1 } from '@happier-dev/p
 import { hasUsableAccountSettingsEncryptionMaterial } from '@/settings/accountSettings/accountSettingsEncryptionMaterial';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createCliProfileStore, createCliProfileStoreForOperation } from '@/settings/profiles/profileStore';
-import { createCliMcpServerStore, createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
-import { createCliAcpCatalogStore } from '@/agent/acp/catalog/acpCatalogStore';
 import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from '@/providers/settings/catalogStore';
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
 import { createCliRemoteHostStore, createCliRemoteHostStoreForOperation } from '@/settings/remoteHosts/remoteHostStore';
@@ -582,6 +580,15 @@ export async function captureSavedSecretReferenceCatalogsForOperation(input: Rea
   if (context && (context.credentials.token !== input.credentials.token || !await context.isCurrent())) {
     throw new Error('saved_secret_account_lifetime_changed');
   }
+  input.signal?.throwIfAborted();
+  // Catalog readers consume secret admission; load their transports only for
+  // this cross-catalog capture, after the Account operation has been admitted.
+  const [{ createCliMcpServerStore, createCliMcpServerStoreForOperation },
+    { createCliAcpCatalogStore }, { createCliRemoteHostStore, createCliRemoteHostStoreForOperation },
+    { createCliNotificationChannelStore }] = await Promise.all([
+    import('@/settings/mcp/mcpServerStore'), import('@/agent/acp/catalog/acpCatalogStore'),
+    import('@/settings/remoteHosts/remoteHostStore'), import('@/settings/notifications/notificationChannelStore'),
+  ]);
   input.signal?.throwIfAborted();
   const mcp = context ? createCliMcpServerStoreForOperation({ operationContext: context, signal: input.signal }) : createCliMcpServerStore(input);
   const acp = createCliAcpCatalogStore(input);
@@ -1330,7 +1337,7 @@ export async function importLegacySavedSecretsForOperation(input: SavedSecretCat
           pending = { status: 'pending', reason: 'outcome-unknown' }; break;
         }
       }
-      if (inline?.kind !== 'chat') transfers.push(legacy ? { savedSecretId: legacy.id, resourceId, expectedRevision: 1 }
+      if (inline?.kind !== 'chat') transfers.push(identity.kind === 'personal-saved-secret' ? { savedSecretId: identity.secretId, resourceId, expectedRevision: 1 }
         : { source: identity, resourceId, expectedRevision: 1 });
     }
     if (await isCurrent()) {

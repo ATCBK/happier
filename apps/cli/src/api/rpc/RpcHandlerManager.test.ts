@@ -24,7 +24,8 @@ import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import { prepareRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
 import type { PrepareExternalActionRequesterAccountContext } from '@/daemon/externalActions/executeExternalAction';
-import { sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { openExternalActionRequesterAccountContextV1, sealExternalActionRequesterAccountContextV1,
+  type ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { encodeStoredCredentials, type StoredCredentials } from '@/persistence';
 import { prepareAccountSettingsV2Content } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
@@ -37,6 +38,7 @@ import { HandoffTargetReplacementPreflightV1Schema } from '@happier-dev/protocol
 import { isDeepStrictEqual } from 'node:util';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
 
 const bindingCallId = '0123456789abcdef0123456789abcdef';
 const boundWorkspaceModel = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'codex', providerConnectionId: null, modelId: 'bound-model' });
@@ -420,8 +422,14 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
   const machineKey = new Uint8Array(32).fill(7);
   const credentials: StoredCredentials = { token: 'bob-private', encryption: mode === 'plain' ? null
     : { type: 'legacy', secret: new Uint8Array(32).fill(29) } };
+  const encodedCredentials = { ...encodeStoredCredentials(credentials), token: credentials.token };
   const method = 'machine:machines.managed.list';
+  const purposeMethod = 'machines.managed.list';
   const params = { homeId: 'home' };
+  const invocation: ExternalActionRequesterInvocationV1 = { caller: { kind: 'plugin', pluginId: 'happier.agent.codex',
+    contributionLocalId: 'automation' }, surface: 'plugin', authority: 'account_automation',
+    callerPermissionMode: 'default', callerInputConstraints: { models: [boundWorkspaceModel], permissionModes: ['default'] },
+    workspaceWrites: 'deny', defaultSessionId: 'original-session' };
   const authorization: ExternalActionExecutionAuthorizationV1 = { v: 1, token: 'home-root', binding: {
     accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
     accountEncryptionMode: mode, serverIdentityId: 'home', machineId: 'machine', installationId: 'installation',
@@ -429,7 +437,7 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
     target: { kind: 'machine', machineId: 'machine' },
   } };
   const seal = (root = authorization, payload = params, purposeMethod = 'machines.managed.list') => sealExternalActionRequesterAccountContextV1({ authorization: root,
-    credentials: encodeStoredCredentials(credentials), purpose: { kind: 'machine_rpc', method: purposeMethod, params: payload },
+    credentials: encodedCredentials, invocation, purpose: { kind: 'machine_rpc', method: purposeMethod, params: payload },
     installationPublicKey: installation.publicKey, randomBytes: tweetnacl.randomBytes });
   const settings = prepareAccountSettingsV2Content({ credentials, raw: {}, envelopeKind: mode === 'plain' ? 'plain' : 'encrypted' });
   let current = true;
@@ -481,6 +489,18 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
   rpc.registerHandler('machines.managed.list', async (args, context) => {
     const root = context?.callerInputAuthorization;
     if (!root?.requesterAccountExecutor) throw new Error('Missing admitted requester executor');
+    expect(context?.callerAuthority).toBe('account_automation');
+    expect(context?.callerInputConstraints).toEqual(invocation.callerInputConstraints);
+    expect(buildActionExecutorContextForRpc({ ...context, callerInputAuthorization: root }))
+      .toMatchObject({ authority: invocation.authority, surface: invocation.surface, actionCaller: invocation.caller,
+        callerPermissionMode: invocation.callerPermissionMode, workspaceWrites: invocation.workspaceWrites,
+        defaultSessionId: invocation.defaultSessionId });
+    const child = await root.requesterAccountProjection?.sealRequesterAccountContext?.({ authorization: root,
+      purpose: { kind: 'machine_rpc', method: purposeMethod, params }, installationPublicKey: installation.publicKey });
+    expect(child).not.toBeNull();
+    expect(openExternalActionRequesterAccountContextV1({ authorization: child!, purpose: { kind: 'machine_rpc', method: purposeMethod, params },
+      machineId: 'machine', installationId: 'installation', serverIdentityId: 'home', installationPrivateKey: installation.secretKey,
+      includeInvocation: true })?.invocation).toEqual(invocation);
     return await root.requesterAccountExecutor.execute('machines.managed.list', args, { surface: 'ui',
       authority: context?.callerAuthority, serverId: 'profile', runtimeAccountId: 'bob',
       externalActionExecutionAuthorization: root, externalActionTarget: root.binding.target, actionRequestId: root.binding.requestId });
@@ -498,6 +518,31 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
     expect(await run(seal(authorization, params, method))).toMatchObject({ ok: true, result: { machines: [] } });
     expect(await run(seal(authorization, params, 'other:machines.managed.list'))).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
     expect(await run(seal(authorization, params, 'machines.managed.get'))).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    let freshSpawnEffects = 0;
+    rpc.registerHandler(RPC_METHODS.SPAWN_HAPPY_SESSION, () => { freshSpawnEffects += 1; return { type: 'success' }; });
+    const transition = { ...authorization, binding: { ...authorization.binding, actionId: 'session.agent.transition' } };
+    const freshSpawn = { type: 'spawn-session', directory: '/project' };
+    const freshRoot = sealExternalActionRequesterAccountContextV1({ authorization: transition,
+      credentials: encodedCredentials, invocation,
+      purpose: { kind: 'machine_rpc', method: RPC_METHODS.SPAWN_HAPPY_SESSION, params: freshSpawn },
+      installationPublicKey: installation.publicKey, randomBytes: tweetnacl.randomBytes });
+    const freshMethod = `machine:${RPC_METHODS.SPAWN_HAPPY_SESSION}`;
+    const freshResponse = await rpc.handleRequest({ method: freshMethod, requestId: 'fresh-relay', machineAdmission,
+      callerAuthority: 'present_user', callerInputAuthorization: freshRoot,
+      params: mode === 'plain' ? freshSpawn : await sealRpcRequest(machineKey, freshMethod, freshSpawn) });
+    expect(mode === 'plain' ? freshResponse : await openRpcResponse(machineKey, freshResponse))
+      .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    expect(freshSpawnEffects).toBe(0);
+    const resume = { type: 'resume-session', sessionId: 'original-session', directory: '/project' };
+    const resumeRoot = sealExternalActionRequesterAccountContextV1({ authorization: transition,
+      credentials: encodedCredentials, invocation,
+      purpose: { kind: 'machine_rpc', method: RPC_METHODS.SPAWN_HAPPY_SESSION, params: resume },
+      installationPublicKey: installation.publicKey, randomBytes: tweetnacl.randomBytes });
+    const resumeResponse = await rpc.handleRequest({ method: freshMethod, requestId: 'resume-relay', machineAdmission,
+      callerAuthority: 'present_user', callerInputAuthorization: resumeRoot,
+      params: mode === 'plain' ? resume : await sealRpcRequest(machineKey, freshMethod, resume) });
+    expect(mode === 'plain' ? resumeResponse : await openRpcResponse(machineKey, resumeResponse)).toMatchObject({ type: 'success' });
+    expect(freshSpawnEffects).toBe(1);
     expect(await run(seal(), { homeId: 'other' })).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
     expect(await run({ ...seal(), token: 'swapped-root' })).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
     get.mockClear();

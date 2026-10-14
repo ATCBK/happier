@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createClaudePredecessorMessageMetaShape } from '../../agents/claude/predecessorMessageMeta.js';
 
 import { createSentFromSchema } from '../../sentFrom.js';
 import { createSessionPermissionModeSchema } from '../metadata/sessionPermissionModes.js';
@@ -104,6 +105,7 @@ export function createSessionMessageMetaSchema(zod: typeof z) {
   ]);
   return zod
     .object({
+      ...createClaudePredecessorMessageMetaShape(zod),
       sentFrom: createSentFromSchema(zod).optional(),
       /**
        * High-level origin of the message, used by agents to avoid treating

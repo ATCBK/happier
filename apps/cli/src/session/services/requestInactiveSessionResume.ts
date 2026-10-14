@@ -11,6 +11,7 @@ import { createStableSpawnNonce } from '@/session/shared/spawnNonce';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { awaitSpawnedSessionId } from './awaitSpawnedSessionId';
+import type { ActionExecutorContext, SessionInitialGoalRequestV1 } from '@happier-dev/protocol';
 
 /**
  * `unsupported` is a statement about CAPABILITY — this Session cannot be resumed
@@ -92,6 +93,7 @@ export function buildMachineResumeRequest(
       ? { initialTranscriptAfterSeq: options.initialTranscriptAfterSeq }
       : {}),
     ...(options.executionAuthorization ? { executionAuthorization: options.executionAuthorization } : {}),
+    ...(options.initialGoal ? { initialGoal: options.initialGoal } : {}),
     ...(typeof options.approvedNewDirectoryCreation === 'boolean'
       ? { approvedNewDirectoryCreation: options.approvedNewDirectoryCreation } : {}),
   };
@@ -122,6 +124,9 @@ export async function requestInactiveSessionResume(params: Readonly<{
   signal?: AbortSignal;
   waitForReady?: boolean;
   approvedNewDirectoryCreation?: boolean;
+  initialGoal?: SessionInitialGoalRequestV1;
+  executionAuthority?: ActionExecutorContext['authority'];
+  externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
   machineRpcTransport?: (
     method: string,
     request: unknown,
@@ -165,7 +170,7 @@ export async function requestInactiveSessionResume(params: Readonly<{
     };
   }
 
-  const executionAuthorization = SpawnSessionExecutionAuthorizationSchema.parse({
+  const executionAuthorization = params.executionAuthority === 'account_automation' ? undefined : SpawnSessionExecutionAuthorizationSchema.parse({
     provenance: 'user_request',
     requestId,
   });
@@ -183,6 +188,7 @@ export async function requestInactiveSessionResume(params: Readonly<{
   if (params.approvedNewDirectoryCreation === true) {
     options.approvedNewDirectoryCreation = true;
   }
+  if (params.initialGoal) options.initialGoal = params.initialGoal;
 
   const startedAtMs = Date.now();
   const readinessSpawnNonce = params.waitForReady === true
@@ -197,7 +203,7 @@ export async function requestInactiveSessionResume(params: Readonly<{
       ? RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE
       : RPC_METHODS.SPAWN_HAPPY_SESSION;
     const request = buildMachineResumeRequest(options, params.sessionId, readinessSpawnNonce);
-    const response = params.machineRpcTransport
+    const response = params.machineRpcTransport && !params.externalAction
       ? await params.machineRpcTransport(
           method,
           request,
@@ -210,6 +216,7 @@ export async function requestInactiveSessionResume(params: Readonly<{
           request,
           ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
           ...(params.signal ? { signal: params.signal } : {}),
+          ...(params.externalAction ? { externalAction: params.externalAction } : {}),
         });
     const responseSessionId = response && typeof response === 'object'
       ? readNonEmptyString((response as { sessionId?: unknown }).sessionId)

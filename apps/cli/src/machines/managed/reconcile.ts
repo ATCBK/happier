@@ -24,7 +24,8 @@ import { ManagedEnrollmentCorrelationV1Schema } from '@happier-dev/protocol/mach
 import { ManagedBootstrapCarrierV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { ManagedNativeBootstrapIO } from './enrollment';
-import { ManagedMachineControllerError, ManagedMachineNativeEffectGuardRefusal, type ManagedMachineAcquisitionDriverInput, type ManagedMachineControllerClient, type ManagedMachineExecutionOptions } from './acquire';
+import { ManagedMachineControllerError, ManagedMachineNativeEffectGuardRefusal } from './controllerErrors';
+import type { ManagedMachineAcquisitionDriverInput, ManagedMachineControllerClient, ManagedMachineExecutionOptions } from './acquire';
 import { sshPublicKey } from './bootstrapSshPublicKey';
 
 export type ManagedMachineReconciliationInput = Readonly<{
@@ -519,7 +520,7 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     }, {
         readCurrentManagedRow: async () => {
             params.options.signal?.throwIfAborted();
-            if (params.input.runtimeRegistry.readPluginOccurrenceId(contribution.pluginId) !== occurrenceId) {
+            if (params.input.runtimeRegistry.readPluginOccurrenceId?.(contribution.pluginId) !== occurrenceId) {
                 throw new ManagedMachineControllerError('provider_unavailable');
             }
             return await params.client.row('current', correlation);

@@ -41,7 +41,7 @@ export type QuotaSnapshotStoreEntry = Readonly<{
     snapshot: ConnectedServiceQuotaSnapshotV1 | null;
     loading: boolean;
     error: string | null;
-    /** True for the lifetime of a `refreshQuotaSnapshot` (server refresh + poll). */
+    /** True until the requested refresh produces a newer snapshot, fails, or is cancelled. */
     refreshing: boolean;
     /** A read has completed (with or without a snapshot): "no snapshot" is then an answer, not a wait. */
     read: boolean;
@@ -84,6 +84,7 @@ type InternalEntry = {
     consecutiveErrors: number;
     loadPromise: Promise<ConnectedServiceQuotaSnapshotV1 | null> | null;
     refreshPromise: Promise<void> | null;
+    refreshSinceFetchedAt: number | null;
     pollRetainCount: number;
     observation: ReturnType<typeof observeUsageProjection> | null;
     pollContext: QuotaSnapshotLoadContext | null;
@@ -91,7 +92,6 @@ type InternalEntry = {
     view: QuotaSnapshotStoreEntry;
 };
 
-const REFRESH_RELOAD_DELAYS_MS = [0, 250, 500, 1_000, 2_000, 3_000, 4_000] as const;
 
 const EMPTY_VIEW: QuotaSnapshotStoreEntry = { snapshot: null, loading: false, error: null, refreshing: false, read: false };
 
@@ -122,6 +122,7 @@ function getOrCreateEntry(key: string): InternalEntry {
         consecutiveErrors: 0,
         loadPromise: null,
         refreshPromise: null,
+        refreshSinceFetchedAt: null,
         pollRetainCount: 0,
         observation: null,
         pollContext: null,
@@ -171,9 +172,28 @@ function retainCredentialScope(credentialScope: string): () => void {
     };
 }
 
-function sleep(ms: number): Promise<void> {
-    if (!Number.isFinite(ms) || ms <= 0) return Promise.resolve();
-    return new Promise((resolve) => setTimeout(resolve, ms));
+function hasPollingDemand(key: string, entry: InternalEntry): boolean {
+    // Cached surfaces do not poll normally; an explicit refresh stays live while observed.
+    return entry.pollRetainCount > 0 || (entry.refreshing && (listenersByKey.get(key)?.size ?? 0) > 0);
+}
+
+function reconcilePolling(key: string, initialReadCompleted = false): void {
+    const entry = entries.get(key);
+    if (!entry) return;
+    const ctx = entry.pollContext;
+    if (!hasPollingDemand(key, entry) || !ctx || !isScopeActive(ctx.credentialScope)) {
+        entry.observation?.dispose();
+        entry.observation = null;
+        return;
+    }
+    if (!entry.observation) entry.observation = observeUsageProjection({
+        serverId: ctx.serverBasis.serverId,
+        initialReadCompleted,
+        read: () => { entry.loadAttempted = true; return runLoad(key, ctx); },
+        busy: () => Boolean(entry.loadPromise || entry.refreshPromise),
+        nextReadAtMs: () => entry.nextFetchAtMs,
+    });
+    entry.observation.reconcile();
 }
 
 /**
@@ -187,7 +207,7 @@ function sleep(ms: number): Promise<void> {
  */
 function evictEntriesOutsideCredentialScope(activeCredentialScope: string): void {
     for (const [key, entry] of entries) {
-        if (entry.pollRetainCount > 0) continue;
+        if (hasPollingDemand(key, entry)) continue;
         if (entry.credentialScope === activeCredentialScope) continue;
         entry.observation?.dispose();
         entries.delete(key);
@@ -210,6 +230,13 @@ export function subscribeQuotaSnapshotEntry(key: string | null, listener: () => 
     return () => {
         listeners?.delete(listener);
         if (listeners && listeners.size === 0) listenersByKey.delete(key);
+        const entry = entries.get(key);
+        if (entry && !hasPollingDemand(key, entry)) {
+            entry.refreshSinceFetchedAt = null;
+            entry.refreshing = false;
+            publish(key, entry);
+            reconcilePolling(key);
+        }
     };
 }
 
@@ -236,7 +263,7 @@ async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<Conn
                     expectedActiveServer: ctx.serverBasis,
                 });
                 if (!isScopeActive(ctx.credentialScope)) return null;
-                entry.snapshot = opened;
+                entry.snapshot = opened ?? (entry.refreshing ? entry.snapshot : null);
                 entry.consecutiveErrors = 0;
                 entry.nextFetchAtMs = getUsageProjectionNextReadAtMs({ consecutiveErrors: 0,
                     legacyStaleAfterMs: opened?.staleAfterMs ?? 30_000 });
@@ -256,7 +283,7 @@ async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<Conn
                 })
                 : null;
             if (!isScopeActive(ctx.credentialScope)) return null;
-            entry.snapshot = opened;
+            entry.snapshot = opened ?? (entry.refreshing ? entry.snapshot : null);
             entry.consecutiveErrors = 0;
             entry.nextFetchAtMs = getUsageProjectionNextReadAtMs({ consecutiveErrors: 0,
                 legacyStaleAfterMs: opened?.staleAfterMs ?? 30_000 });
@@ -271,6 +298,14 @@ async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<Conn
         } finally {
             if (isScopeActive(ctx.credentialScope)) {
                 entry.loading = false;
+                if (entry.refreshSinceFetchedAt !== null) {
+                    if (entry.error || (entry.snapshot && entry.snapshot.fetchedAt > entry.refreshSinceFetchedAt)) {
+                        entry.refreshing = false;
+                        entry.refreshSinceFetchedAt = null;
+                    } else {
+                        entry.nextFetchAtMs = getUsageProjectionNextReadAtMs({ consecutiveErrors: 0, legacyStaleAfterMs: 0 });
+                    }
+                }
             }
             entry.loadPromise = null;
             publish(key, entry);
@@ -306,12 +341,7 @@ export function retainQuotaSnapshotPolling(key: string, ctx: QuotaSnapshotLoadCo
     entry.credentialScope = ctx.credentialScope;
     evictEntriesOutsideCredentialScope(ctx.credentialScope);
 
-    if (!entry.observation) entry.observation = observeUsageProjection({
-        serverId: ctx.serverBasis.serverId,
-        read: () => { entry.loadAttempted = true; return runLoad(key, ctx); },
-        busy: () => Boolean(entry.loadPromise || entry.refreshPromise),
-        nextReadAtMs: () => entry.nextFetchAtMs,
-    });
+    reconcilePolling(key);
 
     let released = false;
     return () => {
@@ -321,46 +351,45 @@ export function retainQuotaSnapshotPolling(key: string, ctx: QuotaSnapshotLoadCo
         const current = entries.get(key);
         if (current !== entry) return;
         current.pollRetainCount = Math.max(0, current.pollRetainCount - 1);
-        if (current.pollRetainCount === 0) {
+        if (!hasPollingDemand(key, current)) {
             current.pollContext = null;
             current.observation?.dispose();
             current.observation = null;
+            current.refreshSinceFetchedAt = null;
+            current.refreshing = false;
+            publish(key, current);
         }
     };
 }
 
 export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadContext): Promise<void> {
     const entry = getOrCreateEntry(key);
-    if (entry.refreshPromise) {
-        await entry.refreshPromise;
+    const previousRefresh = entry.refreshPromise;
+    if (previousRefresh && entry.refreshing) {
+        await previousRefresh;
         return;
     }
+    if (entry.refreshing) return;
 
     if (!isScopeActive(ctx.credentialScope)) return;
+    entry.pollContext = ctx;
     entry.refreshing = true;
+    entry.error = null;
     publish(key, entry);
-    const promise = (async () => {
+    const promise = Promise.resolve(previousRefresh).then(async () => {
+        // A new intent waits for the cancelled request without inheriting its completion.
+        if (entry.refreshPromise !== promise || !entry.refreshing || !isScopeActive(ctx.credentialScope)) return;
         const inFlightFetchedAt = (await entry.loadPromise
             ?.then((snapshot) => snapshot?.fetchedAt ?? 0)
             .catch(() => 0)) ?? 0;
-        if (!isScopeActive(ctx.credentialScope)) return;
-        const sinceFetchedAt = Math.max(entry.snapshot?.fetchedAt ?? 0, inFlightFetchedAt);
+        if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+        entry.refreshSinceFetchedAt = Math.max(entry.snapshot?.fetchedAt ?? 0, inFlightFetchedAt);
         try {
             const mode = await ctx.resolveAccountMode();
-            if (!isScopeActive(ctx.credentialScope)) return;
-            try {
-                await ctx.assertOperationAllowed('quota_refresh');
-            } catch (error) {
-                if (isScopeActive(ctx.credentialScope)) {
-                    entry.error =
-                        sanitizeEndpointErrorMessage(error)
-                        ?? t('common.error');
-                    publish(key, entry);
-                }
-                return;
-            }
-            if (!isScopeActive(ctx.credentialScope)) return;
-            await (mode === 'plain'
+            if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+            await ctx.assertOperationAllowed('quota_refresh');
+            if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+            const ok = await (mode === 'plain'
                 ? requestConnectedServiceQuotaSnapshotRefreshV3(
                     ctx.credentials,
                     {
@@ -377,25 +406,30 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
                     },
                     { expectedActiveServer: ctx.serverBasis },
                 ));
-        } catch {
-            // Best-effort only.
+            if (!ok) throw new Error(t('common.error'));
+            if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+            await runLoad(key, ctx);
+        } catch (error) {
+            if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
+            entry.error = sanitizeEndpointErrorMessage(error) ?? t('common.error');
+            entry.refreshSinceFetchedAt = null;
+            entry.refreshing = false;
         }
-        for (const delayMs of REFRESH_RELOAD_DELAYS_MS) {
-            await sleep(delayMs);
-            if (!isScopeActive(ctx.credentialScope)) break;
-            const opened = await runLoad(key, ctx);
-            if (opened && opened.fetchedAt > sinceFetchedAt) break;
-        }
-    })();
+    });
 
     entry.refreshPromise = promise;
     try {
         await promise;
     } finally {
-        if (entry.refreshPromise === promise) entry.refreshPromise = null;
-        entry.refreshing = false;
-        publish(key, entry);
-        entry.observation?.reconcile();
+        if (entry.refreshPromise === promise) {
+            entry.refreshPromise = null;
+            if (!isScopeActive(ctx.credentialScope) || !hasPollingDemand(key, entry)) {
+                entry.refreshSinceFetchedAt = null;
+                entry.refreshing = false;
+            }
+            publish(key, entry);
+            reconcilePolling(key, entry.refreshSinceFetchedAt !== null && entry.error === null);
+        }
     }
 }
 

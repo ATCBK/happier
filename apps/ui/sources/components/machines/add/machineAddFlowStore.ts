@@ -21,7 +21,9 @@ export type MachineAddTaskHandle = Readonly<{
     /** Original SSH target/ref custody; later form edits cannot retarget a prompt. */
     sshSubmission?: Readonly<{ draft: MachineAddSshDraft; savedHostRevision: number | 'absent' | null }>;
 }>;
-export type MachineAddSshDraft = SshCredentialsDraft & Readonly<{ privateKeyMaterial?: string; savedHostId?: string | null }>;
+export type MachineAddSshDraft = SshCredentialsDraft & Readonly<{
+    privateKeyMaterial?: string; savedHostId?: string | null; savedHostExpectedRevision?: number | 'absent';
+}>;
 export type MachineAddFlowDraft = Readonly<{
     serverId: string | null;
     path: MachineAddPathId | null;

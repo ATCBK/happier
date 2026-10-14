@@ -1,10 +1,13 @@
 {
-  "extends": "./tsconfig.source.json",
+  "extends": "./tsconfig.json",
   "compilerOptions": {
+    "composite": true,
+    "noEmit": false,
+    "emitDeclarationOnly": true,
     "outDir": "node_modules/.cache/tsc/cli.services.declarations",
-    "tsBuildInfoFile": "node_modules/.cache/tsc/cli.services.typecheck.tsbuildinfo"
+    "tsBuildInfoFile": "node_modules/.cache/tsc/cli.services.typecheck.tsbuildinfo",
+    "disableSourceOfProjectReferenceRedirect": true
   },
-  "include": [],
   "references": [
     {
       "path": "./tsconfig.foundation.json"
@@ -96,7 +99,6 @@
     "src/api/connection/scheduling/index.ts",
     "src/api/machine/legacyDirectSessionResponseCompatibility.ts",
     "src/api/machine/machineMetadataPublication.ts",
-    "src/api/machine/resolveCurrentMachineExecutionOriginContext.ts",
     "src/api/machine/sessionHandoff/runtimeConfig.ts",
     "src/api/machine/sessionHandoff/workspaceSyncGuard.ts",
     "src/api/machine/voiceInferenceRpcResponses.ts",
@@ -199,6 +201,7 @@
     "src/cli/runtime/update/autoUpdateNotice.ts",
     "src/cli/runtime/update/cliUpdateFacts.ts",
     "src/cli/runtime/update/updaterAdmission.ts",
+    "src/cloud/connectedServices/connectedServiceCredentialResolutionErrors.ts",
     "src/cloud/connectedServices/connectedServiceStoredContentUnavailable.ts",
     "src/cloud/connectedServices/createConnectedServiceAccountModeCache.ts",
     "src/cloud/loopbackOauthPkce.ts",
@@ -442,6 +445,8 @@
     "src/daemon/memory/transcript/legacyUnclassifiedTranscriptRows.ts",
     "src/daemon/ownership/daemonOwnershipMetadata.ts",
     "src/daemon/ownership/resolveDaemonOwnershipConflictExitCode.ts",
+    "src/daemon/peer/iroh/daemonMachineIrohRuntime.ts",
+    "src/daemon/peer/iroh/irohEndpointIdentity.ts",
     "src/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen.ts",
     "src/daemon/peer/iroh/workspaceMachineCarrierTunnelOpen.ts",
     "src/daemon/peer/mediation/loopback/irohMachineAdmission.ts",
@@ -461,6 +466,9 @@
     "src/daemon/peer/mediation/stream/control.ts",
     "src/daemon/peer/mediation/stream/framePump.ts",
     "src/daemon/peer/mediation/stream/session.ts",
+    "src/daemon/peer/mediation/tunnel/frames/index.ts",
+    "src/daemon/peer/mediation/tunnel/grantConsumption.ts",
+    "src/daemon/peer/mediation/tunnel/open.ts",
     "src/daemon/peer/mediation/tunnel/registerRoutes.ts",
     "src/daemon/peer/mediation/tunnel/relay.ts",
     "src/daemon/peer/mediation/tunnel/voiceBinaryAppend.ts",
@@ -659,6 +667,7 @@
     "src/plugins/runtime/api/types.ts",
     "src/plugins/runtime/composition/retainedProviderAssembly.ts",
     "src/plugins/runtime/connectedAccounts/hostRuntime.ts",
+    "src/plugins/runtime/context/daemonDatabaseWorkerEntry.ts",
     "src/plugins/runtime/context/eventPayloadSchema.ts",
     "src/plugins/runtime/context/mcp.ts",
     "src/plugins/runtime/context/pluginAccountSettingsChangeBroker.ts",
@@ -721,8 +730,6 @@
     "src/providers/sessions/resolveNativeAgentModelApplyPolicy.ts",
     "src/providers/sessions/resolveSpawnBindingContinuity.ts",
     "src/registries/registryTransferPayload.ts",
-    "src/registries/updates/registryUpdateTracker.ts",
-    "src/registries/updates/trackers/skillsUpdateTracker.ts",
     "src/rpc/handlers/fileSystem/directoryListing/directoryListingTypes.ts",
     "src/rpc/handlers/fileSystem/directoryListing/sortDirectoryEntries.ts",
     "src/rpc/handlers/machineFileBrowser/listMachineBrowseRoots.ts",
@@ -826,5 +833,6 @@
     "src/utils/lock.ts",
     "src/workspaces/execution/projectServicePlacement.ts",
     "src/workspaces/sync/workspaceSyncLegacyState.ts"
-  ]
+  ],
+  "include": []
 }

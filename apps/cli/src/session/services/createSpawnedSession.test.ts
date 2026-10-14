@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { markRpcRequestDisposition } from '@happier-dev/sync-client';
 import axios from 'axios';
 import { NO_TEAM_CAPABILITIES_V1 } from '@happier-dev/protocol/teams';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -60,7 +61,7 @@ vi.mock('@/auth/validateStoredAuthTokenAgainstActiveServer', () => ({
   validateStoredAuthTokenAgainstActiveServer,
 }));
 
-vi.mock('@/session/transport/rpc/machineRpc', () => ({ callMachineRpc }));
+vi.mock('@/session/transport/rpc/machineRpc', () => ({ callMachineRpc, callExactMachineRpc: callMachineRpc }));
 vi.mock('@/api/client/connectedServiceCredentialApi', async importOriginal => ({
   ...await importOriginal<typeof import('@/api/client/connectedServiceCredentialApi')>(),
   fetchAccountEncryptionCurrentness,
@@ -591,7 +592,7 @@ describe('createSpawnedSession settlement', () => {
     callMachineRpc.mockImplementation(async ({ method }) => {
       if (method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE) return { status: 'not_found' };
       if (method !== RPC_METHODS.SPAWN_HAPPY_SESSION) throw new Error(`Unexpected RPC: ${method}`);
-      if (failure === 'lost_admission') throw Object.assign(new Error('admission acknowledgement lost'), { code: 'MACHINE_RPC_TIMEOUT' });
+      if (failure === 'lost_admission') throw markRpcRequestDisposition(Object.assign(new Error('admission acknowledgement lost'), { code: 'MACHINE_RPC_TIMEOUT' }), 'outcomeUnknown');
       if (failure === 'uncorrelated_failure') throw Object.assign(new Error('uncorrelated transport validation failure'), {
         code: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
       });
@@ -2007,9 +2008,9 @@ describe('createSpawnedSession settlement', () => {
   });
 
   it('retains the Provider spawn nonce only when machine-RPC submission is ambiguous', async () => {
-    callMachineRpc.mockRejectedValue(Object.assign(new Error('Machine RPC call timeout'), {
+    callMachineRpc.mockRejectedValue(markRpcRequestDisposition(Object.assign(new Error('Machine RPC call timeout'), {
       code: 'MACHINE_RPC_TIMEOUT',
-    }));
+    }), 'outcomeUnknown'));
 
     await expect(createSpawnedSession({
       credentials,

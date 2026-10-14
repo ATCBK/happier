@@ -27,6 +27,7 @@ import { resolveRemoteSshBootstrapPrompt, type RemoteSshBootstrapFormState } fro
 import { startRemoteSshBootstrapTask, continueRemoteSshBootstrapTask } from '@/components/systemTasks/remoteSshBootstrap/remoteSshBootstrapTask';
 import { readMachineAddFlowDraft, updateMachineAddFlowDraft, type MachineAddTaskHandle, type MachineAddSshDraft } from './machineAddFlowStore';
 import { beginMachineAddWatch, startMachineAddTask } from './machineAddTaskLifetime';
+import { getMachineAddSshSupportedAuthModes } from './machineAddSshTask';
 
 const ResolutionSchema = z.object({
     hostTrust: z.object({ kind: z.enum(['ssh.trustHost', 'ssh.replaceHostKey']), fingerprint: z.string(), existingFingerprint: z.string().nullable().optional() }).optional(),
@@ -85,6 +86,7 @@ export function createMachineAddSshTaskAction(runnerOverride?: SystemTaskRunner)
                     return await withRemoteHostSshConfig(account, { hostId: draft.savedHostId, expectedRevision: submission.savedHostRevision },
                         async ({ config, host, assertCurrent: assertHostCurrent }) => {
                             assertCurrent();
+                            if (!getMachineAddSshSupportedAuthModes(runner).some(mode => mode === config.value.sshAuth)) throw new Error('ssh_auth_mode_unavailable');
                             const form = buildRemoteSshBootstrapFormStateFromSshConfig({ config: config.value, draft, installRelayRuntime: false });
                             return run(form, async spec => (await startAdmittedRemoteHostSystemTask({ runner, assertCurrent: () => {
                                 assertCurrent(); assertHostCurrent();
@@ -101,6 +103,7 @@ export function createMachineAddSshTaskAction(runnerOverride?: SystemTaskRunner)
             const request = MachineAddSshStartInputSchema.parse(input);
             if (!areServerProfileIdentifiersEquivalent(request.serverId, serverId)) return fail('server_scope_mismatch');
             if ([retained.sshTask, retained.thisComputerTask].some((handle) => handle && (handle.starting || (handle.taskId && !handle.runner.getSnapshot(handle.taskId)?.result)))) return fail('machine_setup_in_progress');
+            if ('host' in request && !getMachineAddSshSupportedAuthModes(runner).some(mode => mode === request.authMode)) return fail('ssh_auth_mode_unavailable');
             const requestedDraft: MachineAddSshDraft = 'savedHostId' in request
                 ? { ...createDefaultSshCredentialsDraft(), savedHostId: request.savedHostId }
                 : { ...createDefaultSshCredentialsDraft(request.authMode), host: request.host, username: request.username,

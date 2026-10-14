@@ -4885,6 +4885,7 @@ localTailscale: {
       },
     },
     quota: {
+      refreshing: "使用量を更新中…",
       loading: "読み込み中…",
       error: ({ message }: { message: string }) => `エラー: ${message}`,
       lastUpdated: ({ time }: { time: string }) => `最終更新: ${time}`,
@@ -13363,9 +13364,9 @@ settingsSession: {
       mediatorVerbosityShort: "短く",
       mediatorVerbosityBalanced: "バランス",
       mediatorIdleTtl: "メディエーター idle TTL",
-      mediatorIdleTtlSubtitle: "非アクティブ時に自動停止（60–21600秒）",
-      mediatorIdleTtlDescription: "60〜21600 の数値を入力してください。",
-      mediatorIdleTtlInvalid: "60〜21600 の数値を入力してください。",
+      mediatorIdleTtlSubtitle: "非アクティブ時に自動停止",
+      mediatorIdleTtlDescription: "秒数を正の整数で入力してください。",
+      mediatorIdleTtlInvalid: "秒数を正の整数で入力してください。",
       mediatorChatModelSource: "メディエーター モデル（チャット）",
       mediatorChatModelSourceSubtitle:
         "セッションのモデル、またはカスタムの高速モデルを使用",

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ActionIdSchema } from './actionIds.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
-// Catalog initialization belongs to collection, not an individual test's budget.
-import './actionSpecs.js';
+import { getActionSpec, PublicActionIdSchema } from './actionSpecs.js';
+import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('local Voice Action contract', () => {
   it('declares the exact local conversation and Brief operation identities', () => {
@@ -14,8 +14,7 @@ describe('local Voice Action contract', () => {
     }
   });
 
-  it('exposes local conversation and Brief operations to automation on the answering client', async () => {
-    const { getActionSpec, PublicActionIdSchema } = await import('./actionSpecs.js');
+  it('exposes local conversation and Brief operations to automation on the answering client', () => {
     for (const id of ['get', 'start', 'end', 'set_muted', 'recover', 'dismiss', 'hold_begin', 'hold_release', 'hold_cancel', 'turn_control',
       'brief.request', 'brief.retry', 'brief.stop', 'brief.close', 'glance.open', 'glance.close', 'transcript.set_visible',
       'companion.reveal', 'position.set', 'setup.open', 'setup.close', 'open_conversation',
@@ -33,9 +32,7 @@ describe('local Voice Action contract', () => {
     }
   });
 
-  it('defaults microphone opening to approval and leaves safe controls direct', async () => {
-    const { getActionSpec } = await import('./actionSpecs.js');
-    const { resolveActionApprovalRouting } = await import('./actionApprovalPolicy.js');
+  it('defaults microphone opening to approval and leaves safe controls direct', () => {
     for (const [operation, required] of [
       ['start', true], ['recover', true], ['hold_begin', true], ['brief.request', true], ['brief.retry', true],
       ['get', false], ['end', false], ['set_muted', true], ['dismiss', false], ['hold_release', false],
@@ -93,9 +90,7 @@ describe('local Voice Action contract', () => {
     expect(end.inputSchema.safeParse({ expectedAttempt: 'attempt-1', sessionId: 'focused-session' }).success).toBe(false);
   });
 
-  it('exposes destructive Voice reset with the same default approval owner', async () => {
-    const { getActionSpec } = await import('./actionSpecs.js');
-    const { resolveActionApprovalRouting } = await import('./actionApprovalPolicy.js');
+  it('exposes destructive Voice reset with the same default approval owner', () => {
     const actionId = 'ui.voice_global.reset';
     const spec = getActionSpec(actionId);
     expect(spec.surfaces).toMatchObject({ agent: true, mcp: true, plugin: true });

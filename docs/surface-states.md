@@ -274,7 +274,7 @@ welcome/sign-in route before mounting their bodies.
 
 In 0.3 development source, core's `ActivitySpinner` and plugin `Spinner` share the frame generation and platform renderers in [`presentation/feedback`](../packages/plugin-ui/src/presentation/feedback/Spinner.tsx). The default is the eight-dot Happier mark: the seven-dot H plus a bottom-centre dot. Appearance retains each seven-dot H motion as an `h…` choice, alongside the Classic Ring. Shape is part of the shared style descriptor; consumers do not add their own dot or animation.
 
-Core injects device-local style, speed and pause preferences, including pending release previews through the existing presentation host; plugin surfaces use the shared default. Both preserve paused marks, reduced-motion breathing, explicit color overrides and the existing native clocks/web filmstrips.
+Core injects device-local style, speed and pause preferences, including pending release previews through the existing presentation host. Mounted plugin surfaces receive the same preferences in the optional `SurfaceContext.theme.spinner` presentation data; public `Spinner` and busy controls consume them through the shared environment and renderer. Contexts without these preferences use the shared default. Both preserve paused marks, reduced-motion breathing, explicit color overrides and the existing native clocks/web filmstrips. The host remains the sole owner of reduced motion and active-view policy. This addition belongs to the unpublished 0.3 development author contract: new readers accept omitted preferences, while prior strict theme readers reject the new field.
 
 ## Retained content and recovery
 

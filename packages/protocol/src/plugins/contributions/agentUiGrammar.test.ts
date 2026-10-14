@@ -1,5 +1,5 @@
-import type { core } from 'zod';
 import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
+import { compileProtocolJsonSchema } from '../actions/jsonSchemaCompiler.js';
 import { createPluginManifestJsonSchemaV2 } from '../manifest/jsonSchema.js';
 import { PluginManifestV2Schema } from '../manifest/v2.js';
 import { describe, expect, it } from 'vitest';
@@ -389,45 +389,60 @@ describe('public Agent UI authoring grammar', () => {
 
 describe('Agent UI grammar in the full public Manifest projection', () => {
   it('keeps shared identifiers, setting references, and dialogs concrete in both dialects', () => {
-    const projections = [createPluginManifestJsonSchemaV2()];
+    const projections: { schema: ReturnType<typeof createPluginManifestJsonSchemaV2>;
+      dialect: 'draft-07' | 'draft-2020-12' }[] = [
+      { schema: createPluginManifestJsonSchemaV2(), dialect: 'draft-2020-12' },
+    ];
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
-      projections.push(PluginManifestV2Schema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' }));
+      projections.push({ schema: PluginManifestV2Schema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' }),
+        dialect: target === 'draft-7' ? 'draft-07' : 'draft-2020-12' });
       // Custom authoring nodes are intentionally unrepresentable by the strict action helper.
       expect(() => zodSchemaToJsonSchemaObject(PluginManifestV2Schema, { target }))
         .toThrow(ActionJsonSchemaProjectionError);
     }
-    for (const schema of projections) {
-      const definitions = (schema.$defs ?? schema.definitions) as Record<string, core.JSONSchema.JSONSchema>;
-      const object = (node: unknown): core.JSONSchema.JSONSchema => {
-        if (!node || typeof node !== 'object') throw new Error('Expected a projected schema object');
-        return node as core.JSONSchema.JSONSchema;
-      };
-      const resolve = (node: unknown) => {
-        const schemaObject = object(node);
-        const reference = schemaObject.$ref ?? (schemaObject.allOf?.length === 1 ? schemaObject.allOf[0]?.$ref : undefined);
-        return reference
-          ? object(definitions[reference.slice(reference.lastIndexOf('/') + 1)])
-          : schemaObject;
-      };
-      const declaration = Object.values(definitions).find((node) => {
-        const behavior = node.properties?.behavior;
-        return behavior && typeof behavior === 'object' && behavior.properties?.descriptorId;
-      });
-      const behavior = object(declaration?.properties?.behavior);
-      expect(resolve(behavior.properties?.descriptorId)).toEqual({ type: 'string', minLength: 1 });
-      const payload = object(behavior.properties?.payload);
-      const sessionExtras = object(payload.properties?.sessionExtras);
-      expect(resolve(sessionExtras.properties?.values)).toEqual({
-        type: 'array', items: { $ref: expect.any(String) },
-      });
-      expect(resolve(sessionExtras.properties?.settingKey)).toMatchObject({
-        type: 'object', properties: { scope: { type: 'string', enum: ['host', 'account', 'daemon'] } },
-      });
-      const askUserQuestion = object(behavior.properties?.askUserQuestion);
-      const dialogs = resolve(askUserQuestion.properties?.dialogs);
-      expect(resolve(dialogs.items)).toMatchObject({
-        properties: { dialogId: { $ref: expect.any(String) } }, required: ['dialogId'],
-      });
+    const manifestForDeclaration = (ui: unknown) => ({
+      schemaVersion: 2, id: 'acme.grammar', version: '0.1.0', displayName: 'Grammar fixture',
+      engines: { happier: '^0.3.0' }, runtime: { apiVersion: 1 },
+      entrypoints: { daemon: './dist/index.js' },
+      contributes: { agents: [{
+        id: 'example', title: 'Example', runtime: { kind: 'custom' }, primary: 'sessions',
+        capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } }, ui,
+      }] },
+    });
+    for (const { schema, dialect } of projections) {
+      // Validate the real public graph rather than assuming where Zod places its aliases.
+      const validateManifest = compileProtocolJsonSchema(schema, dialect);
+      const validManifest = manifestForDeclaration(SUPPORTED_DECLARATION);
+      expect(PluginManifestV2Schema.safeParse(validManifest).success).toBe(true);
+      expect(validateManifest(validManifest)).toBe(true);
+      for (const scope of ['host', 'account', 'daemon']) {
+        const scopedManifest = manifestForDeclaration({
+          ...SUPPORTED_DECLARATION, behavior: { ...SUPPORTED_DECLARATION.behavior,
+            payload: { sessionExtras: { ...SUPPORTED_DECLARATION.behavior.payload.sessionExtras,
+              settingKey: { scope, localId: 'experiments' } } } },
+        });
+        expect(PluginManifestV2Schema.safeParse(scopedManifest).success).toBe(true);
+        expect(validateManifest(scopedManifest)).toBe(true);
+      }
+      for (const candidate of [
+        { ...SUPPORTED_DECLARATION, behavior: { ...SUPPORTED_DECLARATION.behavior, descriptorId: '' } },
+        { ...SUPPORTED_DECLARATION, behavior: { ...SUPPORTED_DECLARATION.behavior,
+          payload: { sessionExtras: { outputKey: 'acmeMode', values: false } } } },
+        { ...SUPPORTED_DECLARATION, behavior: { ...SUPPORTED_DECLARATION.behavior,
+          payload: { sessionExtras: { outputKey: 'acmeMode', settingKey: { localId: 'experiments' } } } } },
+        { ...SUPPORTED_DECLARATION, behavior: { ...SUPPORTED_DECLARATION.behavior,
+          payload: { sessionExtras: { ...SUPPORTED_DECLARATION.behavior.payload.sessionExtras,
+            settingKey: { scope: 'global', localId: 'experiments' } } } } },
+        { ...SUPPORTED_DECLARATION, behavior: { ...SUPPORTED_DECLARATION.behavior,
+          askUserQuestion: { dialogs: [{ dialogId: '' }] } } },
+        { ...SUPPORTED_DECLARATION, behavior: { ...SUPPORTED_DECLARATION.behavior,
+          askUserQuestion: { dialogs: [{}] } } },
+      ]) {
+        const invalidManifest = manifestForDeclaration(candidate);
+        expect(parse(candidate).success).toBe(false);
+        expect(PluginManifestV2Schema.safeParse(invalidManifest).success).toBe(false);
+        expect(validateManifest(invalidManifest)).toBe(false);
+      }
     }
   });
 });

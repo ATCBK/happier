@@ -1,3 +1,5 @@
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -18,8 +20,10 @@ installHomeGovernanceBoundaries(harness);
 const navigation = createExpoRouterMock();
 vi.doMock('expo-router', () => navigation.module);
 const machineRpc = vi.fn(async () => { throw new Error('Unexpected Machine transport in Account approval test'); });
-// Only Machine transport is replaced: Action admission, Artifact writes and Inbox execution stay real.
-vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
+const providerHarness = createProviderSettingsHarness({ machines: [] });
+installProviderSettingsRpcBoundary(providerHarness);
+providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, () => machineRpc());
+// Socket transport is the boundary; scoped routing, Action admission and Inbox execution stay real.
 await loadSyncSingletonForTests();
 const { useProviderConnectionMutation } = await import('./useProviderConnectionMutation');
 const { mutateProviderConnection } = await import('@/providers/actions/client');

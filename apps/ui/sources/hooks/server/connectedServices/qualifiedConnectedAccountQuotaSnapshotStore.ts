@@ -48,6 +48,7 @@ type InternalEntry = {
     loadPromise:
         Promise<QualifiedConnectedAccountQuotaSnapshotV4 | null> | null;
     refreshPromise: Promise<void> | null;
+    refreshSinceFetchedAt: number | null;
     nextFetchAtMs: number;
     consecutiveErrors: number;
     retainCount: number;
@@ -100,6 +101,7 @@ function getOrCreateEntry(key: string): InternalEntry {
         loadAttempted: false,
         loadPromise: null,
         refreshPromise: null,
+        refreshSinceFetchedAt: null,
         nextFetchAtMs: 0,
         consecutiveErrors: 0,
         retainCount: 0,
@@ -126,6 +128,31 @@ function publish(key: string, entry: InternalEntry): void {
     for (const listener of listeners) listener();
 }
 
+function hasPollingDemand(key: string, entry: InternalEntry): boolean {
+    // Cached surfaces do not poll normally; an explicit refresh stays live while observed.
+    return entry.retainCount > 0 || (entry.refreshing && (listenersByKey.get(key)?.size ?? 0) > 0);
+}
+
+function reconcilePolling(key: string, initialReadCompleted = false): void {
+    const entry = entries.get(key);
+    if (!entry) return;
+    const context = entry.pollContext;
+    if (!hasPollingDemand(key, entry) || !context) {
+        entry.observation?.dispose();
+        entry.observation = null;
+        return;
+    }
+    if (!entry.observation) entry.observation = observeUsageProjection({
+        serverId: context.serverBasis.serverId,
+        initialReadCompleted,
+        read: () => { entry.loadAttempted = true; return runLoad(key, context); },
+        busy: () => Boolean(entry.loadPromise || entry.refreshPromise),
+        nextReadAtMs: () => entry.nextFetchAtMs,
+        presentationDeadlineMs: () => entry.snapshot ? entry.snapshot.fetchedAt + entry.snapshot.staleAfterMs : undefined,
+        publish: () => publish(key, entry),
+    });
+    entry.observation.reconcile();
+}
 /**
  * Drops cached entries that belong to a superseded credential scope.
  *
@@ -139,7 +166,7 @@ function evictEntriesOutsideCredentialScope(
     activeCredentialScope: string,
 ): void {
     for (const [key, entry] of entries) {
-        if (entry.retainCount > 0) continue;
+        if (hasPollingDemand(key, entry)) continue;
         if (entry.credentialScope === activeCredentialScope) continue;
         entry.observation?.dispose();
         entries.delete(key);
@@ -161,8 +188,8 @@ async function runLoad(
             const read =
                 await readQualifiedConnectedAccountQuota(context);
             const snapshot = read?.snapshot ?? null;
-            entry.snapshot = snapshot;
-            entry.usageRecordId = read?.recordId ?? null;
+            entry.snapshot = snapshot ?? (entry.refreshing ? entry.snapshot : null);
+            entry.usageRecordId = read?.recordId ?? (entry.refreshing ? entry.usageRecordId : null);
             const diagnostic = snapshot?.diagnostics?.find((value) => value.kind === 'provider_http');
             // POST only queues acquisition. A fresh observation or a later producer
             // failure settles it; the last-known snapshot's timestamp cannot do so.
@@ -200,6 +227,14 @@ async function runLoad(
             return null;
         } finally {
             entry.loading = false;
+            if (entry.refreshSinceFetchedAt !== null) {
+                if (entry.error || (entry.snapshot && entry.snapshot.fetchedAt > entry.refreshSinceFetchedAt)) {
+                    entry.refreshing = false;
+                    entry.refreshSinceFetchedAt = null;
+                } else {
+                    entry.nextFetchAtMs = getUsageProjectionNextReadAtMs({ consecutiveErrors: 0, legacyStaleAfterMs: 0 });
+                }
+            }
             entry.loadPromise = null;
             publish(key, entry);
             entry.observation?.reconcile();
@@ -230,6 +265,13 @@ export function subscribeQualifiedQuotaSnapshotEntry(
     return () => {
         listeners?.delete(listener);
         if (listeners?.size === 0) listenersByKey.delete(key);
+        const entry = entries.get(key);
+        if (entry && !hasPollingDemand(key, entry)) {
+            entry.refreshSinceFetchedAt = null;
+            entry.refreshing = false;
+            publish(key, entry);
+            reconcilePolling(key);
+        }
     };
 }
 
@@ -278,14 +320,7 @@ export function retainQualifiedQuotaSnapshotPolling(
     entry.pollContext = context;
     entry.credentialScope = context.credentialScope;
     evictEntriesOutsideCredentialScope(context.credentialScope);
-    if (!entry.observation) entry.observation = observeUsageProjection({
-        serverId: context.serverBasis.serverId,
-        read: () => { entry.loadAttempted = true; return runLoad(key, context); },
-        busy: () => Boolean(entry.loadPromise || entry.refreshPromise),
-        nextReadAtMs: () => entry.nextFetchAtMs,
-        presentationDeadlineMs: () => entry.snapshot ? entry.snapshot.fetchedAt + entry.snapshot.staleAfterMs : undefined,
-        publish: () => publish(key, entry),
-    });
+    reconcilePolling(key);
 
     let released = false;
     return () => {
@@ -293,7 +328,10 @@ export function retainQualifiedQuotaSnapshotPolling(
         released = true;
         if (entries.get(key) !== entry) return;
         entry.retainCount = Math.max(0, entry.retainCount - 1);
-        if (entry.retainCount === 0) {
+        if (!hasPollingDemand(key, entry)) {
+            entry.refreshSinceFetchedAt = null;
+            entry.refreshing = false;
+            publish(key, entry);
             entry.observation?.dispose();
             entry.observation = null;
         }
@@ -305,7 +343,11 @@ export async function refreshQualifiedQuotaSnapshot(
     context: QualifiedQuotaSnapshotStoreContext,
 ): Promise<void> {
     const entry = getOrCreateEntry(key);
-    if (entry.refreshPromise) return entry.refreshPromise;
+    const previousRefresh = entry.refreshPromise;
+    if (previousRefresh && entry.refreshing) return previousRefresh;
+    if (entry.refreshing) return;
+    entry.pollContext = context;
+    entry.credentialScope = context.credentialScope;
     // The last-known-good snapshot stays visible for the whole refresh:
     // `refreshing` is the in-flight signal, and blanking here would flash an
     // empty gauge on every manual refresh.
@@ -313,24 +355,37 @@ export async function refreshQualifiedQuotaSnapshot(
     entry.error = null;
     publish(key, entry);
 
-    const promise = (async () => {
+    const promise = Promise.resolve(previousRefresh).then(async () => {
         try {
+            // Cancelled admission cannot complete a later explicit intent.
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             await entry.loadPromise;
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
+            entry.refreshSinceFetchedAt = entry.snapshot?.fetchedAt ?? 0;
             await refreshQualifiedConnectedAccountQuota(context);
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             await runLoad(key, context);
         } catch (error) {
+            if (entry.refreshPromise !== promise || !entry.refreshing) return;
             if (readConnectedServiceSettingsErrorCode(error) === 'connected_account_v4_operation_unsupported') {
                 entry.supported = false;
             }
             entry.producerRefreshPending = false;
             entry.error = resolveConnectedServiceSettingsErrorMessage(error);
-        } finally {
-            entry.refreshPromise = null;
+            entry.refreshSinceFetchedAt = null;
             entry.refreshing = false;
-            publish(key, entry);
-            entry.observation?.reconcile();
+        } finally {
+            if (entry.refreshPromise === promise) {
+                entry.refreshPromise = null;
+                if (!hasPollingDemand(key, entry)) {
+                    entry.refreshSinceFetchedAt = null;
+                    entry.refreshing = false;
+                }
+                publish(key, entry);
+                reconcilePolling(key, entry.refreshSinceFetchedAt !== null && entry.error === null);
+            }
         }
-    })();
+    });
     entry.refreshPromise = promise;
     return promise;
 }

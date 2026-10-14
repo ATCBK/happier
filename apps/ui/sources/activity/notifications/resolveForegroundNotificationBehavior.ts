@@ -157,7 +157,7 @@ export async function resolveForegroundNotificationBehavior(params: Readonly<{
             : plan.foregroundBehavior;
     if (arrival.sessionId && arrival.eventIdentity && behavior !== 'off') {
         const presentation = {
-            address: { serverId: arrival.serverId, sessionId: arrival.sessionId },
+            address: { serverId: resolution.scope.serverId, sessionId: arrival.sessionId },
             accountId: resolution.scope.accountId,
             event: arrival.personalEvent,
             identity: arrival.eventIdentity,

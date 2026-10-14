@@ -105,6 +105,24 @@ function metadataWithLaunchCorrespondence() {
 }
 
 describe('requestInactiveSessionResume', () => {
+  it('delivers the invocation initial goal in the existing resume request without changing saved launch controls', async () => {
+    callMachineRpc.mockResolvedValue({ type: 'success', sessionId: 'session-1' });
+    await expect(requestInactiveSessionResume({ credentials, sessionId: 'session-1', localId: 'goal-request',
+      rawSession: rawSession(), metadata, initialGoal: { objective: 'Finish the task', tokenBudget: null },
+    })).resolves.toEqual({ ok: true });
+    expect(callMachineRpc.mock.calls[0]?.[0]?.request).toMatchObject({
+      type: 'resume-session', sessionId: 'session-1',
+      initialGoal: { objective: 'Finish the task', tokenBudget: null }, initialTranscriptAfterSeq: 17,
+    });
+  });
+  it('does not fabricate a fresh user-message authorization for an automated goal wake', async () => {
+    callMachineRpc.mockResolvedValue({ type: 'success', sessionId: 'session-1' });
+    await expect(requestInactiveSessionResume({ credentials, sessionId: 'session-1', localId: 'goal-request',
+      rawSession: rawSession(), metadata, initialGoal: { objective: 'Finish the task' },
+      executionAuthority: 'account_automation',
+    })).resolves.toEqual({ ok: true });
+    expect(callMachineRpc.mock.calls[0]?.[0]?.request).not.toHaveProperty('executionAuthorization');
+  });
   it.each([100, 200, 300])('resumes with predecessor launch intent and timestamp-selected controls (%s)', async (incomingAt) => {
     callMachineRpc.mockResolvedValue({ type: 'success', sessionId: 'session-1' });
     const modelRef = (modelId: string) => ({ agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId });

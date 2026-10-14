@@ -75,6 +75,19 @@ describe('isProfileCompatibleWithBackendTarget', () => {
             target,
         )).toBe(true);
     });
+    it('retains the configured definition when reading qualified and legacy Profile compatibility', () => {
+        const targets = [
+            { kind: 'agent' as const, identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-bot' },
+            { kind: 'configuredAcpBackend' as const, backendId: 'review-bot' },
+        ];
+        for (const target of targets) {
+            expect(isProfileCompatibleWithBackendTarget({ compatibility: {}, isBuiltIn: false }, target)).toBe(true);
+            expect(isProfileCompatibleWithBackendTarget({ compatibility: {}, isBuiltIn: true,
+                compatibilityByTargetKey: { 'acpBackend:review-bot': true } }, target)).toBe(true);
+            expect(isProfileCompatibleWithBackendTarget({ compatibility: {}, isBuiltIn: false,
+                compatibilityByTargetKey: { 'acpBackend:review-bot': false } }, target)).toBe(false);
+        }
+    });
 
     it('honors a released flat Agent key for its qualified persisted Agent identity', () => {
         expect(isProfileCompatibleWithBackendTarget(

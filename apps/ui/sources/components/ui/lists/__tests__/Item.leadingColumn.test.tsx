@@ -5,6 +5,8 @@ import { flattenTestStyle, renderScreen, standardCleanup } from '@/dev/testkit';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+vi.unmock('@/components/ui/icons/Icon');
+
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock();
@@ -15,19 +17,9 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-vi.mock('@/components/ui/layout/layout', () => ({
-    useLayoutMaxWidth: () => 850,
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
-}));
+vi.mock('react-native-svg', async () => import('@/dev/testkit/mocks/reactNativeSvg'));
 
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: (key: string) => (key === 'uiItemDensity' ? 'cozy' : key === 'uiFontScale' ? 1 : null),
-}));
 
 afterEach(() => {
     standardCleanup();
@@ -75,6 +67,41 @@ async function renderSection(presentation: 'page' | 'grouped', rows: ReadonlyArr
 }
 
 describe('Item leading column (page sections)', () => {
+    it('keeps a service mark mode while sizing named and unnamed numeric glyphs to the row density', async () => {
+        const { Item } = await import('../Item');
+        const { ItemGroup } = await import('../ItemGroup');
+        const { ListPresentationProvider } = await import('../listPresentation');
+        const { ITEM_ICON_GLYPH_SIZE } = await import('../itemDensityMetrics');
+        const { ConnectedServiceMark } = await import('@/components/settings/connectedServices/ConnectedServiceMark');
+        const { Icon } = await import('@/components/ui/icons/Icon');
+        const { AgentIcon } = await import('@/agents/registry/AgentIcon');
+        const screen = await renderScreen(
+            <ListPresentationProvider value="grouped">
+                <ItemGroup title="Section" density="cozy">
+                    <Item testID="service.row" title="Service" icon={<ConnectedServiceMark legacyServiceId="openai" size="inline" />} />
+                    <Item title="Glyph" icon={<Icon name="key" testID="named.glyph" />} />
+                    <Item title="Agent" icon={<AgentIcon agentId="claude" size={29} testID="agent.glyph" />} />
+                </ItemGroup>
+            </ListPresentationProvider>,
+        );
+        const markDrawing = screen.findAllByTestId('service.row')[0]!.findAll(
+            (node) => typeof node.type === 'string' && node.props.width === 16 && node.props.height === 16,
+        );
+        expect(markDrawing.length).toBeGreaterThan(0);
+        const glyphSize = ITEM_ICON_GLYPH_SIZE.cozy;
+        for (const testID of ['named.glyph', 'agent.glyph']) {
+            const drawings = screen.findAllByTestId(testID).flatMap((node) => node.findAll(
+                (candidate) => typeof candidate.type === 'string',
+            ));
+            expect(drawings.some((node) => {
+                const style = flattenTestStyle(node.props.style ?? {});
+                // Native SVG leaves expose dimensions; the vendor glyph boundary exposes its size.
+                return (node.props.width ?? style.width ?? node.props.size) === glyphSize
+                    && (node.props.height ?? style.height ?? node.props.size) === glyphSize;
+            }), testID).toBe(true);
+        }
+    });
+
     it('reserves the same leading column on every row of a section in which any row has an icon', async () => {
         const { PAGE_LIST_METRICS } = await import('../pageListMetrics');
         const screen = await renderSection('page', [

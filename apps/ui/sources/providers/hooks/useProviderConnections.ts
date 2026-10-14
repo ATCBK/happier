@@ -3,6 +3,7 @@ import type { DaemonProviderConnectionsDescribeResponseV1 } from '@happier-dev/p
 
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
@@ -36,7 +37,7 @@ export function useProviderConnections(input: Readonly<{
     serverId: string | null;
     connectionId?: string;
 }>) {
-    const { describeProviderConnections, ready, retryReadiness, pendingApproval } = useProviderActionClient(input.serverId);
+    const { describeProviderConnections, ready, retryReadiness, pendingApproval, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId);
     const active = input.active ?? true;
     const activeRef = React.useRef(active);
     activeRef.current = active;
@@ -62,8 +63,10 @@ export function useProviderConnections(input: Readonly<{
         input.machineId,
         input.serverId,
         input.connectionId ?? null,
+        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null,
     ]);
-    const accountScopeKey = JSON.stringify([input.enabled, input.serverId, input.connectionId ?? null]);
+    const accountScopeKey = JSON.stringify([input.enabled, input.serverId, input.connectionId ?? null,
+        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null]);
     const stateMatchesScope = state.scopeKey === scopeKey
         && state.accountLifetime === accountLifetime;
     const scopeEnabled = input.enabled;
@@ -75,7 +78,9 @@ export function useProviderConnections(input: Readonly<{
         : stateMatchesScope ? state.data : accountMatchesScope ? state.accountData ?? null : null;
     const error = stateMatchesScope ? state.error : null;
     const machineError = stateMatchesScope ? state.machineError ?? null : null;
-    const loading = active && scopeEnabled && (!ready || !stateMatchesScope || state.loading);
+    const loading = active && scopeEnabled
+        && (resolution.kind === 'resolving' || resolution.kind === 'bound')
+        && (!ready || !stateMatchesScope || state.loading);
 
     React.useEffect(() => {
         const registration = accountLifetime?.onRetire(() => {
@@ -94,6 +99,7 @@ export function useProviderConnections(input: Readonly<{
         const requestStillCurrent = (): boolean => (
             activeRef.current && currentAccountLifetimeRef.current === accountLifetime
             && (accountLifetime?.isCurrent() ?? true)
+            && (resolution.kind !== 'bound' || binding?.isCurrent() === true)
         );
         if (!requestStillCurrent()) return null;
         if (!input.enabled) {
@@ -173,7 +179,7 @@ export function useProviderConnections(input: Readonly<{
                     : current);
             }
         }
-    }, [accountLifetime, accountScopeKey, describeProviderConnections, ready, input.connectionId, input.enabled, input.machineId, input.serverId, readCatalogAdmission, scopeKey]);
+    }, [accountLifetime, binding, resolution.kind, accountScopeKey, describeProviderConnections, ready, input.connectionId, input.enabled, input.machineId, input.serverId, readCatalogAdmission, scopeKey]);
 
     React.useEffect(() => {
         const unregister = active && input.enabled
@@ -203,14 +209,14 @@ export function useProviderConnections(input: Readonly<{
         const ownRead = read();
         if (input.enabled
             && currentAccountLifetimeRef.current === accountLifetime
-            && (accountLifetime?.isCurrent() ?? true)) {
+            && (accountLifetime?.isCurrent() ?? true) && binding?.isCurrent() === true) {
             // Account edits affect every machine projection on this Home;
             // runtime-only changes retain demand on the exact machine.
             refreshProviderConnectionReaders({ scope: refreshScope, machineId: input.machineId,
                 serverId: input.serverId, accountLifetime, ownRead: read });
         }
         return await ownRead;
-    }, [accountLifetime, input.enabled, input.machineId, input.serverId, read, retryReadiness]);
+    }, [accountLifetime, binding, input.enabled, input.machineId, input.serverId, read, retryReadiness]);
 
     return { data, catalog, error, machineError, loading, refresh, pendingApproval };
 }

@@ -4,6 +4,7 @@ import type { ArtifactSharingResourceV1 } from '../../artifacts/artifactSharingV
 import type { ArtifactAccessGrantRowV1 } from '../../artifacts/artifactAccessV1.js';
 import { createWorkBoardV1 } from '../../boards/workBoardV1.js';
 import { buildWorkBoardArtifactHeaderV1 } from '../../boards/workBoardArtifactV1.js';
+import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, WidgetAreaLayoutV1Schema } from '../../widgets/widgetSurfaceArtifactV1.js';
 
 const input = { artifactId: 'workflow', principal: { kind: 'team' as const, teamId: 'team' }, accessLevel: 'edit' as const };
 const resource = { artifactId: 'workflow', access: 'owner' as const,
@@ -29,17 +30,32 @@ describe('Artifact grant host owner', () => {
       .rejects.toMatchObject({ code: 'artifact_kind_not_shareable' });
   });
   it('shares widget layouts with people, Teams and groups but refuses Home-layout grants', async () => {
-    let kind = 'widget-area-layout.v1';
-    const write = vi.fn(async () => response);
-    const owner = createArtifactAccessActionsV1({ read: async () => ({ ...resource, header: { kind } }),
-      transport: { list: async () => response, set: write, remove: write } });
+    const surface = { serverId: 'home', accountId: 'owner', owner: { kind: 'project', projectId: 'project' } } as const;
+    const layout = WidgetAreaLayoutV1Schema.parse({ v: 1, surface, items: [] });
+    const artifactId = buildWidgetSurfaceArtifactIdV1(surface);
+    const widget = { ...resource, artifactId, header: buildWidgetSurfaceArtifactHeaderV1(layout), body: JSON.stringify(layout) };
+    const widgetResponse = { ...response, artifactId };
+    let opened: ArtifactSharingResourceV1 = widget;
+    const write = vi.fn(async () => widgetResponse);
+    const owner = createArtifactAccessActionsV1({ read: async () => opened,
+      transport: { list: async () => widgetResponse, set: write, remove: write } });
     for (const principal of [{ kind: 'account', accountId: 'recipient' }, { kind: 'team', teamId: 'team' },
       { kind: 'group', teamId: 'team', groupId: 'group' }] as const) {
-      await expect(owner({ actionId: 'artifact.access.grants.set', input: { ...input, principal } })).resolves.toEqual(response);
+      await expect(owner({ actionId: 'artifact.access.grants.set', input: { ...input, artifactId, principal } })).resolves.toEqual(widgetResponse);
     }
     write.mockClear();
-    kind = 'home-hub-layout.v1';
-    await expect(owner({ actionId: 'artifact.access.grants.set', input })).rejects.toMatchObject({ code: 'artifact_kind_not_shareable' });
+    const privateLayout = { ...layout, items: [{ kind: 'widget', instance: {
+      v: 1, id: 'private-input', definition: { kind: 'artifact', artifactId: 'definition' },
+      bindings: { cloud: { kind: 'value', value: { service: { pluginId: 'com.acme.test', localId: 'cloud' }, accountId: 'private' } } },
+    } }] };
+    expect(WidgetAreaLayoutV1Schema.safeParse(privateLayout).success).toBe(true);
+    for (const body of ['{bad', JSON.stringify({ ...layout, surface: { ...surface, accountId: 'foreign' } }), JSON.stringify(privateLayout)]) {
+      opened = { ...widget, body };
+      await expect(owner({ actionId: 'artifact.access.grants.set', input: { ...input, artifactId } }))
+        .rejects.toMatchObject({ code: 'artifact_kind_not_shareable' });
+    }
+    opened = { ...widget, header: { kind: 'home-hub-layout.v1' } };
+    await expect(owner({ actionId: 'artifact.access.grants.set', input: { ...input, artifactId } })).rejects.toMatchObject({ code: 'artifact_kind_not_shareable' });
     expect(write).not.toHaveBeenCalled();
   });
   it('returns a committed self-revocation after checking pre-mutation admin authority', async () => {

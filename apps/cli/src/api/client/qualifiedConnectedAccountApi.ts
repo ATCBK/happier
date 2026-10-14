@@ -284,7 +284,7 @@ export function resolveQualifiedConnectedAccountPeerOperationTransport(
         service: QualifiedConnectedAccountServiceRef;
         operation: BuiltInLegacyConnectedAccountOperation;
     }>,
-): QualifiedConnectedAccountPeerOperationTransport {
+): Readonly<{ kind: "v4" }> {
     return resolveCurrentQualifiedConnectedAccountTransport(params);
 }
 

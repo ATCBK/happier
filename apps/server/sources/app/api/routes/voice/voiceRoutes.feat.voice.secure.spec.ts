@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
-import { createDbMocks, createDbTransactionMock, installDbModuleMock } from "../../testkit/dbMocks";
+import { createDbMocks, createDbTransactionMock, installDbModuleMock, installPrismaModuleMock } from "../../testkit/dbMocks";
 import { createEnvReset } from "../../testkit/env";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 
@@ -8,13 +8,6 @@ const logSpy = vi.hoisted(() => vi.fn());
 const getDbProviderFromEnvSpy = vi.hoisted(() => vi.fn(() => "sqlite"));
 
 vi.mock("@/utils/logging/log", () => ({ log: logSpy }));
-// These route contracts use the database mock below. Avoid loading the real
-// Prisma client solely to resolve transaction-provider metadata.
-vi.mock("@/storage/prisma", () => ({
-    getDbProviderFromEnv: getDbProviderFromEnvSpy,
-    isPrismaErrorCode: () => false,
-}));
-
 const dbMocks = createDbMocks({
     homeSettings: ["findUnique"],
     homeGovernancePolicy: ["findUnique"],
@@ -31,13 +24,17 @@ const conversationFindMany = dbMocks.db.voiceConversation.findMany;
 const conversationUpdateMany = dbMocks.db.voiceConversation.updateMany;
 const postgresRawExecute = vi.fn();
 const dbTransaction = createDbTransactionMock(() => ({
-    voiceSessionLease: dbMocks.db.voiceSessionLease,
-    voiceConversation: dbMocks.db.voiceConversation,
+    ...dbMocks.db,
     $executeRawUnsafe: postgresRawExecute,
 }));
 
 installDbModuleMock(() => ({
     db: dbTransaction.wrapDb(dbMocks.db),
+}));
+installPrismaModuleMock(() => ({
+    getDbProviderFromEnv: getDbProviderFromEnvSpy,
+    isPrismaErrorCode: () => false,
+    withSqliteReadSnapshot: dbTransaction.readSnapshot,
 }));
 
 // Install the database boundary before loading the real routes once. Environment

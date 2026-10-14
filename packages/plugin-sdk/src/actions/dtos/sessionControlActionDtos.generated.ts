@@ -273,6 +273,7 @@ export type SessionControlActionInputById = {
         objective?: string | undefined;
         status?: 'unknown' | 'active' | 'pending' | 'paused' | 'blocked' | 'complete' | 'cancelled' | undefined;
         tokenBudget?: number | null | undefined;
+        resumeInactiveWithInitialGoal?: boolean | undefined;
     };
     readonly "session.goal.clear": {
         [x: string]: unknown;
@@ -614,8 +615,21 @@ export type SessionControlActionResultById = {
     readonly "session.reports_to.set": {
         ok: true;
         sessionId: string;
-        leadSessionId: string | null;
-        attachedAt: number | null;
+        leadSessionId: string;
+        attachedAt: number;
+        sourceKeyPreparation?: {
+            kind: 'not_needed';
+        } | {
+            kind: 'prepared';
+        } | {
+            kind: 'waiting';
+            reason: 'unsupported' | 'source_key_unavailable' | 'runner_unreachable' | 'runner_key_unavailable';
+        } | undefined;
+    } | {
+        ok: true;
+        sessionId: string;
+        leadSessionId: null;
+        attachedAt: null;
         sourceKeyPreparation?: {
             kind: 'not_needed';
         } | {

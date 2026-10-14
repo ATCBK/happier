@@ -26,7 +26,7 @@ import {
 } from './actionSpecRpcRegistration';
 
 export type ActionSpecRpcHandlerSpec = Readonly<{
-    id: string;
+    id: ActionId;
     operation?: unknown;
     surfaces?: Readonly<{ rpc?: boolean }>;
     bindings?: Readonly<{ rpcMethod?: string | null; rpcMethodAliases?: readonly string[] }>;
@@ -47,21 +47,24 @@ export type ActionSpecRpcRegistrar = Readonly<{
     ): void;
 }>;
 
-export type RegisterActionSpecRpcHandlersParams = Readonly<{
+type ActionFamilySelection<TActionId extends ActionId> = ActionId extends TActionId
+    ? Readonly<{ actionIds?: readonly string[] }>
+    : Readonly<{ actionIds: readonly TActionId[] }>;
+
+type ActionSpecRpcHandlerParams<TActionId extends ActionId> = Readonly<{
     rpcHandlerManager: ActionSpecRpcRegistrar;
-    actionExecutor?: RpcActionExecutor;
+    actionExecutor?: RpcActionExecutor<NoInfer<TActionId>>;
     resolveActionExecutor?: (request: Readonly<{
-        actionId: ActionId;
+        actionId: TActionId;
         method: string;
         isAlias: boolean;
         /** Original transport input, before a compatibility adapter maps it. */
         input: unknown;
         /** Genuine receiving transport custody, never reconstructed from Action context/input. */
         ingress?: RpcHandlerContext;
-    }>) => RpcActionExecutor | Promise<RpcActionExecutor>;
+    }>) => RpcActionExecutor<NoInfer<TActionId>> | Promise<RpcActionExecutor<NoInfer<TActionId>>>;
     actionSpecs?: readonly ActionSpecRpcHandlerSpec[];
     exceptions?: readonly ActionSpecRpcExceptionLike[];
-    actionIds?: readonly string[];
     methods?: readonly string[];
     scopes?: readonly ActionSpecRpcRegistrationScope[];
     /** Authority stamped by the host-owned RPC ingress; never inferred from surface. */
@@ -69,23 +72,7 @@ export type RegisterActionSpecRpcHandlersParams = Readonly<{
     targetMachineId?: string;
     /** Machine-scoped handlers must not let an input Session selector choose a different ingress. */
     defaultMachineTarget?: true;
-    observeExecution?: (request: Readonly<{
-        actionId: string;
-        input: unknown;
-        actionRequestId?: string;
-        sessionId?: string;
-        rpcContext?: RpcHandlerContext;
-        execute: (context: Readonly<{
-            actionRequestId?: string;
-            signal: AbortSignal;
-            operationProgress: NonNullable<RpcHandlerContext['localActionContext']>['operationProgress'];
-            operationOwnerUpdate: NonNullable<RpcHandlerContext['localActionContext']>['operationOwnerUpdate'];
-            operationAcceptance?: NonNullable<RpcHandlerContext['localActionContext']>['operationAcceptance'];
-            operationCancellation?: NonNullable<RpcHandlerContext['localActionContext']>['operationCancellation'];
-            operationReview?: NonNullable<RpcHandlerContext['localActionContext']>['operationReview'];
-            requesterWorkAttributionV1?: NonNullable<RpcHandlerContext['localActionContext']>['requesterWorkAttributionV1'];
-        }>) => Promise<ActionExecuteResult>;
-    }>) => Promise<ActionExecuteResult>;
+    observeExecution?: import('@/daemon/actionOperations/createHostActionOperationRuntime').HostActionOperationRuntime['observeExecution'];
     mapResponseForMethod?: (context: Readonly<{
         actionId: ActionId;
         method: string;
@@ -105,6 +92,9 @@ export type RegisterActionSpecRpcHandlersParams = Readonly<{
         | { accepted: false; response: unknown }
     >>;
 }>;
+
+export type RegisterActionSpecRpcHandlersParams<TActionId extends ActionId = ActionId> =
+    ActionSpecRpcHandlerParams<TActionId> & ActionFamilySelection<TActionId>;
 
 function normalizeOptionalString(value: unknown): string | undefined {
     if (typeof value !== 'string') {
@@ -179,10 +169,10 @@ export function unwrapActionResultForRpc(actionId: ActionId, result: ActionExecu
     };
 }
 
-async function resolveActionExecutor(
-    params: Pick<RegisterActionSpecRpcHandlersParams, 'actionExecutor' | 'resolveActionExecutor'>,
-    request: Parameters<NonNullable<RegisterActionSpecRpcHandlersParams['resolveActionExecutor']>>[0],
-): Promise<RpcActionExecutor> {
+async function resolveActionExecutor<TActionId extends ActionId>(
+    params: Pick<ActionSpecRpcHandlerParams<TActionId>, 'actionExecutor' | 'resolveActionExecutor'>,
+    request: Parameters<NonNullable<ActionSpecRpcHandlerParams<TActionId>['resolveActionExecutor']>>[0],
+): Promise<RpcActionExecutor<TActionId>> {
     const requester = request.ingress?.callerInputAuthorization?.requesterAccountExecutor;
     if (requester) return requester;
     if (params.actionExecutor) {
@@ -200,6 +190,13 @@ function buildIncludedSet(values: readonly string[] | undefined): ReadonlySet<st
 
 function isIncluded(value: string, included: ReadonlySet<string> | null): boolean {
     return !included || included.has(value);
+}
+
+function buildActionFamilySelection<TActionId extends ActionId>(selection: ActionFamilySelection<TActionId>) {
+    const included = buildIncludedSet(selection.actionIds);
+    // A missing/string-only filter can certify only the full canonical ActionId
+    // union; a narrower executor must supply its actual typed family witness.
+    return (value: ActionId): value is TActionId => isIncluded(value, included);
 }
 
 function buildActionExecutorContextHints(input: unknown): Pick<ActionExecutorContext, 'defaultSessionId' | 'serverId'> {
@@ -262,9 +259,9 @@ function buildRpcSurfaceBindingContext(
     };
 }
 
-export function registerActionSpecRpcHandlers(params: RegisterActionSpecRpcHandlersParams): void {
+export function registerActionSpecRpcHandlers<TActionId extends ActionId = ActionId>(params: RegisterActionSpecRpcHandlersParams<NoInfer<TActionId>>): void {
     const actionSpecs = params.actionSpecs ?? ACTION_SPECS;
-    const actionIds = buildIncludedSet(params.actionIds);
+    const isSelectedActionId = buildActionFamilySelection<TActionId>(params);
     const methods = buildIncludedSet(params.methods);
     const scopes = params.scopes ?? null;
     const exceptionMethods = collectExceptionMethods(params.exceptions);
@@ -275,12 +272,12 @@ export function registerActionSpecRpcHandlers(params: RegisterActionSpecRpcHandl
         if (spec.surfaces?.rpc !== true) {
             continue;
         }
-        const actionId = spec.id.trim();
+        const actionId = spec.id;
         const rpcMethod = normalizeOptionalString(spec.bindings?.rpcMethod);
         if (!actionId || !rpcMethod) {
             continue;
         }
-        if (!isIncluded(actionId, actionIds) || !isIncluded(rpcMethod, methods)) {
+        if (!isSelectedActionId(actionId) || !isIncluded(rpcMethod, methods)) {
             continue;
         }
         if (scopes && !isActionSpecRpcSpecInScopes(spec, scopes)) {
@@ -296,7 +293,7 @@ export function registerActionSpecRpcHandlers(params: RegisterActionSpecRpcHandl
             method: string = rpcMethod,
             isAlias: boolean = method !== rpcMethod,
         ) => {
-            const typedActionId = actionId as ActionId;
+            const typedActionId = actionId;
             if (context?.machineAdmission
                 && (typedActionId === 'session.spawn_new' || typedActionId === 'execution.run.start'
                     || typedActionId === 'workflow.run.start')
@@ -370,7 +367,7 @@ export function registerActionSpecRpcHandlers(params: RegisterActionSpecRpcHandl
             if (envelopeDefaultSessionId && inputSessionId && inputSessionId !== envelopeDefaultSessionId) {
                 return unwrapActionResultForRpc(typedActionId, transportFailure(typedActionId, 'invalid_action_transport_input'));
             }
-            const executor = await resolveActionExecutor(params, { actionId: typedActionId, method, isAlias, input,
+            const executor = await resolveActionExecutor<TActionId>(params, { actionId: typedActionId, method, isAlias, input,
                 ...(context ? { ingress: context } : {}) });
             const execute = async (execution: Readonly<{
                 actionRequestId?: string;

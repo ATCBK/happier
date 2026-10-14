@@ -41,6 +41,8 @@ export type RemoteSshBootstrapFormState = Readonly<{
     sshPort: string;
     sshAuth: 'agent' | 'keyfile' | 'password';
     sshPassword: string;
+    /** Borrowed saved-host material is task-only; an explicitly entered password may answer its prompt. */
+    passwordSource?: 'draft' | 'saved_host';
     identityFilePath: string;
     identityPrivateKey: string;
     installRelayRuntime: boolean;
@@ -149,7 +151,7 @@ export function useRemoteSshBootstrapTask(options: Readonly<{
     ) => {
         // Referenced credentials belong to the admitted task, not a later UI
         // auto-response. Only an explicitly entered password draft is retained.
-        latestPasswordDraftRef.current = startSpec ? '' : params.sshPassword;
+        latestPasswordDraftRef.current = params.passwordSource === 'draft' || (params.passwordSource === undefined && !startSpec) ? params.sshPassword : '';
         setIsStarting(true);
         try {
             const taskId = await startRemoteSshBootstrapTask({ ...options, runner, startSpec }, params, nextPromptResolution);
@@ -172,7 +174,7 @@ export function useRemoteSshBootstrapTask(options: Readonly<{
             throw new Error('SSH password prompts must be answered via answerPasswordPrompt().');
         }
         if (!activeTaskId) throw new Error('No remote SSH prompt task is active.');
-        latestPasswordDraftRef.current = startSpec ? '' : params.sshPassword;
+        latestPasswordDraftRef.current = params.passwordSource === 'draft' || (params.passwordSource === undefined && !startSpec) ? params.sshPassword : '';
         const continued = await continueRemoteSshBootstrapTask({ options: { ...options, runner, startSpec }, form: params,
             taskId: activeTaskId, snapshot: rawSnapshot, prompt, resolution: promptResolution });
         setPromptResolution(continued.resolution);

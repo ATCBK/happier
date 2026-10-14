@@ -47,6 +47,7 @@ import {
   QualifiedConnectedAccountProfileV4Schema,
   QualifiedConnectedAccountProviderIdentityV4Schema,
   QualifiedConnectedAccountServiceRefSchema,
+  type QualifiedConnectedAccountGroupRef,
 } from './qualifiedConnectedAccountProjectionsV4.js';
 
 export {

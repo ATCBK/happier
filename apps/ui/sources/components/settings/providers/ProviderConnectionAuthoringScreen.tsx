@@ -157,20 +157,23 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         machineId,
         resolveCurrentTarget,
         selectedTargetServerMatchesActiveAccount,
-        serverId,
+        accountServerId: serverId,
+        accountAddressAvailable,
     } = providerTarget;
     // Route seeds belong to the selected target, whose identity exists before
     // its credential/presence resolution can admit machine execution.
     const candidateMachineId = providerTarget.selection.selectedTarget?.machineId ?? null;
-    const { describeProviderConnections, probeProviderDraft } = useProviderActionClient(serverId);
+    const { describeProviderConnections, probeProviderDraft, accountScope: { resolution } } = useProviderActionClient(serverId, accountAddressAvailable ? undefined : null);
+    const addressedScope = accountAddressAvailable && resolution.kind === 'bound' ? resolution.scope : null;
     const focused = useIsFocused();
-    const query = useProviderConnections({ enabled, active: focused, machineId, serverId });
+    const query = useProviderConnections({ enabled: enabled && accountAddressAvailable, active: focused, machineId, serverId });
     const refreshConnections = React.useCallback(async (scope?: ProviderConnectionRefreshScope): Promise<void> => {
         await query.refresh(scope);
     }, [query.refresh]);
     const mutation = useProviderConnectionMutation({
         resolveTarget: resolveCurrentTarget,
         serverId,
+        initiatingLifetime: accountAddressAvailable ? undefined : null,
         refresh: refreshConnections,
     });
     const connectionId = React.useRef(props.edit?.connectionId ?? `pc_${randomUUID()}`).current;
@@ -342,7 +345,7 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
     }, [candidateMachineId, discardAuthoringDraft, serverId]);
     // One incumbent lifetime owns both synchronous form retirement and every
     // callback fence; there is no Provider-local Account epoch.
-    const accountLifetime = useRetireProviderStateOnAccountChange(discardAccountScopedAuthoringState);
+    const accountLifetime = useRetireProviderStateOnAccountChange(discardAccountScopedAuthoringState, addressedScope);
     const accountStillCurrent = React.useCallback(
         () => accountLifetime?.isCurrent() ?? true, [accountLifetime]);
     const secretApproval = useActionApprovalContinuation({

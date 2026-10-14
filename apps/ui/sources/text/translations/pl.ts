@@ -4397,6 +4397,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       },
     },
     quota: {
+      refreshing: "Odświeżanie użycia…",
       loading: "Ładowanie…",
       error: ({ message }: { message: string }) => `Błąd: ${message}`,
       lastUpdated: ({ time }: { time: string }) => `Ostatnia aktualizacja: ${time}`,
@@ -12912,9 +12913,9 @@ settingsSession: {
       mediatorVerbosityBalanced: "Zrównoważone",
       mediatorIdleTtl: "TTL bezczynności agenta głosowego",
       mediatorIdleTtlSubtitle:
-        "Automatyczne zatrzymanie po bezczynności (60–21600s)",
-      mediatorIdleTtlDescription: "Wpisz liczbę od 60 do 21600.",
-      mediatorIdleTtlInvalid: "Wpisz liczbę od 60 do 21600.",
+        "Automatyczne zatrzymanie po bezczynności",
+      mediatorIdleTtlDescription: "Wpisz dodatnią liczbę całkowitą sekund.",
+      mediatorIdleTtlInvalid: "Wpisz dodatnią liczbę całkowitą sekund.",
       mediatorChatModelSource: "Źródło modelu (chat)",
       mediatorChatModelSourceSubtitle:
         "Użyj modelu sesji lub własnego szybkiego modelu",

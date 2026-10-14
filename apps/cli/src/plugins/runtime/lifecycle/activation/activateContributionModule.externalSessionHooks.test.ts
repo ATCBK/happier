@@ -343,6 +343,7 @@ describe('real-loader External Session hook aggregate conformance', () => {
             onDuplicate: vi.fn(),
         });
         const registry = await createDeclarativeAcpAgentRuntimeRegistry({
+            admittedFixture: registered.fixture,
             agents,
             registered,
             occurrenceId: 'generation-7',
@@ -354,6 +355,8 @@ describe('real-loader External Session hook aggregate conformance', () => {
         if (!lease?.hasPrimaryRuntime) {
             throw new Error('Expected a primary Agent runtime lease');
         }
+        const admittedCustody = registry.readPluginSourceCustody(PLUGIN_ID);
+        if (admittedCustody?.kind !== 'managed') throw new Error('Expected admitted managed fixture custody');
         expect(lease.sessionRunnerFactoryBinding).toEqual({
             kind: 'host_declarative_acp_v1',
             v: 1,
@@ -364,7 +367,7 @@ describe('real-loader External Session hook aggregate conformance', () => {
             localAgentId: AGENT_ID,
             sourceCustody: {
                 kind: 'managed',
-                immutableGenerationId: 'immutable-generation-7',
+                immutableGenerationId: admittedCustody.immutableGenerationId,
                 installSource: 'localPath',
             },
         });
@@ -477,7 +480,7 @@ describe('real-loader External Session hook aggregate conformance', () => {
             expect(lease).toMatchObject({
                 pluginId: PLUGIN_ID,
                 agentId: AGENT_ID,
-                occurrenceId: 'generation-7',
+                occurrenceId: registry.readPluginOccurrenceId(PLUGIN_ID),
                 hasPrimaryRuntime: true,
             });
             expect(Object.keys(lease?.externalSessionHooks ?? {})).toEqual([

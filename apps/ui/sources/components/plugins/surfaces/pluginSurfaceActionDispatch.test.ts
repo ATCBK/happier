@@ -86,6 +86,9 @@ import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entity
 import { createPluginEntityDragDropBinding, executeMountedPluginEntityDropAction, settlePluginEntityDropActionResult } from './entityDragDrop/pluginEntityDragDropBinding';
 import { createActionOperationRunner } from '../../../../../cli/src/daemon/actionOperations/actionOperationRunner';
 import { createActionOperationStore } from '../../../../../cli/src/daemon/actionOperations/actionOperationStore';
+import { createUiAccountActionTransport } from '@/sync/ops/actions/accountActionTransport';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { NotificationsNotifyMeResultV1Schema } from '@happier-dev/protocol/account/notifications/notifyMeV1';
 
 // The dispatcher and serializer stay real. The server-scoped RPC is the
 // system boundary that terminates this UI-side transport path.
@@ -646,6 +649,35 @@ async function runMountedHomeApproval(custody: PluginSourceCustodyV1, retireBefo
 }
 
 describe('plugin-surface action branch selection', () => {
+    it('admits a bounded mounted Plugin continuation without inheriting present-user authority', async () => {
+        const admitted: unknown[] = [];
+        // Only the daemon network boundary is substituted. Protected mounted
+        // dispatch, Action admission and the canonical Account transport stay real.
+        const relay = createUiAccountActionTransport({ account: { serverId: 'home-plugin', accountId: 'account-plugin', assertCurrent() {} },
+            resolveFallbackMachineId: () => 'machine-plugin', transport: async request => {
+                admitted.push(request.invocation);
+                return { attemptedChannels: 1, deliveredChannels: 1 };
+            } });
+        const deps = { notificationsNotifyMe: async (input, context) => {
+            const result = await relay({ actionId: 'notifications.notify_me', input, context });
+            const refusal = ActionExecuteFailureSchema.safeParse(result);
+            return refusal.success ? refusal.data : NotificationsNotifyMeResultV1Schema.parse(result);
+        } } satisfies Partial<ActionExecutorDeps>;
+        // The fixture supplies only its genuine daemon port; unrelated Agent ports are not exercised.
+        const executor = createActionExecutor(deps as unknown as ActionExecutorDeps);
+        const api = createPluginSurfaceActionHostApi({ surfaceContext: surfaceContext(), callerBinding: mountedCallerBinding(),
+            hostAction: { execute: executor.execute, context: { serverId: 'home-plugin', runtimeAccountId: 'account-plugin',
+                authority: 'present_user', callerPermissionMode: 'read-only',
+                callerInputConstraints: { models: null, permissionModes: ['read-only'] }, agentStartWorkspaceWrites: 'deny' } } });
+        try {
+            expect(await api.handleRequest(executeActionRequest({ action: 'notifications.notify_me', input: { message: 'Review' } })))
+                .toEqual({ attemptedChannels: 1, deliveredChannels: 1 });
+            expect(admitted).toEqual([{ caller: { kind: 'plugin', pluginId: CALLER_PLUGIN_ID, contributionLocalId: 'inspector-app',
+                occurrenceId: `${CALLER_PLUGIN_ID}:current`, materialization: CALLER_MATERIALIZATION }, surface: 'plugin',
+                authority: 'account_automation', callerPermissionMode: 'read-only',
+                callerInputConstraints: { models: null, permissionModes: ['read-only'] }, workspaceWrites: 'deny' }]);
+        } finally { api.dispose?.(); }
+    });
     it.each(['Ask-first', 'default', 'waived'] as const)(
         'evaluates a nested host Action independently of its admitted parent: %s',
         async (policy) => {
@@ -2082,6 +2114,7 @@ describe('plugin-surface action branch selection', () => {
         expect(execute).toHaveBeenCalledWith(HOST_ACTION_ID, { pluginId: CALLER_PLUGIN_ID }, {
             serverId: 'server-1',
             surface: 'plugin',
+            authority: 'account_automation',
             actionCaller: {
                 kind: 'plugin',
                 pluginId: CALLER_PLUGIN_ID,
@@ -2111,6 +2144,7 @@ describe('plugin-surface action branch selection', () => {
             serverId: 'server-1',
             signal: cancellation.signal,
             surface: 'plugin',
+            authority: 'account_automation',
             actionCaller: {
                 kind: 'plugin',
                 pluginId: CALLER_PLUGIN_ID,
@@ -3060,6 +3094,7 @@ describe('mounted executeAction handler', () => {
         expect(execute).toHaveBeenCalledWith(HOST_ACTION_ID, { pluginId: CALLER_PLUGIN_ID }, {
             actionRequestId: 'request-1',
             surface: 'plugin',
+            authority: 'account_automation',
             actionCaller: {
                 kind: 'plugin',
                 pluginId: 'acme.other-app-surface',
@@ -3407,6 +3442,7 @@ describe('composed public SDK client to canonical plugin-surface dispatcher', ()
             },
             signal: expect.any(AbortSignal),
             surface: 'plugin',
+            authority: 'account_automation',
             serverId: 'server-composed',
         });
     });
@@ -3708,6 +3744,7 @@ describe('composed React Native host API to canonical plugin-surface dispatcher'
             actionRequestId: 'rn-dispatch:1',
             serverId: 'server-rn',
             surface: 'plugin',
+            authority: 'account_automation',
             actionCaller: {
                 kind: 'plugin',
                 pluginId: CALLER_PLUGIN_ID,

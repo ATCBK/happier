@@ -34,9 +34,11 @@ describe('buildCodexCloudAuthFile', () => {
       lastRefreshIso: '2026-06-06T13:15:00.000Z',
     })).toMatchObject({
       id_token: 'access-token',
+      refresh_token: '',
       account_id: null,
       tokens: {
         id_token: 'access-token',
+        refresh_token: '',
         account_id: null,
       },
     });

@@ -1217,6 +1217,7 @@ async function enqueuePendingMessageWithAdmission(
                 tx,
                 sessionId,
                 requestId: localId,
+                currentAccess: access.access,
                 ...(params.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
             }) : undefined;
             const { pendingCount, pendingBlockedCount, pendingVersion, recipientCursors, badgeAttentionChanged, meaningfulActivityAt } = await applyPendingSessionStateChange({
@@ -2015,9 +2016,9 @@ export async function updatePendingRequestedAction(params: Readonly<{
                 tx, readStoredSessionInputAdmissionReceipt(existing.inputAdmissionReceipt)?.admittedTarget?.machineId,
             );
             await acquireSessionAccountCursorLocksInTx(tx, [sessionId], controllerAccountIds);
-            if (!params.automaticResetReleaseTarget) {
-                const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
-                if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
+            const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
+            if (!params.automaticResetReleaseTarget && !access.ok) {
+                return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
             }
             if (requestedActionResult.data.kind === "reset_start" || params.automaticResetReleaseTarget) {
                 const target = await readCurrentPendingResetStartTargetInTx(tx, sessionId, existing,
@@ -2040,7 +2041,7 @@ export async function updatePendingRequestedAction(params: Readonly<{
                 if (retained !== 1) {
                     return { ok: false, error: "action-conflict" } as const;
                 }
-                const shouldArmActivation = targetExecutionRunId === null && shouldArmPendingActivationAuthorization({
+                const shouldArmActivation = access.ok && targetExecutionRunId === null && shouldArmPendingActivationAuthorization({
                     requestedAction: requestedActionResult.data,
                     resumeWhenAvailable: params.resumeWhenAvailable,
                 });
@@ -2051,6 +2052,7 @@ export async function updatePendingRequestedAction(params: Readonly<{
                             tx,
                             sessionId,
                             requestId: localId,
+                            currentAccess: access.access,
                             ...(params.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
                         })
                         : undefined;
@@ -2095,7 +2097,7 @@ export async function updatePendingRequestedAction(params: Readonly<{
             if (updatedCount !== 1) {
                 return { ok: false, error: "action-conflict" } as const;
             }
-            const shouldArmActivation = targetExecutionRunId === null && shouldArmPendingActivationAuthorization({
+            const shouldArmActivation = access.ok && targetExecutionRunId === null && shouldArmPendingActivationAuthorization({
                 requestedAction: requestedActionResult.data,
                 resumeWhenAvailable: params.resumeWhenAvailable,
             });
@@ -2104,6 +2106,7 @@ export async function updatePendingRequestedAction(params: Readonly<{
                     tx,
                     sessionId,
                     requestId: localId,
+                    currentAccess: access.access,
                     ...(params.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
                 })
                 : undefined;

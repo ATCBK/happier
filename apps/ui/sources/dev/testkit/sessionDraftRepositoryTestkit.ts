@@ -1,8 +1,6 @@
-import {
-    SessionDraftRecipientValueV1Schema,
-    StrictJsonValueSchema,
-    type StrictJsonValue,
-} from '@happier-dev/protocol';
+import { SessionDraftRecipientValueV1Schema } from '@happier-dev/protocol/drafts/sessionDrafts';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
+import { type StrictJsonValue } from '@happier-dev/protocol';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {

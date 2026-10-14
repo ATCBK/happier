@@ -340,8 +340,9 @@ async function readHandoffContinuation(request: FastifyRequest, actionId: string
         const input = privatePrepare.success ? privatePrepare.data.input : body.envelope.input;
         if (typeof input !== 'object' || input === null || Array.isArray(input)
             || (actionId === 'session.spawn_new'
-                ? input.type !== 'resume-session' || input.sessionId !== handoff.sessionId || body.machineId !== handoff.targetMachineId
-                : input.handoffId !== continuation.handoffId)
+                ? !('type' in input) || input.type !== 'resume-session' || !('sessionId' in input)
+                    || input.sessionId !== handoff.sessionId || body.machineId !== handoff.targetMachineId
+                : !('handoffId' in input) || input.handoffId !== continuation.handoffId)
             || ('sessionId' in input && input.sessionId !== handoff.sessionId)
             || ('sourceMachineId' in input && input.sourceMachineId !== handoff.sourceMachineId)
             || ('targetMachineId' in input && input.targetMachineId !== handoff.targetMachineId)) return null;

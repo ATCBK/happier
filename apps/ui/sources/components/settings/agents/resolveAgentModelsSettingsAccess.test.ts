@@ -19,7 +19,7 @@ describe('resolveAgentModelsSettingsAccess', () => {
             providerConnectionId: null, modelId: 'retained' })]: 'hidden' as const };
         for (const status of ['loading', 'partial', 'unavailable'] as const) {
             expect(resolveAgentModelsSettingsAccess({ status, data: { ...catalog, modelVisibilityByRef } }))
-                .toEqual({ readable: true, writable: false });
+                .toMatchObject({ readable: true, writable: false, settings: { modelVisibilityByRef } });
         }
         // Security/mode/invalid-content failures withdraw data at the catalog owner.
         expect(resolveAgentModelsSettingsAccess({ status: 'unavailable', data: null }))

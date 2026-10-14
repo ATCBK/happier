@@ -103,7 +103,6 @@ for (const shell of shells) test(`yarn-install-with-retry preserves scoped first
   assert.equal(readFileSync(thirdPartyOutput, 'utf8'), 'required native install complete');
   assert.equal(readFileSync(gatePath, 'utf8'), gateBefore);
 });
-
 for (const shell of shells) test(`yarn-install-with-retry streams and retains successful install stdout and stderr (${shell})`, async (t) => {
   const root = createFakeYarnWorkspace({
     installBody: `  echo '[1/4] Resolving packages...'

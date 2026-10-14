@@ -256,7 +256,7 @@ export async function resolveCurrentAuthenticationEvidenceForTeamQualificationIn
                 const connectionId = item.teamConnectionId;
                 if (!connectionId) return null;
                 const connection = teamConnectionById.get(connectionId);
-                if (!connection) return null;
+                if (!connection || connection.teamId === null) return null;
                 const read = teamDescriptors.get(teamIdentityConnectionReferenceKey(connection));
                 if (read?.status !== "ready"
                     || read.connection.state !== "connected"

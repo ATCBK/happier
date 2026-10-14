@@ -1,6 +1,7 @@
 
 import {
     AgentRuntimeJsonValueSchema,
+    canPublishSessionResumeIdentity,
     type AgentSessionHostServices,
     type AgentExecutionRunHooksServiceV1,
     type AgentSessionHookServerStartRequest,
@@ -939,7 +940,7 @@ export function createClaudeAgentSdkTurnOperations(
                 // The previously proven transcript is no longer the live one, so
                 // retract the published proof. Leaving it would let a resume use
                 // a proof that no longer matches this id.
-                if (providerSessionId) publishProviderSessionId(providerSessionId);
+                if (providerSessionId) publishProviderSessionId(providerSessionId, true);
             },
             onTranscriptPromoted: async ({ providerSessionId: provenProviderSessionId, transcriptPath, isCurrent }) => {
                 if (!isCurrent() || providerSessionId !== provenProviderSessionId) return;
@@ -955,10 +956,8 @@ export function createClaudeAgentSdkTurnOperations(
                 }
                 if (!isCurrent() || providerSessionId !== provenProviderSessionId) return;
                 promotedTranscriptPath = transcriptPath;
-                // The id was already published bare when it first appeared; this
-                // is the generation that PROVES it, so republish the matched pair
-                // or the proof never reaches Session metadata and native return
-                // stays unavailable for a resumable Session.
+                // Promote the provisional identity together with its matched
+                // transcript only after this generation proves native continuity.
                 publishProviderSessionId(provenProviderSessionId);
                 ensureGoalStatusTail();
             },
@@ -1330,10 +1329,18 @@ export function createClaudeAgentSdkTurnOperations(
      * that exact id — so the pair published here is matched by construction, and
      * a re-key clears the path before the new id is published.
      */
-    function publishProviderSessionId(nextSessionId: string): void {
+    function publishProviderSessionId(nextSessionId: string, isExistingResume = false): void {
         const nativeSessionLogPath = providerSessionId === nextSessionId
             ? promotedTranscriptPath
             : null;
+        if (!canPublishSessionResumeIdentity({
+            isExistingResume: isExistingResume
+                || pendingResumeProviderSessionId === nextSessionId
+                || params.initialProviderSessionId === nextSessionId,
+            // Without native resumability, identity comes from the SDK's
+            // running prompt query, not an idle SessionStart hook.
+            hasResumeEvidence: Boolean(nativeSessionLogPath) || params.enableSessionResumability !== true,
+        })) return;
         publishRuntimeEvent(ClaudeProviderEventSchema.parse({
             sessionId: readString(params.happierSessionId) ?? nextSessionId,
             emittedAtMs: Date.now(),
@@ -1801,6 +1808,9 @@ export function createClaudeAgentSdkTurnOperations(
                             return false;
                         })
                         : null;
+                    // Native persistence can settle after SessionStart without another hook.
+                    // Publish the existing candidate's durable proof before completing this turn.
+                    await resumeIdentityOwner?.settleCurrentCandidate();
                     completeSuccessfulTurn(resultTurn, publishTerminal);
                     foregroundCompleted = true;
                     if (shouldContinueForBackgroundTasks) {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
     renderWithSessionTranscriptSource,
     standardCleanup,
@@ -8,15 +8,10 @@ import {
     installToolShellCommonModuleMocks,
     makeToolCall,
 } from './ToolView.testHelpers';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        ensureSidechainMessagesLoaded: vi.fn(),
-    },
-}));
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 installToolShellCommonModuleMocks({
     expoRouter: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module,
@@ -29,19 +24,6 @@ installToolShellCommonModuleMocks({
             },
         }),
     text: async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock(),
-    storage: async (importOriginal) =>
-        (await import('@/dev/testkit/mocks/storage')).createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'toolViewDetailLevelDefault') return 'summary';
-                    if (key === 'toolViewDetailLevelDefaultLocalControl') return 'title';
-                    if (key === 'toolViewDetailLevelByToolName') return {};
-                    if (key === 'toolViewShowDebugByDefault') return false;
-                    return null;
-                } }),
-            },
-        }),
 });
 
 vi.mock('@expo/vector-icons', () => ({
@@ -49,61 +31,21 @@ vi.mock('@expo/vector-icons', () => ({
     Octicons: 'Octicons',
 }));
 
-vi.mock('@/components/tools/renderers/core/_registry', () => ({
-    getToolViewComponent: () => (props: any) => React.createElement('SpecificToolView', { toolName: props.tool?.name }),
-}));
-
-vi.mock('@/components/tools/catalog', () => ({
-    knownTools: {
-        Bash: {
-            title: 'Terminal',
-            minimal: true,
-        },
-    },
-}));
-
-vi.mock('@/components/tools/renderers/system/MCPToolView', () => ({
-    formatMCPTitle: () => 'MCP',
-    formatMCPSubtitle: () => '',
-}));
-
-vi.mock('@/utils/errors/toolErrorParser', () => ({
-    parseToolUseError: () => ({ isToolUseError: false }),
-}));
-
-vi.mock('@/components/ui/media/CodeView', () => ({
-    CodeView: () => null,
-}));
-
-vi.mock('../presentation/ToolSectionView', async (importOriginal) => {
-    const { installToolSectionViewModuleMock } = await import('@/dev/testkit/mocks/toolSectionView');
-    return installToolSectionViewModuleMock('fragment')(importOriginal);
-});
-
-vi.mock('../presentation/ToolError', () => ({
-    ToolError: () => null,
-}));
-
-vi.mock('../permissions/PermissionFooter', () => ({
-    PermissionFooter: () => React.createElement('PermissionFooter', null),
-}));
-
-vi.mock('@/agents/catalog/catalog', () => ({
-    AGENT_IDS: ['claude', 'codex', 'gemini', 'opencode'],
-    DEFAULT_AGENT_ID: 'claude',
-    getAgentCore: () => ({ toolRendering: { hideUnknownToolsByDefault: false } }),
-    resolveAgentIdFromFlavor: () => null,
-}));
-
-// Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
-const { ToolView } = await import('./ToolView');
-
 describe('ToolView (minimal tools)', () => {
     afterEach(() => {
         standardCleanup();
     });
 
     it('renders a specific tool view even when the tool is marked minimal', async () => {
+        const previousSettings = getStorage().getState().settings;
+        getStorage().setState({ settings: { ...settingsDefaults,
+            toolViewDetailLevelDefault: 'summary', toolViewDetailLevelDefaultLocalControl: 'title',
+            toolViewDetailLevelByToolName: {}, toolViewShowDebugByDefault: false,
+        } });
+        onTestFinished(() => getStorage().setState({ settings: previousSettings }));
+        const { ToolView } = await import('./ToolView');
+        const { BashView } = await import('@/components/tools/renderers/core/_registry');
+        const { CommandView } = await import('@/components/sessions/transcript/CommandView');
         const tool = makeToolCall({
             name: 'Bash',
             input: { command: 'echo hello' },
@@ -114,6 +56,7 @@ describe('ToolView (minimal tools)', () => {
             React.createElement(ToolView, { tool, metadata: null, messages: [], sessionId: 's1', messageId: 'm1' }),
         );
 
-        expect(screen.findAllByType('SpecificToolView' as any)).toHaveLength(1);
+        expect(screen.findAllByType(BashView)).toHaveLength(1);
+        expect(screen.findByType(CommandView).props).toMatchObject({ command: 'echo hello', stdout: 'hello\n' });
     });
 });

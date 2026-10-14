@@ -171,6 +171,25 @@ not released availability or completed loaded-runtime validation.
 ## Authentication
 Most endpoints require `Authorization: Bearer <token>`.
 
+### UI HTTP request ownership (0.3 development source)
+
+`apps/ui/sources/sync/http/client.ts` owns HTTP admission, authentication,
+reachability and cancellation through `requestAtEndpoint`. Account, Artifact,
+social and focused-Home push operations capture their focused Home once through
+`createServerFetchForActiveServer`, before starting their containing retry or
+compatibility-fallback operation. Explicit endpoint transports remain captured
+through `createServerFetchAtEndpoint`; supplied scoped requests retain their own
+authority. Neither wrapper is another retry or credential owner.
+
+An obsolete focused-Home basis raises `StaleServerGenerationError` with
+`retryable: false`; a containing retry must not send its captured bearer to the
+newly focused Home. A prepared Account socket write may preserve an empty HTTP
+401 after its own conditional removal of the rejected stored token retires the
+request configuration. This exception discards the response body and never
+retries the mutation. Credential replacement or target replacement still takes
+the stale-response path. Session-viewer socket reconnects retain their Session
+role and do not register Account presence or Machine RPC handlers.
+
 ### Home authentication entry (0.3 development source)
 
 `POST /v1/auth/entry` is the public, stateless discovery endpoint for the
@@ -488,7 +507,9 @@ failure does not trigger a v1 downgrade.
 - `POST /v1/auth/request`
   - Body: `{ publicKey, supportsV2? }`
   - Creates or returns a terminal auth request.
-  - Response: `{ state: "requested" }` or `{ state: "authorized", token, response }`.
+  - Response: `{ state: "requested", expiresAt }` or `{ state: "authorized", token, response }`.
+  - Development correction for #403: `expiresAt` is Unix time in milliseconds, computed from the persisted request creation time and effective server TTL. Repeating a pending request does not renew it. Older clients ignore this additive field; older servers omit it.
+  - Current development CLIs cap pairing crypto validity by this deadline. `auth request --json` reports the effective `expiresAtMs` and `expiryNotice`; if the server omits expiry, `expiresAtMs` is `null` and the notice advises prompt approval and rerunning after failure. The nested `pairing.expiresAtMs` remains the crypto binding deadline, not a promise of server acceptance.
 
 - `GET /v1/auth/request/status?publicKey=...`
   - Response: `{ status: "not_found" | "pending" | "authorized", supportsV2 }`.
@@ -1991,6 +2012,8 @@ subsets must not be added again to inclusive input/output counters.
 
 Cost facts keep reported, estimated, API-equivalent and invoice amounts separate
 by currency and source. Unpriced tokens carry null money, not a fabricated zero.
+Repricing preserves each contribution's witnessed event count. Older contributions
+without that count retain the single-event fallback but cannot claim complete cost facts.
 `costPresentation` is omitted when the selected population has no single honest
 monetary basis. API-equivalent pricing is not paid spend; allowance state and
 live context-window state are separate domains, not accounting totals.

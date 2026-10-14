@@ -1,17 +1,14 @@
 import { vi } from 'vitest';
-import {
-    MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent,
-    DirectRouteGrantRequestV2Schema, SignedDirectRouteGrantV2Schema, DIRECT_ROUTE_GRANT_AUDIENCE_V1,
-    DIRECT_ROUTE_GRANT_TTL_MS, tryWriteServerEnabledBitInPlace,
-    type PromptAssetTypeDescriptorV1,
-    type PromptAssetWriteRequest, type PromptAssetExternalRefV1,
-    PromptAssetWriteRequestSchema,
-    PromptAssetWriteBundleRequestSchema,
-    PromptAssetWriteDocRequestSchema,
-} from '@happier-dev/protocol';
 import { RegistryFetchRequestV1Schema, RegistryFetchResponseV1Schema, RegistryItemV1Schema, RegistryDownloadRequestV1Schema,
     computeGitBlobShaV1, computeGitTreeShaV1, RegistrySkillFilesPayloadV1Schema, type RegistryItemV1,
     type RegistrySkillFileBytesV1 } from '@happier-dev/protocol/registries';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { DirectRouteGrantRequestV2Schema, SignedDirectRouteGrantV2Schema } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantV2';
+import { DIRECT_ROUTE_GRANT_AUDIENCE_V1 } from '@happier-dev/protocol';
+import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { type PromptAssetTypeDescriptorV1 } from '@happier-dev/protocol/prompts/library/promptAssetDescriptorsV1';
+import { type PromptAssetWriteRequest, type PromptAssetExternalRefV1, PromptAssetWriteRequestSchema, PromptAssetWriteBundleRequestSchema, PromptAssetWriteDocRequestSchema } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher';
 import { createEncryptedTransferChunkEnvelope, createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';

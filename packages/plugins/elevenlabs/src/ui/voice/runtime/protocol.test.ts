@@ -1,3 +1,5 @@
+import type { VoiceCredentialAccess } from '@happier-dev/plugin-sdk/voice';
+import type { VoiceHostedConversationService } from '@happier-dev/plugin-sdk/voice/client';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS, ElevenLabsVoiceProviderSettingsSchema } from '../../../protocol/voice/index.js';
@@ -6,54 +8,64 @@ import { createElevenLabsEventMapper } from './eventMapper.js';
 import { createElevenLabsSessionLifecycle } from './sessionLifecycle.js';
 import { createElevenLabsSessionPreparationService } from './sessionPreparation.js';
 
-function createProtocolFixture() {
-  // Hosted admission/settlement is the service boundary. Preparation, config
-  // parsing, event mapping and attempt custody remain the real provider owners.
+function createFixture(billingMode: 'byo' | 'happier' = 'byo') {
+  // Only mediated HTTP and hosted-conversation operations replace system
+  // boundaries; preparation, lifecycle and event decoding stay real.
+  const request = vi.fn(async (input: Readonly<{ operationId: string }>) => ({
+    status: 200,
+    finalUrl: input.operationId === 'agent'
+      ? 'https://api.elevenlabs.io/v1/convai/agents/agent-1'
+      : 'https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=agent-1',
+    headers: { 'content-type': 'application/json' },
+    body: new TextEncoder().encode(JSON.stringify(input.operationId === 'agent' ? {
+      agent_id: 'agent-1', tags: ['happier_voice_config_v1'],
+      platform_settings: {
+        auth: { enable_auth: true },
+        overrides: { conversation_config_override: {
+          agent: { first_message: true, language: true, prompt: { prompt: true } },
+          conversation: { text_only: true },
+        } },
+      },
+    } : { token: 'ephemeral-token' })),
+  }));
+  const credentials = {
+    phase: 'prepare', mediated: { request }, raw: null,
+  } satisfies VoiceCredentialAccess<'prepare'>;
   let leaseIndex = 0;
   const hostedConversation = {
     start: vi.fn(async () => ({
-      allowed: true as const,
-      leaseId: `lease-${++leaseIndex}`,
-      bindingNonce: 'binding-nonce',
-      token: 'ephemeral-token',
-      expiresAtMs: 123456,
+      allowed: true as const, leaseId: `lease-${++leaseIndex}`, bindingNonce: 'binding-1',
+      token: 'ephemeral-token', expiresAtMs: 60_000,
     })),
-    complete: vi.fn(async (_input: Readonly<{ providerConversationId: string }>) => undefined),
-    abort: vi.fn(async () => undefined),
-  };
-  const hostedByLease = new Map<string, typeof hostedConversation>();
-  const preparation = createElevenLabsSessionPreparationService({
-    providerId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-    projectVoiceSettings: (providerConfig) => ({
-      providerId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-      assistantLanguage: null,
-      providerConfig: ElevenLabsVoiceProviderSettingsSchema.parse(providerConfig),
-    }),
-    alert: () => {},
+    complete: vi.fn(async (_input: Readonly<{ providerConversationId: string }>) => {}),
+    abort: vi.fn(async () => {}),
+  } satisfies VoiceHostedConversationService;
+  const providerConfig = ElevenLabsVoiceProviderSettingsSchema.parse({
+    ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS, billingMode, agentId: 'agent-1',
   });
+  const providerId = 'happier.voice.elevenlabs/realtime-elevenlabs';
+  const preparation = createElevenLabsSessionPreparationService({
+    providerId,
+    projectVoiceSettings: (settings) => ({ providerId, assistantLanguage: null, providerConfig: settings }),
+    alert() {},
+  });
+  // Compose the same lease lookup/release bindings as the public runtime, so
+  // a completed lease cannot be returned again during adapter cleanup.
+  const hostedByLeaseId = new Map<string, Pick<VoiceHostedConversationService, 'complete' | 'abort'>>();
   const lifecycle = createElevenLabsSessionLifecycle({
-    takeHostedConversation: (leaseId) => hostedByLease.get(leaseId) ?? null,
-    forgetHostedConversation: (leaseId) => { hostedByLease.delete(leaseId); },
+    takeHostedConversation: (leaseId) => hostedByLeaseId.get(leaseId) ?? null,
+    forgetHostedConversation: (leaseId) => { hostedByLeaseId.delete(leaseId); },
   });
   const runtime = createElevenLabsProtocolAdapter({
-    preparation,
-    lifecycle,
-    eventMapper: createElevenLabsEventMapper(),
-    onDiagnosticError: (reason) => { throw new Error(reason); },
-    rememberHostedConversation: (leaseId) => { hostedByLease.set(leaseId, hostedConversation); },
+    preparation, lifecycle, eventMapper: createElevenLabsEventMapper(),
+    onDiagnosticError(reason) { throw new Error(reason); },
+    rememberHostedConversation: (leaseId, service) => { hostedByLeaseId.set(leaseId, service); },
   });
-  const prepare = (controlSessionId: string, attemptId: number, request: Readonly<{
-    initialContext?: string; requestedTargetSessionId?: string; textOnly?: boolean;
-  }> = {}) => runtime.adapter.prepare({
-    controlSessionId,
-    attemptId,
-    reason: 'initial',
-    request,
-    platform: 'web',
-    providerConfig: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
-    credentials: { phase: 'prepare', mediated: null, raw: null },
-    providerConversation: null,
-    hostedConversation,
+  const prepare = (attemptId: number, initialContext = 'context') => runtime.adapter.prepare({
+    controlSessionId: 'control-1', attemptId, reason: 'initial',
+    request: { initialContext, requestedTargetSessionId: 'target-1', textOnly: false },
+    platform: 'web', providerConfig, credentials,
+    providerConversation: null, hostedConversation: billingMode === 'happier' ? hostedConversation : null,
     signal: new AbortController().signal,
   });
   return { runtime, prepare, hostedConversation };
@@ -61,43 +73,33 @@ function createProtocolFixture() {
 
 describe('createElevenLabsProtocolAdapter', () => {
   it('maps controller preparation into provider-owned session config and lifecycle metadata', async () => {
-    const { runtime, prepare, hostedConversation } = createProtocolFixture();
-    await expect(prepare('control-1', 1, {
-      initialContext: 'context',
-      requestedTargetSessionId: 'target-1',
-      textOnly: false,
-    })).resolves.toMatchObject({
+    const { runtime, prepare, hostedConversation } = createFixture();
+    await expect(prepare(1)).resolves.toEqual({
       kind: 'prepared',
       session: {
         config: {
-          conversationToken: 'ephemeral-token',
-          textOnly: false,
+          conversationToken: 'ephemeral-token', connectionType: 'webrtc', textOnly: false,
           dynamicVariables: { sessionId: 'control-1', initialConversationContext: 'context' },
+          overrides: { conversation: { textOnly: false }, agent: {} },
         },
         initialContextDelivery: 'prepared',
-        safeMetadata: { billingMode: 'happier', expiresAtMs: 123456 },
+        safeMetadata: { billingMode: 'byo', expiresAtMs: null },
       },
     });
-    expect(hostedConversation.start).toHaveBeenCalledWith({ sessionId: 'target-1' });
-
-    await prepare('control-1', 2, {
-      initialContext: 'replacement context',
-      requestedTargetSessionId: 'target-1',
-      textOnly: false,
+    await expect(prepare(2, 'replacement context')).resolves.toMatchObject({
+      kind: 'prepared', session: { config: { dynamicVariables: { initialConversationContext: 'replacement context' } } },
     });
     await runtime.adapter.releasePrepared?.({ controlSessionId: 'control-1', attemptId: 1, reason: { code: 'replaced' } });
-    // Replacement retires the prior lease; a delayed prior release cannot
-    // retire the current attempt or attach its identity to the old lease.
-    expect(hostedConversation.abort).toHaveBeenCalledTimes(1);
     runtime.handleSessionIdentity({ controlSessionId: 'control-1', conversationId: 'conversation-1' });
     await runtime.endSession();
-    expect(hostedConversation.complete.mock.calls).toEqual([[{ providerConversationId: 'conversation-1' }]]);
-    expect(hostedConversation.abort).toHaveBeenCalledTimes(1);
+    expect(hostedConversation.start).not.toHaveBeenCalled();
+    expect(hostedConversation.complete).not.toHaveBeenCalled();
+    expect(hostedConversation.abort).not.toHaveBeenCalled();
   });
 
   it('keeps raw ElevenLabs event semantics in the provider leaf and emits canonical transcript events', async () => {
-    const { runtime, prepare } = createProtocolFixture();
-    await prepare('control-events', 1);
+    const { runtime, prepare } = createFixture();
+    await prepare(1);
     expect(runtime.adapter.decodeControl({ type: 'elevenlabs.mode', mode: 'speaking' }))
       .toEqual([{ type: 'assistant_output_started' }]);
     expect(runtime.adapter.decodeControl({ type: 'elevenlabs.mode', mode: 'listening' }))
@@ -106,21 +108,49 @@ describe('createElevenLabsProtocolAdapter', () => {
     expect(runtime.adapter.decodeControl({
       type: 'future.provider.event', token: 'sentinel-secret-token', transcript: 'sentinel-private-transcript',
     })).toEqual([]);
-    await runtime.endSession();
   });
 
   it('preserves the exact-message text payload for the SDK connection', () => {
-    const { runtime } = createProtocolFixture();
+    const { runtime } = createFixture();
     expect(runtime.adapter.encodeTurnControl('send_exact_message', { text: 'Keep this exact message.' }))
       .toEqual({ type: 'voice.user_text', text: 'Keep this exact message.' });
     expect(runtime.adapter.encodeTurnControl('send_exact_message', {})).toBeNull();
   });
 
+  it('retires only the replaced hosted attempt when a delayed release precedes current identity', async () => {
+    const { runtime, prepare, hostedConversation } = createFixture('happier');
+    await expect(prepare(1)).resolves.toMatchObject({
+      kind: 'prepared', session: { safeMetadata: { billingMode: 'happier', expiresAtMs: 60_000 } },
+    });
+    expect(hostedConversation.start).toHaveBeenCalledWith({ sessionId: 'target-1' });
+    await prepare(2, 'replacement context');
+    await runtime.adapter.releasePrepared?.({ controlSessionId: 'control-1', attemptId: 1, reason: { code: 'replaced' } });
+    expect(hostedConversation.abort).toHaveBeenCalledTimes(1);
+    runtime.handleSessionIdentity({ controlSessionId: 'control-1', conversationId: 'conversation-1' });
+    await runtime.endSession();
+    expect(hostedConversation.complete.mock.calls).toEqual([[{ providerConversationId: 'conversation-1' }]]);
+    expect(hostedConversation.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles the current hosted provider identity through the real lifecycle', async () => {
+    const { runtime, prepare, hostedConversation } = createFixture('happier');
+    const prepared = await prepare(1);
+    if (prepared.kind !== 'prepared') throw new Error('Expected a prepared hosted session');
+    expect(prepared.session.safeMetadata).toEqual({ billingMode: 'happier', expiresAtMs: 60_000 });
+    runtime.handleSessionIdentity({ controlSessionId: 'control-1', conversationId: 'conversation-hosted' });
+    await runtime.endSession();
+    expect(hostedConversation.complete.mock.calls).toEqual([[{ providerConversationId: 'conversation-hosted' }]]);
+    expect(hostedConversation.abort).not.toHaveBeenCalled();
+  });
+
   it('discards prepared provider state when the controller tears down before session identity', async () => {
-    const { runtime, prepare, hostedConversation } = createProtocolFixture();
-    await prepare('never-connected', 1);
-    await runtime.adapter.releasePrepared?.({ controlSessionId: 'never-connected', attemptId: 1, reason: { code: 'error' } });
-    runtime.handleSessionIdentity({ controlSessionId: 'never-connected', conversationId: 'late-identity' });
+    const { runtime, prepare, hostedConversation } = createFixture('happier');
+    await expect(prepare(1)).resolves.toMatchObject({
+      kind: 'prepared', session: { safeMetadata: { billingMode: 'happier', expiresAtMs: 60_000 } },
+    });
+    expect(hostedConversation.start).toHaveBeenCalledWith({ sessionId: 'target-1' });
+    await runtime.adapter.releasePrepared?.({ controlSessionId: 'control-1', attemptId: 1, reason: { code: 'error' } });
+    runtime.handleSessionIdentity({ controlSessionId: 'control-1', conversationId: 'late-identity' });
     await runtime.endSession();
     expect(hostedConversation.abort).toHaveBeenCalledTimes(1);
     expect(hostedConversation.complete).not.toHaveBeenCalled();

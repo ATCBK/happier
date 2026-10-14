@@ -37,6 +37,7 @@ import {
     readManagedMachineInTx,
     type StoredManagedMachine,
     readManagedAdmissionState, readManagedCurrentRequestId,
+    readManagedJsonEqualityOperand,
 } from "./managedRows";
 
 /** A declared, retained native handle can identify partial cleanup before resource binding. */
@@ -148,7 +149,7 @@ async function readOrAdmitManagedPolicy(params: Readonly<{ custodianAccountId: s
         if (!admit) return { machine: { ...machine, desired: intent, desiredWhen: 'now' as const, desiredAfterMs: undefined },
             requestId: input.requestId, replayed: false };
         const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: input.expectedIntentRevision,
-            controllerMachineId: input.controller.machineId, controllerInstallationId: input.controller.installationId, admittedInput: { equals: row.admittedInput } },
+            controllerMachineId: input.controller.machineId, controllerInstallationId: input.controller.installationId, admittedInput: { equals: readManagedJsonEqualityOperand(row.admittedInput) } },
             data: { desired: intent, desiredWhen: 'now', desiredAfterMs: null, intentRevision: { increment: 1 },
                 admittedInput: { ...admitted, currentAdmission },
                 ...(intent === 'delete' ? { cleanup: { disposition: 'pending', reason: 'delete_requested' } } : {}) } });
@@ -227,7 +228,7 @@ export async function admitManagedControl(params: Readonly<{
             }
         }
         const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: expected,
-            controllerMachineId: controller.machineId, controllerInstallationId: controller.installationId, admittedInput: { equals: row.admittedInput } }, data });
+            controllerMachineId: controller.machineId, controllerInstallationId: controller.installationId, admittedInput: { equals: readManagedJsonEqualityOperand(row.admittedInput) } }, data });
         if (changed.count !== 1) throw new ManagedMachineError("intent_changed");
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, row);
@@ -255,7 +256,7 @@ export async function submitManagedIntent(input: ManagedControllerCurrentnessV1)
         if (row.desired === 'rebuild' && admitted.currentAdmission?.kind === 'control' && admitted.currentAdmission.rebuildSettled) {
             return { machine: await projectManagedMachineInTx(tx, row), submitted: false };
         }
-        const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: canonical.expectedIntentRevision, admittedInput: { equals: row.admittedInput } },
+        const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: canonical.expectedIntentRevision, admittedInput: { equals: readManagedJsonEqualityOperand(row.admittedInput) } },
             data: { admittedInput: { ...admitted, submittedEffect: { ...canonical, intent: row.desired,
                 ...(rebuild ? { reviewedEffectDigest: rebuild.reviewedEffectDigest } : {}) } } } });
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
@@ -277,7 +278,7 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
         if (!pending || pending.homeId !== canonical.homeId || pending.managedId !== canonical.managedId
                 || pending.expectedIntentRevision !== canonical.expectedIntentRevision || pending.requestId !== canonical.requestId
                 || !sameManagedInput(pending.controller, canonical.controller)) throw new ManagedMachineError("request_conflict");
-        const data: Prisma.ManagedMachineUpdateManyMutationInput = {};
+        const data: Prisma.ManagedMachineUncheckedUpdateManyInput = {};
         if (canonical.result.kind === 'accepted') {
             if (pending.intent !== 'delete') throw new ManagedMachineError('resource_mismatch');
             const launch = readManagedLaunchSnapshot(row.launch);
@@ -331,7 +332,7 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
                 ...(settlesCurrentRebuild ? { currentAdmission: { ...currentAdmission, rebuildSettled: true } } : {}),
                 ...(row.enrolledMachineId ? { replacementEnrollment: { machineId: row.enrolledMachineId } } : {}) };
             const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision,
-                admittedInput: { equals: row.admittedInput } }, data });
+                admittedInput: { equals: readManagedJsonEqualityOperand(row.admittedInput) } }, data });
             if (changed.count !== 1) throw new ManagedMachineError('intent_changed');
             const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
             await invalidateManagedMachineInTx(tx, row);
@@ -366,7 +367,7 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
             else if (row.archivedAt === null) data.cleanup = canonical.result.kind === "refused"
                 ? { disposition: "unavailable", reason: canonical.result.code } : getActivePrismaRuntime().DbNull;
         }
-        const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision, admittedInput: { equals: row.admittedInput } }, data });
+        const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision, admittedInput: { equals: readManagedJsonEqualityOperand(row.admittedInput) } }, data });
         if (changed.count !== 1) throw new ManagedMachineError("intent_changed");
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, row);
@@ -542,7 +543,7 @@ export async function linkManagedEnrollmentInTx(tx: Tx, input: ManagedEnrollment
             replacementMachineId: machineId, reason: 'managed_native_rebuild', source: 'automatic', actorUserId: null });
     }
     const updated = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: input.expectedIntentRevision, creationState: "active", enrolledMachineId: row.enrolledMachineId,
-        admittedInput: { equals: row.admittedInput } }, data: { enrolledMachineId: machineId, ...(replacementEnrollment ? { admittedInput: retainedAdmission } : {}) } });
+        admittedInput: { equals: readManagedJsonEqualityOperand(row.admittedInput) } }, data: { enrolledMachineId: machineId, ...(replacementEnrollment ? { admittedInput: retainedAdmission } : {}) } });
     if (updated.count !== 1) throw new ManagedMachineError("enrollment_retired");
     await invalidateManagedMachineInTx(tx, row);
 }

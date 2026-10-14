@@ -45,6 +45,7 @@ const gateway = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
     gatewayPlacement: { kind: 'machine', machineId: 'hub-a' }, claudeHelperModels: { fast: 'haiku' },
     revision: 3, createdAt: 1, updatedAt: 1 });
 const mutations: ConnectedAccountCatalogRowMutationV1[] = [];
+const providerRowHomes: string[] = [];
 let savedConnections: readonly ProviderConnectionV1[] = [gateway];
 let rowStatus: 'absent' | 'present' | 'deleted' = 'absent';
 let content: ConnectedAccountCatalogRowMutationV1['content'] | null = null;
@@ -54,6 +55,7 @@ let providerRevision = 1;
 let catalogReadGate: Promise<void> | null = null;
 
 beforeEach(() => {
+    providerRowHomes.length = 0;
     savedConnections = [gateway]; providerCatalog = null; providerRevision = 1; catalogReadGate = null;
     rowStatus = 'absent'; content = null; mutations.length = 0; machineRpc.mockReset();
     beforeNextPurposeRead = undefined;
@@ -81,7 +83,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
             providerCatalog = mutation.content.v; providerRevision += 1;
             return Response.json({ status: 'updated', revision: providerRevision, cursor: providerRevision });
         }
-        if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) await catalogReadGate;
+        if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) { providerRowHomes.push(new URL(String(url)).origin); await catalogReadGate; }
         if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: providerRevision,
             content: { t: 'plain', v: providerCatalog ?? { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: savedConnections } } });
         if (path === '/v1/account/entity-rows/connected-accounts/purposes') {
@@ -101,7 +103,8 @@ const runtime = installSessionPaneRuntimeTestHarness({
     },
 });
 
-async function mount(mode: 'load' | 'cached', machineId: string | null, retiredProjectionLifetime = false, gateways = false) {
+async function mount(mode: 'load' | 'cached', machineId: string | null, retiredProjectionLifetime = false, gateways = false,
+    projectionServerId = runtime.serverId) {
     const scope = { serverId: runtime.serverId, accountId: 'account-a' };
     storage.setState({ profileScope: scope, settingsScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }) });
     storage.getState().applyMachines([createMachineFixture({ id: 'm1', activeAt: Date.now() })], true, { sourceServerId: scope.serverId });
@@ -117,7 +120,7 @@ async function mount(mode: 'load' | 'cached', machineId: string | null, retiredP
         expect(lifetime.isCurrent()).toBe(false);
     }
     const value: AppShellPluginUiProjectionValue = { pluginUiProjection: null, pluginBrowserProjection: null,
-        phase: 'unavailable', interactionEnabled: false, machineId, serverId: scope.serverId, platform: 'web',
+        phase: 'unavailable', interactionEnabled: false, machineId, serverId: projectionServerId, platform: 'web',
         accountLifetime: lifetime, reloadConnectedAccountProjection() {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables() {} };
     const Wrapper = ({ children }: { children: React.ReactNode }) => <runtime.Wrapper>
         <AppShellPluginUiProjectionValueProvider value={value}>{children}</AppShellPluginUiProjectionValueProvider>
@@ -316,4 +319,20 @@ describe('Connected Services index purpose source admission', () => {
             expect(machineRpc).not.toHaveBeenCalled();
         } finally { await hook.unmount(); }
     });
+    it('reads active Account gateways rather than a stale foreign app-shell Machine projection', async () => {
+        const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
+        const foreign = await upsertServerProfileOnly({ serverUrl: 'https://foreign-index.test', name: 'Foreign index Home' });
+        const hook = await mount('cached', 'm1', false, true, foreign.id);
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().gateways).toEqual([
+                expect.objectContaining({ connectionId: gateway.id, title: gateway.displayName }),
+            ]));
+            expect(hook.getCurrent().gatewayCatalog?.scope?.serverId).toBe(runtime.serverId);
+            expect(providerRowHomes.length).toBeGreaterThan(0);
+            expect(providerRowHomes.every(origin => origin === 'https://session-pane.test')).toBe(true);
+            expect(machineRpc).not.toHaveBeenCalled();
+            expect(mutations).toEqual([]);
+        } finally { await hook.unmount(); }
+    });
+
 });

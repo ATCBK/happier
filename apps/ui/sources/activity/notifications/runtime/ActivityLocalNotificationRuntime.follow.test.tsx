@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { createDeferred, createSessionAccessFixture, createSessionFixture, renderScreen } from '@/dev/testkit';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { TokenStorage, type HomeCredentialWriteRollback } from '@/auth/storage/tokenStorage';
+import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
@@ -21,23 +24,27 @@ const boundary = vi.hoisted(() => ({
     desktop: false,
     active: { serverId: 'srv_home_a', serverUrl: 'https://stack.example.test', generation: 1 },
     expo: vi.fn(async (_params: ExpoNotificationParams) => 'notification-1'),
-    tauri: vi.fn(async () => true),
+    tauri: vi.fn((_params: Readonly<{ title: string; body: string }>) => undefined),
 }));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { get OS() { return boundary.desktop ? 'web' : 'ios'; } } });
 });
-vi.mock('@/utils/platform/desktopHost', () => ({ isDesktopHost: () => boundary.desktop }));
-vi.mock('../channels/sendExpoLocalNotification', () => ({ sendExpoLocalNotification: boundary.expo }));
-vi.mock('../channels/sendTauriLocalNotification', () => ({ sendTauriLocalNotification: boundary.tauri }));
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({ importOriginal, tokenStorage: {
-        getCredentialsForServerUrl: async () => ({ token: createAccountTokenForTests('account-a') }),
-    } });
-});
-
+vi.mock('expo-notifications', () => ({
+    scheduleNotificationAsync: async (request: Parameters<typeof import('expo-notifications')['scheduleNotificationAsync']>[0]) => {
+        const { content } = request;
+        if (typeof content.title !== 'string' || typeof content.body !== 'string') throw new Error('Expected local notification copy');
+        return boundary.expo({ title: content.title, body: content.body,
+            ...(content.data ? { data: content.data } : {}),
+            ...(content.categoryIdentifier ? { categoryIdentifier: content.categoryIdentifier } : {}) });
+    },
+}));
+vi.mock('@tauri-apps/plugin-notification', () => ({
+    isPermissionGranted: async () => true,
+    requestPermission: async () => 'granted',
+    sendNotification: boundary.tauri,
+}));
 const initialState = storage.getInitialState();
 const getSession = () => storage.getState().sessions['session-1'];
 const applySessions: Parameters<typeof handleUpdateContainer>[0]['applySessions'] = (sessions) => storage.getState().applySessions(sessions);
@@ -121,11 +128,33 @@ describe('live Follow socket notifications', () => {
     });
     let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
     let savedProfileId: string | undefined;
+    const credentialWrites: Array<{ desktop: boolean; write: HomeCredentialWriteRollback }> = [];
+    let localStorage: ReturnType<typeof installLocalStorageMock>;
+    let webLocks: ReturnType<typeof installWebLockManagerMock>;
+    let previousDesktopHost: PropertyDescriptor | undefined;
     beforeEach(async () => {
+        boundary.desktop = false;
+        const desktopStorage = createDesktopSecureStorageBoundary();
+        previousDesktopHost = Object.getOwnPropertyDescriptor(globalThis, '__TAURI_INTERNALS__');
+        Object.defineProperty(globalThis, '__TAURI_INTERNALS__', {
+            configurable: true,
+            get: () => boundary.desktop ? { invoke: desktopStorage.invoke } : undefined,
+        });
+        localStorage = installLocalStorageMock();
+        webLocks = installWebLockManagerMock();
         const profile = await upsertServerProfile({ serverUrl: boundary.active.serverUrl, name: 'Home A' });
         savedProfileId = profile.id;
         await setServerProfileIdentityForUrl(profile.serverUrl, 'srv_home_a');
         await setActiveServerId('srv_home_a');
+        for (const desktop of [false, true]) {
+            boundary.desktop = desktop;
+            const write = await TokenStorage.setCredentialsForServerUrlWithRollback(
+                profile.serverUrl, { serverId: 'srv_home_a' }, { token: createAccountTokenForTests('account-a') },
+            );
+            if (!write) throw new Error('Could not store the Follow notification Account credential');
+            credentialWrites.push({ desktop, write });
+        }
+        boundary.desktop = false;
         storage.setState(initialState, true);
         storage.setState({ settings: settingsParse({}), localSettings: localSettingsParse({}) });
         saveAccountSettings({ serverId: 'srv_home_a', accountId: 'account-a' }, settingsParse({}), 1);
@@ -139,6 +168,10 @@ describe('live Follow socket notifications', () => {
     afterEach(async () => {
         await act(async () => { screen?.tree.unmount(); });
         screen = undefined;
+        for (const { desktop, write } of credentialWrites.splice(0).reverse()) {
+            boundary.desktop = desktop;
+            await write.rollback();
+        }
         boundary.desktop = false;
         boundary.expo.mockClear(); boundary.tauri.mockClear();
         resetActivityLocalNotificationRuntimeForTests();
@@ -146,6 +179,10 @@ describe('live Follow socket notifications', () => {
         storage.setState(initialState, true);
         if (savedProfileId) await removeServerProfile(savedProfileId);
         savedProfileId = undefined;
+        webLocks.restore();
+        localStorage.restore();
+        if (previousDesktopHost) Object.defineProperty(globalThis, '__TAURI_INTERNALS__', previousDesktopHost);
+        else Reflect.deleteProperty(globalThis, '__TAURI_INTERNALS__');
     });
 
     it.each([false, true])('delivers live Follow messages on desktop=%s without remote enrollment or history replay', async (desktop) => {

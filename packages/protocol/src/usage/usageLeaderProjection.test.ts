@@ -42,6 +42,18 @@ it('admits witnessed contribution event counts while retaining older missing cou
     expect(UsageAnalyticsContributionSchema.parse({ ...contribution, eventCount: 3, context: { usedTokens: 15, windowTokens: 100 } })).toMatchObject({ eventCount: 3, context: { usedTokens: 15, windowTokens: 100 } });
     expect(UsageAnalyticsContributionSchema.parse(contribution).eventCount).toBeUndefined();
     expect(UsageAnalyticsContributionSchema.safeParse({ ...contribution, eventCount: -1 }).success).toBe(false);
+    const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1,
+        totals: { eventCount: 3, tokens: contribution.tokens, cost: contribution.cost },
+        contributions: [{ ...contribution, eventCount: 3 }],
+        coverage: { status: 'complete', reasons: [], sources: [], missingDimensions: [],
+            range: { complete: true }, ranked: [] },
+    });
+    const result = repriceUsageAnalyticsResponse(response, { v: 1,
+        models: { model: { inputUsdPerMillion: 1, outputUsdPerMillion: 1 } },
+        provenance: { source: 'litellm', origin: 'bundled', asOfMs: 1, revision: 'witnessed', fetchStatus: 'ready' },
+    }, {}, 'api_equivalent');
+    expect(result.costFacts?.find(fact => fact.kind === 'api_equivalent'))
+        .toMatchObject({ eventCount: 3, complete: true });
 });
 
 it('recovers a server-omitted token-tied winner after a private price override', () => {
@@ -79,6 +91,8 @@ it('retains older rankings honestly when missing event counts prevent reconstruc
         provenance: { source: 'litellm', origin: 'bundled', asOfMs: 1, revision: 'ranking', fetchStatus: 'ready' } }, {}, 'api_equivalent');
     expect(result.leaders?.models?.[0]).toMatchObject({ key: 'model', label: 'preserved label', eventCount: 3 });
     expect(result.coverage).toMatchObject({ status: 'partial', reasons: ['ranked_truncation'], ranked: [{ complete: false }] });
+    expect(result.costFacts?.find(fact => fact.kind === 'api_equivalent'))
+        .toMatchObject({ eventCount: 1, complete: false });
 });
 
 it('re-prices a retained snapshot-key ranking without inventing missing legacy event counts', () => {

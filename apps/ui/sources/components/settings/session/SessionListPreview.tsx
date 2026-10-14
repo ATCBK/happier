@@ -11,7 +11,8 @@ import {
 } from '@/components/sessions/shell/resolveSessionListDensityViewState';
 import type { SessionListLayoutChoice } from '@/sync/domains/session/listing/sessionListLayout';
 import { workStatusWordStyle } from '@/components/work/status/workStatusTreatment';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
+import { useSettingsSelector } from '@/sync/domains/state/storage';
 
 // A viewport onto normal-sized rows, matching the other session settings previews.
 const CANVAS_WIDTH = 320;
@@ -53,6 +54,7 @@ function PreviewRows(props: Readonly<{ density: SessionListRowDensity; ids: read
 export const SessionListDensityPreview = React.memo(function SessionListDensityPreview(props: Readonly<{
     density: 'detailed' | 'cozy' | 'narrow';
 }>) {
+    useSettingsSelector(getPreferredLanguage);
     const viewState = resolveSessionListDensityViewState(props.density);
     const rowDensity: SessionListRowDensity = viewState.compactMinimal ? 'minimal' : viewState.compact ? 'compact' : 'default';
     return <PreviewStage><PreviewRows density={rowDensity} ids={SAMPLE_IDS} /></PreviewStage>;
@@ -61,6 +63,7 @@ export const SessionListDensityPreview = React.memo(function SessionListDensityP
 export const SessionListLayoutPreview = React.memo(function SessionListLayoutPreview(props: Readonly<{
     layout: `layout:${SessionListLayoutChoice}`;
 }>) {
+    useSettingsSelector(getPreferredLanguage);
     // Representative groups, not a second arrangement policy: only the sample
     // headings change. The real layout writer and reader still own the choice.
     const headings = props.layout === 'layout:projects'

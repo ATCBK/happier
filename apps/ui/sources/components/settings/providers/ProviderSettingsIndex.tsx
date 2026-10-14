@@ -50,8 +50,8 @@ const ProviderCollectionLanding = React.memo(function ProviderCollectionLanding(
     const { enabled, presentation: availabilityPresentation } = useProviderFeatureAvailability();
     const localDiscoveryEnabled = useFeatureEnabled('providers.localDiscovery');
     const providerTarget = useProviderSettingsTarget();
-    const { machineId, serverId } = providerTarget;
-    const { data, error, loading, refresh } = useProviderConnections({ enabled, active: focused, machineId, serverId });
+    const { machineId, accountServerId: serverId, accountAddressAvailable } = providerTarget;
+    const { data, error, loading, refresh } = useProviderConnections({ enabled: enabled && accountAddressAvailable, active: focused, machineId, serverId });
     const collection = React.useMemo(() => buildProviderCollection({
         data, query: '', localDiscoveryEnabled,
     }), [data, localDiscoveryEnabled]);

@@ -38,6 +38,15 @@
       "@/*": [
         "./src/*"
       ],
+      // Runtime workspace copies retain their own Zod dependencies. The CLI
+      // declaration graph uses the host's directly declared ESM schema identity.
+      "zod": [
+        "../../node_modules/zod/index.d.ts"
+      ],
+      "zod/*": [
+        "../../node_modules/zod/*/index.d.ts",
+        "../../node_modules/zod/*.d.ts"
+      ],
       // Packaging materializes another SDK copy under CLI node_modules. The
       // authored workspace graph must use one prepared declaration identity.
       "@happier-dev/plugin-sdk": [

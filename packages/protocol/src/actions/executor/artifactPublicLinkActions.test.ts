@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createArtifactPublicLinkActionsV1, type ArtifactPublicLinkActionIdV1, type ArtifactPublicLinkIssuedV1, type ArtifactPublicLinkKeyholdingResourceV1 } from './artifactPublicLinkActions.js';
 import { openPublicShareDataKeyV1 } from '../../crypto/publicShareEncryptedDataKeyEnvelopeV0.js';
+import { StoredContentPublicShareV1Schema } from '../../sharing/storedContentPublicShareV1.js';
 
-const publicShare = { id: 'share-1', subject: { kind: 'artifact' as const, id: 'artifact-1' }, expiresAt: null,
-  maxUses: null, useCount: 0, isConsentRequired: false, networkOff: false, createdAt: 1, updatedAt: 1, keyDerivation: 'fragment_v1' as const };
+const publicShare = StoredContentPublicShareV1Schema.parse({ id: 'share-1', subject: { kind: 'artifact', id: 'artifact-1' }, expiresAt: null,
+  maxUses: null, useCount: 0, isConsentRequired: false, networkOff: false, createdAt: 1, updatedAt: 1, keyDerivation: 'fragment_v1' });
 
 describe('keyholding Artifact public-link Actions', () => {
   it('lets owners revoke existing layout publications after new publication admission is disabled', async () => {

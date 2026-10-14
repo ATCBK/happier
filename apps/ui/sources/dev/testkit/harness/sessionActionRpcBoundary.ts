@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
+import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { SOCKET_RPC_EVENTS, SocketRpcCancellationPayloadSchema, SocketRpcRequestIdSchema, parseSocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import type { Session } from '@/sync/domains/state/storageTypes';

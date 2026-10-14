@@ -6,7 +6,8 @@ import {
     savePendingOutboxMessage,
 } from '@/sync/domains/state/pendingOutboxPersistence';
 import { Encryption } from '@/sync/encryption/encryption';
-import type { RawRecord } from "@happier-dev/session-core/raw";
+import { RawRecordSchema, type RawRecord } from "@happier-dev/session-core/raw";
+import { HappierStructuredInputV1Schema, RawIngressStructuredInputV1Schema, readAdmittedHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 
 import {
     fetchAndApplyPendingMessagesV2 as fetchAndApplyPendingMessagesV2Impl,
@@ -91,7 +92,7 @@ describe('pendingQueueV2 decrypt mapping', () => {
     it('projects a queued attachment-only media row instead of a false decrypt failure', async () => {
         const sessionId = 's_attachment_only_pending';
         const encryption = await createPendingQueueEncryption({ sessionId });
-        const stagedImageAttachment = {
+        const admittedImageAttachment = {
             v: 1,
             instanceId: 'attachment-media-1',
             attachment: { pluginId: 'acme.media', localId: 'image' },
@@ -99,20 +100,39 @@ describe('pendingQueueV2 decrypt mapping', () => {
             value: { alt: 'A mountain lake' },
             presentation: { label: 'Hero image', typeLabel: 'Image' },
             content: {
-                kind: 'stagedMedia',
-                handle: {
-                    v: 1,
-                    id: 'stage-1',
-                    executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
-                    owner: { pluginId: 'acme.media', localId: 'image' },
-                    mediaKind: 'image',
-                    mimeType: 'image/png',
-                    name: 'hero.png',
-                    sizeBytes: 42,
-                    sha256: 'a'.repeat(64),
-                },
+                kind: 'sessionMedia',
+                mediaId: 'media-1',
             },
         };
+        // Pending enqueue persists the finalized prepare response, not its
+        // draft staged-media claim. Verify the real stored-input boundary
+        // before asking the row projection to retain this attachment-only turn.
+        const admittedRecord = RawRecordSchema.parse({
+            role: 'user',
+            content: { type: 'text', text: '' },
+            meta: {
+                happierStructuredInputV1: HappierStructuredInputV1Schema.parse({
+                    v: 1,
+                    composerAttachments: [admittedImageAttachment],
+                }),
+            },
+        });
+        expect(readAdmittedHappierStructuredInputV1FromMeta(admittedRecord.meta)).toMatchObject({
+            status: 'admitted',
+            structuredInput: { composerAttachments: [admittedImageAttachment] },
+        });
+        const draftRecord = RawRecordSchema.parse({
+            role: 'user', content: { type: 'text', text: '' },
+            meta: { happierStructuredInputV1: RawIngressStructuredInputV1Schema.parse({
+                v: 1, composerAttachments: [{ ...admittedImageAttachment, content: {
+                    kind: 'stagedMedia', handle: {
+                        v: 1, id: 'stage-1', executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+                        owner: { pluginId: 'acme.media', localId: 'image' }, mediaKind: 'image',
+                        mimeType: 'image/png', name: 'hero.png', sizeBytes: 42, sha256: 'a'.repeat(64),
+                    },
+                } }],
+            }) },
+        });
 
         await fetchAndApplyPendingMessagesV2({
             sessionId,
@@ -123,16 +143,7 @@ describe('pendingQueueV2 decrypt mapping', () => {
                         localId: 'media-only',
                         content: {
                             t: 'plain',
-                            v: {
-                                role: 'user',
-                                content: { type: 'text', text: '' },
-                                meta: {
-                                    happierStructuredInputV1: {
-                                        v: 1,
-                                        composerAttachments: [stagedImageAttachment],
-                                    },
-                                },
-                            },
+                            v: admittedRecord,
                         },
                         status: 'queued', position: 0, createdAt: 1, updatedAt: 1,
                     },
@@ -144,21 +155,26 @@ describe('pendingQueueV2 decrypt mapping', () => {
                         },
                         status: 'queued', position: 1, createdAt: 2, updatedAt: 2,
                     },
+                    {
+                        localId: 'unadmitted-draft', content: { t: 'plain', v: draftRecord },
+                        status: 'queued', position: 2, createdAt: 3, updatedAt: 3,
+                    },
                 ],
             }),
         });
 
         const messages = storage.getState().sessionPending[sessionId]?.messages ?? [];
-        expect(messages.map((m) => m.localId)).toEqual(['media-only', 'truly-blank']);
+        expect(messages.map((m) => m.localId)).toEqual(['media-only', 'truly-blank', 'unadmitted-draft']);
         // The attachment-only turn is a real queued message; losing its rawRecord loses the
         // selected media and makes the row unsendable.
         expect(messages[0]?.pendingDecryptFailure).toBeUndefined();
         expect(messages[0]?.text).toBe('');
         expect(messages[0]?.rawRecord).toMatchObject({
-            meta: { happierStructuredInputV1: { composerAttachments: [stagedImageAttachment] } },
+            meta: { happierStructuredInputV1: { composerAttachments: [admittedImageAttachment] } },
         });
         // A blank row carrying no submittable selection stays an explicit failure.
         expect(messages[1]).toMatchObject({ pendingDecryptFailure: { kind: 'decrypt_failed' } });
+        expect(messages[2]).toMatchObject({ pendingDecryptFailure: { kind: 'decrypt_failed' } });
     });
 
     it('maps plaintext pending rows without decrypting', async () => {

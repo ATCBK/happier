@@ -33,6 +33,7 @@ import {
   installProviderSettingsRpcBoundary,
 } from '@/dev/testkit/harness/providerSettingsHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -201,29 +202,42 @@ describe('AgentModelsScreen provider settings safety', () => {
     );
   });
 
-  it('keeps the Account catalog on its own Home when another Home has the selected machine', async () => {
-    const selectedServerId = await account.addHome({
-      name: 'Selected Agent Home',
-      serverUrl: 'https://agent-models-selected.test',
-      accountId: 'account-a',
-      serverIdentityId: 'srv_agent_models_selected',
-      active: false,
+    it('uses the canonical Administration exact target instead of the active-server fallback', async () => {
+        const selectedServerId = await account.addHome({ name: 'Selected Agent Home', serverUrl: 'https://agent-models-selected.test',
+            accountId: 'account-a', serverIdentityId: 'srv_agent_models_selected', active: false });
+        await account.publishMachines(selectedServerId, [{ ...providerHarness.state.machines[0]!, id: 'machine-selected' }]);
+        await account.selectMachine(selectedServerId, 'machine-selected', 'agents');
+        const { useAgentAdministrationCatalog } = await import('./collection/useAgentAdministrationCatalog');
+        const admission = await renderHook(() => useAgentAdministrationCatalog({ loadProjection: false }));
+        expect(admission.getCurrent().targetSelection.selectedTarget).toEqual({
+            serverIdentityId: 'srv_agent_models_selected', machineId: 'machine-selected',
+        });
+        expect(admission.getCurrent().targetSelection.state.kind).toBe('online');
+        expect(admission.getCurrent().executionTarget?.machine.id).toBe('machine-selected');
+        const { AgentModelsScreen } = await import('./AgentModelsScreen');
+        const screen = await renderScreen(<AgentModelsScreen agentTargetKey="agent:happier.agent.codex/codex" runtimeAgentId={null} />);
+
+        expect(screen.findByTestId('settings.agents.models.header')).not.toBeNull();
+        await waitForHomeGovernance(() => expect(providerHarness.state.requests.length
+            + account.home.artifacts(selectedServerId).list().length).toBeGreaterThan(0));
+        expect(account.home.artifacts(selectedServerId).list()).toEqual([]);
+        const projectionRequest = providerHarness.state.requests.find(
+            (request) => request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION,
+        );
+        expect(projectionRequest?.machineId).toBe('machine-selected');
+        const { areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
+        expect(areServerProfileIdentifiersEquivalent(projectionRequest!.serverId, selectedServerId)).toBe(true);
+        expect(areServerProfileIdentifiersEquivalent(projectionRequest!.serverId, serverId)).toBe(false);
     });
-    await account.publishMachines(selectedServerId, [
-      { ...providerHarness.state.machines[0]!, id: 'machine-selected' },
-    ]);
-    await account.selectMachine(selectedServerId, 'machine-selected', 'agents');
-
+  it('refuses unresolved selected-Home data instead of revealing the active Account catalog', async () => {
+    const foreignServerId = await account.addHome({ name: 'Unresolved Agent Home',
+      serverUrl: 'https://agent-models-unresolved.test', serverIdentityId: 'srv_agent_models_unresolved',
+      accountId: 'foreign-account', active: false });
+    await account.selectMachine(foreignServerId, 'missing-machine', 'agents');
     const { AgentModelsScreen } = await import('./AgentModelsScreen');
-    const screen = await renderScreen(
-      <AgentModelsScreen
-        agentTargetKey="agent:happier.agent.codex/codex"
-        runtimeAgentId={null}
-      />,
-    );
-
+    const screen = await renderScreen(<AgentModelsScreen agentTargetKey="agent:happier.agent.codex/codex" runtimeAgentId="codex" />);
     expect(screen.findByTestId('settings.agents.models.header')).not.toBeNull();
-    expect(screen.findByTestId('agent-models')).not.toBeNull();
+    expect(screen.findByTestId('agent-models')).toBeNull();
     expect(providerHarness.state.requests).toEqual([]);
   });
 
@@ -350,7 +364,7 @@ describe('AgentModelsScreen provider settings safety', () => {
       ),
     ).toHaveLength(readsBefore);
   });
-  it.each(['none', 'online', 'offline', 'unresolved'] as const)(
+  it.each(['none', 'online', 'offline'] as const)(
     'keeps Account models, visibility and favorite/default markers available with an %s machine selection', async (machineState) => {
     const agentTargetKey = 'agent:happier.agent.codex/codex';
     const selection = {
@@ -393,7 +407,7 @@ describe('AgentModelsScreen provider settings safety', () => {
       await account.restore({
         accountId: 'account-models',
         catalog,
-        machines: machineState === 'none' || machineState === 'unresolved' ? [] : providerHarness.state.machines.map(machine => ({
+        machines: machineState === 'none' ? [] : providerHarness.state.machines.map(machine => ({
           ...machine, active: machineState === 'online', activeAt: machineState === 'online' ? Date.now() : 0,
         })),
         settings: {
@@ -719,6 +733,7 @@ describe('AgentModelsScreen provider settings safety', () => {
         mode === 'e2ee' ? { type: 'legacy' as const, secret } : null;
       let catalog = ProviderConnectionsCatalogV1Schema.parse({
         ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+        manualModelsByConnectionId: { pc_a: [{ id: 'model-a', name: 'Model A', addedAt: 1 }] },
         connections: ['pc_a', 'pc_b'].map((id) => ({
           v: 1,
           id,
@@ -727,7 +742,7 @@ describe('AgentModelsScreen provider settings safety', () => {
               ? {
                   kind: 'custom',
                   template: buildCustomProviderTemplate({
-                    ...createCustomProviderDraft('openai-chat'),
+                    ...createCustomProviderDraft('openai-responses'),
                     name: 'Custom source',
                     baseUrl: 'https://custom.example/v1',
                     requiresApiKey: false,
@@ -746,7 +761,9 @@ describe('AgentModelsScreen provider settings safety', () => {
       serverId = (
         await account.restore({
           catalog,
-          machines: providerHarness.state.machines,
+          machines: [],
+          accountId: `account-source-widget-${mode}`,
+          waivedActions: ['providers.models.source_visibility.set'],
           features: createRootLayoutFeaturesResponse({
             features: { providers: { enabled: true } },
           }),
@@ -754,7 +771,7 @@ describe('AgentModelsScreen provider settings safety', () => {
         })
       ).serverId;
       await account.home.selectHomes([serverId]);
-      await account.selectMachine(serverId, 'machine-a', 'agents');
+      await account.selectMachine(serverId, null, 'agents');
       let revision = 1;
       account.home.answer(
         serverId,
@@ -844,7 +861,8 @@ describe('AgentModelsScreen provider settings safety', () => {
         screen
           .findAllByTestId('agent-models-source-visibility:pc_a')
           .find((node) => typeof node.props.onValueChange === 'function');
-      expect(control()?.props.value).toBe(true);
+      await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('Model A'));
+      await waitForHomeGovernance(() => expect(control()?.props.value).toBe(true));
       expect(
         screen.findByTestId('agent-models-source-visibility:pc_b'),
       ).toBeNull();
@@ -883,23 +901,27 @@ describe('AgentModelsScreen provider settings safety', () => {
         expect(writes).toBe(1);
         // Secure-store reads and its genuine mutation event both now report keyless
         // credentials; catalog admission and the mounted widget remain real.
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
+        const credentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
           token: credentials.token,
         });
-        await act(async () => {
-          await TokenStorage.setCredentialsForServerUrl(
-            home.serverUrl,
-            { serverId },
-            { token: credentials.token },
-          );
-        });
-        expect(control()).toBeUndefined();
-        expect(screen.findByTestId('agent-models')).toBeNull();
-        expect(screen.getTextContent()).not.toContain('Model A');
-        await act(async () => {
-          withdrawnChoice?.(true);
-        });
-        expect(rowWrites()).toHaveLength(writes);
+        try {
+          await act(async () => {
+            await TokenStorage.setCredentialsForServerUrl(
+              home.serverUrl,
+              { serverId },
+              { token: credentials.token },
+            );
+          });
+          expect(control()).toBeUndefined();
+          expect(screen.findByTestId('agent-models')).toBeNull();
+          expect(screen.getTextContent()).not.toContain('Model A');
+          await act(async () => {
+            withdrawnChoice?.(true);
+          });
+          expect(rowWrites()).toHaveLength(writes);
+        } finally {
+          credentialRead.mockRestore();
+        }
       }
     },
   );

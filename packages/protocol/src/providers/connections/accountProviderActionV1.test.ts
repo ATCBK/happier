@@ -8,6 +8,7 @@ import { ProviderConnectionV1Schema } from './v1.js';
 import { CustomProviderTemplateV1Schema } from './customTemplateV1.js';
 import { createAccountProviderActionExecuteV1, type AccountProviderDeclarationV1 } from './accountProviderActionV1.js';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, type ProviderConnectionsCatalogV1 } from './connectionRowsV1.js';
+import { serializeModelVisibilityRefV1 } from '../selection/v1.js';
 
 // An in-memory Account-row transport boundary; all domain operations and output admission are real.
 function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1) {
@@ -33,7 +34,7 @@ function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CON
       return { status: outcome };
     },
   });
-  return { execute, get catalog() { return current; }, get writes() { return writes; },
+  return { execute, get catalog() { return current; }, get revision() { return revision; }, get writes() { return writes; },
     beforeNextWrite(callback: () => void) { beforeWrite = callback; },
     setOutcome(value: typeof outcome) { outcome = value; }, clearDefinitions() { definitions = []; },
     setDefinitions(value: readonly AccountProviderDeclarationV1[]) { definitions = value; } };
@@ -140,6 +141,101 @@ describe('shared Provider Account Action producer', () => {
     credential: { kind: 'apiKey', required: true, transports: [{ id: 'key', protocols: ['openai-chat'],
       uses: ['probe', 'runtime'], destination: { kind: 'httpHeader', name: 'Authorization', format: 'bearer' } }] },
     catalog: { source: 'manual', manualModelPolicy: 'allowed' } });
+
+  it('persists only canonical experimental confirmation fields through the captured Account catalog revision', async () => {
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_experimental',
+      source: { kind: 'custom', template: { ...customTemplate, credential: undefined,
+        endpointTemplates: [{ ...customTemplate.endpointTemplates[0], protocol: 'openai-responses' }] } },
+      role: 'named', displayName: 'Experimental', displayNameMode: 'custom', revision: 3, createdAt: 1, updatedAt: 1 });
+    const previous = { v: 1 as const, connectionId: connection.id, agentTargetKey: 'agent:happier.agent.codex/codex',
+      modelId: 'experimental-model', compatibilityFingerprint: 'compatibility:v1:previous', confirmedAt: 1 };
+    const neighbor = { ...previous, modelId: 'another-model' };
+    const row = accountRow({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [connection],
+      manualModelsByConnectionId: { [connection.id]: [{ id: 'experimental-model', addedAt: 1 }] },
+      experimentalBindingConfirmations: [previous, neighbor] });
+    const input = { action: 'confirmExperimental', connectionId: connection.id,
+      expectedConnectionRevision: 3, machineId: 'machine_optional', agentTargetKey: previous.agentTargetKey,
+      modelId: previous.modelId, compatibilityFingerprint: 'compatibility:v1:experimental' } as const;
+    const captured = row.catalog;
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', {
+      ...input, expectedConnectionRevision: 2,
+    }), {})).toMatchObject({ ok: false, errorCode: 'provider_connection_changed' });
+    expect(row.catalog).toBe(captured);
+    expect(row.writes).toBe(0);
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', input), {}))
+      .toEqual({ ok: true, result: { status: 'success', action: 'confirmExperimental' } });
+    expect(row.revision).toBe(2);
+    expect(row.catalog.connections).toEqual([connection]);
+    expect(row.catalog.experimentalBindingConfirmations).toEqual([neighbor, {
+      v: 1, connectionId: connection.id, agentTargetKey: input.agentTargetKey, modelId: input.modelId,
+      compatibilityFingerprint: input.compatibilityFingerprint, confirmedAt: 10,
+    }]);
+  });
+
+  it.each([
+    ['providers.models.source_visibility.set', { action: 'setConnectionVisibility', connectionId: 'pc_target', shown: false }],
+    ['providers.models.visibility.set', { action: 'setVisibility',
+      ref: { scope: 'allAgents', providerConnectionId: 'pc_target', modelId: 'model' }, hidden: true }],
+    ['providers.models.visibility.reset', { action: 'resetVisibility', scope: { kind: 'connection', connectionId: 'pc_target' } }],
+    ['providers.models.visibility.bulk', { action: 'bulkVisibility', changes: [
+      { ref: { scope: 'agent', agentTargetKey: 'backend:codex', providerConnectionId: null, modelId: 'native' }, hidden: true },
+      { ref: { scope: 'allAgents', providerConnectionId: 'pc_live', modelId: 'live' }, hidden: true },
+      { ref: { scope: 'agent', agentTargetKey: 'backend:codex', providerConnectionId: 'pc_target', modelId: 'model' }, hidden: true },
+    ] }],
+  ] as const)('refuses %s for missing or deleted connections without committing any visibility change', async (actionId, input) => {
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_live',
+      source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' }, role: 'named',
+      displayName: 'Live', displayNameMode: 'custom', revision: 0, createdAt: 1, updatedAt: 1 });
+    for (const deleted of [false, true]) {
+      const row = accountRow({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+        connections: deleted ? [connection, { ...connection, id: 'pc_target' }] : [connection] });
+      if (deleted) expect(await row.execute(parseProviderActionRequestV1('providers.connections.delete', {
+        action: 'delete', connectionId: 'pc_target',
+      }), {})).toMatchObject({ ok: true });
+      const previous = row.catalog;
+      const writes = row.writes;
+      expect(await row.execute(parseProviderActionRequestV1(actionId, input), {}))
+        .toMatchObject({ ok: false, errorCode: 'provider_connection_not_found',
+          details: { code: 'provider_connection_not_found', connectionId: 'pc_target' } });
+      expect(row.catalog).toBe(previous);
+      expect(row.writes).toBe(writes);
+    }
+  });
+
+  it('preserves native and connection visibility scopes through successful Account mutations', async () => {
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_live',
+      source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' }, role: 'named',
+      displayName: 'Live', displayNameMode: 'custom', revision: 0, createdAt: 1, updatedAt: 1 });
+    const row = accountRow({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [connection] });
+    const native = { scope: 'agent', agentTargetKey: 'backend:codex', providerConnectionId: null, modelId: 'native' } as const;
+    const provider = { scope: 'allAgents', providerConnectionId: connection.id, modelId: 'provider' } as const;
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.source_visibility.set', {
+      action: 'setConnectionVisibility', connectionId: connection.id, shown: false,
+    }), {})).toMatchObject({ ok: true, result: { status: 'updated' } });
+    expect(row.catalog.modelPickerVisibilityByConnectionId).toEqual({ [connection.id]: false });
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.source_visibility.set', {
+      action: 'setConnectionVisibility', connectionId: connection.id, shown: null,
+    }), {})).toMatchObject({ ok: true });
+    expect(row.catalog.modelPickerVisibilityByConnectionId).toBeUndefined();
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.visibility.set', {
+      action: 'setVisibility', ref: native, hidden: true,
+    }), {})).toMatchObject({ ok: true });
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.visibility.bulk', {
+      action: 'bulkVisibility', changes: [{ ref: native, hidden: false }, { ref: provider, hidden: true }],
+    }), {})).toMatchObject({ ok: true });
+    expect(row.catalog.modelVisibilityByRef).toEqual({ [serializeModelVisibilityRefV1(provider)]: 'hidden' });
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.visibility.set', {
+      action: 'setVisibility', ref: native, hidden: true,
+    }), {})).toMatchObject({ ok: true });
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.visibility.reset', {
+      action: 'resetVisibility', scope: { kind: 'connection', connectionId: connection.id },
+    }), {})).toMatchObject({ ok: true });
+    expect(row.catalog.modelVisibilityByRef).toEqual({ [serializeModelVisibilityRefV1(native)]: 'hidden' });
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.visibility.reset', {
+      action: 'resetVisibility', scope: { kind: 'agent', agentTargetKey: native.agentTargetKey },
+    }), {})).toMatchObject({ ok: true });
+    expect(row.catalog.modelVisibilityByRef).toEqual({});
+  });
 
   it('replaces a custom template at its captured revision without losing bindings or manual models, invalidating changed grants', async () => {
     const row = accountRow();

@@ -883,11 +883,6 @@ vi.mock('@/sync/domains/scope/activeServerAccountScope', async (importOriginal) 
     },
 }));
 
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplySettings: () => vi.fn(),
-    useDeleteAiLaunchProfile: () => vi.fn(async () => {}),
-}));
-
 vi.mock('@/utils/sessions/recentPaths', () => ({
     getRecentPathsForMachine: () => [],
 }));
@@ -1017,10 +1012,6 @@ vi.mock('@/components/sessions/new/modules/automationFeatureGate', () => ({
 
 vi.mock('@/components/sessions/new/modules/useNewSessionConnectedServices', () => ({
     useNewSessionConnectedServices: () => ({ connectedServicesAuthChip: null }),
-}));
-
-vi.mock('@/utils/sessions/machineUtils', () => ({
-    isMachineOnline: () => true,
 }));
 
 vi.mock('@/utils/errors/daemonUnavailableAlert', () => ({

@@ -189,6 +189,12 @@ type PluginUiHostApiSurfaceTypographyMetricV1 = {
 /** SDK-local declaration projection of the Protocol-owned semantic theme. */
 export type PluginUiHostApiSurfaceThemeV1 = {
     version: 1;
+    /** Optional host presentation choices; an unknown id renders the shared default. */
+    spinner?: {
+        style: string;
+        speed: string;
+        pause: string;
+    };
     /** Optional, safely ignorable presentation overlays; absence renders the existing flat finish. */
     surfaceFinish?: Partial<Record<'card' | 'floating' | 'composer' | 'primaryButton' | 'secondaryButton', {
         colors: [string, string, ...string[]];

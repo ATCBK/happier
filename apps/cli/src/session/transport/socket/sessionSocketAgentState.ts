@@ -253,6 +253,7 @@ export async function waitForIdleViaSocket(params: Readonly<{
   readyCompletesPendingUserTurns?: boolean;
   // Seed with the latest agentState ciphertext from snapshot, if available.
   initialAgentStateCiphertextBase64: string | null;
+  resolveAuthorizationHeaders?: Parameters<typeof fetchSessionById>[0]['resolveAuthorizationHeaders'];
 }>): Promise<{ idle: true; observedAt: number }> {
   const initialObservedAgentState = summarizeAgentStateCiphertext({
     ciphertextBase64: params.initialAgentStateCiphertextBase64,
@@ -371,6 +372,7 @@ export async function waitForIdleViaSocket(params: Readonly<{
           if (latestTurnActivity && !applyRecheckedTurnActivity(latestTurnActivity)) return;
           const refreshedSession = await fetchSessionById({
             token: params.token, sessionId: params.sessionId,
+            ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
           });
           if (settled || revision !== observationRevision || !refreshedSession) return;
           const refreshedProjectionActivity = preferProjectionUpdates

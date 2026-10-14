@@ -1,3 +1,5 @@
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import * as React from 'react';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
 import { act } from 'react-test-renderer';
@@ -21,7 +23,9 @@ import { applyProviderCatalogSnapshot } from '@/sync/store/settings/providerCata
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope }));
+const providerHarness = createProviderSettingsHarness({ machines: [] });
+installProviderSettingsRpcBoundary(providerHarness);
+providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, request => machineRpcWithServerScope(request));
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
 let otherServerId = '';

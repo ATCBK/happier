@@ -58,6 +58,10 @@ import {
 import { readSessionConnectedServiceBindings } from '@/sync/domains/connectedServices/readSessionConnectedServiceBindings';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import {
+    presentConnectedAccountPurposeTeamResource,
+    presentQualifiedConnectedAccountTarget,
+} from '@/sync/domains/connectedServices/qualifiedConnectedAccountTargetPresentation';
+import {
     applyProjectedCredentialKindRestrictions,
     buildQualifiedConnectedAccountGroupOptionsByServiceId,
     buildQualifiedConnectedAccountProfileOptionsByServiceId,
@@ -453,6 +457,12 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
         agentIdentity: PluginContributionIdentityV1 | null;
         connectedAccounts: readonly PluginProjectedAgentConnectedAccountPurposeV2[];
     }> | null;
+    /** Undefined is unarmed; null is an armed target whose catalog is unavailable. */
+    armedAuthoringTarget?: Readonly<{
+        agentId: string;
+        agentIdentity: PluginContributionIdentityV1;
+        connectedAccounts: readonly PluginProjectedAgentConnectedAccountPurposeV2[];
+    }> | null;
     teamCredentialResources?: readonly TeamCredentialResourceCatalogEntryV1[];
     teamCredentialResourceCurrentKeys?: ReadonlySet<string>;
     teamNameById?: Readonly<Record<string, string>>;
@@ -472,9 +482,10 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
 }>): SessionConnectedServicesAuthSwitchResult {
     const accountProfile = useProfile();
     const { present } = useConnectedAccountIdentityPrivacy();
-    const needsConnectedLabels = params.connectedAccounts.length > 0 || Boolean(params.armedContinuationAgent?.connectedAccounts.length);
+    const armedTarget = params.armedAuthoringTarget === undefined ? params.armedContinuationAgent : params.armedAuthoringTarget;
+    const needsConnectedLabels = params.connectedAccounts.length > 0 || Boolean(armedTarget?.connectedAccounts.length);
     const { binding } = useServerCredentialAccountScopeBinding(needsConnectedLabels ? params.serverId : null);
-    const armedPurposeCatalog = useConnectedAccountCatalog('purposes', !params.armedContinuationAgent
+    const armedPurposeCatalog = useConnectedAccountCatalog('purposes', !armedTarget
         ? null
         : params.serverId ? binding?.scope ?? null : undefined);
     const labelsByKey = useConnectedMetadataCatalog(!needsConnectedLabels ? null
@@ -1055,7 +1066,8 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
     const armedRouteSourceLabel = routePresentation ? presentArmedSessionRouteSource(routePresentation, appliedNativeRoute) : null;
 
     const connectedServicesAuthChip = React.useMemo<AgentInputExtraActionChip | null>(() => {
-        const target = params.armedContinuationAgent;
+        if (params.armedAuthoringTarget === null) return null;
+        const target = armedTarget;
         if (target) {
             const serviceIds = resolveProjectedConnectedAccountServiceKeys(target.connectedAccounts);
             if (serviceIds.length === 0) return null;
@@ -1115,8 +1127,32 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
                 formatConnectedCountLabel: (count) => t('connectedServices.authChip.connectedCountLabel', { count }),
             });
             const warningKey = resolveConnectedServicesAuthWarningTranslationKey(label.warningCodes[0]);
+            const qualifiedLabel = label.connectedCount === 0 ? t('connectedServices.authChip.nativeLabel')
+                : serviceIds.map((serviceId) => {
+                    const binding = bindings?.bindingsByServiceId[serviceId];
+                    const serviceTitle = resolveServiceTitle(serviceId);
+                    if (binding?.source === 'connected') {
+                        const service = parseQualifiedPluginContributionKey(serviceId);
+                        const selectionLabel = service ? presentQualifiedConnectedAccountTarget({
+                            target: binding.selection === 'group'
+                                ? { kind: 'group', service, groupId: binding.groupId }
+                                : { kind: 'account', account: { service, accountId: binding.profileId } },
+                            accounts: accountProfile?.connectedAccountsV4 ?? [],
+                            groups: accountProfile?.connectedAccountGroupsV4 ?? [],
+                            labelsByKey,
+                            serviceTitle,
+                            presentIdentity: present,
+                        }).primaryLabel : t('common.unavailable');
+                        return `${serviceTitle}: ${selectionLabel}`;
+                    }
+                    if (binding?.source === 'team_resource') {
+                        return teamResourceChoicesByServiceId[serviceId]?.presentation.accessibilityLabel
+                            ?? `${serviceTitle}: ${t('common.unavailable')}`;
+                    }
+                    return `${serviceTitle}: ${t('connectedServices.authChip.nativeLabel')}`;
+                }).join(', ');
             const displayLabel = defaultsReady || (armedPurposeCatalog.value && label.connectedCount > 0)
-                ? label.label : unavailableLabel;
+                ? qualifiedLabel : unavailableLabel;
             return createConnectedServicesAuthActionChip({
                 label: displayLabel,
                 connectedCount: label.connectedCount,
@@ -1166,7 +1202,8 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
             testID: 'session-connected-services-auth-chip',
         });
     }, [
-        params.armedContinuationAgent,
+        armedTarget,
+        params.armedAuthoringTarget,
         armedPurposeCatalog.value,
         armedPurposeCatalog.status,
         armedPurposeCatalog.stale,

@@ -3289,7 +3289,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -3301,6 +3301,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -3471,7 +3485,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -3483,6 +3497,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -3697,7 +3725,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -3709,6 +3737,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -5830,7 +5872,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -5842,6 +5884,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -6015,7 +6071,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -6027,6 +6083,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -6200,7 +6270,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -6212,6 +6282,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -6385,7 +6469,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -6397,6 +6481,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -6569,7 +6667,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -6581,6 +6679,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -6754,7 +6866,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -6766,6 +6878,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -6936,7 +7062,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -6948,6 +7074,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -7118,7 +7258,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -7130,6 +7270,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -8632,7 +8786,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -8644,6 +8798,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -9489,7 +9657,7 @@ export type WorkflowsActionResultById = {
                             kind: 'everyMatch';
                         };
                     } | {
-                        event: 'sessionStarted' | 'sessionArchived';
+                        event: 'sessionStarted';
                         sourceSessionId: string;
                         policy: {
                             kind: 'nextMatches';
@@ -9501,6 +9669,20 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'everyMatch';
                         };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
                     } | {
                         event: 'userActionRequired';
                         sourceSessionId: string;
@@ -15777,7 +15959,7 @@ export type WorkflowsActionResultById = {
                         kind: 'everyMatch';
                     };
                 } | {
-                    event: 'sessionStarted' | 'sessionArchived';
+                    event: 'sessionStarted';
                     sourceSessionId: string;
                     policy: {
                         kind: 'nextMatches';
@@ -15789,6 +15971,20 @@ export type WorkflowsActionResultById = {
                     } | {
                         kind: 'everyMatch';
                     };
+                } | {
+                    event: 'sessionArchived';
+                    sourceSessionId: string;
+                    policy: {
+                        kind: 'nextMatches';
+                        count: number;
+                    } | {
+                        kind: 'currentTurn';
+                    } | {
+                        kind: 'firstMatch';
+                    } | {
+                        kind: 'everyMatch';
+                    };
+                    originRunId?: string | undefined;
                 } | {
                     event: 'userActionRequired';
                     sourceSessionId: string;

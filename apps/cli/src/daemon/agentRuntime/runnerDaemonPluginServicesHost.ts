@@ -156,7 +156,7 @@ type Invocation = {
 
 type ManagedProviderInvocation = Readonly<{
     bootstrap: RunnerDaemonManagedProviderBootstrapV1;
-    connectedAccounts: PluginServices['connectedAccounts'];
+    connectedAccounts: PluginServices['connectedAccounts'] | null;
     isCurrent(): boolean | Promise<boolean>;
     readSupervisionLaunchAuthority(
         serverId: string,
@@ -1054,9 +1054,18 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
         };
         const connectedAccountsFor = async (
             operationScope: 'managedProvider' | undefined,
-        ) => operationScope === 'managedProvider'
-            ? (await requireManagedProvider()).connectedAccounts
-            : services.connectedAccounts;
+        ) => {
+            const connectedAccounts = operationScope === 'managedProvider'
+                ? (await requireManagedProvider()).connectedAccounts
+                : services.connectedAccounts;
+            if (!connectedAccounts) {
+                return fail(
+                    'plugin_service_unavailable',
+                    'Runner managed Provider Connected Account service is unavailable',
+                );
+            }
+            return connectedAccounts;
+        };
         const operationOptions = signal ? { signal } : {};
         const storageScope = (
             scope: 'ephemeral' | 'daemonSession' | 'daemon',

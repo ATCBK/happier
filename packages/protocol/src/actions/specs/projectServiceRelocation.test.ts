@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ActionIdSchema } from '../actionIds.js';
+import { ActionSpecSchema } from '../actionSpecs.js';
 import { createActionExecutor, type ActionExecutorDeps } from '../actionExecutor.js';
 import { isRuntimeActionExecutorReal, resolveRuntimeActionSurfaces } from '../surfaces.js';
 
@@ -41,6 +42,8 @@ describe('service relocation Action', () => {
     expect(spec.executionPlacement).toBe('machine');
     expect(spec.operation).toMatchObject({ version: 1, progress: 'reported' });
     expect(spec.bindings?.rpcMethod).toBeUndefined();
+    expect(spec.surfaces).toMatchObject({ cli: true, mcp: false, voice: false, rpc: false });
+    expect(ActionSpecSchema.safeParse(spec).success).toBe(true);
   });
 
   it('accepts only the incumbent exact managed target and refuses a second binding witness', async () => {

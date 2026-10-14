@@ -60,7 +60,8 @@ export const QualifiedPoolDetail = React.memo(function QualifiedPoolDetail(
     const agentDefaults = useAgentDefaultChoices(target);
     const providersEnabled = useFeatureEnabled('providers');
     const providerTarget = useProviderSettingsTarget();
-    const gatewayUsage = usePoolGatewayChoices({ target, enabled: providersEnabled, resolveTarget: providerTarget.resolveCurrentTarget });
+    const gatewayUsage = usePoolGatewayChoices({ target, enabled: providersEnabled, resolveTarget: providerTarget.resolveCurrentTarget,
+        accountServerId: providerTarget.accountServerId, accountAddressAvailable: providerTarget.accountAddressAvailable });
 
     const profile = useProfile();
     const { labelsByKey, serviceLabel } = props;

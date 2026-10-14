@@ -7,10 +7,7 @@ import {
 } from '@happier-dev/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  resolveExecutablePluginRuntimeRegistry,
-  type ResolvedExecutablePluginRuntimeRegistry,
-} from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
 import {
   createExactV021ConnectedServiceMaterializationOwner,
@@ -32,12 +29,12 @@ describe('exact v0.2.1 Connected Service one-shot materialization', () => {
       'happier-exact-v021-connected-service-',
     ));
     temporaryRoots.push(happyHomeDir);
-    let registry: ResolvedExecutablePluginRuntimeRegistry | null = null;
+    let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
 
     try {
-      registry = await resolveExecutablePluginRuntimeRegistry({
+      runtime = await createAdmittedPluginRuntimeFixture({
         happyHomeDir,
-        pluginIds: ['happier.agent.codex'],
+        runtimeOptions: { pluginIds: ['happier.agent.codex'] },
       });
       const service = Object.freeze({
         pluginId: 'happier.agent.codex',
@@ -69,7 +66,7 @@ describe('exact v0.2.1 Connected Service one-shot materialization', () => {
       });
 
       const owner = createExactV021ConnectedServiceMaterializationOwner({
-        registry,
+        registry: runtime.registry,
         purposeBindings: Object.freeze([Object.freeze({
           purpose,
           target: Object.freeze({ kind: 'account' as const, account }),
@@ -98,14 +95,21 @@ describe('exact v0.2.1 Connected Service one-shot materialization', () => {
         new TextDecoder().decode(authFile),
       ) as Readonly<Record<string, unknown>>;
       expect(auth).toMatchObject({
-        auth_mode: 'chatgpt',
+        auth_mode: 'chatgptAuthTokens',
         access_token: 'legacy-access',
-        refresh_token: 'legacy-refresh',
+        refresh_token: '',
         id_token: 'legacy-id-token',
         account_id: 'legacy-account',
+        tokens: {
+          access_token: 'legacy-access',
+          refresh_token: '',
+          id_token: 'legacy-id-token',
+          account_id: 'legacy-account',
+        },
       });
+      expect(new TextDecoder().decode(authFile)).not.toContain('legacy-refresh');
     } finally {
-      await registry?.dispose();
+      await runtime?.dispose();
     }
   });
 

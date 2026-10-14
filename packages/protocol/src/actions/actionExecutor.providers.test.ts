@@ -13,6 +13,7 @@ import { decideApprovalRequestTransition } from '../approvals/approvalRequestTra
 import { ProviderConnectionV1Schema } from '../providers/connections/v1.js';
 import { ProviderContributionV1Schema } from '../providers/contributions/v1.js';
 import { CLIPROXYAPI_PROVIDER_CONTRIBUTION } from '../../../plugins/cliproxyapi/src/provider/contribution.js';
+import { DaemonProviderConnectionMutationResponseV1Schema } from '../rpc/providers.js';
 
 const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
 

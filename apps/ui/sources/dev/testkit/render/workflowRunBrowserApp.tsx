@@ -7,21 +7,13 @@ import { createRoot } from 'react-dom/client';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { UnistylesRuntime } from 'react-native-unistyles';
-import {
-    AutomationDefinitionListResponseSchema,
-    CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
-    WorkflowAcceptedSnapshotV1Schema,
-    WorkflowDefinitionV1Schema,
-    WorkflowProgressEnvelopeV1Schema,
-    WorkflowRunRecipientCensusResponseV1Schema,
-    sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
-    sealWorkflowProgressStoredEnvelopeV1,
-    serializeWorkflowStoredContentEnvelopeV1,
-    type WorkflowRunStateV1,
-    type WorkflowRunInvocationIndexV1,
-    type WorkflowRunSummaryV1,
-    type WorkflowResultContract,
-} from '@happier-dev/protocol';
+import { AutomationDefinitionListResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
+import { WorkflowAcceptedSnapshotV1Schema } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
+import { WorkflowDefinitionV1Schema, type WorkflowResultContract } from '@happier-dev/protocol/workflows/workflowV1';
+import { WorkflowProgressEnvelopeV1Schema, type WorkflowRunStateV1, type WorkflowRunInvocationIndexV1, type WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import { WorkspaceProvider } from '@/components/appShell/workspace/WorkspaceProvider';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';

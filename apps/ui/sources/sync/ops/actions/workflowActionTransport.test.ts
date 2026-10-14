@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     createWorkflowAccountRunActionOwner,
-    TargetedActionRpcRequestV1Schema,
     WorkflowRunStartRequestV1Schema,
     WorkflowRunSummaryV1Schema,
 } from '@happier-dev/protocol';
@@ -25,7 +24,9 @@ function createHarness() {
         resolveFallbackMachineId: () => 'relay-b',
         transport,
     });
-    const context = { surface: 'ui' as const, serverId: 'home-a', runtimeAccountId: 'account-a' };
+    // This fixture is the admitted UI host producer, not a transport default.
+    const context = { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const },
+        serverId: 'home-a', runtimeAccountId: 'account-a' };
     return { execute, context, transport, retire: () => { current = false; } };
 }
 
@@ -72,14 +73,12 @@ describe('Workflow Action relay and resource target', () => {
         expect(transport.mock.calls[0]?.[0].payload).toEqual({});
     });
 
-    it('preserves the caller session restriction rather than replacing it with the relay machine', async () => {
+    it('refuses a caller session restriction rather than replacing it with machine authority', async () => {
         const { execute, context, transport } = createHarness();
         const target = { kind: 'session' as const, sessionId: 'session-a' };
-        await execute({ actionId: 'workflow.definition.list', input: {}, context: { ...context, externalActionTarget: target } });
-        expect(transport.mock.calls[0]?.[0]).toMatchObject({
-            machineId: 'relay-b',
-            payload: { v: 1, kind: 'targeted_action_rpc', input: {}, target },
-        });
+        await expect(execute({ actionId: 'workflow.definition.list', input: {}, context: { ...context, externalActionTarget: target } }))
+            .resolves.toMatchObject({ ok: false, errorCode: 'target_not_local' });
+        expect(transport).not.toHaveBeenCalled();
     });
 
     it('does not supply a relay target when the daemon refuses a missing new-Run target', async () => {
@@ -100,7 +99,7 @@ describe('Workflow Action relay and resource target', () => {
         const input = { runId: '00000000-0000-4000-8000-000000000001', source: { kind: 'inline' as const, definition: { blocks: ['Work'] } } };
         await execute({ actionId: 'workflow.run.start', input, context: { ...context, externalActionTarget: target } });
         expect(transport.mock.calls[0]?.[0]).toMatchObject({
-            machineId: 'executor-a', payload: { v: 1, kind: 'targeted_action_rpc', input, target },
+            machineId: 'executor-a', payload: input, target,
         });
     });
 
@@ -110,7 +109,7 @@ describe('Workflow Action relay and resource target', () => {
         const input = { runId: '00000000-0000-4000-8000-000000000001', source: { kind: 'catalog' as const, workflow: 'builtin:review-and-converge' } };
         await execute({ actionId: 'workflow.run.start', input, context: { ...context, defaultSessionId: 'session-a', externalActionTarget: target } });
         expect(transport.mock.calls[0]?.[0]).toMatchObject({
-            machineId: 'executor-a', payload: { v: 1, kind: 'targeted_action_rpc', input, target, defaultSessionId: 'session-a' },
+            machineId: 'executor-a', payload: input, target, invocation: { defaultSessionId: 'session-a' },
         });
     });
 
@@ -141,12 +140,11 @@ describe('Workflow Action relay and resource target', () => {
                 }) };
             } },
         });
-        transport.mockImplementation(async ({ payload }) => {
-            const request = TargetedActionRpcRequestV1Schema.parse(payload);
+        transport.mockImplementation(async ({ payload, target, invocation }) => {
             try {
-                return await owner.execute({ actionId: 'workflow.run.start', input: WorkflowRunStartRequestV1Schema.parse(request.input),
+                return await owner.execute({ actionId: 'workflow.run.start', input: WorkflowRunStartRequestV1Schema.parse(payload),
                     context: { surface: 'ui', authority: 'present_user', callerPermissionMode: 'safe-yolo',
-                        externalActionTarget: request.target, defaultSessionId: request.defaultSessionId } });
+                        externalActionTarget: target, defaultSessionId: invocation.defaultSessionId } });
             } catch (error) {
                 return { ok: false, errorCode: typeof error === 'object' && error !== null && 'code' in error ? error.code : 'unknown' };
             }

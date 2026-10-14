@@ -1,13 +1,17 @@
-import React from 'react';
+import { initializeRealAppRuntimeForTests as initializeRootLayoutRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { renderRealAppRoute } from '@/dev/testkit/render/renderRealAppRoute';
+import { RootLayoutRouteContexts } from "./rootLayoutRouteContexts";
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Stack } from 'expo-router';
 
 import { storage } from '@/sync/domains/state/storageStore';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 
-import { createOkFetchResponse, createRootLayoutFeaturesResponse, flushHookEffects, renderScreen } from '@/dev/testkit';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { createRootLayoutFeaturesResponse, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
+import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -23,7 +27,6 @@ type LinkedProvider = {
     showOnProfile: boolean;
 };
 
-let friendsIdentityReady = false;
 const routerMockState = vi.hoisted(() => ({
     push: vi.fn(),
     back: vi.fn(),
@@ -41,29 +44,9 @@ vi.mock('expo-router', async () => {
     }).module;
 });
 
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ isAuthenticated: false }),
-}));
-
-vi.mock('@/auth/routing/authRouting', () => ({
-    isPublicRouteForUnauthenticated: () => true,
-}));
-
-vi.mock('@/hooks/server/useFriendsIdentityReadiness', () => ({
-    useFriendsIdentityReadiness: () => ({ isReady: friendsIdentityReady }),
-}));
-
-vi.mock('@/activity/badges/ActivityBadgeRuntime', () => ({
-    ActivityBadgeRuntime: () => null,
-}));
-
-vi.mock('@/components/navigation/mobile/chrome/MobileBottomChromeHost', () => ({
-    MobileBottomChromeHost: () => null,
-}));
-
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
+vi.mock('expo-router/build/fork/getPathFromState', async () => {
+    const { loadInstalledExpoPathSerializer } = await import('@/dev/testkit/runtime/installedExpoPathSerializer');
+    return loadInstalledExpoPathSerializer();
 });
 
 function createGithubLinkedProvider(): LinkedProvider {
@@ -77,16 +60,21 @@ function createGithubLinkedProvider(): LinkedProvider {
     };
 }
 
-function stubRootLayoutFeaturesFetch() {
-    const payload = createRootLayoutFeaturesResponse();
-    const fetchMock: typeof fetch = (() => createOkFetchResponse(payload)) as unknown as typeof fetch;
+async function stubRootLayoutFeaturesFetch() {
+    await seedPersistedHomeProfilesForTests({ activeServerId: 'friends-home', profiles: [{ id: 'friends-home', serverUrl: 'https://friends.example.test', name: 'Friends', createdAt: 1, updatedAt: 1, lastUsedAt: 1, source: 'manual' }] });
+    resetServerFeaturesClientForTests();
+    const payload = createRootLayoutFeaturesResponse({ capabilities: {
+        social: { friends: { allowUsername: true, requiredIdentityProviderId: 'github' } },
+    } });
+    const fetchMock: typeof fetch = async () => Response.json(payload);
     vi.stubGlobal('fetch', vi.fn(fetchMock));
     setRuntimeFetch(fetchMock);
+    expect(await getServerFeaturesSnapshot({ serverId: 'friends-home', force: true })).toMatchObject({ status: 'ready', features: { capabilities: { social: { friends: { allowUsername: true } } } } });
 }
 
 async function renderRootLayout() {
     const { default: RootLayout } = await import('@/app/(app)/_layout');
-    const screen = await renderScreen(<RootLayout />);
+    const screen = await renderRealAppRoute(RootLayout, null, { contextWrapper: RootLayoutRouteContexts });
     await flushHookEffects({ cycles: 10, turns: 3 });
     return screen;
 }
@@ -109,6 +97,8 @@ function getRegisteredScreen(
     return (screen.findAllByType(Stack.Screen) ?? [])
         .find((node) => node.props?.name === name);
 }
+
+await initializeRootLayoutRuntimeForTests();
 
 afterEach(() => {
     resetRuntimeFetch();
@@ -144,8 +134,7 @@ describe('RootLayout', () => {
 
     for (const scenario of scenarios) {
         it(scenario.name, async () => {
-            stubRootLayoutFeaturesFetch();
-            friendsIdentityReady = scenario.linkedProviders.length > 0 && typeof scenario.username === 'string' && scenario.username.length > 0;
+            await stubRootLayoutFeaturesFetch();
             storage.getState().applyProfile({
                 ...profileDefaults,
                 username: scenario.username,
@@ -169,23 +158,22 @@ describe('RootLayout', () => {
         });
     }
 
-    it('registers session detail routes for tool and execution-run screens', async () => {
-        stubRootLayoutFeaturesFetch();
+    it('registers the session navigator for tool and execution-run sub-pages', async () => {
+        await stubRootLayoutFeaturesFetch();
 
         const tree = await renderRootLayout();
         try {
             const screenNames = getScreenNames(tree);
 
-            expect(screenNames).toContain('session/[id]/message/[messageId]');
-            expect(screenNames).toContain('session/[id]/runs/new');
-            expect(screenNames).toContain('session/[id]/runs/[runId]');
+            expect(screenNames).toContain('session/[id]');
+            expect(screenNames.filter(name => name.startsWith('session/[id]/'))).toEqual([]);
         } finally {
             await tree?.unmount();
         }
     });
 
     it('registers settings as a nested navigator', async () => {
-        stubRootLayoutFeaturesFetch();
+        await stubRootLayoutFeaturesFetch();
 
         const tree = await renderRootLayout();
         try {
@@ -198,7 +186,7 @@ describe('RootLayout', () => {
     });
 
     it('registers project list and project detail source-control routes', async () => {
-        stubRootLayoutFeaturesFetch();
+        await stubRootLayoutFeaturesFetch();
 
         const tree = await renderRootLayout();
         try {
@@ -206,9 +194,9 @@ describe('RootLayout', () => {
 
             expect(screenNames).toContain('projects/index');
             expect(screenNames).toContain('projects/[workspaceRefId]/index');
-            expect(screenNames).toContain('projects/[workspaceRefId]/files');
-            expect(screenNames).toContain('projects/[workspaceRefId]/git');
-            expect(screenNames).toContain('projects/[workspaceRefId]/details');
+            expect(screenNames).toContain('projects/[workspaceRefId]/code');
+            expect(screenNames).toContain('projects/[workspaceRefId]/changes');
+            expect(screenNames).toContain('projects/[workspaceRefId]/overview');
             expect(screenNames).toContain('projects/[workspaceRefId]/terminal');
         } finally {
             await tree?.unmount();
@@ -216,7 +204,7 @@ describe('RootLayout', () => {
     });
 
     it('renders terminal connect without the shell header on web', async () => {
-        stubRootLayoutFeaturesFetch();
+        await stubRootLayoutFeaturesFetch();
 
         const tree = await renderRootLayout();
         try {

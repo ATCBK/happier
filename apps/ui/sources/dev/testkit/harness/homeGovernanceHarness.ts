@@ -1,8 +1,12 @@
-import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
+import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { vi } from 'vitest';
 import type { ActionSurfaceKey } from '@happier-dev/protocol/actions/actionSettings';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
 import {
     adoptHomeProfile,
@@ -12,14 +16,57 @@ import {
     setActiveServerId,
     upsertServerProfile,
 } from '@/sync/domains/server/serverProfiles';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { createPlainProjectAccountRowListFixture } from '../fixtures/projectAccountRows';
 import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from './artifactStoreBoundary';
-import { assertBoundaryImportOrder, recordBoundaryImportOriginal } from './assertBoundaryImportOrder';
+import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
+import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { parseToken } from '@/utils/auth/parseToken';
+import type { Settings } from '@/sync/domains/settings/settings';
+import { waitForNetworkResponseForTests } from '../mocks/runtimeFetch';
+import type { ManagedMachineActionInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import type { ActionExecutorContext, WorkflowActionExecute } from '@happier-dev/protocol';
+
+/** Keep the real Workflow transport in its UI program during cross-program tests. */
+export async function loadWorkflowActionTransportForTests() {
+    const transportSource = '@/sync/ops/actions/workflowActionTransport';
+    return vi.importActual<{ createUiWorkflowActionTransport(params: Readonly<{
+        account: Readonly<{ serverId: string; accountId: string; assertCurrent(): void }>;
+        resolveFallbackMachineId(): string | null;
+        transport(input: Readonly<{ machineId: string; method: string; payload: unknown;
+            target: Extract<NonNullable<ActionExecutorContext['externalActionTarget']>, { kind: 'machine' }>;
+            signal?: AbortSignal; operationTimeoutMs?: null }>): Promise<unknown>;
+    }>): WorkflowActionExecute }>(transportSource);
+}
+
+/** Cross-program compositions load UI owners in Vitest, under the UI resolver. */
+export async function loadScopedHomeActionExecutorForTests() {
+    const scopedExecutorSource = '@/sync/ops/actions/scopedHomeActionExecutor';
+    return vi.importActual<{ resetScopedHomeActionExecutorsForTests(): void }>(scopedExecutorSource);
+}
+
+/** Cross-program compositions load UI owners in Vitest, under the UI resolver. */
+export async function loadManagedProvisionerCatalogForTests() {
+    // Nonliteral specifiers keep the caller's compiler from rooting UI owners
+    // in a different program. These are real modules, not substituted behavior.
+    const provisionerClientSource = '@/components/settings/machines/managed/managedProvisionerClient';
+    const [scoped, client] = await Promise.all([
+        loadScopedHomeActionExecutorForTests(),
+        vi.importActual<{ createManagedProvisionerClient(scope: Readonly<{ serverId: string; accountId: string }>, homeId: string): {
+            read(actionId: 'machines.provisioners.list', input: ManagedMachineActionInputV1<'machines.provisioners.list'>): Promise<unknown>;
+        } }>(provisionerClientSource),
+    ]);
+    return {
+        reset: scoped.resetScopedHomeActionExecutorsForTests,
+        read: (scope: Readonly<{ serverId: string; accountId: string }>, input: ManagedMachineActionInputV1<'machines.provisioners.list'>) =>
+            client.createManagedProvisionerClient(scope, input.homeId).read('machines.provisioners.list', input),
+    };
+}
 
 /**
  * One or more Homes, each answering for itself.
@@ -81,6 +128,8 @@ export type AddHomeOptions = Readonly<{
     serverIdentityId?: string;
     /** The Account this device holds there. `null` means signed out of it. */
     accountId?: string | null;
+    /** Explicit genuine encryption material for encrypted Account fixtures. Plain defaults are token-only. */
+    credentials?: AuthCredentials;
     /** Seeds the canonical `teams` feature decision for that Home. */
     teamsEnabled?: boolean;
     /**
@@ -131,8 +180,8 @@ type HomeRecord = {
 export type HomeGovernanceHarness = Readonly<{
     /** Every request that reached the network boundary, in order. */
     requests: RecordedHomeRequest[];
-    /** Genuine HTTP boundary, leaving the request and admission owners real. */
-    request(input: string | URL | Request, init?: RequestInit): Promise<Response>;
+    /** The same Home answers at the external fetch boundary for real Sync/request consumers. */
+    request: RuntimeFetch;
     /** Saves a Home on this device and returns the id every path is keyed by. */
     addHome(options: AddHomeOptions): Promise<string>;
     /**
@@ -178,7 +227,7 @@ export type HomeGovernanceHarness = Readonly<{
      * Someone else signs in on one saved Home: its credential now belongs to `accountId`, written
      * through the real credential store so every credential-lifetime observer sees the change.
      */
-    switchAccount(serverId: string, accountId: string, options?: Readonly<{ currentAccount?: boolean }>): Promise<void>;
+    switchAccount(serverId: string, accountId: string, options?: AuthCredentials | Readonly<{ currentAccount?: boolean }>): Promise<void>;
     /** Used by the installed boundaries; tests address Homes by id. */
     findByServerUrl(serverUrl: string): HomeRecord | null;
     reset(): Promise<void>;
@@ -193,9 +242,9 @@ function base64Url(value: string): string {
 /**
  * A structurally real token for one Account.
  *
- * The credential store is mocked, but what it returns is not: the production
- * decoder runs on this, so a token this device cannot read fails here the same
- * way a malformed one fails in the app.
+ * Persisted through the real credential store: the production decoder runs on
+ * this, so a token this device cannot read fails here the same way a malformed
+ * one fails in the app.
  */
 export function createAccountTokenForTests(accountId: string, options?: Readonly<{ currentAccount?: boolean }>): string {
     return `e30.${base64Url(JSON.stringify({ sub: accountId, ...(options?.currentAccount ? {
@@ -208,18 +257,21 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
     const homesByServerUrl = new Map<string, HomeRecord>();
     const requests: RecordedHomeRequest[] = [];
     /** Whether this harness wrote an explicit approval requirement to undo. */
-    let seededApprovalRequirement = false;
+    let seededApprovalRequirement: Readonly<{ serverId: string; accountId: string; policy: Settings['actionsSettingsV1'] }> | null = null;
+    const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
+    const installedLocks: Array<ReturnType<typeof installWebLockManagerMock>> = [];
 
     let harness: HomeGovernanceHarness;
     harness = Object.freeze({
         requests,
-        request: async (input: string | URL | Request, init?: RequestInit) => {
+        request: async (input: Parameters<RuntimeFetch>[0], init: Parameters<RuntimeFetch>[1]) => {
             const url = input instanceof Request ? input.url : String(input);
             const authorization = new Headers(init?.headers).get('Authorization');
             return await answerForEndpoint(harness, new URL(url).origin, url, init,
                 authorization?.startsWith('Bearer ') ? authorization.slice(7) : null);
         },
         async addHome(options: AddHomeOptions): Promise<string> {
+            if (typeof globalThis.navigator?.locks?.request !== 'function') installedLocks.push(installWebLockManagerMock());
             const profile = options.publicServerUrl === undefined && options.serverIdentityId === undefined
                 ? await upsertServerProfile({ serverUrl: options.serverUrl, name: options.name })
                 : await adoptHomeProfile({
@@ -241,7 +293,7 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
                 serverId,
                 serverUrl: storedServerUrl,
                 accountId,
-                token: accountId === null ? null : createAccountTokenForTests(accountId, { currentAccount: options.currentAccount }),
+                token: accountId === null ? null : options.credentials?.token ?? createAccountTokenForTests(accountId, { currentAccount: options.currentAccount }),
                 answers: new Map(),
                 artifacts: createArtifactStoreBoundary({
                     ownerAccountId: () => record.accountId,
@@ -261,6 +313,14 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
                 body: { mode: options.accountEncryptionMode ?? 'plain', updatedAt: 0 },
             });
             record.answers.set(ACCOUNT_SETTINGS_V2_PATH, { body: { content: null, version: 0 } });
+            record.answers.set('/health', { body: {} });
+            record.answers.set('/v1/auth/ping', { body: {} });
+            // The real managed Socket transport probes this authenticated
+            // endpoint before constructing its external SDK connection.
+            record.answers.set('/v2/cursor', { body: CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }) });
+            if ((options.accountEncryptionMode ?? 'plain') === 'plain') {
+                record.answers.set('/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+            }
             record.answers.set(`GET ${AUTHORING_MEMORY_ROUTE_V1}`, { body: AuthoringMemoryListResponseV1Schema.parse({ rows: [] }) });
             if ((options.accountEncryptionMode ?? 'plain') === 'plain') {
                 record.answers.set(`POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body: createPlainProjectAccountRowListFixture() });
@@ -325,6 +385,14 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             record.answers.set('/v1/features', { body: features });
             record.answers.set('/v1/features/authenticated', { body: features });
 
+            if (record.token) {
+                const write = await TokenStorage.setCredentialsForServerUrlWithRollback(
+                    storedServerUrl, { serverId }, options.credentials ?? { token: record.token },
+                );
+                if (!write) throw new Error(`The credential store refused Home ${serverId}`);
+                credentialWrites.push(write);
+            }
+
             if (options.active !== false) await setActiveServerId(serverId, { scope: 'device' });
             return serverId;
         },
@@ -342,36 +410,32 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             if (!record.accountId) {
                 throw new Error(`Home ${serverId} holds no Account to require approval for`);
             }
-            // Imported here rather than at module scope: the installed boundaries
-            // are registered with `vi.doMock`, and pulling the storage graph in
-            // at testkit evaluation would resolve the real transport first.
             const { storage } = await import('@/sync/domains/state/storage');
             const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
             const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
-            const current = storage.getState().settings ?? {};
-            const settings = {
+            const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+            const scope = getActiveServerAccountScope();
+            const isAppliedAccount = scope?.serverId === resolveServerProfileScopeIdForIdentifier(serverId)
+                && scope.accountId === record.accountId;
+            const { settingsParse } = await import('@/sync/domains/settings/settings');
+            const targetScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: record.accountId };
+            const persisted = loadAccountSettings(targetScope);
+            const current = isAppliedAccount ? storage.getState().settings : settingsParse(persisted.settings ?? {});
+            const version = (persisted.version ?? 0) + 1;
+            const settings = settingsParse({
                 ...current,
                 actionsSettingsV1: normalizeActionsSettingsV1({
                     v: 1,
                     actions: { [actionId]: { approvalRequiredSurfaces: [surface] } },
                 }),
-            };
-            // The live Account scope, as the sync owner establishes it for the
-            // active Home: it activates the settings and profile scopes
-            // together (`activateAccountSettingsScope`), and the Artifact
-            // publication and approval readers each check one of the two. The
-            // sync owner names the Home by the active snapshot's scope id, which
-            // for a Home that publishes a portable identity is that identity.
-            const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: record.accountId };
-            const version = (loadAccountSettings(scope).version ?? 0) + 1;
-            storage.setState({
-                settingsScope: scope,
-                profileScope: scope,
             });
-            // Publish through the settings owner, including its persisted revision.
-            // Sync activation can otherwise replace a direct in-memory seed with
-            // the old baseline before the Action captures its Account policy.
-            storage.getState().applySettingsForScope(scope, settings, version);
+            // A local settings publication can only belong to an actually
+            // restored Account. Persisted target policy below also serves a
+            // saved/nonfocused Home without forging a focused Account scope.
+            if (isAppliedAccount && scope) {
+                seededApprovalRequirement ??= { ...scope, policy: current.actionsSettingsV1 };
+                storage.getState().applySettingsLocal({ actionsSettingsV1: settings.actionsSettingsV1 });
+            }
             // The Action front door may capture the exact Home while another
             // surface changes the device's live settings scope. Persist the same
             // policy at this Home's real settings boundary so the request still
@@ -380,7 +444,6 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             record.answers.set(ACCOUNT_SETTINGS_V2_PATH, {
                 body: { content: { t: 'plain', v: settings }, version },
             });
-            seededApprovalRequirement = true;
             // The approval request itself crosses the Artifact write boundary,
             // which every Home already answers statefully (`artifacts`).
         },
@@ -392,17 +455,31 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             if (!record) throw new Error(`No Home saved for ${serverId}`);
             return record.artifacts;
         },
-        async switchAccount(serverId: string, accountId: string, options?: Readonly<{ currentAccount?: boolean }>): Promise<void> {
+        async switchAccount(serverId: string, accountId: string, options?: AuthCredentials | Readonly<{ currentAccount?: boolean }>): Promise<void> {
             const record = homesByServerId.get(serverId);
             if (!record) throw new Error(`No saved Home ${serverId}`);
-            record.accountId = accountId;
-            record.token = createAccountTokenForTests(accountId, options);
-            const stored = await TokenStorage.setCredentialsForServerUrl(
+            const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+            const active = getActiveServerAccountScope();
+            const isAppliedHome = active?.serverId === resolveServerProfileScopeIdForIdentifier(serverId);
+            if (isAppliedHome && seededApprovalRequirement && active?.serverId === seededApprovalRequirement.serverId
+                && active.accountId === seededApprovalRequirement.accountId) {
+                const { storage } = await import('@/sync/domains/state/storage');
+                storage.getState().applySettingsLocal({ actionsSettingsV1: seededApprovalRequirement.policy });
+                seededApprovalRequirement = null;
+            }
+            const { disconnectActiveServerConnection, restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+            if (isAppliedHome) await disconnectActiveServerConnection();
+            const nextCredentials = options && 'token' in options ? options : { token: createAccountTokenForTests(accountId, options) };
+            const write = await TokenStorage.setCredentialsForServerUrlWithRollback(
                 record.serverUrl,
                 { serverId },
-                { token: record.token, secret: `harness-secret-${accountId}` },
+                nextCredentials,
             );
-            if (!stored) throw new Error(`The credential store refused the switch on ${serverId}`);
+            if (!write) throw new Error(`The credential store refused the switch on ${serverId}`);
+            credentialWrites.push(write);
+            record.accountId = accountId;
+            record.token = nextCredentials.token;
+            if (isAppliedHome) await restoreConnectionToActiveServer(nextCredentials);
         },
         async selectHomes(serverIds: readonly string[]): Promise<void> {
             const groupId = 'home-governance-test-group';
@@ -423,6 +500,20 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             // `beforeEach` always resets the suite-local harness; reclaim the
             // boundary here so execution order cannot redirect its requests.
             installed.current = harness;
+            setRuntimeFetch((input, init) => requireHarness().request(input, init));
+            const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+            const active = getActiveServerAccountScope();
+            if (seededApprovalRequirement && active?.serverId === seededApprovalRequirement.serverId
+                && active.accountId === seededApprovalRequirement.accountId) {
+                const { storage } = await import('@/sync/domains/state/storage');
+                storage.getState().applySettingsLocal({ actionsSettingsV1: seededApprovalRequirement.policy });
+            }
+            seededApprovalRequirement = null;
+            if (active && [...homesByServerId.keys()].some(id => resolveServerProfileScopeIdForIdentifier(id) === active.serverId)) {
+                const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+                await disconnectActiveServerConnection();
+            }
+            for (const write of credentialWrites.splice(0).reverse()) await write.rollback();
             // The Homes were saved through the real profile owner, so they are
             // removed through it too: a leftover Home would silently rejoin the
             // next test's selection. Standard cleanup may already have dropped
@@ -432,22 +523,8 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             }
             homesByServerId.clear();
             homesByServerUrl.clear();
+            for (const locks of installedLocks.splice(0).reverse()) locks.restore();
             requests.length = 0;
-            // An explicit approval requirement is the one piece of shared
-            // Account state this harness writes outside its own Homes, and the
-            // settings baseline outlives both the Home and the test. Removing
-            // exactly what was seeded keeps the next case's ordinary mutation an
-            // ordinary mutation; a harness that seeded nothing touches nothing.
-            if (seededApprovalRequirement) {
-                seededApprovalRequirement = false;
-                const { storage } = await import('@/sync/domains/state/storage');
-                const current = storage.getState().settings ?? {};
-                storage.setState({
-                    settingsScope: null,
-                    profileScope: null,
-                    settings: { ...current, actionsSettingsV1: undefined } as never,
-                });
-            }
         },
     });
     return harness;
@@ -495,6 +572,12 @@ async function answerForEndpoint(
     const pathAnswer = record?.answers.get(`${method} ${path}`) ?? record?.answers.get(path)
         ?? record?.answers.get(`${method} ${route}`) ?? record?.answers.get(route);
     const answer = await pathAnswer?.select?.(input, { signal: init?.signal }) ?? pathAnswer;
+    if (!answer && path === '/v1/account/profile') {
+        let accountId: string | null = null;
+        try { accountId = token ? parseToken(token) : null; } catch { /* Invalid external bearer stays unauthenticated. */ }
+        return accountId ? Response.json(AccountProfileSchema.parse({ id: accountId }))
+            : Response.json({ error: 'Not authenticated' }, { status: 401 });
+    }
     if (!answer) {
         const artifactResponse = record?.artifacts.handle(path, init);
         if (artifactResponse) return await artifactResponse;
@@ -502,7 +585,7 @@ async function answerForEndpoint(
     // A Home that was given no answer for this path behaves like one that does
     // not serve it, rather than silently succeeding.
     if (!answer) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404 });
-    await answer.respondAfter;
+    if (answer.respondAfter) await waitForNetworkResponseForTests(answer.respondAfter, init?.signal);
     // No `code`, because a lost connection after dispatch carries none. That is
     // precisely what makes the committed outcome unknowable to the client.
     if (answer.dispatchThenFail) throw new TypeError('Failed to fetch');
@@ -522,93 +605,16 @@ async function answerForEndpoint(
 }
 
 /**
- * Installs the three genuine boundaries: the two network transports and the
- * device credential store.
- *
- * The answer is composed as a real `Response`, so the production status
- * classification and strict schema parsing both run exactly as they do against
- * a real Home.
- *
- * The second transport matters because the shared Action front door does not
- * use the reachability fetch: it opens its own endpoint-bound transport to
- * capture the Account context before it dispatches. Leaving that one real sent
- * every Action-backed surface to the network, so a Team read rendered while
- * every Team *mutation* silently stalled.
- *
- * Both are installed with `vi.doMock`, which only reaches later imports.
- * The testkit barrel stays runtime-free; load screens/runtime consumers after
- * installation. The shared import-order guard rejects an already captured
- * real transport rather than letting the surface stall outside this harness.
+ * Installs the external HTTP port. Both request orchestration paths remain
+ * real and converge on runtimeFetch, so authentication, reachability and
+ * captured-Account retirement cannot be bypassed by this fixture.
  */
 export function installHomeGovernanceBoundaries(harness: HomeGovernanceHarness): void {
-    assertBoundaryImportOrder('installHomeGovernanceBoundaries', [
-        '@/sync/http/client',
-        '@/sync/runtime/connectivity/serverReachabilityRuntimeFetch',
-    ]);
     installed.current = harness;
+    setRuntimeFetch((input, init) => requireHarness().request(input, init));
 
-    vi.doMock('@/sync/http/client', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('@/sync/http/client')>();
-        recordBoundaryImportOriginal(actual);
-        return {
-            ...actual,
-            // Feature/currentness probes for the focused Home use the active
-            // request owner, while every explicitly scoped Action below uses
-            // `createServerFetchAtEndpoint`. Both are genuine network leaves
-            // and must observe the same Home answers in an integration test.
-            serverFetch: async (path: string, init?: RequestInit) => {
-                const active = getActiveServerSnapshot();
-                return await answerForEndpoint(
-                    requireHarness(),
-                    active.serverUrl,
-                    path,
-                    init,
-                    null,
-                );
-            },
-            createServerFetchAtEndpoint: (params: Readonly<{
-                endpointUrl: string;
-                credentials?: Readonly<{ token: string }> | null;
-            }>) => async (
-                path: string,
-                init?: RequestInit,
-                options?: Readonly<{ onIssued?: () => void }>,
-            ) => {
-                options?.onIssued?.();
-                return answerForEndpoint(
-                    requireHarness(),
-                    params.endpointUrl,
-                    path,
-                    init,
-                    params.credentials?.token ?? null,
-                );
-            },
-        };
-    });
-
-    vi.doMock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-        runtimeFetchWithServerReachability: async (params: {
-            serverUrl: string;
-            token?: string;
-            url: string;
-            init?: RequestInit;
-            onIssued?: () => void;
-        }) => {
-            params.onIssued?.();
-            return answerForEndpoint(
-                requireHarness(),
-                params.serverUrl,
-                params.url,
-                params.init,
-                params.token ?? null,
-            );
-        },
-    }));
-
-    vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (serverUrl: string) => {
-        const token = requireHarness().findByServerUrl(serverUrl)?.token ?? null;
-        return token ? { token } : null;
-    });
+    vi.doUnmock('@/sync/http/client');
+    vi.doUnmock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch');
 }
 
 /**

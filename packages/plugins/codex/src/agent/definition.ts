@@ -1,5 +1,6 @@
 import { codexStateSharingDescriptor } from './auth/services/state/sharing/descriptor.js';
 import { CODEX_NATIVE_HOME, CODEX_CONNECTED_SERVICE_HOME_DIRECTORY_NAME } from '@happier-dev/plugin-sdk/first-party/connected-accounts';
+import type { PluginCustomAgentDeclaration } from '@happier-dev/plugin-sdk/agents';
 
 const { providerId: _providerId, ...stateSharing } = codexStateSharingDescriptor;
 export const AGENT_STATE_SHARING_DESCRIPTOR = {
@@ -141,7 +142,7 @@ export const AGENT_DEFINITION = Object.freeze({
   },
   commandPolicy: {
     daemonAutostartDefault: 'preferLocalTui',
-  },
+  } satisfies NonNullable<PluginCustomAgentDeclaration['cli']>['commandPolicy'],
   releasedFlatSessionMetadataRuntimeDescriptorReader: {
     kind: 'providerRuntimeDescriptorReader',
     providerId: 'codex',

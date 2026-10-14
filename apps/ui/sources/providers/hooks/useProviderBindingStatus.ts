@@ -4,6 +4,7 @@ import type { DaemonProviderBindingStatusResponseV1 } from '@happier-dev/protoco
 
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
@@ -29,7 +30,7 @@ export function useProviderBindingStatus(input: Readonly<{
     selectionIntentPresent?: boolean;
     launchBinding: SessionProviderBindingMetadataV1 | null;
 }>) {
-    const { describeProviderBindingStatus, ready, pendingApproval } = useProviderActionClient(input.serverId);
+    const { describeProviderBindingStatus, ready, pendingApproval, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const [state, setState] = React.useState<ProviderBindingStatusState>({
         scopeKey: null,
@@ -47,6 +48,7 @@ export function useProviderBindingStatus(input: Readonly<{
         : '';
     const scopeKey = JSON.stringify([
         input.enabled, input.machineId, input.serverId, input.selectionIntentPresent === true, selectionKey, bindingKey,
+        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null,
     ]);
     const requestable = Boolean(
         input.enabled
@@ -77,6 +79,7 @@ export function useProviderBindingStatus(input: Readonly<{
         const requestStillCurrent = (): boolean => (
             currentAccountLifetimeRef.current === accountLifetime
             && (accountLifetime?.isCurrent() ?? true)
+            && binding?.isCurrent() === true
         );
         if (!requestStillCurrent()) return;
         if (!input.enabled || !input.machineId || !input.launchBinding) {
@@ -153,7 +156,7 @@ export function useProviderBindingStatus(input: Readonly<{
                     : current);
             }
         }
-    }, [accountLifetime, describeProviderBindingStatus, ready, bindingKey, input.enabled, input.machineId, input.selectionIntentPresent, input.serverId, scopeKey, selectionKey]);
+    }, [accountLifetime, binding, describeProviderBindingStatus, ready, bindingKey, input.enabled, input.machineId, input.selectionIntentPresent, input.serverId, scopeKey, selectionKey]);
 
     React.useEffect(() => {
         void refresh();
@@ -163,7 +166,9 @@ export function useProviderBindingStatus(input: Readonly<{
     return {
         status: stateMatchesScope ? state.status : null,
         error: stateMatchesScope ? state.error : null,
-        loading: requestable && (!ready || !stateMatchesScope || state.loading),
+        loading: requestable
+            && (resolution.kind === 'resolving' || resolution.kind === 'bound')
+            && (!ready || !stateMatchesScope || state.loading),
         refresh,
         pendingApproval,
     };

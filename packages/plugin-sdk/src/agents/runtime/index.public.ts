@@ -1,4 +1,5 @@
 export { ACP_AGENT_CLI_TRANSPORT_TIMEOUTS } from '../../agentRuntime/projections.js';
+export { canPublishSessionResumeIdentity } from '../../agentRuntime/projections.js';
 export { ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES } from '../../agentRuntime/projections.js';
 export { ACP_WRITE_LIKE_PERMISSION_KINDS } from '../../agentRuntime/projections.js';
 export type { AcpForkSessionRequestV1 } from '../../agentRuntime/projections.js';

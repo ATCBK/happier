@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   TERMINAL_STREAM_MAX_FRAMES,
+  AuthTokenProvenanceSchema,
   TerminalStreamReadResponseSchema,
   decodeTerminalStreamBytesFrame,
   type TerminalStreamBytesFrame,
@@ -16,6 +17,10 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import { registerMachineTerminalRpcHandlers } from './rpcHandlers.terminal';
+import { registerMachineRpcHandlers } from './rpcHandlers';
+import * as ptyBoundary from '@/terminal/pty/provider';
+import * as processBoundary from '@happier-dev/cli-common/process';
+import * as processKillBoundary from '@/agent/runtime/process/killProcessTree';
 import { createTerminalPtySessionManager, type TerminalPtySessionManager } from '@/terminal/pty/sessions';
 import type { PtyProcess, PtyProvider, PtySpawnParams } from '@/terminal/pty/provider';
 import type { RpcHandler, RpcHandlerContext } from '@/api/rpc/types';
@@ -347,8 +352,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
     } finally { registration.dispose(); await h.dispose(); }
   });
 
-  it('prepares fresh Project shells by waiting for policy-admitted setup to settle before opening the dependent shell', async () => {
-    const h = await finiteHarness({ setup: true, waived: true, setupWaived: true });
+  it('prepares fresh Project shells by waiting for trusted setup to settle before opening the dependent shell', async () => {
+    const h = await finiteHarness({ setup: true, waived: true, machineComposition: true, setupWaived: true });
     const workspace = { id: 'accepted', serverId: 'home', machineId: 'machine', rootPath: h.root, projectKey: 'project', createdAtMs: 1 };
     const reviewed = await reviewProjectSetupEffect({ workspace, projectAssociation: { workspace, project: { serverId: 'home', projectId: 'project' } },
       requester: { credentials: h.runtime.credentials, serverHttpBaseUrl: h.runtime.serverHttpBaseUrl }, purpose: 'setup', platform: { os: 'linux', arch: 'x64' }, nativeIo: h.runtime.nativeIo });
@@ -667,7 +672,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     }
   });
 
-  async function finiteHarness(options: Readonly<{ setup?: boolean; waived?: boolean; setupWaived?: boolean; acceptedRootTrailingSlash?: boolean; acceptedRoot?: string; unenriched?: boolean; observeInteractiveStop?: boolean; homeServerId?: string }> = {}) {
+  async function finiteHarness(options: Readonly<{ setup?: boolean; waived?: boolean; setupWaived?: boolean; acceptedRootTrailingSlash?: boolean; acceptedRoot?: string; unenriched?: boolean; observeInteractiveStop?: boolean; machineComposition?: boolean; homeServerId?: string }> = {}) {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-finite-terminal-')));
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'web; echo untrusted', packageManager: 'yarn@1', scripts: { dev: 'echo selected' } }));
     if (options.setup) {
@@ -684,13 +689,14 @@ describe('registerMachineTerminalRpcHandlers', () => {
       return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 1, content: { t: 'plain', v: { key, value: workspace } } }] } };
     });
     const provider = new FakeInteractivePtyProvider();
-    const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: {}, platform: 'linux',
+    const probeProcessGroup = (groupId: number) => {
+      const process = provider.spawned.find(entry => entry.pty.ownedProcessGroupId === groupId)?.pty;
+      return process ? process.exited ? 'absent' as const : 'alive' as const : 'absent' as const;
+    };
+    let sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: {}, platform: 'linux',
       // The fake forkpty and OS group probe must agree about actual exit;
       // a relay pid or callback alone cannot prove finite tree settlement.
-      probeProcessGroup: groupId => {
-        const process = provider.spawned.find(entry => entry.pty.ownedProcessGroupId === groupId)?.pty;
-        return process ? process.exited ? 'absent' : 'alive' : 'absent';
-      }, stopProcessTree: async ({ pid }) => {
+      probeProcessGroup, stopProcessTree: async ({ pid }) => {
       if (options.observeInteractiveStop) provider.spawned.find(entry => entry.pty.pid === pid)!.pty.exit(0);
     },
       config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
@@ -703,8 +709,15 @@ describe('registerMachineTerminalRpcHandlers', () => {
         read: async () => ({ status: 'absent' }), mutate: async () => { throw new Error('read only'); },
       } });
     const admissionDrain = createDaemonAdmissionDrain();
+    // The HTTP boundary accepts this Account token; production credential
+    // decoding and automation provenance remain real, with no human ceiling.
+    const token = options.machineComposition
+      ? `e30.${Buffer.from(JSON.stringify({ sub: 'owner', tokenEpoch: 1,
+        provenance: AuthTokenProvenanceSchema.parse({ v: 1, kind: 'terminal', authority: 'account_automation' }) })).toString('base64url')}.signature`
+      : `requester:${root}`;
     const runtime: ProjectFiniteActionRuntime & { operationRuntime: typeof operationRuntime } = {
-      serverId: 'home', machineId: 'machine', accountId: 'owner', credentials: { token: `requester:${root}`, encryption: null }, serverHttpBaseUrl: 'https://home.example',
+      serverId: 'home', machineId: 'machine', accountId: 'owner', credentials: { token, encryption: null,
+        ...(options.machineComposition ? { credentialProvenance: 'stored_session' as const } : {}) }, serverHttpBaseUrl: 'https://home.example',
       operationRuntime, terminalSessions: sessionManager,
       workerAdmission: createProjectWorkerAdmission({ machineId: 'machine', admissionDrain,
         readPolicy: async () => ({ status: 'ready', policy: { accepting: true, runAtMost: null }, source: 'stored', metadataVersion: 1 }) }),
@@ -718,21 +731,42 @@ describe('registerMachineTerminalRpcHandlers', () => {
       machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
       verifyMachineAdmissionCurrent: async () => current };
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
-    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
+    const actionsSettingsProvider = { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1, actions: {},
+      approvalWaivedSurfaces: { ...(options.waived ? { 'projects.script.run': ['api'] } : {}),
+        ...(options.setupWaived ? { 'projects.prepare': ['api'] } : {}) } }) };
+    if (options.machineComposition) {
+      // PTY spawning and process-group liveness are the native OS boundary.
+      vi.spyOn(ptyBoundary, 'createNodePtyProvider').mockReturnValue(provider);
+      vi.spyOn(processBoundary, 'probeProcessGroupLiveness').mockImplementation(probeProcessGroup);
+      vi.spyOn(processKillBoundary, 'killProcessTree').mockImplementation(async ({ pid }) => {
+        provider.spawned.find(entry => entry.pty.pid === pid)?.pty.exit(0);
+      });
+    }
+    // This in-memory transport erases callback generics only; admission,
+    // composition, preparation and operation settlement remain real.
+    const registrar = { registerHandler(method: string, handler: RpcHandler<unknown, unknown>) { handlers.set(method, handler); } };
+    const registration = options.machineComposition ? registerMachineRpcHandlers({
+      rpcHandlerManager: registrar as unknown as RpcHandlerManager,
+      handlers: { spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'not installed' }),
+        stopSession: async () => true, requestShutdown() {} },
+      deps: { currentMachineId: 'machine', currentServerId: 'home', workingDirectory: root,
+        actionOperations: operationRuntime, actionsSettingsProvider,
+        createProjectFiniteRuntime: async ports => ({ ...runtime, ...ports }),
+      },
+    }) : registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
       deps: { env: {}, workingDirectory: root, sessionManager, admissionDrain, projectFiniteRuntime: async () => runtime,
         projectScriptExecutor: (boundRuntime, context) => createCliActionExecutorHarness({ token: runtime.credentials.token, credentials: runtime.credentials,
           isCredentialCurrent: async () => current,
           sessionId: 'cli-global', serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl,
-          actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1, actions: {},
-            approvalWaivedSurfaces: { ...(options.waived ? { 'projects.script.run': ['api'] } : {}),
-              ...(options.setupWaived ? { 'projects.prepare': ['api'] } : {}) } }) },
+          actionsSettingsProvider,
         }, { projectAction: createProjectFiniteAction(boundRuntime, context) }).executor,
       } });
+    if ('getFiniteTerminalSessions' in registration) sessionManager = registration.getFiniteTerminalSessions();
     const invoke = (method: string = RPC_METHODS.DAEMON_TERMINAL_ENSURE, cwd = root, context = ingress) => handlers.get(method)!({
       terminalKey: 'mounted', cwd, launch: { kind: 'package_script', runTargetId: 'web; echo untrusted:dev' },
     }, context);
     return { root, ingress, invoke, handlers, provider, sessionManager, operationRuntime, runtime, admissionDrain, get, post, retire: () => { current = false; },
-      dispose: async () => { registration.dispose(); vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); } };
+      dispose: async () => { await registration.dispose(); vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); } };
   }
 
   it('mounts accepted finite work after drain closes and retains the same bytes after a nonzero exit', async () => {

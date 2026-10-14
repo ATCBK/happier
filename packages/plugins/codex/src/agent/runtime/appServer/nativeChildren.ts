@@ -112,7 +112,6 @@ export function createCodexNativeChildObserver(params: Readonly<{
         overrideThinkingText: ({ text, streamKey }) => writeText(text, streamKey, true, false),
         flushAll: async () => {
           for (const [streamKey, segment] of textByStream) {
-            if (!segment.text.trim()) continue;
             params.publish({ kind: 'transcript-agent-message-committed', agentId: 'codex',
               localId: messageIdForStream(streamKey), sidechainId: childThreadId,
               body: { type: segment.thinking ? 'reasoning' : 'message', message: segment.text },

@@ -118,7 +118,8 @@ export type ConnectedServiceConfigurationCatalogHostV1 = Readonly<{
   resolveMode(service: ConnectedAccountConfigurationTarget & { kind: 'service' }): Promise<PluginConnectedAccountAuthenticationModeV2 | null>;
   hasSecret(reference: string): Promise<boolean>;
   createRevision(): string;
-  write(input: ConnectedServiceConfigurationCatalogWriteV1): Promise<ConnectedAccountCatalogRowMutationResponseV1 | Readonly<{ status: 'applied' }>>;
+  write(input: ConnectedServiceConfigurationCatalogWriteV1): Promise<ConnectedAccountCatalogRowMutationResponseV1
+    | Readonly<{ status: 'applied' }> | Readonly<{ status: 'conflict' }>>;
 }>;
 
 /** Target revision admission and complete catalog replacement have a single owner. */

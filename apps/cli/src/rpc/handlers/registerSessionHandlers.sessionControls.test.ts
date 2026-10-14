@@ -12,27 +12,12 @@ import {
   SessionPendingMessageComposerAdmissionPrepareRequestV1Schema,
   SessionUsageLimitRecoveryV1Schema,
 } from '@happier-dev/protocol';
-
-vi.mock('./capabilities', () => ({ registerCapabilitiesHandlers: vi.fn() }));
-vi.mock('./previewEnv', () => ({ registerPreviewEnvHandler: vi.fn() }));
-vi.mock('./bash', () => ({ registerBashHandler: vi.fn() }));
-vi.mock('./workspaceFileList', () => ({ registerWorkspaceFileListHandler: vi.fn() }));
-vi.mock('./difftastic', () => ({ registerDifftasticHandler: vi.fn() }));
-vi.mock('./daemonContributionRegistryProjection', () => ({ registerDaemonContributionRegistryProjectionHandler: vi.fn() }));
-vi.mock('./spawnRuntimeSelection', () => ({
-  readCanonicalSpawnRuntimeSelection: vi.fn(() => ({})),
-  readSpawnRuntimeDescriptorV1: vi.fn(() => undefined),
-}));
-vi.mock('@/persistence', () => ({ readCredentials: vi.fn(async () => null) }));
-vi.mock('@/session/actions/createCliActionExecutorFromCredentials', () => ({
-  createCliActionExecutorFromCredentials: vi.fn(),
-}));
+import { registerSessionHandlers } from './registerSessionHandlers';
 
 async function loadRegisterSessionHandlers() {
-  const module = await import('./registerSessionHandlers');
   // This harness represents a Session client; machine registration has its own scope contract test.
-  return (...[registrar, workingDirectory, options]: Parameters<typeof module.registerSessionHandlers>) =>
-    module.registerSessionHandlers(registrar, workingDirectory, {
+  return (...[registrar, workingDirectory, options]: Parameters<typeof registerSessionHandlers>) =>
+    registerSessionHandlers(registrar, workingDirectory, {
       ...options,
       sessionId: options?.sessionId ?? 'session-1',
     });

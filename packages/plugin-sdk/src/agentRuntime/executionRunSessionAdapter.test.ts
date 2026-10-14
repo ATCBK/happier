@@ -200,7 +200,7 @@ function providerSessionIdEvent(): AgentSessionRuntimeEvent {
   };
 }
 
-function outputEvent(turnId: string): AgentSessionRuntimeEvent {
+function outputEvent(turnId: string): Extract<AgentSessionRuntimeEvent, { kind: 'message-delta' }> {
   return {
     sequence: 2,
     sessionId: 'session-1',
@@ -234,6 +234,55 @@ function failedEvent(turnId: string): AgentSessionRuntimeEvent {
 }
 
 describe('createExecutionRunHostBackendFromSessionRuntime', () => {
+  it('does not adopt uncorrelated transcript history as a foreground output snapshot', async () => {
+    const harness = createSessionHarness();
+    const execution = await createExecutionRunHostBackendFromSessionRuntime({
+      request: createRequest(), openSession: async () => harness.session,
+    });
+    const events: AgentExecutionRunEvent[] = [];
+    execution.watch((event) => events.push(event));
+    const turnId = 'run-1-turn-1';
+    harness.publish(outputEvent(turnId));
+    // Claude, Codex and OpenCode emit these committed history facts without a host turn identity.
+    harness.publish({ sequence: 3, sessionId: 'session-1', emittedAtMs: 12,
+      kind: 'transcript-message-committed', role: 'assistant', messageId: 'historical-artifact', text: 'Historical replacement' });
+    harness.publish(completeEvent(turnId));
+    expect(events).toMatchObject([
+      { kind: 'run-start' },
+      { kind: 'output-delta', text: 'early output' },
+      { kind: 'run-complete' },
+    ]);
+    await execution.dispose();
+  });
+
+  it('retains committed assistant artifacts and their identities in the finite Run event stream', async () => {
+    const harness = createSessionHarness();
+    const execution = await createExecutionRunHostBackendFromSessionRuntime({
+      request: createRequest(), openSession: async () => harness.session,
+    });
+    const events: AgentExecutionRunEvent[] = [];
+    execution.watch((event) => events.push(event));
+    const turnId = 'run-1-turn-1';
+    harness.publish({ ...outputEvent(turnId), messageId: 'artifact', text: 'Draft report' });
+    harness.publish({ sequence: 3, sessionId: 'session-1', emittedAtMs: 12, turnId,
+      kind: 'transcript-message-committed', role: 'assistant', messageId: 'artifact', text: 'Corrected report' });
+    harness.publish({ sequence: 4, sessionId: 'session-1', emittedAtMs: 13, turnId,
+      kind: 'transcript-message-committed', role: 'assistant', messageId: 'acknowledgment', text: 'Artifact delivered.' });
+    harness.publish({ sequence: 5, sessionId: 'session-1', emittedAtMs: 14, turnId: 'stale-turn',
+      kind: 'transcript-message-committed', role: 'assistant', messageId: 'artifact', text: 'Stale replacement' });
+    harness.publish({ sequence: 6, sessionId: 'session-1', emittedAtMs: 15, turnId, sidechainId: 'child-tool',
+      kind: 'transcript-message-committed', role: 'assistant', messageId: 'child-artifact', text: 'Child output' });
+    harness.publish(completeEvent(turnId));
+    expect(events).toMatchObject([
+      { kind: 'run-start' },
+      { kind: 'output-delta', messageId: 'artifact', text: 'Draft report' },
+      { kind: 'output-message-committed', messageId: 'artifact', text: 'Corrected report' },
+      { kind: 'output-message-committed', messageId: 'acknowledgment', text: 'Artifact delivered.' },
+      { kind: 'run-complete' },
+    ]);
+    await execution.dispose();
+  });
+
   it.each(['usage-observed', 'skill-usage'] as const)('forwards %s without creating a competing Run event', async kind => {
     const harness = createSessionHarness();
     const observeSessionUsage = vi.fn();

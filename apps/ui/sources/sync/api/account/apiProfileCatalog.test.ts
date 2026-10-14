@@ -234,6 +234,8 @@ describe('Profile catalog captured Account transport', () => {
         await refreshSavedSecretCatalog(scope);
         expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready',
             materializedSecrets: [{ id: 'happier:shared-secret:v1:already-ready', encryptedValue: { value: 'current-private' } }] });
+        // The material-demand owner publishes foreground resources before its
+        // retained legacy import settles; observe that maintenance separately.
         await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)?.legacyImport)
             .toMatchObject({ status: 'pending', reason: 'source-uncharacterized' }));
         expect(sourceRaw).toBe(source);
@@ -373,6 +375,7 @@ describe('Profile catalog captured Account transport', () => {
             source: { kind: 'personal-saved-secret', secretId: secret.id } });
         const resourceRef = `happier:shared-secret:v1:${resourceId}`;
         await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready',
+            legacyImport: { status: 'complete' },
             materializedSecrets: [{ id: resourceRef, encryptedValue: { value: 'fixture-private' } }] }));
         expect(committed).toHaveLength(1);
         expect(sourceRaw).toMatchObject({ secrets: [], secretBindingsByProfileId: { 'builtin-default': { TOKEN: resourceRef } },

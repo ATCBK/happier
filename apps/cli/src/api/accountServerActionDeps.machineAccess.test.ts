@@ -22,13 +22,35 @@ afterEach(async () => { restore?.(); restore = undefined; await app?.close(); ap
 describe('Machine access headless Action transport', () => {
   it('returns qualified accessible inventory through the incumbent captured-endpoint owner', async () => {
     app = fastify();
-    app.get('/v1/machines', async () => [{ id: 'shared', active: false, revokedAt: null, replacedByMachineId: null,
-      access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'e2ee', accessState: 'key_pending' } }]);
+    app.get('/v1/machines', async request => {
+      expect(request.headers.authorization).toBe('Bearer test-token');
+      return [
+        { id: 'local', metadata: JSON.stringify({ host: 'coordinator' }), active: true, revokedAt: null, replacedByMachineId: null },
+        { id: 'remote', metadata: JSON.stringify({ host: 'remote-builder' }), active: true, revokedAt: null, replacedByMachineId: null },
+        { id: 'shared', active: false, revokedAt: null, replacedByMachineId: null,
+          access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'e2ee', accessState: 'key_pending' } },
+      ];
+    });
     await app.ready();
     restore = installAxiosFastifyAdapter({ app, origin: 'http://access.test' });
     const deps = createCliActionInventoryDeps({ token: 'test-token', sessionId: '', mode: 'plain', ctx: null });
-    expect(await runWithServerHttpBaseUrl('http://access.test', () => deps.machinesList({ serverId: 'home' })))
-      .toMatchObject({ items: [{ serverId: 'home', machineId: 'shared', active: false, access: { accessState: 'key_pending' } }] });
+    // These read Actions consume only inventory dependencies; all inventory and
+    // option projection logic stays real beneath the HTTP boundary.
+    const executor = createActionExecutor(deps as unknown as ActionExecutorDeps);
+    const context = { surface: 'cli', authority: 'present_user', serverId: 'home' } as const;
+    expect(await runWithServerHttpBaseUrl('http://access.test', () => executor.execute('machines.list', { serverId: 'home' }, context)))
+      .toMatchObject({ ok: true, result: { items: [
+        { serverId: 'home', machineId: 'local', label: 'coordinator', active: true },
+        { serverId: 'home', machineId: 'remote', label: 'remote-builder', active: true },
+        { serverId: 'home', machineId: 'shared', active: false, access: { accessState: 'key_pending' } },
+      ] } });
+    expect(await runWithServerHttpBaseUrl('http://access.test', () => executor.execute('action.options.resolve', {
+      actionId: 'session.spawn_new', fieldPath: 'executionTarget.machineId',
+      executionTarget: { serverId: 'home' },
+    }, context))).toMatchObject({ ok: true, result: { options: [
+      { value: 'local', label: 'coordinator' }, { value: 'remote', label: 'remote-builder' },
+      { value: 'shared', label: 'shared' },
+    ] } });
     expect(await runWithServerHttpBaseUrl('http://access.test', () => deps.machinesList({ serverId: 'home', refresh: true })))
       .toMatchObject({ items: [{ serverId: 'home', machineId: 'shared', active: false, access: { accessState: 'key_pending' } }] });
   });

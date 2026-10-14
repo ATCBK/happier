@@ -2329,10 +2329,8 @@ export function createNativeAgentSessionOperations(
     initialRollbackTurns: readonly Readonly<{
         turnId: string;
         userMessageSeq: number | null;
-        providerCheckpoint: Exclude<
-            Extract<AgentSessionRuntimeEvent, { kind: 'turn-rollback-boundary' }>['providerCheckpoint'],
-            undefined
-        >;
+        providerCheckpoint?: Extract<AgentSessionRuntimeEvent, { kind: 'turn-rollback-boundary' }>['providerCheckpoint'];
+        rollbackEligible?: boolean;
     }>[] = [],
     interactionLifecycle?: NativeAgentSessionInteractionLifecycle,
     sanitizeDisposeError?: (error: unknown) => unknown,
@@ -2391,6 +2389,7 @@ export function createNativeAgentSessionOperations(
             { kind: 'turn-rollback-boundary' }
         >;
         didPublishRollbackBoundary?: boolean;
+        rollbackEligible?: boolean;
     }>> = initialRollbackTurns.map((turn) => Object.freeze({ ...turn }));
     const pendingRollbackJoinByLocalId = new Map<string, Readonly<{ turnId: string }>>();
     const readActiveTurnAdmissionWitness = (): NativeAgentNewTurnAdmissionWitness | null => {
@@ -2990,10 +2989,7 @@ export function createNativeAgentSessionOperations(
                 logger.debug('[NativeAgentSession] failed to publish rollback boundary lifecycle (non-fatal)');
             }
         }
-        if (
-            event.kind === 'turn-failed'
-            || event.kind === 'turn-cancelled'
-        ) {
+        if (event.kind === 'turn-failed') {
             for (const [localId, pendingJoin] of pendingRollbackJoinByLocalId) {
                 if (pendingJoin.turnId === event.turnId) {
                     pendingRollbackJoinByLocalId.delete(localId);
@@ -3080,7 +3076,7 @@ export function createNativeAgentSessionOperations(
                                 ? { providerCheckpoint: turn.providerCheckpoint }
                                 : {}),
                         }));
-                        if (!targetTurn || affectedTurns.length === 0) {
+                        if (!targetTurn || targetTurn.rollbackEligible === false || affectedTurns.length === 0) {
                             return {
                                 ok: false,
                                 errorCode: 'native_conversation_rollback_target_unavailable',
@@ -5424,13 +5420,17 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             const persistedRollbackTurns = resumeId && sessionCapabilities.conversationRollback === true
                 ? await hostRuntimeParams.session.readSessionTurnsProjection()
                     .then((projection) => projection?.turns.flatMap((turn) => (
-                        turn.rollback?.state === 'eligible'
-                        && turn.rollback.providerCheckpoint !== undefined
-                        && typeof turn.transcriptAnchors?.startUserMessageSeq === 'number'
+                        turn.rollback?.state !== 'rolled_back'
+                        && turn.status !== 'in_progress'
                           ? [Object.freeze({
                               turnId: turn.turnId,
-                              userMessageSeq: turn.transcriptAnchors.startUserMessageSeq,
-                              providerCheckpoint: turn.rollback.providerCheckpoint,
+                              userMessageSeq: turn.transcriptAnchors?.startUserMessageSeq ?? null,
+                              rollbackEligible: turn.rollback?.state === 'eligible'
+                                  && turn.rollback.providerCheckpoint !== undefined
+                                  && typeof turn.transcriptAnchors?.startUserMessageSeq === 'number',
+                              ...(turn.rollback?.providerCheckpoint !== undefined
+                                  ? { providerCheckpoint: turn.rollback.providerCheckpoint }
+                                  : {}),
                             })]
                           : []
                     )) ?? [])
@@ -5531,7 +5531,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     );
                 }
                 const sessionFactory = sessions;
-                if (params.createRuntime && params.backend.provenance !== 'configured') {
+                if (params.createRuntime) {
                     const diagnostics: Parameters<
                         typeof resolveBackendExecutionSurfacesFromNativeAgentRuntime
                     >[0]['diagnostics'] = [];

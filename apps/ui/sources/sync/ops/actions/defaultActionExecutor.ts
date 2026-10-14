@@ -1,4 +1,5 @@
 import { isTransientConnectivityError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
+import { inspectSessionContinuationOnMachine } from '@/sync/ops/sessionContinuationInspection';
 import { projectAutomationEligibleEventsCatalogV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { ArtifactAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
@@ -35,6 +36,7 @@ import { readOriginalAccountActionMachine } from '@/sync/api/externalActionAccou
 import { normalizeActionsSettingsV1, isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { sessionGoalGet, sessionGoalSet, sessionGoalClear } from '@/sync/ops/sessionGoals';
 import { CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD, type CurrentSessionPresentationActionResultV1 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createUiProviderActionExecuteV1 } from './providerActionDeps';
@@ -228,7 +230,6 @@ import {
     sessionAbort,
     resumeSession,
 } from '@/sync/ops/sessions';
-import { sessionGoalClear, sessionGoalSet } from '@/sync/ops/sessionGoals';
 import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session/resume/resumeSessionBase';
 import { buildResumeCapabilityOptionsFromUiState, buildResumeSessionExtrasFromUiState } from '@/agents/registry/registryUiBehavior';
 import { getPermissionModeOverrideForSpawn } from '@/sync/domains/permissions/permissionModeOverride';
@@ -560,6 +561,8 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
   homeRuntimeRunner?: SystemTaskRunner;
   /** Mounted presentation only; the existing blocking executor retains input and decision custody. */
   onBlockingApprovalPending?: (input: Readonly<{ artifactId: string; signal?: AbortSignal }>) => void;
+  /** Exact mounted invocation whose intent must remain live through shared approval. */
+  hostActionApprovalLifetime?: Readonly<{ actionId: ActionId; signal: AbortSignal; surface: 'ui' }>;
   listContributedActionDefinitions?: NonNullable<ActionExecutorDeps['listContributedActionDefinitions']>;
   readContributedActionSchemas?: NonNullable<ActionExecutorDeps['readContributedActionSchemas']>;
   /** Optional surface-local policy composed with the canonical Action settings policy. */
@@ -733,7 +736,7 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
     return resolved.ok ? { ...resolved.target, backendTargetParam: target ?? resolved.target.backendTargetParam } : null;
   };
 
-  const resolveSessionMachineId = (sessionId: string, serverId?: string): string => {
+  const resolveSessionMachineId = (sessionId: string, serverId?: string | null): string => {
     const exactServerId = String(serverId ?? '').trim();
     return readMachineControlTargetForSession(exactServerId
       ? { sessionId, serverId: exactServerId }
@@ -900,7 +903,8 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
       },
     } } : {}),
     filesystemActionExecute: createUiFilesystemAction(accountContext ?? undefined, opts?.filesystemActionDelivery),
-    ...(opts?.filesystemActionDelivery ? { hostActionApprovalLifetime: {
+    ...(opts?.hostActionApprovalLifetime ? { hostActionApprovalLifetime: opts.hostActionApprovalLifetime }
+      : opts?.filesystemActionDelivery ? { hostActionApprovalLifetime: {
       actionId: opts.filesystemActionDelivery.actionId, signal: opts.filesystemActionDelivery.signal, surface: 'ui' as const,
     } } : {}),
     currentSessionPresentationApply: async ({ input, context, signal }) => {
@@ -1560,6 +1564,15 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
         throw error;
       }
     },
+    sessionGoalGet: async ({ sessionId, serverId, signal }) => await sessionGoalGet(sessionId, { serverId, signal }),
+    sessionGoalSet: async ({ sessionId, objective, status, tokenBudget, resumeInactiveWithInitialGoal, serverId, signal }) =>
+      await sessionGoalSet(sessionId, {
+        ...(objective !== undefined ? { objective } : {}),
+        ...(status === 'active' || status === 'paused' || status === 'complete' ? { status } : {}),
+        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+        ...(resumeInactiveWithInitialGoal !== undefined ? { resumeInactiveWithInitialGoal } : {}),
+      }, { serverId, signal }),
+    sessionGoalClear: async ({ sessionId, serverId, signal }) => await sessionGoalClear(sessionId, { serverId, signal }),
     sessionOpen: async ({ sessionId, serverId, intent, resumeRequest, approvedNewDirectoryCreation, actionRequestId, tabId, destination, signal }) => {
       const comparison = destination ? scmReviewComparisonOfSource(destination.comparison, destination.comparisonId) : null;
       if (destination && !comparison) return { ok: false, errorCode: 'invalid_parameters', error: 'comparison_selector_unavailable' };
@@ -2523,16 +2536,35 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
     },
     spawnConnectedServicesList: async (args) => await listSpawnConnectedServicesForActions(args),
 
+    sessionContinuationInspect: async ({ input, serverId }) => {
+      const machineId = resolveSessionMachineId(input.sessionId, serverId);
+      if (!machineId) return { status: 'indeterminate' };
+      return await inspectSessionContinuationOnMachine({ ...input, machineId, serverId: serverId ?? null });
+    },
+    sessionAgentTransition: async ({ request, context, serverId }) => {
+      if (!accountContext) return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
+      const machineId = resolveSessionMachineId(request.sessionId, serverId);
+      if (!machineId) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+      if (context.externalActionTarget && (context.externalActionTarget.kind !== 'session'
+          || context.externalActionTarget.sessionId !== request.sessionId)) {
+        return { ok: false, errorCode: 'target_not_local', error: 'target_not_local' };
+      }
+      const { v: _version, ...input } = request;
+      return await createUiAccountAction({ account: accountContext })({ actionId: 'session.agent.transition', input,
+        context: { ...context, serverId: accountContext.serverId, runtimeAccountId: accountContext.accountId,
+          externalActionTarget: { kind: 'machine', machineId } },
+      });
+    },
     sessionSendMessage: opts?.sessionSendMessage ?? (async ({ sessionId, message, serverId, recipient, requestedAction, displayText, messageMeta, permissionModeOverride, localId, signal }) => {
       const delivery = await sendSessionMessageWithServerScope({
         sessionId,
         message,
+        messageLocalId: localId,
         serverId,
         recipient,
         requestedAction,
         displayText,
         metaOverrides: permissionModeOverride ? { ...messageMeta, permissionMode: permissionModeOverride } : messageMeta,
-        messageLocalId: localId,
         signal,
       });
       return projectServerScopedSessionSendMessageResult(delivery);
@@ -2700,16 +2732,6 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
         updateSessionMetadataWithRetry: sync.patchSessionMetadataWithRetry,
       });
       return { ok: true, sessionId, modeId: normalizedModeId };
-    },
-    sessionGoalSet: async ({ sessionId, objective, status, tokenBudget, serverId }) => {
-      return await sessionGoalSet(sessionId, {
-        ...(typeof objective === 'string' ? { objective } : {}),
-        ...(status ? { status } : {}),
-        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
-      }, { serverId });
-    },
-    sessionGoalClear: async ({ sessionId, serverId }) => {
-      return await sessionGoalClear(sessionId, { serverId });
     },
     sessionConfigOptionSet: async ({ sessionId, configId, valueId }) => {
       const session = (storage.getState() as any)?.sessions?.[sessionId] ?? null;
@@ -3414,7 +3436,9 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
     const credential = accountContext?.credentialAuthorityKind ?? getCurrentAuth()?.credentialAuthorityKind ?? 'none';
     const authority = opts?.admittedClientActionId
       ? context?.authority ?? 'account_automation'
-      : resolveInvocationAuthority({ credential, surface });
+      : context?.authority ?? resolveInvocationAuthority({ credential, surface });
+    const actionCaller = context?.actionCaller ?? (credential === 'account' && (surface === 'ui' || surface === 'voice' || surface === 'rpc') && !context?.externalActionCredential
+      && !context?.rpcSessionAuthorization ? { kind: 'host' as const } : undefined);
     // Ordinary UI callers do not author approval provenance. Retain stronger
     // invocation identities, otherwise bind one attempt at this host before
     // execute/prepare reaches the strict approval-origin owner.
@@ -3425,6 +3449,7 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
       actionsSettings: resolveActionsSettingsSnapshot(),
       surface,
       authority,
+      ...(actionCaller ? { actionCaller } : {}),
       ...(accountContext ? { managedMachineCreationEnabled: accountContext.settings.managedMachineCreationEnabled } : {}),
       ...(opts?.admittedClientActionId ? { bypassApprovals: actionId === opts.admittedClientActionId } : {}),
       ...((surface === 'ui' || surface === 'voice') && (credential === 'account' || credential === 'terminal')

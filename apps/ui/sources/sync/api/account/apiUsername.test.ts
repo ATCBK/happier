@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -30,6 +30,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+    vi.useRealTimers();
     disposeScope?.();
     disposeScope = undefined;
     await homes.reset();
@@ -40,6 +41,35 @@ function installResponse(body: unknown, status = 200, invalidJson = false) {
 }
 
 describe('setAccountUsername', () => {
+    it('does not retry the captured bearer against a successor Home after a transient failure', async () => {
+        let observeIssued!: () => void;
+        const issued = new Promise<void>((resolve) => { observeIssued = resolve; });
+        let releaseFailure!: () => void;
+        const failure = new Promise<void>((resolve) => { releaseFailure = resolve; });
+        homes.answer(serverId, 'POST /v1/account/username', { select: async () => {
+            observeIssued();
+            await failure;
+            return { status: 503, body: {} };
+        } });
+        const { setAccountUsername } = await import('./apiUsername');
+        const outcome = setAccountUsername(credentials, 'alice').then(
+            (value) => ({ status: 'fulfilled' as const, value }),
+            (reason: unknown) => ({ status: 'rejected' as const, reason }),
+        );
+        await issued;
+        vi.useFakeTimers();
+        expect(homes.requestsFor('/v1/account/username')).toEqual([
+            expect.objectContaining({ serverId, token: credentials.token, input: { username: 'alice' } }),
+        ]);
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        await upsertAndActivateServer({ serverUrl: 'https://other.example.test', scope: 'device' });
+        releaseFailure();
+        await vi.advanceTimersByTimeAsync(1_000);
+        const settled = await outcome;
+        expect(homes.requestsFor('/v1/account/username')).toHaveLength(1);
+        expect(settled).toMatchObject({ status: 'rejected', reason: { name: 'HappyError', message: 'account_username_stale_scope' } });
+    });
+
     it('returns the username on success', async () => {
         installResponse({ username: 'alice' });
         const { setAccountUsername } = await import('./apiUsername');

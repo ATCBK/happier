@@ -72,7 +72,14 @@ import {
 const ITEM_TITLE_META_TITLE_MIN_PX = 120;
 
 function resizeItemIconForDensity(icon: React.ReactNode, iconSize: number, color?: string): React.ReactNode {
-    if (!React.isValidElement(icon) || icon.type === React.Fragment) {
+    if (!React.isValidElement<Record<string, unknown>>(icon) || icon.type === React.Fragment) {
+        return icon;
+    }
+    // Numeric glyphs opt into the row scale; named glyphs may omit their default size.
+    // Semantic size modes and composed marks keep the layout owned by their component.
+    const props = icon.props;
+    if (props.children != null || !(typeof props.size === 'number'
+        || (typeof props.name === 'string' && props.size === undefined))) {
         return icon;
     }
     // Semantic marks own their named size; density only resizes numeric glyphs.

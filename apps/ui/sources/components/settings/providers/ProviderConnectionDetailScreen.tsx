@@ -176,6 +176,8 @@ function ProviderDuplicateDraft(props: Readonly<{
 export const ProviderConnectionDetailScreen = React.memo(function ProviderConnectionDetailScreen(
     props: Readonly<{
         connectionId: string;
+        /** Open the manual-model editor for this connection. */
+        startAddingModels?: boolean;
         /** The connection was created a moment ago by the add flow (its completion note may show). */
         justConnected?: boolean;
     }>,
@@ -199,9 +201,11 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
         machineRows,
         resolveCurrentTarget,
         selectedTargetServerMatchesActiveAccount,
-        serverId,
+        accountServerId: serverId,
+        accountAddressAvailable,
     } = providerTarget;
-    const { probeProviderConnection } = useProviderActionClient(serverId);
+    const { probeProviderConnection, accountScope: { resolution } } = useProviderActionClient(serverId, accountAddressAvailable ? undefined : null);
+    const addressedScope = accountAddressAvailable && resolution.kind === 'bound' ? resolution.scope : null;
     const teamCredentialResourcesEnabled = useFeatureEnabled('teams.credentialResources', {
         scopeKind: 'spawn',
         serverId,
@@ -219,7 +223,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
         targetSelection.selectTarget(target);
     }, [targetSelection]);
     const focused = useIsFocused();
-    const query = useProviderConnections({ enabled, active: focused, machineId, serverId, connectionId: props.connectionId });
+    const query = useProviderConnections({ enabled: enabled && accountAddressAvailable, active: focused, machineId, serverId, connectionId: props.connectionId });
     const connection = query.data?.connections.find((item) => item.connectionId === props.connectionId) ?? null;
     const machineSectionVisible = connection?.scope === 'machine' || (connection?.grants.enabledMachineIds.length ?? 0) > 0;
     const machineViews = useProviderConnectionMachineViews({
@@ -234,6 +238,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
     const mutation = useProviderConnectionMutation({
         resolveTarget: resolveCurrentTarget,
         serverId,
+        initiatingLifetime: accountAddressAvailable ? undefined : null,
         refresh: refreshConnectionQuery,
     });
     const mutationApprovalHref = mutation.pendingApproval?.href ?? null;
@@ -247,7 +252,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
     const [managedPurposeDraft, setManagedPurposeDraft] = React.useState<ManagedPurposeDraft | null>(null);
     const [duplicateMode, setDuplicateMode] = React.useState<'sameSource' | 'asCustom' | null>(null);
     const discardDuplicate = React.useCallback(() => setDuplicateMode(null), []);
-    useRetireProviderStateOnAccountChange(discardDuplicate);
+    useRetireProviderStateOnAccountChange(discardDuplicate, addressedScope);
     React.useEffect(discardDuplicate, [discardDuplicate, machineId, serverId, props.connectionId]);
     // A purpose draft names Account-scoped Connected Account targets, so it is
     // retired with the Account that authored it rather than surviving into the
@@ -267,11 +272,13 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
     const models = useProviderConnectionModelsSection({
         connectionId: props.connectionId,
         connection,
-        enabled,
+        enabled: enabled && accountAddressAvailable,
         active: focused && connection !== null,
         machineId,
         serverId,
         resolveCurrentTarget,
+        initiatingLifetime: accountAddressAvailable ? undefined : null,
+        startAdding: props.startAddingModels,
     });
     const storedConnection = query.catalog?.connections.find(item => item.id === props.connectionId);
     // A saved custom connection reopens in the editor it was added with, where that form can express it (F08).
@@ -301,10 +308,12 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
     // committed (leaving the field or Enter) through the connection's `update` write.
     const [nameDraft, setNameDraft] = React.useState<string | null>(null);
     const [nameError, setNameError] = React.useState<string | null>(null);
-    React.useEffect(() => {
+    const discardNameDraft = React.useCallback(() => {
         setNameDraft(null);
         setNameError(null);
-    }, [machineId, props.connectionId]);
+    }, []);
+    useRetireProviderStateOnAccountChange(discardNameDraft, addressedScope);
+    React.useEffect(discardNameDraft, [discardNameDraft, machineId, props.connectionId]);
     const managedDeployment = connection?.deployment.kind === 'managedLocal'
         ? connection.deployment
         : null;

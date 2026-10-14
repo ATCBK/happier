@@ -3,6 +3,7 @@ import type { createCliActionExecutor } from '@/session/actions/createCliActionE
 import type { RpcLocalActionContext, RpcHandlerContext } from '@/api/rpc/types';
 import type { SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
 import { WorkspaceSyncSourceContextV1Schema } from '@happier-dev/protocol/socketRpc';
+import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
 
 type CliActionExecutorParams = Parameters<typeof createCliActionExecutor>[0];
 
@@ -33,16 +34,16 @@ export function projectWorkspaceSyncPhysicalContextFromActionContext(context: Rp
     });
 }
 
-export type RpcActionExecutor = Readonly<{
+export type RpcActionExecutor<TActionId extends ActionId = ActionId> = Readonly<{
     execute: (
-        actionId: ActionId,
+        actionId: TActionId,
         input: unknown,
         context?: RpcActionExecutorContext,
     ) => Promise<ActionExecuteResult>;
 }>;
 
-export type RpcActionDispatchRequest = HostRequesterContext & Readonly<{
-    actionId: ActionId;
+export type RpcActionDispatchRequest<TActionId extends ActionId = ActionId> = HostRequesterContext & Readonly<{
+    actionId: TActionId;
     input: unknown;
     defaultSessionId?: string | null;
     serverId?: string | null;
@@ -54,7 +55,7 @@ export type RpcActionDispatchRequest = HostRequesterContext & Readonly<{
     rpcSessionAuthorization?: ActionExecutorContext['rpcSessionAuthorization'];
     runtimeAccountId?: ActionExecutorContext['runtimeAccountId'];
     externalActionExecutionAuthorization?: ActionExecutorContext['externalActionExecutionAuthorization'];
-    executor?: RpcActionExecutor;
+    executor?: RpcActionExecutor<TActionId>;
     executorParams?: CliActionExecutorParams;
 }>;
 
@@ -84,6 +85,9 @@ export function buildActionExecutorContextForRpc(
     );
     const requesterAuthorization = params.callerInputAuthorization?.requesterAccountProjection
         ? params.callerInputAuthorization : undefined;
+    const requesterInvocation = requesterAuthorization && !params.sessionActionOrigin
+        && !requesterAuthorization.binding.workflowActionOrigin
+        ? readRequesterAccountActionContext(requesterAuthorization)?.invocation : undefined;
     const originalHandoffAuthorization = (() => {
         const authorization = params.callerInputAuthorization;
         const binding = authorization?.binding;
@@ -199,6 +203,16 @@ export function buildActionExecutorContextForRpc(
                 grant: requesterAuthorization.binding.grant,
             } } : {}),
         } : {}),
+        ...(requesterInvocation ? {
+            surface: requesterInvocation.surface,
+            authority: requesterInvocation.authority === 'account_automation' ? 'account_automation' as const
+                : params.callerAuthority ?? 'account_automation',
+            actionCaller: requesterInvocation.caller,
+            ...(requesterInvocation.callerPermissionMode !== undefined
+                ? { callerPermissionMode: requesterInvocation.callerPermissionMode } : {}),
+            ...(requesterInvocation.workspaceWrites ? { workspaceWrites: requesterInvocation.workspaceWrites } : {}),
+            ...(requesterInvocation.defaultSessionId ? { defaultSessionId: requesterInvocation.defaultSessionId } : {}),
+        } : {}),
         ...(params.sessionActionOrigin ? {
             // Invocation origin is transport authority, not the Session being mutated.
             surface: 'agent' as const,
@@ -223,7 +237,7 @@ export function buildActionExecutorDepsForRpc(
     return params.executorParams;
 }
 
-async function resolveRpcActionExecutor(params: RpcActionDispatchRequest): Promise<RpcActionExecutor> {
+async function resolveRpcActionExecutor<TActionId extends ActionId>(params: RpcActionDispatchRequest<TActionId>): Promise<RpcActionExecutor<TActionId>> {
     const requester = params.callerInputAuthorization?.requesterAccountExecutor;
     if (requester) return requester;
     if (params.executor) {
@@ -236,8 +250,8 @@ async function resolveRpcActionExecutor(params: RpcActionDispatchRequest): Promi
     return module.createCliActionExecutor(buildActionExecutorDepsForRpc({ executorParams: params.executorParams }));
 }
 
-export async function dispatchActionFromRpc(
-    params: RpcActionDispatchRequest,
+export async function dispatchActionFromRpc<TActionId extends ActionId>(
+    params: RpcActionDispatchRequest<TActionId>,
 ): Promise<ActionExecuteResult> {
     const executor = await resolveRpcActionExecutor(params);
     return await executor.execute(

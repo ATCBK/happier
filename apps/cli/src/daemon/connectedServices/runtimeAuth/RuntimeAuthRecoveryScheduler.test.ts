@@ -1111,6 +1111,8 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     const { RuntimeAuthRecoveryScheduler } = await loadModule();
     const unsafeClassification = {
       ...usageLimitClassification({
+        // Released scalar ingress is normalized before the current intent is retained.
+        serviceId: 'openai-codex',
         providerLimitId: 'Bearer secret-provider-limit-token',
         planType: 'enterprise secret plan',
         action: {
@@ -1402,7 +1404,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       sessionId: 'sess_exact',
       switchesThisTurn: 1,
       classification: usageLimitClassification({
-        serviceId: 'happier.agent.gemini/gemini',
+        serviceId: 'happier.agent.gemini/gemini-account',
         profileId: 'work',
         groupId: 'gemini-pool',
         groupGeneration: 7,
@@ -1422,7 +1424,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     const baseProof = {
       sessionId: 'sess_exact',
       proofKind: 'provider_activity',
-      serviceId: 'happier.agent.gemini/gemini',
+      serviceId: 'happier.agent.gemini/gemini-account',
       profileId: 'work',
       groupId: 'gemini-pool',
       groupGeneration: 7,
@@ -1453,7 +1455,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       ...baseProof,
       credentialRevision: 'csr_abcdefghijklmnopqrstuv',
     })).resolves.toEqual([
-      expect.objectContaining({ sessionId: 'sess_exact', serviceId: 'happier.agent.gemini/gemini' }),
+      expect.objectContaining({ sessionId: 'sess_exact', serviceId: 'happier.agent.gemini/gemini-account' }),
     ]);
   });
 

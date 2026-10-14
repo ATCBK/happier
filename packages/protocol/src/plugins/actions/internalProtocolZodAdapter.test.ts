@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
+import { compileActionInputJsonSchema } from '../../actions/actionInputJsonSchemaValidation.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { LaunchProfileIdV2ProtocolSchema } from '../../profiles/v2/profileId.js';
 import { PluginContributionIdentityV1Schema } from '../contributionIdentity.js';
@@ -132,8 +133,17 @@ describe('the private neutral-schema bridge for classic parents', () => {
     const json = zodSchemaToJsonSchemaObject(parent, { target });
     expect(json).toMatchObject({
       type: 'object', required: ['payload', 'second'], additionalProperties: false,
-      properties: { payload: canonical.jsonSchema, second: canonical.jsonSchema },
     });
+    const validate = compileActionInputJsonSchema(json);
+    for (const input of [
+      { payload: { value: 'accepted' }, second: { value: 'other' } },
+      { payload: { value: '' }, second: { value: 'other' } },
+      { payload: { value: 'accepted', extra: true }, second: { value: 'other' } },
+      { payload: { value: 7 }, second: { value: 'other' } },
+    ]) {
+      expect(validate(input)).toBe(parent.safeParse(input).success);
+    }
+    expect(canonical.jsonSchema).toMatchObject({ $schema: 'http://json-schema.org/draft-07/schema#' });
     expect(Object.getOwnPropertyDescriptor(json, '~standard')).toBeUndefined();
   });
 });

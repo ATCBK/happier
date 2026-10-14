@@ -281,6 +281,10 @@ describe('createIdentityAdministrationClient', () => {
         });
         const screen = await renderScreen(createElement(IdentityConnectionDetailContent, { scope, teamId: null, connectionId: 'connection-1', mutationsAvailable: true }));
         await vi.waitFor(() => expect(screen.findHostByTestId('identity-workos-candidate:candidate-live')).not.toBeNull());
+        expect(screen.tree.root.findAll((node) => typeof node.type === 'string'
+            && node.props.accessibilityRole === 'radiogroup')
+            .some((node) => typeof node.props.accessibilityLabel === 'string'
+                && node.props.accessibilityLabel.trim().length > 0)).toBe(true);
         let parent = screen.findHostByTestId('identity-workos-candidate:candidate-live')?.parent;
         while (parent && parent.props.testID !== 'identity-workos-setup-steps') parent = parent.parent;
         expect(parent).not.toBeNull();

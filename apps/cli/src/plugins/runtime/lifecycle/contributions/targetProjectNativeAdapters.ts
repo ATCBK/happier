@@ -66,7 +66,7 @@ export type ProjectNativeAdapterResolutionV1 = Readonly<{ kind: 'ready'; lease: 
 }>;
 
 export class ProjectNativeAdapterInvocationError extends Error {
-    constructor(readonly code: 'native_adapter_retired' | 'native_adapter_cancelled' | 'native_adapter_result_invalid' | 'native_adapter_reference_mismatch') {
+    constructor(readonly code: PluginProjectNativeFailureV1['code']) {
         super(code);
     }
 }

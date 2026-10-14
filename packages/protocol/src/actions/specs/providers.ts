@@ -109,7 +109,9 @@ function providerSpec<Id extends ProviderActionIdV1>(id: Id, title: string, summ
   danger?: boolean; read?: boolean; external?: boolean;
 }>): ProviderActionSpec<Id> {
   return {
-    id, approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'required' }, title, safety: options.danger ? 'danger' : 'safe',
+    id, approvalPolicy: { uiConfirmation: 'policy',
+      ...(id === 'providers.models.experimental.confirm' ? { retainUiFieldIntent: true } : {}),
+    }, approval: { result: 'required' }, title, safety: options.danger ? 'danger' : 'safe',
     ...(id === 'providers.connections.update' ? { safetyForInput: (input: unknown) => {
       const parsed = inputs['providers.connections.update'].safeParse(input);
       if (!parsed.success) return 'danger' as const;

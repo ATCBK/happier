@@ -67,10 +67,17 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
         })).toEqual(configuredTarget('row-review'));
     });
 
-    it('keeps ordinary bundled selection available when the configured destination catalog is unavailable', () => {
+    it.each([
+        { name: 'missing', snapshot: undefined },
+        { name: 'loading', snapshot: { status: 'loading' } as const },
+        { name: 'unavailable', snapshot: { status: 'unavailable', reason: 'account-mode-mismatch' } as const },
+    ])('keeps bundled selection and explicit configured intent when the destination catalog is $name', ({ snapshot }) => {
         expect(resolvePreferredBackendTargetFromProjection({ lastUsedAgent: 'codex',
-            acpCatalogSnapshot: { status: 'unavailable', reason: 'account-mode-mismatch' },
+            acpCatalogSnapshot: snapshot,
         })).toEqual({ kind: 'agent', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.codex });
+        expect(resolvePreferredBackendTargetFromProjection({ lastUsedAgent: 'codex',
+            lastUsedBackendTarget: configuredTarget('retained-review'), acpCatalogSnapshot: snapshot,
+        })).toEqual(configuredTarget('retained-review'));
     });
 
     it('routes an Antigravity provider default selection to the canonical provider backend', () => {

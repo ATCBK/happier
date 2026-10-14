@@ -94,7 +94,7 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
     const { enabled, presentation: availabilityPresentation } = useProviderFeatureAvailability();
     const localDiscoveryEnabled = useFeatureEnabled('providers.localDiscovery');
     const providerTarget = useProviderSettingsTarget();
-    const { machineId, machineRows, resolveCurrentTarget, serverId } = providerTarget;
+    const { machineId, machineRows, resolveCurrentTarget, accountServerId: serverId, accountAddressAvailable } = providerTarget;
     const catalogCounts = useProviderCatalogCounts(serverId);
     const teamCredentialResourcesEnabled = useFeatureEnabled('teams.credentialResources', {
         scopeKind: 'spawn',
@@ -102,10 +102,10 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
     });
     const teamCredentialCatalog = useHomeTeamCredentialModelCatalog({
         serverId,
-        enabled: active && teamCredentialResourcesEnabled,
+        enabled: active && accountAddressAvailable && teamCredentialResourcesEnabled,
     });
     const { data, error, machineError, loading, refresh } = useProviderConnections({
-        enabled, active, machineId, serverId,
+        enabled: enabled && accountAddressAvailable, active, machineId, serverId,
     });
     const captureNavigationFocusReturn = useNavigationFocusReturn({
         ready: active && pathname === PROVIDERS_COLLECTION_ROUTE
@@ -123,7 +123,8 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
     const refreshConnections = React.useCallback(async (scope?: ProviderConnectionRefreshScope): Promise<void> => {
         await refresh(scope);
     }, [refresh]);
-    const mutation = useProviderConnectionMutation({ resolveTarget: resolveCurrentTarget, serverId, refresh: refreshConnections });
+    const mutation = useProviderConnectionMutation({ resolveTarget: resolveCurrentTarget, serverId,
+        initiatingLifetime: accountAddressAvailable ? undefined : null, refresh: refreshConnections });
     const [searchQuery, setSearchQuery] = React.useState('');
     const [discoverySelectionError, setDiscoverySelectionError] = React.useState<ProviderErrorV1 | null>(null);
     const collection = React.useMemo(() => buildProviderCollection({

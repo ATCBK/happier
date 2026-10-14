@@ -11,6 +11,8 @@ export async function transitionSessionArchiveStateInTx(params: Readonly<{
     wasArchived: boolean;
     archivedAt: Date | null;
     meaningfulActivityAt?: Date;
+    /** The HTTP owner has already verified this exact Run's Machine publisher. */
+    originRunId?: string;
 }>) {
     const relatedEdges = await params.tx.sessionReportsTo.findMany({
         where: { OR: [{ sessionId: params.sessionId }, { leadSessionId: params.sessionId }] },
@@ -45,6 +47,7 @@ export async function transitionSessionArchiveStateInTx(params: Readonly<{
             occurrence: {
                 v: 1, kind: "sessionLifecycle", event: "sessionArchived",
                 sourceSessionId: session.id, occurredAt: params.archivedAt.getTime(),
+                ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
             },
         });
     }

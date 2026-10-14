@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AccountProfileSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { AccountProfileSchema, PluginProjectionV2Schema, createProviderErrorV1 } from '@happier-dev/protocol';
 import { MachineAgentInventoryItemSchema } from '@happier-dev/protocol/capabilities';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import type { NewSessionPathSelectionContentProps } from '../components/NewSessionPathSelectionContent';
@@ -195,6 +195,7 @@ describe('New Session selected credential launch gate', () => {
         { native: 'signedOut' as const, connected: false, selected: 'provider', acpReady: true, ready: true },
         { native: 'signedOut' as const, connected: false, selected: 'native-with-provider', acpReady: true, ready: false },
         { native: 'signedOut' as const, connected: false, selected: 'provider-unconfirmed', acpReady: true, ready: false },
+        { native: 'signedOut' as const, connected: false, selected: 'provider-unavailable', acpReady: true, ready: false },
     ])('loads readiness with the picker closed and keeps Start on the exact launch credential: %j', async (scenario) => {
         await prepareSessionDraftPersistenceStorage();
         const bridge = await loadSyncSingletonForTests();
@@ -270,6 +271,9 @@ describe('New Session selected credential launch gate', () => {
         const modelDescriptor = { id: 'local-model', name: 'Local model' };
         const providerGroup = createProviderModelProjectionGroupFixture({
             connectionId: 'pc_lmstudio', providerName: lmstudio.name, connectionName: lmstudio.name,
+            authorization: scenario.selected === 'provider-unavailable'
+                ? { authorized: false, error: createProviderErrorV1('provider_not_enabled_on_machine') }
+                : { authorized: true },
             suppressedConnectedServiceIds: agentRequirements.authIsolation.suppressConnectedServiceIds,
             rows: [{ ref: { agentTargetKey, providerConnectionId: 'pc_lmstudio', modelId: modelDescriptor.id },
                 descriptor: modelDescriptor, sources: { probe: true, manual: false, static: false }, confidence: 'probe',
@@ -400,6 +404,11 @@ describe('New Session selected credential launch gate', () => {
                 statusBadges: model.simpleProps.statusBadges,
             });
             expect(model.simpleProps.canCreate, observedAdmission).toBe(scenario.ready);
+            expect(model.simpleProps.agentPickerOptions?.find(option => option.id === agentTargetKey)?.disabled).toBe(false);
+            // An installed signed-out executable still offers its model/source
+            // detail, so the Provider credential can actually be selected.
+            expect(model.simpleProps.agentPickerOptions?.find(option => option.id === agentTargetKey)?.onSelectImmediate)
+                .toBeTypeOf('function');
             if (!scenario.acpReady) {
                 expect(model.simpleProps.agentPickerOptions?.map((option) => option.id)).toContain('agent:happier.agent.claude/claude');
                 act(() => { model.simpleProps.promptStore.setPrompt('hello'); });

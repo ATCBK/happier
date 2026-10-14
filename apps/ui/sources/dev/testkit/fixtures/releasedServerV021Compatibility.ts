@@ -1,7 +1,4 @@
-import {
-    FeaturesResponseSchema,
-    type FeaturesResponse,
-} from '@happier-dev/protocol';
+import { FeaturesResponseSchema, type FeaturesResponse } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 /**
  * Relevant `/v1/features` bytes from immutable server-v0.2.1 commit

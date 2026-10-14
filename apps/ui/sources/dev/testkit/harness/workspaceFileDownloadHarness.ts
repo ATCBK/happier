@@ -1,5 +1,7 @@
 import type { NativeIrohModule } from '@happier-dev/iroh-native';
-import { DirectRouteGrantRequestV2Schema, MACHINE_PLAIN_DATA_KEY_MARKER, SignedDirectRouteGrantV2Schema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { DirectRouteGrantRequestV2Schema, SignedDirectRouteGrantV2Schema } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantV2';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { vi } from 'vitest';
 

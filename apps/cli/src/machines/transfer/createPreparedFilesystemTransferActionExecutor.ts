@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 import {
   FilesystemUploadInputSchema, FilesystemDownloadInputSchema, FilesystemTransferCancelInputSchema, FilesystemPreparedCopyInputSchema,
+  FilesystemPreparedImportSchema, FilesystemPreparedExportSchema,
   type FilesystemUploadOutput, type FilesystemDownloadOutput, type FilesystemTransferCancelOutput, type FilesystemCopyOutput,
 } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { authorizeFilesystemPathWithinRoot } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
@@ -108,7 +109,8 @@ export function createPreparedFilesystemTransferActionExecutor(params: Readonly<
             args.context.signal?.addEventListener('abort', onAbort, { once: true });
             if (args.context.signal?.aborted) onAbort();
             acceptance.accept({ success: true, status: 'accepted', operationId: acceptance.operationId, sourceId: copy.source.sourceId,
-              prepared: { manifest: imports[0]!.prepared, blobs: imports.slice(1).map(record => ({ transferId: record.transferId, prepared: record.prepared })) } } satisfies FilesystemCopyOutput);
+              prepared: { manifest: FilesystemPreparedImportSchema.parse(imports[0]!.prepared),
+                blobs: imports.slice(1).map(record => ({ transferId: record.transferId, prepared: FilesystemPreparedImportSchema.parse(record.prepared) })) } } satisfies FilesystemCopyOutput);
             const settlements = new Map<string, Extract<Awaited<typeof imports[number]['settlement']>, { success: true }>>();
             const results = await Promise.all(imports.map(async record => {
               const result = await record.settlement;
@@ -144,7 +146,8 @@ export function createPreparedFilesystemTransferActionExecutor(params: Readonly<
         onAbort = () => { void params.lifecycle.abortImportSession({ uploadId: prepared.uploadId }, scope).catch(() => undefined); };
         args.context.signal?.addEventListener('abort', onAbort, { once: true });
         if (args.context.signal?.aborted) onAbort();
-        acceptance.accept({ success: true, status: 'accepted', operationId: acceptance.operationId, sourceId: input.source.sourceId, prepared } satisfies FilesystemUploadOutput);
+        acceptance.accept({ success: true, status: 'accepted', operationId: acceptance.operationId, sourceId: input.source.sourceId,
+          prepared: FilesystemPreparedImportSchema.parse(prepared) } satisfies FilesystemUploadOutput);
         const result = await settlement;
         if (!result.success) return transferFailure(result);
         return { success: true, status: 'completed', sourceId: input.source.sourceId, transferId: prepared.uploadId,
@@ -163,7 +166,8 @@ export function createPreparedFilesystemTransferActionExecutor(params: Readonly<
       onAbort = () => params.lifecycle.clearPublishedTransfer(prepared.transferId, scope);
       args.context.signal?.addEventListener('abort', onAbort, { once: true });
       if (args.context.signal?.aborted) onAbort();
-      acceptance.accept({ success: true, status: 'accepted', operationId: acceptance.operationId, destinationId: input.destination.destinationId, prepared,
+      acceptance.accept({ success: true, status: 'accepted', operationId: acceptance.operationId, destinationId: input.destination.destinationId,
+        prepared: FilesystemPreparedExportSchema.parse(prepared),
         ...(exported ? { entryTree: exported.entryTree } : {}) } satisfies FilesystemDownloadOutput);
       const result = await settlement;
       if (!result.success) return transferFailure(result);

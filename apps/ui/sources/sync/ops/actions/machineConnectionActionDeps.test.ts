@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createActionExecutor, computeHomeQrBindingProofV2, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
@@ -12,6 +13,11 @@ import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/sett
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { AccountEncryptionCurrentnessResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+
+// Keep the actual Socket and Sync lifecycle; only external Engine.IO packets stay disconnected.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 const boundary = vi.hoisted(() => ({ rpc: vi.fn() }));
 // This native rendering package is outside the transport process and never renders here.
@@ -234,6 +240,73 @@ describe('UI machine connection Actions', () => {
             surface: 'ui', authority: 'present_user', serverId,
         })).toEqual({ ok: true, result: { kind: 'invalid_address' } });
         expect(harness.requests.some((request) => request.serverUrl === 'ftp://wrong.example')).toBe(false);
+    });
+    it('reconnects the focused Home through the real connection lifecycle', async () => {
+        await loadSyncSingletonForTests();
+        const serverId = await harness.addHome({ name: 'Focused Home', serverUrl: 'https://focused.example', accountId: 'alice' });
+        const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        expect(getActiveServerAccountScope()).toBeNull();
+        try {
+            expect(await makeExecutor().execute('homes.reconnect', { serverId }, {
+                surface: 'ui', authority: 'present_user', serverId,
+            })).toEqual({ ok: true, result: { serverId } });
+            expect(getActiveServerAccountScope()).toMatchObject({
+                serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'alice',
+            });
+        } finally {
+            const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+            await disconnectActiveServerConnection();
+        }
+    });
+    it('refuses reconnecting an unfocused Home rather than retrying another Home', async () => {
+        const other = await harness.addHome({ name: 'Other Home', serverUrl: 'https://other.example', accountId: 'alice' });
+        await harness.addHome({ name: 'Focused Home', serverUrl: 'https://focused.example', accountId: 'alice' });
+        const requestCount = harness.requests.length;
+        expect(await makeExecutor().execute('homes.reconnect', { serverId: other }, {
+            surface: 'ui', authority: 'present_user', serverId: other,
+        })).toMatchObject({ ok: false, errorCode: 'home_not_focused' });
+        expect(harness.requests).toHaveLength(requestCount);
+    });
+    it('does not retry using a replacement Account after the admitted Account retires', async () => {
+        await loadSyncSingletonForTests();
+        const serverId = await harness.addHome({ name: 'Home', serverUrl: 'https://focused.example', accountId: 'alice' });
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const account = await captureLazyActionAccountContext(serverId);
+        try {
+            await harness.switchAccount(serverId, 'bob');
+            expect(account.accountLifetime.isCurrent()).toBe(false);
+            const executor = createActionExecutor(createMachineConnectionActionDeps({ account }) as ActionExecutorDeps);
+            const result = await executor.execute('homes.reconnect', { serverId }, {
+                surface: 'ui', authority: 'present_user', serverId, runtimeAccountId: 'alice',
+            });
+            expect(result.ok).toBe(false);
+            expect(getActiveServerAccountScope()).toBeNull();
+        } finally {
+            account.dispose();
+            const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+            await disconnectActiveServerConnection();
+        }
+    });
+    it('refuses reconnecting with a mismatched Action scope before touching transport', async () => {
+        const other = await harness.addHome({ name: 'Other Home', serverUrl: 'https://other.example', accountId: 'alice' });
+        const focused = await harness.addHome({ name: 'Focused Home', serverUrl: 'https://focused.example', accountId: 'alice' });
+        const requestCount = harness.requests.length;
+        expect(await makeExecutor().execute('homes.reconnect', { serverId: focused }, {
+            surface: 'ui', authority: 'present_user', serverId: other,
+        })).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
+        expect(harness.requests).toHaveLength(requestCount);
+    });
+    it('does not reconnect after caller cancellation', async () => {
+        const serverId = await harness.addHome({ name: 'Home', serverUrl: 'https://focused.example', accountId: 'alice' });
+        const controller = new AbortController();
+        controller.abort();
+        const requestCount = harness.requests.length;
+        expect(await makeExecutor().execute('homes.reconnect', { serverId }, {
+            surface: 'ui', authority: 'present_user', serverId, signal: controller.signal,
+        })).toMatchObject({ ok: false, errorCode: 'cancelled' });
+        expect(harness.requests).toHaveLength(requestCount);
     });
     it('prepares Windows SSH setup without exposing credentials or starting a native task', async () => {
         const serverId = await harness.addHome({ name: 'Home', serverUrl: 'https://setup.example', accountId: 'alice' });

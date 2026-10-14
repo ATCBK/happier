@@ -1,13 +1,8 @@
-import React from 'react';
+import { PetAppShellCompanionMount } from '@/components/pets/runtime/PetAppShellCompanionMount';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    createRootLayoutFeaturesResponse,
-    flushHookEffects,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
-import { installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
+import { flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { initializeRootLayoutRuntimeForTests, renderRootLayoutRoute, installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -15,60 +10,7 @@ type ReactActEnvironmentGlobal = typeof globalThis & {
 (globalThis as ReactActEnvironmentGlobal).IS_REACT_ACT_ENVIRONMENT = true;
 
 
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
-}));
-
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ isAuthenticated: true, refreshFromActiveServer: vi.fn(async () => {}) }),
-}));
-
-vi.mock('@/auth/routing/authRouting', () => ({
-    isPublicRouteForUnauthenticated: () => true,
-}));
-
-vi.mock('@/utils/platform/platform', () => ({
-    isRunningOnMac: () => false,
-}));
-
-vi.mock('@/utils/platform/desktopHost', () => ({
-    invokeDesktopHost: vi.fn(async () => null),
-    isDesktopHost: () => false,
-}));
-
-vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
-    getPendingTerminalConnect: () => null,
-}));
-
-vi.mock('@/sync/domains/pending/pendingNotificationNav', () => ({
-    getPendingNotificationNav: () => null,
-    clearPendingNotificationNav: vi.fn(),
-    setPendingNotificationNav: vi.fn(),
-}));
-
-vi.mock('@/sync/domains/pending/pendingNotificationAction', () => ({
-    getPendingNotificationAction: () => null,
-    clearPendingNotificationAction: vi.fn(),
-    setPendingNotificationAction: vi.fn(),
-}));
-
-vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
-    getReadyServerFeatures: async () => createRootLayoutFeaturesResponse(),
-}));
-
-vi.mock('@/components/pets/runtime/PetAppShellCompanionMount', () => ({
-    PetAppShellCompanionMount: () => React.createElement('PetAppShellCompanionMount', {
-        testID: 'pet-app-shell-companion-mount',
-    }),
-}));
-
-vi.mock('@/changelog/releaseNotes', () => ({
-    ReleaseNotesAutoShowMount: () => {
-        return React.createElement('ReleaseNotesAutoShowMount', {
-            testID: 'release-notes-auto-show-mount',
-        });
-    },
-}));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 installRootLayoutRouteCommonModuleMocks({
     reactNative: async () => {
@@ -93,9 +35,10 @@ installRootLayoutRouteCommonModuleMocks({
     },
 });
 
+await initializeRootLayoutRuntimeForTests();
+
 afterEach(() => {
     vi.restoreAllMocks();
-    vi.resetModules();
     standardCleanup();
 });
 
@@ -103,9 +46,9 @@ describe('App RootLayout pets', () => {
     it('mounts the ordinary web/app-shell pet companion runtime', async () => {
         const RootLayout = (await import('@/app/(app)/_layout')).default;
 
-        const screen = await renderScreen(React.createElement(RootLayout));
+        const screen = await renderRootLayoutRoute(RootLayout);
         await flushHookEffects();
 
-        expect(screen.findAllByTestId('pet-app-shell-companion-mount')).toHaveLength(1);
+        expect(screen.tree.root.findAllByType(PetAppShellCompanionMount)).toHaveLength(1);
     });
 });

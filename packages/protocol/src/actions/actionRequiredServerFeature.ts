@@ -47,6 +47,7 @@ export function getActionRequiredServerFeatureId(
   if (actionId === 'remote_hosts.trusted_keys.list' || actionId === 'remote_hosts.trusted_keys.remove'
     || actionId === 'remote_hosts.trusted_keys.clear' || actionId === 'remote_hosts.tunnel.stop') return null;
   if (isRemoteHostActionIdV1(actionId)) return 'remoteHosts.management';
+  if ((ACTION_ID_FAMILIES_V1.session_agent_transition as readonly string[]).includes(actionId)) return 'sessions.agentSwitching';
   const presentHumanUi = context?.surface === 'ui' && context.authority === 'present_user';
   if (browserAutomationActionIds.has(actionId) || (browserNavigationActionIds.has(actionId) && !presentHumanUi)) {
     return 'browser.automation';

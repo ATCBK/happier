@@ -196,6 +196,9 @@ export type MachineConnectionActionInputById = {
     readonly "machines.add.ssh.cancel": {
         taskId?: string | undefined;
     };
+    readonly "homes.reconnect": {
+        serverId: string;
+    };
     readonly "homes.connect": {
         address: string;
         displayName?: string | undefined;
@@ -428,6 +431,9 @@ export type MachineConnectionActionResultById = {
         taskId: string;
     } | {
         pendingCanceled: true;
+    };
+    readonly "homes.reconnect": {
+        serverId: string;
     };
     readonly "homes.connect": {
         kind: 'connected';

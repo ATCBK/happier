@@ -694,7 +694,7 @@ type PredictiveSwitchGuardResult =
 export type ConnectedServiceQuotaPredictiveSwitchGuard = (
   input: Readonly<{
     sessionId: string;
-    serviceId: ConnectedServiceId;
+    serviceId: ConnectedAccountServiceKey;
     groupId: string;
     activeProfileId: string;
     reason: 'soft_threshold';

@@ -38,7 +38,10 @@ function createHarness(_createSessionsDomain: unknown, createReducer: typeof imp
 }
 
 describe('sessions domain: thinking grace', () => {
-    it('owns a bounded resuming marker until genuine post-attach activity settles it', async () => {
+    it.each([
+        { recency: 'creation', hasHistory: false },
+        { recency: 'loaded history', hasHistory: true },
+    ])('owns a bounded resuming marker until genuine post-attach activity settles it ($recency)', async ({ hasHistory }) => {
         const scheduledTimeouts = new Map<number, { callback: () => void; delay: number }>();
         let nextTimeoutId = 1;
         let nowMs = Date.parse('2026-02-05T00:00:00.000Z');
@@ -65,6 +68,7 @@ describe('sessions domain: thinking grace', () => {
         });
         const baseSession = (overrides: Partial<Session>): Session => ({
             id: 's1',
+            serverId: 'server_1',
             seq: 0,
             createdAt: 1,
             updatedAt: 1,
@@ -80,10 +84,51 @@ describe('sessions domain: thinking grace', () => {
             ...overrides,
         });
 
-        domain.applySessions([baseSession({
-            latestTurnStatus: 'completed',
-            latestTurnStatusObservedAt: nowMs - 60_000,
-        })]);
+        const { fetchAndApplySessionById } = await import('../../engine/sessions/sessionById');
+        const hydration = await fetchAndApplySessionById({
+            sessionId: 's1',
+            serverId: 'server_1',
+            credentials: { token: 'plain-account-token' },
+            accountCurrentness: {
+                mode: 'plain', version: 1, signingKeyFingerprint: null,
+                contentKeyFingerprint: null, updatedAt: 1,
+            },
+            // The production plaintext Account adapter has no client encryption material.
+            encryption: {
+                decryptEncryptionKey: async () => null,
+                initializeSessions: async () => {},
+                getSessionEncryption: () => null,
+            },
+            sessionDataKeys: new Map(),
+            request: async () => Response.json({ session: {
+                id: 's1', seq: 0, createdAt: 1, updatedAt: 1,
+                active: false, activeAt: 1, encryptionMode: 'plain',
+                metadata: '{}', metadataVersion: 0,
+                agentState: '{}', agentStateVersion: 1,
+                dataEncryptionKey: null, share: null,
+                latestTurnStatus: 'completed',
+                latestTurnStatusObservedAt: nowMs - 60_000,
+                // The admitted legacy HTTP carrier omits meaningfulActivityAt.
+            } }),
+            applySessions: domain.applySessions,
+            getExistingSession: (id) => get().sessions[id],
+            log: { log: () => {} },
+            includeTurnsProjection: false,
+        });
+        expect(hydration.ok).toBe(true);
+        if (hasHistory) {
+            domain.applyMessages('s1', [{
+                id: 'historical-message', seq: 1, localId: null, createdAt: 100,
+                isSidechain: false, role: 'agent',
+                content: [{ type: 'text', text: 'Earlier activity', uuid: 'historical-message', parentUUID: null }],
+            }]);
+        }
+        const ownedRow = get().sessionListRowsByServerId.server_1?.s1;
+        if (!ownedRow) throw new Error('Expected the hydrated Session Home row');
+        storage.setState({ sessionListRowsByServerId: {
+            ...get().sessionListRowsByServerId,
+            server_foreign: { s1: { ...ownedRow, meaningfulActivityAt: nowMs + 10_000 } },
+        } });
         domain.markSessionOptimisticThinking('s1');
         domain.markSessionResuming('s1');
 
@@ -105,6 +150,26 @@ describe('sessions domain: thinking grace', () => {
             latestTurnStatusObservedAt: nowMs - 60_500,
         })]);
         expect(get().sessions.s1?.resumingAt).toBe(nowMs - 500);
+        expect(get().sessionListRowsByServerId.server_1?.s1?.resumingAt).toBe(nowMs - 500);
+        expect(get().sessions.s1?.optimisticThinkingAt).toBe(nowMs - 500);
+
+        nowMs += 500;
+        domain.applyMessages('s1', [{
+            id: 'post-attach-message', seq: 2, localId: null, createdAt: nowMs,
+            isSidechain: false, role: 'agent',
+            content: [{ type: 'text', text: 'New activity', uuid: 'post-attach-message', parentUUID: null }],
+        }]);
+        expect(get().sessionListRowsByServerId.server_1?.s1?.meaningfulActivityAt).toBe(nowMs);
+        expect(get().sessions.s1?.resumingAt).toBe(nowMs - 1_000);
+        domain.applySessions([baseSession({
+            active: true, activeAt: nowMs, presence: 'online',
+            latestTurnStatus: 'completed', latestTurnStatusObservedAt: nowMs - 61_000,
+        })]);
+        expect(get().sessions.s1?.resumingAt ?? null).toBeNull();
+        expect(get().sessionListRowsByServerId.server_1?.s1?.resumingAt ?? null).toBeNull();
+
+        domain.markSessionOptimisticThinking('s1');
+        domain.markSessionResuming('s1');
 
         nowMs += 500;
         domain.applySessions([baseSession({
@@ -126,7 +191,7 @@ describe('sessions domain: thinking grace', () => {
             activeAt: nowMs,
             presence: nowMs,
             latestTurnStatus: 'completed',
-            latestTurnStatusObservedAt: nowMs - 60_000,
+            latestTurnStatusObservedAt: nowMs,
         })]);
         domain.markSessionResuming('s1');
         expect(get().sessions.s1?.resumingAt).toBe(nowMs);
@@ -137,7 +202,7 @@ describe('sessions domain: thinking grace', () => {
             activeAt: nowMs,
             presence: 'online',
             latestTurnStatus: 'completed',
-            latestTurnStatusObservedAt: nowMs - 60_500,
+            latestTurnStatusObservedAt: nowMs - 500,
         })]);
         expect(get().sessions.s1?.resumingAt ?? null).toBeNull();
 
@@ -149,6 +214,22 @@ describe('sessions domain: thinking grace', () => {
         expect(secondDecay).toBeDefined();
         secondDecay?.callback();
         expect(get().sessions.s1?.resumingAt ?? null).toBeNull();
+
+        for (const activity of ['status', 'ready', 'meaningful'] as const) {
+            const previousSession = get().sessions.s1;
+            domain.markSessionOptimisticThinking('s1');
+            domain.markSessionResuming('s1');
+            nowMs += 500;
+            domain.applySessions([{
+                ...previousSession,
+                active: true, activeAt: nowMs, presence: 'online',
+                ...(activity === 'status' ? { latestTurnStatusObservedAt: nowMs } : {}),
+                ...(activity === 'ready' ? { latestReadyEventSeq: 1, latestReadyEventAt: nowMs } : {}),
+                ...(activity === 'meaningful' ? { meaningfulActivityAt: nowMs } : {}),
+            }]);
+            expect(get().sessions.s1?.resumingAt ?? null, activity).toBeNull();
+            expect(get().sessionListRowsByServerId.server_1?.s1?.resumingAt ?? null, activity).toBeNull();
+        }
     });
 
     it('starts thinkingGraceUntil only after thinking turns off (prevents UI flicker without streaming churn)', async () => {
@@ -321,6 +402,7 @@ describe('sessions domain: thinking grace', () => {
         domain.applySessions([
             {
                 id: 's1',
+                serverId: 'server_1',
                 seq: 0,
                 createdAt: nowMs,
                 updatedAt: nowMs,
@@ -340,6 +422,7 @@ describe('sessions domain: thinking grace', () => {
         domain.applySessions([
             {
                 id: 's1',
+                serverId: 'server_1',
                 seq: 0,
                 createdAt: nowMs - 250,
                 updatedAt: nowMs,

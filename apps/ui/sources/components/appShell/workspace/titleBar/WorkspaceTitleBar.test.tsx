@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit/render/renderWithAppProviders';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
 import type { SplitCanvasHostControls } from '../../splitCanvas/components/SplitCanvasHost';
 import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue } from '../WorkspaceNavigationContext';
@@ -39,9 +40,9 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
 type WindowFrame = Readonly<{ x: number; width: number }>;
 
 /** The platform's window measurement, per measured view (the only boundary between panes and the strip). */
-function windowMeasurement(frames: Readonly<Record<string, WindowFrame>>) {
-    return (element: React.ReactElement<{ testID?: string }>) => {
-        const frame = element.props.testID ? frames[element.props.testID] : undefined;
+function windowMeasurement(frames: Readonly<Record<string, WindowFrame>>): NonNullable<RenderWithAppProvidersOptions['createNodeMock']> {
+    return element => {
+        const frame = typeof element.props.testID === 'string' ? frames[element.props.testID] : undefined;
         return frame
             ? { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(frame.x, 0, frame.width, 800) }
             : null;

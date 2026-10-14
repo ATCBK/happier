@@ -78,6 +78,7 @@ import type {
   ResolvedEventDefinition,
   ResolvedResourceDefinition,
   ResolvedToolDefinition,
+  ResolvedRoleContribution,
   PluginLocaleScopedIdentity,
 } from '../types';
 
@@ -137,6 +138,9 @@ export type PluginOwnedComposerAttachmentContribution = PluginOwnedContribution<
 export type PluginOwnedComposerControlContribution = PluginOwnedContribution<PluginComposerControlContributionV1>;
 export type PluginOwnedComposerRegionContribution = PluginOwnedContribution<PluginComposerRegionContributionV1>;
 
+type PluginOwnedRoleContribution = PluginOwnedContribution<PluginRoleDeclarationV1>
+  & Pick<ResolvedRoleContribution, 'displayName'>;
+
 export type PluginContributionRegistry = Readonly<{
   semanticContributionsByFamily: ReadonlyMap<string, readonly PluginOwnedSemanticContribution[]>;
   uiViewsV2: readonly PluginOwnedContribution<PluginUiViewV2>[];
@@ -168,7 +172,7 @@ export type PluginContributionRegistry = Readonly<{
   notificationChannels: readonly PluginOwnedContribution<PluginNotificationChannelContributionV2>[];
   events: readonly PluginOwnedContribution<ResolvedEventDefinition>[];
   executionRunProfiles: readonly PluginOwnedContribution<PluginExecutionRunProfileContributionV2>[];
-  roles: readonly PluginOwnedContribution<PluginRoleDeclarationV1>[];
+  roles: readonly PluginOwnedRoleContribution[];
   workflows: readonly PluginOwnedContribution<PluginWorkflowContributionV1>[];
   inputTypes: readonly PluginOwnedContribution<PluginInputTypeContributionV1>[];
   atmospherePictures: readonly PluginOwnedContribution<PluginAtmospherePictureContributionV1>[];
@@ -416,7 +420,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
   const notificationChannels: PluginOwnedContribution<PluginNotificationChannelContributionV2>[] = [];
   const events: PluginOwnedContribution<ResolvedEventDefinition>[] = [];
   const executionRunProfiles: PluginOwnedContribution<PluginExecutionRunProfileContributionV2>[] = [];
-  const roles: PluginOwnedContribution<PluginRoleDeclarationV1>[] = [];
+  const roles: PluginOwnedRoleContribution[] = [];
   const workflows: PluginOwnedContribution<PluginWorkflowContributionV1>[] = [];
   const inputTypes: PluginOwnedContribution<PluginInputTypeContributionV1>[] = [];
   const atmospherePictures: PluginOwnedContribution<PluginAtmospherePictureContributionV1>[] = [];

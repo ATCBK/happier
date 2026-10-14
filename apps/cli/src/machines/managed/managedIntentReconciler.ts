@@ -6,7 +6,7 @@ import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/ma
 import type { ManagedPolicyPurposeV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import type { ActionExecutorContext } from '@happier-dev/protocol';
 import { isDeepStrictEqual } from 'node:util';
-import { ManagedMachineControllerError, ManagedMachineNativeRefusal, ManagedMachineNativeEffectGuardRefusal } from './acquire';
+import { ManagedMachineControllerError, ManagedMachineNativeRefusal, ManagedMachineNativeEffectGuardRefusal } from './controllerErrors';
 import { createManagedNativeInvocation, reconcileManagedMachine, type ManagedMachineReconciliationInput } from './reconcile';
 import { createManagedGuestActivityTransport } from './managedActivityTransport';
 import { waitForChangeOrDeadline } from '@/daemon/lifecycle/waitForChangeOrDeadline';

@@ -1,16 +1,27 @@
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MobileBottomChromeHost } from '@/components/navigation/mobile/chrome/MobileBottomChromeHost';
+import { AuthenticatedAppRuntimeMounts } from '@/components/appShell/runtime/AuthenticatedAppRuntimeMounts';
+import { DesktopMainWindowRuntimes } from '@/desktop/DesktopMainWindowRuntimes';
+import { beginOnboardingJourneySession, endOnboardingJourneySession } from '@/components/onboarding/tour/state/journeySession';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 
-import { renderScreen } from '@/dev/testkit';
-import { installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+import { initializeRootLayoutRuntimeForTests, renderRootLayoutRoute, installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const hoistedState = vi.hoisted(() => ({
-    journeyActive: false,
-    desktopOverlayWindow: false,
     desktopHost: false,
 }));
+const desktopSecureStorage = createDesktopSecureStorageBoundary();
+async function desktopInvoke(command: string, args?: Readonly<Record<string, unknown>>) {
+    if (command.startsWith('desktop_secure_storage_')) return desktopSecureStorage.invoke(command, args);
+    if (command === 'desktop_set_window_mode' || command === 'desktop_set_tray_state') return null;
+    if (command === 'desktop_get_window_chrome_policy') return { strategy: 'none' };
+    throw new Error(`Unexpected native command: ${command}`);
+}
+vi.mock('@tauri-apps/api/event', async importOriginal => ({ ...await importOriginal<typeof import('@tauri-apps/api/event')>(), listen: vi.fn(async () => () => {}) }));
 
 installRootLayoutRouteCommonModuleMocks({
     router: async () => {
@@ -36,129 +47,76 @@ installRootLayoutRouteCommonModuleMocks({
     },
 });
 
-
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({
-        isAuthenticated: true,
-        refreshFromActiveServer: vi.fn(async () => {}),
-    }),
-}));
-
-vi.mock('@/auth/routing/authRouting', () => ({
-    isPublicRouteForUnauthenticated: () => false,
-}));
-
-vi.mock('@/hooks/server/useFriendsIdentityReadiness', () => ({
-    useFriendsIdentityReadiness: () => ({ isReady: true }),
-}));
-
-vi.mock('@/hooks/server/useHappierVoiceSupport', () => ({
-    useHappierVoiceSupport: () => true,
-}));
-
-vi.mock('@/components/navigation/mobile/chrome/MobileBottomChromeHost', () => ({
-    MobileBottomChromeHost: () => React.createElement('MobileBottomChromeHost'),
-}));
-
-vi.mock('@/components/appShell/runtime/AuthenticatedAppRuntimeMounts', () => ({
-    AuthenticatedAppRuntimeMounts: () => React.createElement('AuthenticatedAppRuntimeMounts'),
-}));
-
-vi.mock('@/desktop/DesktopMainWindowRuntimes', () => ({
-    DesktopMainWindowRuntimes: () => React.createElement('DesktopMainWindowRuntimes'),
-}));
-
-vi.mock('@/utils/platform/desktopHost', async () => ({
-    ...await vi.importActual<typeof import('@/utils/platform/desktopHost')>('@/utils/platform/desktopHost'),
-    isDesktopHost: () => hoistedState.desktopHost,
-    // Native window commands have no OS host in this route harness; routing logic stays real.
-    invokeDesktopHost: async (command: string) => {
-        if (command === 'desktop_set_window_mode') return null;
-        if (command === 'desktop_get_window_chrome_policy') return { strategy: 'none' };
-        throw new Error(`Unexpected native command: ${command}`);
-    },
-}));
-
-vi.mock('@/desktop/window/isDesktopOverlayWindowContext', () => ({
-    isDesktopOverlayWindowContext: () => hoistedState.desktopOverlayWindow,
-}));
-
-vi.mock('@/components/onboarding/tour/state/journeySession', () => ({
-    doesOnboardingJourneyOwnTransientDemoServer: (active: boolean) => active,
-    useOnboardingJourneySessionActive: () => hoistedState.journeyActive,
-}));
-
-vi.mock('@/components/navigation/mobile/chrome/MainAppTabStateProvider', () => ({
-    MainAppTabStateProvider: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
-}));
-
-// Keep cold route transforms outside the assertion budget without retaining a case's flags.
-await import('@/app/(app)/_layout');
-vi.resetModules();
+await initializeRootLayoutRuntimeForTests();
+beforeEach(() => {
+    vi.stubGlobal('__TAURI_INTERNALS__', undefined);
+    Object.defineProperty(globalThis, '__TAURI_INTERNALS__', { configurable: true, get: () => hoistedState.desktopHost ? { invoke: desktopInvoke } : undefined });
+});
 
 afterEach(() => {
-    hoistedState.journeyActive = false;
-    hoistedState.desktopOverlayWindow = false;
+    endOnboardingJourneySession();
+    vi.unstubAllGlobals();
     hoistedState.desktopHost = false;
-    vi.resetModules();
+    desktopSecureStorage.values.clear();
 });
 
 describe('RootLayout mobile bottom chrome wiring', () => {
     it('renders the mobile bottom chrome host after the stack so only its capsule wins pointer hit-testing', async () => {
-        hoistedState.journeyActive = false;
+        endOnboardingJourneySession();
         const RootLayout = (await import('@/app/(app)/_layout')).default;
-        const screen = await renderScreen(<RootLayout />);
+        const screen = await renderRootLayoutRoute(RootLayout);
 
         const stack = screen.tree.findByType('Stack' as never);
-        const mobileChrome = screen.tree.findByType('MobileBottomChromeHost' as never);
-        screen.tree.findByType('AuthenticatedAppRuntimeMounts' as never);
+        const mobileChrome = screen.tree.findByType(MobileBottomChromeHost.type);
+        screen.tree.findByType(AuthenticatedAppRuntimeMounts.type);
 
         // The Stack mock is intentionally a leaf. If chrome regresses inside Stack,
         // it will not render and the findByType above fails rather than producing
         // the same misleading Stack → MobileBottomChromeHost preorder.
-        expect(stack.findAllByType('MobileBottomChromeHost' as never)).toHaveLength(0);
+        expect(stack.findAllByType(MobileBottomChromeHost.type)).toHaveLength(0);
         expect(screen.tree.findAll((node) => (
-            String(node.type) === 'AuthenticatedAppRuntimeMounts'
+            node.type === AuthenticatedAppRuntimeMounts.type
             || String(node.type) === 'Stack'
             || node === mobileChrome
-        )).map((node) => String(node.type))).toEqual([
-            'AuthenticatedAppRuntimeMounts',
+        )).map((node) => node.type)).toEqual([
+            AuthenticatedAppRuntimeMounts.type,
             'Stack',
-            'MobileBottomChromeHost',
+            MobileBottomChromeHost.type,
         ]);
     });
 
     it('keeps app-only auxiliary mounts out of the full-viewport onboarding journey', async () => {
-        hoistedState.journeyActive = true;
+        beginOnboardingJourneySession();
         const RootLayout = (await import('@/app/(app)/_layout')).default;
-        const screen = await renderScreen(<RootLayout />);
+        const screen = await renderRootLayoutRoute(RootLayout);
 
-        expect(screen.tree.findAllByType('MobileBottomChromeHost' as never)).toHaveLength(0);
-        expect(screen.tree.findAllByType('AuthenticatedAppRuntimeMounts' as never)).toHaveLength(0);
+        expect(screen.tree.findAllByType(MobileBottomChromeHost.type)).toHaveLength(0);
+        expect(screen.tree.findAllByType(AuthenticatedAppRuntimeMounts.type)).toHaveLength(0);
     });
 
     it('keeps app-owned runtimes out of dedicated desktop overlay presenters', async () => {
-        hoistedState.desktopOverlayWindow = true;
+        hoistedState.desktopHost = true;
+        vi.stubGlobal('window', { location: { href: 'https://app.example.test/desktop/activity-overlay' } });
         const RootLayout = (await import('@/app/(app)/_layout')).default;
-        const screen = await renderScreen(<RootLayout />);
+        const screen = await renderRootLayoutRoute(RootLayout);
 
-        expect(screen.tree.findAllByType('AuthenticatedAppRuntimeMounts' as never)).toHaveLength(0);
+        expect(screen.tree.findAllByType(AuthenticatedAppRuntimeMounts.type)).toHaveLength(0);
         expect(screen.tree.findAllByType('Stack' as never)).toHaveLength(1);
     });
 
     it('keeps the desktop main window\'s tray and Quit handoff mounted through the onboarding journey, never in an overlay window (R13C-F3)', async () => {
         hoistedState.desktopHost = true;
-        hoistedState.journeyActive = true;
+        beginOnboardingJourneySession();
         const RootLayout = (await import('@/app/(app)/_layout')).default;
-        const screen = await renderScreen(<RootLayout />);
-        expect(screen.tree.findAllByType('DesktopMainWindowRuntimes' as never)).toHaveLength(1);
-        expect(screen.tree.findAllByType('AuthenticatedAppRuntimeMounts' as never)).toHaveLength(0);
+        const screen = await renderRootLayoutRoute(RootLayout);
+        expect(screen.tree.findAllByType(DesktopMainWindowRuntimes)).toHaveLength(1);
+        expect(screen.tree.findAllByType(AuthenticatedAppRuntimeMounts.type)).toHaveLength(0);
 
         await screen.unmount();
-        vi.resetModules();
-        hoistedState.desktopOverlayWindow = true;
+        hoistedState.desktopHost = true;
+        vi.stubGlobal('window', { location: { href: 'https://app.example.test/desktop/activity-overlay' } });
         const OverlayLayout = (await import('@/app/(app)/_layout')).default;
-        const overlay = await renderScreen(<OverlayLayout />);
-        expect(overlay.tree.findAllByType('DesktopMainWindowRuntimes' as never)).toHaveLength(0);
+        const overlay = await renderRootLayoutRoute(OverlayLayout);
+        expect(overlay.tree.findAllByType(DesktopMainWindowRuntimes)).toHaveLength(0);
     });
 });

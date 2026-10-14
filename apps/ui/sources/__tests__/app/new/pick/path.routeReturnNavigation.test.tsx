@@ -1,22 +1,30 @@
-import { authoringMemoryDefaults } from '@/sync/store/domains/authoringMemory';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import {
-    flushHookEffects,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
+// Catalog owners import the Socket SDK before the runtime setup hook.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import type { BackendTargetRefV2 } from '@happier-dev/protocol';
+import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { refreshAcpCatalog } from '@/sync/engine/settings/acpCatalogEngine';
+import { getAcpCatalogSnapshot } from '@/sync/store/settings/acpCatalogSnapshot';
+import { readCachedDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 
 import {
     BUNDLED_AGENT_ROUTE_PARAMS,
     cloneNavigationState,
     createConfiguredAcpBackendCatalogSettings,
     createConfiguredBackendRouteParams,
+    createConfiguredAgentRouteParams,
     createDiscoveredPluginBackendDescribeResult,
     createNavigationMock,
     createProjectionDescribeMock,
@@ -26,21 +34,19 @@ import {
     PICKER_THEME_COLORS,
     type PickerNavigationState,
 } from './testHarness';
-import { createUseSettingMock, createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
 
 enableReactActEnvironment();
 
 const routerMock = createRouterMock();
 const navigationMock = createNavigationMock();
-const safeRouterBack = vi.fn();
 const settingsState = {
     current: {
         lastUsedAgent: 'claude',
         lastUsedBackendTarget: null as BackendTargetRefV2 | null,
         backendEnabledByTargetKey: null as Record<string, boolean> | null,
-        acpCatalogSettingsV1: null as unknown,
     },
 };
+let acpDefinitions: Array<ReturnType<typeof AcpBackendDefinitionV1Schema.parse>> = [];
 const machineContributionRegistryProjectionDescribe = createProjectionDescribeMock();
 const pickerMachineMetadata = {
     host: 'tester.local',
@@ -51,12 +57,10 @@ const pickerMachineMetadata = {
 } as const;
 const pickerMachine = createMachineFixture({
     id: 'machine-1',
+    storageMode: 'plain',
     metadata: pickerMachineMetadata,
 });
-let capturedPathSelectionListProps: {
-    onSubmitSelectedPath: (path: string) => void;
-    selectedPath?: string;
-} | null = null;
+let pathSelectionProps: (() => React.ComponentProps<typeof import('@/components/sessions/new/components/PathSelectionList').PathSelectionList>) | null = null;
 let localSearchParams: Record<string, string> = {
     machineId: 'machine-1',
     selectedPath: '/repo/current',
@@ -72,7 +76,7 @@ function emitLocalSearchParamsChange() {
         listener();
     }
 }
-installPickerCommonModuleMocks({
+const picker = installPickerCommonModuleMocks({
     reactNative: async () =>
         (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
             Platform: { OS: 'web' },
@@ -114,70 +118,12 @@ installPickerCommonModuleMocks({
                 ),
         };
     },
-    storage: async (importOriginal) =>
-        (await import('@/dev/testkit/mocks/storage')).createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useAllMachines: () => [pickerMachine],
-                useAllSessionListRenderables: () => [],
-                useAuthoringMemoryField: (key) => ({ ...authoringMemoryDefaults, recentMachinePaths: [] })[key],
-                useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'usePathPickerSearch') return false;
-                    return null;
-                } }),
-                useSettingMutable: createUseSettingMutableMockFromReader(() => [[], vi.fn()]),
-                useSettings: () => ({
-                    ...settingsDefaults,
-                    lastUsedAgent: settingsState.current.lastUsedAgent,
-                    lastUsedBackendTarget: settingsState.current.lastUsedBackendTarget,
-                    backendEnabledByTargetKey:
-                        settingsState.current.backendEnabledByTargetKey as unknown as typeof settingsDefaults.backendEnabledByTargetKey,
-                    acpCatalogSettingsV1:
-                        settingsState.current.acpCatalogSettingsV1 as unknown as typeof settingsDefaults.acpCatalogSettingsV1,
-                }),
-            },
-        }),
     text: async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock(),
-    projectionSeam: { describe: machineContributionRegistryProjectionDescribe },
+    projectionSeam: { describe: machineContributionRegistryProjectionDescribe, serverProfiles: [
+        { id: 'srv_picker_2', serverUrl: 'https://server-2.example.test' },
+        { id: 'server-legacy', serverUrl: 'https://server-legacy.example.test' },
+    ] },
 });
-
-vi.mock('@/components/ui/forms/SearchHeader', () => ({
-    SearchHeader: () => null,
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: any) => React.createElement('Text', props, props.children),
-}));
-
-vi.mock('@/components/sessions/new/components/PathSelectionList', () => ({
-    PathSelectionList: (props: any) => {
-        capturedPathSelectionListProps = {
-            ...props,
-            selectedPath: props.initialValue,
-            onSubmitSelectedPath: props.onCommit,
-            machineBrowse: {
-                enabled: true,
-                machineId: props.machineId,
-                serverId: props.serverId,
-            },
-        };
-        return React.createElement('PathSelectionList', props);
-    },
-}));
-
-vi.mock('@/utils/sessions/recentPaths', () => ({
-    getRecentPathsForMachine: () => [],
-}));
-
-vi.mock('@/utils/navigation/safeRouterBack', () => ({
-    safeRouterBack: (...args: any[]) => safeRouterBack(...args),
-}));
-
-vi.mock('@/components/ui/layout/layout', () => ({
-    layout: { maxWidth: 920 },
-    useLayoutMaxWidth: () => 920,
-    useLayoutMaxWidthStyle: () => ({ maxWidth: 920 }),
-}));
 
 describe('PathPickerScreen', () => {
     afterEach(() => {
@@ -185,8 +131,7 @@ describe('PathPickerScreen', () => {
     });
 
     beforeEach(() => {
-        vi.resetModules();
-        capturedPathSelectionListProps = null;
+        pathSelectionProps = null;
         localSearchParams = {
             machineId: 'machine-1',
             selectedPath: '/repo/current',
@@ -195,13 +140,13 @@ describe('PathPickerScreen', () => {
             lastUsedAgent: 'claude',
             lastUsedBackendTarget: null,
             backendEnabledByTargetKey: null,
-            acpCatalogSettingsV1: null,
         };
+        acpDefinitions = [];
         paramListeners.clear();
         routerMock.setParams.mockReset();
         routerMock.replace.mockReset();
         routerMock.back.mockReset();
-        safeRouterBack.mockReset();
+        navigationMock.goBack.mockReset();
         navigationMock.dispatch.mockReset();
         machineContributionRegistryProjectionDescribe.mockReset();
         machineContributionRegistryProjectionDescribe.mockResolvedValue({ supported: false, reason: 'not-supported' });
@@ -213,8 +158,38 @@ describe('PathPickerScreen', () => {
     });
 
     async function renderPathPicker() {
+        if (localSearchParams.spawnServerId === 'server-legacy') await picker.restoreHome('server-legacy');
+        const scope = picker.accountScope;
+        picker.homeBoundary.answer(scope.serverId, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 3, content: { t: 'plain', v: { v: 1, definitions: acpDefinitions } },
+        }) });
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applySettingsLocal(settingsParse({ ...settingsState.current, usePathPickerSearch: false, favoriteDirectories: [] }));
+        storage.getState().applyMachines([pickerMachine], true, { sourceServerId: scope.serverId });
         const PathPickerScreen = (await import('@/app/(app)/new/pick/path')).default;
         const screen = await renderScreen(React.createElement(PathPickerScreen));
+        if (localSearchParams.spawnServerId) {
+            await act(async () => { await refreshAcpCatalog(scope); });
+            await waitForHomeGovernance(() => expect(getAcpCatalogSnapshot(scope)).toMatchObject({
+                scope, stale: false, catalog: { status: 'ready', revision: 3 },
+            }));
+        }
+        const { PathSelectionList } = await import('@/components/sessions/new/components/PathSelectionList');
+        pathSelectionProps = () => {
+            // React's renderer SDK erases component prop types; retain the real
+            // queried props while exposing the canonical required fields.
+            const props = screen.findByType(PathSelectionList).props;
+            return {
+                ...props,
+                initialValue: props.initialValue,
+                favorites: props.favorites,
+                recents: props.recents,
+                machineHomeDir: props.machineHomeDir,
+                machineId: props.machineId,
+                onCommit: props.onCommit,
+                onRequestClose: props.onRequestClose,
+            };
+        };
         return { PathPickerScreen, screen };
     }
 
@@ -222,10 +197,10 @@ describe('PathPickerScreen', () => {
         await renderPathPicker();
         await flushHookEffects({ cycles: 1, turns: 2 });
 
-        expect(capturedPathSelectionListProps).toBeTruthy();
+        expect(pathSelectionProps).toBeTruthy();
 
         await act(async () => {
-            await capturedPathSelectionListProps?.onSubmitSelectedPath('/repo/selected');
+            await pathSelectionProps?.().onCommit('/repo/selected');
         });
 
         expect(routerMock.replace).toHaveBeenCalledWith({
@@ -239,7 +214,7 @@ describe('PathPickerScreen', () => {
             },
         });
         expect(routerMock.setParams).not.toHaveBeenCalled();
-        expect(safeRouterBack).not.toHaveBeenCalled();
+        expect(navigationMock.goBack).not.toHaveBeenCalled();
     });
 
     it('replaces back to /new instead of mutating a non-new previous route under the modal stack', async () => {
@@ -266,10 +241,10 @@ describe('PathPickerScreen', () => {
             await Promise.resolve();
         });
 
-        expect(capturedPathSelectionListProps).toBeTruthy();
+        expect(pathSelectionProps).toBeTruthy();
 
         await act(async () => {
-            await capturedPathSelectionListProps?.onSubmitSelectedPath('/repo/selected');
+            await pathSelectionProps?.().onCommit('/repo/selected');
         });
 
         expect(navigationMock.dispatch).not.toHaveBeenCalled();
@@ -283,7 +258,7 @@ describe('PathPickerScreen', () => {
                 path: undefined,
             },
         });
-        expect(safeRouterBack).not.toHaveBeenCalled();
+        expect(navigationMock.goBack).not.toHaveBeenCalled();
     });
 
     it('preserves configured backend route params on replace fallback without reserializing the legacy customAcp agentType', async () => {
@@ -292,7 +267,7 @@ describe('PathPickerScreen', () => {
             ...createConfiguredBackendRouteParams('review-bot'),
             machineId: 'machine-1',
             selectedPath: '/repo/current',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
         navigationState = {
             index: 1,
@@ -313,22 +288,22 @@ describe('PathPickerScreen', () => {
 
         await renderPathPicker();
 
-        expect(capturedPathSelectionListProps).toBeTruthy();
+        expect(pathSelectionProps).toBeTruthy();
 
         await act(async () => {
-            await capturedPathSelectionListProps?.onSubmitSelectedPath('/repo/selected');
+            await pathSelectionProps?.().onCommit('/repo/selected');
         });
 
         expect(routerMock.replace).toHaveBeenCalledTimes(1);
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                ...createConfiguredBackendRouteParams('review-bot'),
+                ...createConfiguredAgentRouteParams('review-bot'),
                 machineId: 'machine-1',
                 directoryKind: 'path',
                 directory: '/repo/selected',
                 path: undefined,
-                spawnServerId: 'server-2',
+                spawnServerId: 'srv_picker_2',
             },
         });
     });
@@ -338,13 +313,12 @@ describe('PathPickerScreen', () => {
             agentType: 'customAcp',
             machineId: 'machine-1',
             selectedPath: '/repo/current',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
         settingsState.current = {
             lastUsedAgent: 'customAcp',
             lastUsedBackendTarget: null,
             backendEnabledByTargetKey: null,
-            acpCatalogSettingsV1: null,
         };
         navigationState = {
             index: 1,
@@ -365,18 +339,21 @@ describe('PathPickerScreen', () => {
         machineContributionRegistryProjectionDescribe.mockResolvedValue(createDiscoveredPluginBackendDescribeResult());
 
         await renderPathPicker();
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readCachedDaemonMergedProjectionCacheEntry({ machineId: 'machine-1', serverId: 'srv_picker_2' }))
+                .toMatchObject({ kind: 'ready' });
+        });
 
-        expect(capturedPathSelectionListProps).toBeTruthy();
+        expect(pathSelectionProps).toBeTruthy();
 
         await act(async () => {
-            await capturedPathSelectionListProps?.onSubmitSelectedPath('/repo/selected');
+            await pathSelectionProps?.().onCommit('/repo/selected');
         });
 
         expect(machineContributionRegistryProjectionDescribe).toHaveBeenCalledWith('machine-1', expect.objectContaining({
-            serverId: 'server-2',
-            accountLifetime: expect.objectContaining({
-                scope: { serverId: 'server-2', accountId: 'account:server-2' },
-            }),
+            serverId: 'srv_picker_2',
+            accountId: 'account:srv_picker_2',
         }));
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
@@ -386,7 +363,7 @@ describe('PathPickerScreen', () => {
                 directoryKind: 'path',
                 directory: '/repo/selected',
                 path: undefined,
-                spawnServerId: 'server-2',
+                spawnServerId: 'srv_picker_2',
             },
         });
     });
@@ -396,8 +373,8 @@ describe('PathPickerScreen', () => {
             lastUsedAgent: 'customAcp',
             lastUsedBackendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' },
             backendEnabledByTargetKey: null,
-            acpCatalogSettingsV1: null,
         };
+        acpDefinitions = createConfiguredAcpBackendCatalogSettings('review-bot').backends.map(definition => AcpBackendDefinitionV1Schema.parse(definition));
         localSearchParams = {
             agentType: 'customAcp',
             machineId: 'machine-1',
@@ -423,16 +400,16 @@ describe('PathPickerScreen', () => {
 
         await renderPathPicker();
 
-        expect(capturedPathSelectionListProps).toBeTruthy();
+        expect(pathSelectionProps).toBeTruthy();
 
         await act(async () => {
-            await capturedPathSelectionListProps?.onSubmitSelectedPath('/repo/selected');
+            await pathSelectionProps?.().onCommit('/repo/selected');
         });
 
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                ...createConfiguredBackendRouteParams('review-bot'),
+                ...createConfiguredAgentRouteParams('review-bot'),
                 machineId: 'machine-1',
                 directoryKind: 'path',
                 directory: '/repo/selected',
@@ -442,18 +419,18 @@ describe('PathPickerScreen', () => {
         });
     });
 
-    it('falls back to the preferred built-in target when the stored configured backend is stale', async () => {
+    it('retains explicit configured intent for repair when its definition is missing', async () => {
         settingsState.current = {
             lastUsedAgent: 'codex',
             lastUsedBackendTarget: { kind: 'backend', backendId: 'stale-review-bot', configuredBackendId: 'stale-review-bot', sourceKind: 'configured' },
             backendEnabledByTargetKey: { 'agent:codex': true },
-            acpCatalogSettingsV1: createConfiguredAcpBackendCatalogSettings('review-bot'),
         };
+        acpDefinitions = createConfiguredAcpBackendCatalogSettings('review-bot').backends.map(definition => AcpBackendDefinitionV1Schema.parse(definition));
         localSearchParams = {
             agentType: 'customAcp',
             machineId: 'machine-1',
             selectedPath: '/repo/current',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
         navigationState = {
             index: 1,
@@ -474,21 +451,21 @@ describe('PathPickerScreen', () => {
 
         await renderPathPicker();
 
-        expect(capturedPathSelectionListProps).toBeTruthy();
+        expect(pathSelectionProps).toBeTruthy();
 
         await act(async () => {
-            await capturedPathSelectionListProps?.onSubmitSelectedPath('/repo/selected');
+            await pathSelectionProps?.().onCommit('/repo/selected');
         });
 
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                ...BUNDLED_AGENT_ROUTE_PARAMS.codex,
+                ...createConfiguredAgentRouteParams('stale-review-bot'),
                 machineId: 'machine-1',
                 directoryKind: 'path',
                 directory: '/repo/selected',
                 path: undefined,
-                spawnServerId: 'server-2',
+                spawnServerId: 'srv_picker_2',
             },
         });
     });
@@ -525,10 +502,10 @@ describe('PathPickerScreen', () => {
 
         await renderPathPicker();
 
-        expect(capturedPathSelectionListProps).toBeTruthy();
+        expect(pathSelectionProps).toBeTruthy();
 
         await act(async () => {
-            await capturedPathSelectionListProps?.onSubmitSelectedPath('/repo/selected');
+            await pathSelectionProps?.().onCommit('/repo/selected');
         });
 
         expect(navigationMock.dispatch).toHaveBeenCalledWith(expect.objectContaining({
@@ -540,7 +517,7 @@ describe('PathPickerScreen', () => {
             }),
         }));
         expect(routerMock.replace).not.toHaveBeenCalled();
-        expect(safeRouterBack).toHaveBeenCalled();
+        expect(navigationMock.goBack).toHaveBeenCalledOnce();
     });
 
     it('uses the direct-entry path query as a fallback selected path', async () => {
@@ -551,13 +528,13 @@ describe('PathPickerScreen', () => {
 
         await renderPathPicker();
 
-        expect(capturedPathSelectionListProps?.selectedPath).toBe('/repo/direct-entry');
+        expect(pathSelectionProps?.().initialValue).toBe('/repo/direct-entry');
     });
 
     it('updates the selected path when route params change after mount', async () => {
         await renderPathPicker();
 
-        expect(capturedPathSelectionListProps?.selectedPath).toBe('/repo/current');
+        expect(pathSelectionProps?.().initialValue).toBe('/repo/current');
 
         localSearchParams = {
             machineId: 'machine-1',
@@ -568,6 +545,6 @@ describe('PathPickerScreen', () => {
             emitLocalSearchParamsChange();
         });
 
-        expect(capturedPathSelectionListProps?.selectedPath).toBe('/repo/updated');
+        expect(pathSelectionProps?.().initialValue).toBe('/repo/updated');
     });
 });

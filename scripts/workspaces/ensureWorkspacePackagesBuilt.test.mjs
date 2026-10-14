@@ -2236,12 +2236,27 @@ test('non-strict workspace builds publish captured inputs despite edits during c
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@happier-dev/moving', main: './dist/index.js', scripts: { build: 'fixture-compiler' } }));
     const source = join(dir, 'src/index.ts');
     writeFileSync(source, 'export const value = "captured";');
+    // Package-root JavaScript helpers resolve their authored declaration
+    // companions during compilation, before any dist declarations exist.
+    writeFileSync(join(dir, 'runtime-helper.mjs'), 'export const helper = "captured";\n');
+    writeFileSync(join(dir, 'runtime-helper.cjs'), 'exports.helper = "captured";\n');
+    const declarations = ['runtime-helper.d.mts', 'runtime-helper.d.cts', 'types.d.ts'];
+    const declarationBytes = 'export declare const helper: string;\n';
+    for (const name of declarations) writeFileSync(join(dir, name), declarationBytes);
     const fingerprint = readWorkspacePackageInputFingerprint({ packageDir: dir });
     let attempts = 0;
     const building = ensureWorkspacePackagesBuiltByName(root, ['@happier-dev/moving'], { quiet: true, buildMode,
       workspaceBuildBoundary: { prepareEnv: async (_dir, env) => env,
         runPackageBuild: async (buildDir, { env }) => {
           attempts++;
+          for (const name of declarations) {
+            const currentDeclaration = await readFile(join(dir, name), 'utf8');
+            const capturedDeclaration = await readFile(join(buildDir, name), 'utf8');
+            assert.equal(capturedDeclaration, currentDeclaration);
+            await writeFile(join(dir, name), 'export declare const helper: number;\n');
+            assert.equal(await readFile(join(buildDir, name), 'utf8'), buildMode === 'qa-runtime'
+              ? capturedDeclaration : 'export declare const helper: number;\n');
+          }
           await writeFile(source, 'export const value = "later-' + attempts + '";');
           const contents = await readFile(join(buildDir, 'src/index.ts'), 'utf8');
           await writeFile(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), contents);
@@ -2970,6 +2985,71 @@ test('workspace build preserves an inherited bundle lease through an unbundled p
     },
     { lockPath: workspaceBundleLockPath },
   );
+});
+
+test('first-party plugin UI siblings prepare their manifests inside joint publication admission before capture', async (t) => {
+  const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), 'happier-plugin-ui-manifest-admission-')));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({
+    private: true, workspaces: ['apps/*', 'packages/plugins/*'],
+  }));
+  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  for (const appName of ['ui', 'cli', 'server']) {
+    const appDir = join(repoRoot, 'apps', appName);
+    mkdirSync(appDir, { recursive: true });
+    writeFileSync(join(appDir, 'package.json'), JSON.stringify({ name: `@fixture/${appName}`, private: true }));
+  }
+  const packageNames = ['@happier-dev/plugins-first', '@happier-dev/plugins-second'];
+  for (const packageName of packageNames) {
+    const id = packageName.slice('@happier-dev/plugins-'.length);
+    const packageDir = join(repoRoot, 'packages/plugins', id);
+    mkdirSync(join(packageDir, 'src'), { recursive: true });
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+      name: packageName, version: '0.0.0', type: 'module', main: './dist/index.js',
+      exports: { '.': './dist/index.js', './happier-plugin-ui/panel': './src/panel.ts' },
+      scripts: { build: 'fixture-compiler', 'build:ui': 'happier-plugin-build-ui' },
+    }));
+    writeFileSync(join(packageDir, 'src/index.ts'), 'export const value = true;\n');
+    writeFileSync(join(packageDir, 'src/panel.ts'), 'export function renderSurface() { return null; }\n');
+    writeFileSync(join(packageDir, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({
+      schemaVersion: 2, id: `happier.${id}`, version: '0.0.0', displayName: id,
+      engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
+      entrypoints: { daemon: './.happier-plugin/daemon.js' },
+      hostAccess: { required: [], optional: [] },
+      contributes: { ui: { renderers: [{ id: 'panel', kind: 'reactNative', artifact: 'panel' }] } },
+    })};\n`);
+  }
+  const workspaceLock = resolveWorkspaceBundleLockPath(repoRoot);
+  const ancestorLock = join(repoRoot, 'ancestor-publication.lock');
+  const built = [];
+  // The admitted root may retain a different primary publication lease.
+  // The canonical lock owner must resolve this transaction's global lease
+  // from its existing inherited lease array rather than waiting on itself.
+  const result = await withWorkspaceBundleLock(({ heldLockValue }) => ensureWorkspacePackagesBuiltByName(repoRoot, packageNames, {
+    buildMode: 'source-dev', maxConcurrentBuilds: 2,
+    env: { ...process.env, HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '0',
+      HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue },
+    workspaceBuildBoundary: {
+      async prepareEnv(_packageDir, env) { return { ...env }; },
+      async runPackageBuild(capturedPackageDir, { env }) {
+        const packageJson = JSON.parse(readFileSync(join(capturedPackageDir, 'package.json'), 'utf8'));
+        const packageDir = join(repoRoot, 'packages/plugins', packageJson.name.slice('@happier-dev/plugins-'.length));
+        assert.equal(JSON.parse(env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD).path, ancestorLock);
+        assert.equal(existsSync(workspaceLock), true, 'manifest preparation and capture must retain admitted publication custody');
+        assert.equal(existsSync(resolveWorkspacePackageBuildLockPath(packageDir, packageJson)), true);
+        assert.notEqual(capturedPackageDir, packageDir, 'the UI input must be consumed from bounded source capture');
+        const manifest = JSON.parse(readFileSync(join(capturedPackageDir, '.happier-plugin/plugin.json'), 'utf8'));
+        assert.equal(manifest.id, `happier.${packageJson.name.slice('@happier-dev/plugins-'.length)}`);
+        built.push(packageJson.name);
+        await writeFile(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), 'export const value = true;\n');
+        mkdirSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'happier-plugin-ui'), { recursive: true });
+        await writeFile(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'happier-plugin-ui/ui-artifacts.json'), '{"version":1,"entries":[]}\n');
+      },
+    },
+  }), { lockPath: ancestorLock });
+  assert.deepEqual([...result.built].sort(), packageNames);
+  assert.deepEqual(built.sort(), packageNames);
+  assert.equal(existsSync(workspaceLock), false);
 });
 
 test('plugin UI runtime build uses only its package lock', async (t) => {

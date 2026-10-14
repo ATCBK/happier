@@ -20,6 +20,7 @@ import {
 import type {
     ConnectedServiceCredentialRevisionV1,
     ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1,
+    ConnectedServiceAuthGroupStateV1,
 } from '@happier-dev/protocol';
 import { logger } from '@/ui/logger';
 import type { AutomaticQuotaResetContext, ConnectedServiceQuotaRecoveryCreditConsumeResult } from '../../quotas/ConnectedServiceQuotasCoordinator';
@@ -91,6 +92,9 @@ export type ConnectedServiceAuthGroupSwitchState<
     serviceId: TServiceIdentity;
     groupId: string;
     activeProfileId: string | null;
+    activeSince?: ConnectedServiceAuthGroupStateV1['activeSince'];
+    lastSwitchReason?: string | null;
+    lastSwitchAt?: number | null;
     incarnation?: string;
     generation: number;
     runtimeStateRevision?: number;
@@ -827,6 +831,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
         observedAtMs: number;
         selection: ReturnType<typeof selectConnectedServiceAuthGroupCandidate>;
         hypothetical?: Readonly<{ strategy: ConnectedServiceAuthGroupPolicyV1['strategy']; atMs: number }>;
+        activeAccountRef: Readonly<{ service: TServiceIdentity; accountId: string }> | null;
+        activeSince: NonNullable<ConnectedServiceAuthGroupStateV1['activeSince']> | null;
     }>> {
         const loaded = await this.deps.loadState(input);
         const observedAtMs = this.deps.nowMs();
@@ -836,11 +842,17 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
         return {
             observedAtMs,
             ...(input.hypothetical ? { hypothetical: { strategy: policy.strategy, atMs } } : {}),
+            activeAccountRef: loaded.activeProfileId ? { service: loaded.serviceId, accountId: loaded.activeProfileId } : null,
+            // Only the persisted identity-bound clock describes the current account.
+            // Observation time and legacy last-switch timestamps are not selection time.
+            activeSince: loaded.activeProfileId && loaded.activeSince?.accountId === loaded.activeProfileId ? loaded.activeSince : null,
             selection: selectConnectedServiceAuthGroupCandidate({
                 nowMs: atMs,
                 quotaFreshnessMs: this.deps.quotaFreshnessMs,
                 activeProfileId: loaded.activeProfileId,
                 policy,
+                lastSwitchReason: loaded.lastSwitchReason,
+                lastSwitchAt: loaded.lastSwitchAt,
                 members: loaded.members,
                 memberStatesByProfileId: loaded.memberStatesByProfileId,
                 allowCurrentProfileRetry: true,
@@ -867,6 +879,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
                 quotaFreshnessMs: this.deps.quotaFreshnessMs,
                 activeProfileId: input.activeProfileId ?? null,
                 policy: input.state.policy,
+                lastSwitchReason: input.state.lastSwitchReason,
+                lastSwitchAt: input.state.lastSwitchAt,
                 members: input.state.members,
                 memberStatesByProfileId,
                 unavailableProfileIds,
@@ -971,6 +985,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
         const unavailableProfileIds = new Set(selected.excluded.filter((entry) => entry.reason === 'credential_unavailable').map((entry) => entry.profileId));
         const selectionInput = () => ({ nowMs: this.deps.nowMs(), quotaFreshnessMs: this.deps.quotaFreshnessMs,
             activeProfileId: loaded.activeProfileId, policy: loaded.policy, members: loaded.members,
+            lastSwitchReason: loaded.lastSwitchReason, lastSwitchAt: loaded.lastSwitchAt,
             memberStatesByProfileId: loaded.memberStatesByProfileId, unavailableProfileIds });
         const reconsider = async (receipt?: ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1) => {
             loaded = applyMemberStateOverrides({ loaded: await this.deps.loadState(input.request), overrides: input.overrides });
@@ -1380,6 +1395,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
             quotaFreshnessMs: this.deps.quotaFreshnessMs,
             activeProfileId: failedProfileId,
             policy: observed.policy,
+            lastSwitchReason: observed.lastSwitchReason,
+            lastSwitchAt: observed.lastSwitchAt,
             members: observed.members,
             memberStatesByProfileId: observed.memberStatesByProfileId,
             providerLimitId: input.providerLimitId,
@@ -1775,6 +1792,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
                     quotaFreshnessMs: this.deps.quotaFreshnessMs,
                     activeProfileId: selectionActiveProfileId,
                     policy: loaded.policy,
+                    lastSwitchReason: loaded.lastSwitchReason,
+                    lastSwitchAt: loaded.lastSwitchAt,
                     members: loaded.members,
                     memberStatesByProfileId: loaded.memberStatesByProfileId,
                     providerLimitId: input.providerLimitId,
@@ -2329,6 +2348,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
                     quotaFreshnessMs: this.deps.quotaFreshnessMs,
                     activeProfileId: observedProfileId,
                     policy: loaded.policy,
+                    lastSwitchReason: loaded.lastSwitchReason,
+                    lastSwitchAt: loaded.lastSwitchAt,
                     members: loaded.members,
                     memberStatesByProfileId: loaded.memberStatesByProfileId,
                     allowCurrentProfileRetry,

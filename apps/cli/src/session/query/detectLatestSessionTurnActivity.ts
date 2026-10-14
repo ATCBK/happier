@@ -13,6 +13,7 @@ export async function detectLatestSessionTurnActivity(params: Readonly<{
     encryptionVariant: 'legacy' | 'dataKey' | null;
     afterSeqExclusive?: number;
     transcriptFetchTimeoutMs?: number;
+    resolveAuthorizationHeaders?: Parameters<typeof fetchSessionById>[0]['resolveAuthorizationHeaders'];
     signal?: AbortSignal;
 }>): Promise<SessionTurnActivity> {
     let projectedActivity: SessionTurnActivity | null = null;
@@ -20,6 +21,7 @@ export async function detectLatestSessionTurnActivity(params: Readonly<{
         const refreshedSession = await fetchSessionById({
             token: params.token,
             sessionId: params.sessionId,
+            ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
         });
         projectedActivity = detectSessionTurnActivityFromProjection(refreshedSession);
@@ -33,6 +35,7 @@ export async function detectLatestSessionTurnActivity(params: Readonly<{
     const transcriptActivity = await detectSessionTurnActivity({
         token: params.token,
         sessionId: params.sessionId,
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
         encryptionMode: params.encryptionMode,
         encryptionKey: params.encryptionKey,

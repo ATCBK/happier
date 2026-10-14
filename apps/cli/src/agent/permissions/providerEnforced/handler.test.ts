@@ -319,12 +319,12 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
       'utf8',
     );
 
-    expect(baseHandlerSource).toContain(
+    expect(baseHandlerSource.includes(
       "import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/protocol/agents/claude';",
-    );
-    expect(baseHandlerSource).not.toContain(
+    )).toBe(true);
+    expect(baseHandlerSource.includes(
       "import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/plugin-sdk/agents';",
-    );
+    )).toBe(false);
   });
 
   afterEach(() => {

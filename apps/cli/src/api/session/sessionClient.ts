@@ -2,7 +2,7 @@ import { logger } from '@/ui/logger'
 import { registerPluginCatalogSignal } from './client/registerPluginCatalogSignal';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
-import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActionExecutionAuthorization';
+import { createExternalActionAuthorizedRequestHeaders, verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { randomUUID } from 'node:crypto'
 import {
     createSessionActionConfirmationAdapter,
@@ -59,6 +59,10 @@ import type { EphemeralSendOutcome } from './client/transcript/ephemeralSendOutc
 import type { CommittedTranscriptMessageOptions } from './transcriptPort';
 import type { TurnAssistantTextSnapshotStore } from './turns/assistantTextSnapshot';
 import { createTurnAssistantTextSnapshotStore } from './turns/assistantTextSnapshotStore';
+import { prepareInstalledRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import {
     registerSessionClientRuntimeHandlers,
 } from './client/executionRuns/registerSessionClientRuntimeHandlers';
@@ -1473,6 +1477,51 @@ export class ApiSessionClient extends EventEmitter {
             scopePrefix: this.sessionId,
             localMachineId: options.localMachineId,
             ...rpcTransportConfig,
+            authorizeRequest: async ({ callerInputAuthorization: authorization, signal }) => {
+                // API roots retain only their verified principal and captured grant, never Account custody.
+                if (!authorization || !('grant' in authorization.binding) || authorization.requesterAccountContext) return { ok: true };
+                try {
+                    const installation = readInstallationIdentityIfExistsSync();
+                    const origin = await createCurrentMachineExecutionOriginContextResolver({
+                        serverUrl: this.serverBinding.serverUrl,
+                        resolveCurrentMachineId: () => this.closed ? null : options.localMachineId ?? null,
+                    })(signal);
+                    const binding = authorization.binding;
+                    if (this.closed || signal?.aborted || !installation || !origin
+                        || installation.installationId !== binding.installationId
+                        || origin.machineId !== binding.machineId || origin.serverIdentityId !== binding.serverIdentityId
+                        || !await verifyExternalActionExecutionAuthorizationCurrent({ authorization,
+                            effectActionId: binding.actionId, target: binding.target, installationId: installation.installationId,
+                            privateKey: installation.privateKey, serverHttpBaseUrl: this.serverBinding.serverUrl,
+                            ...(signal ? { signal } : {}) })) return { ok: false, error: 'Forbidden', errorCode: 'RPC_FORBIDDEN' };
+                    return { ok: true };
+                } catch { return { ok: false, error: 'Forbidden', errorCode: 'RPC_FORBIDDEN' }; }
+            },
+            prepareRequesterAccountContext: async ({ authorization, purpose, signal }) => {
+                if (this.closed || !options.localMachineId || !purpose) return null;
+                const ownCredentials = await this.readCurrentOwnerCredentials();
+                return await prepareInstalledRequesterAccountActionContext({ authorization, purpose,
+                    machineId: options.localMachineId, serverId: this.serverBinding.serverId,
+                    serverHttpBaseUrl: this.serverBinding.serverUrl,
+                    ...(ownCredentials ? { ownCredentials } : {}), signal,
+                    resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
+                        serverUrl: this.serverBinding.serverUrl,
+                        resolveCurrentMachineId: () => this.closed ? null : options.localMachineId ?? null,
+                    }),
+                    createExecutor: (admitted, installation) => createCliActionExecutorFromCredentials({
+                        credentials: admitted.credentials, serverId: this.serverBinding.serverId,
+                        serverApiUrl: this.serverBinding.serverUrl, serverIdentityId: admitted.authorization.binding.serverIdentityId,
+                        machineId: options.localMachineId!, externalActionMachineInstallationId: installation.installationId,
+                        externalActionMachineRequestPrivateKey: installation.privateKey,
+                        readCredentials: async () => await admitted.isCurrent() ? admitted.credentials : null,
+                        actionsSettingsProvider: {
+                            getActionsSettings: () => normalizeActionsSettingsV1(admitted.accountSettingsContext.settings.actionsSettingsV1),
+                            getAccountSettings: () => admitted.accountSettingsContext.settings,
+                        },
+                    }),
+                });
+            },
+            logger: (msg, data) => logger.debug(msg, data),
             onRegistrationError: (error) => {
                 const probe = classifyTransportErrorToProbeResult(error);
                 const supervisor = this.sessionConnectionSupervisor;

@@ -1,21 +1,20 @@
 import * as React from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import type { ConnectedServiceAccountNeedingSignIn, ConnectedServiceAccountWithoutUsage, ConnectedServiceQuotaSummary } from '@/hooks/server/connectedServices/useConnectedServiceQuotaSummaries';
+import type { SidebarUsageAccountFacts } from './SidebarUsagePopoverContent';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const state = vi.hoisted(() => ({
-    summaries: [] as unknown[],
-    withoutUsage: [] as unknown[],
-    needingSignIn: [] as unknown[],
+const state = {
+    summaries: [] as ConnectedServiceQuotaSummary[],
+    withoutUsage: [] as ConnectedServiceAccountWithoutUsage[],
+    needingSignIn: [] as ConnectedServiceAccountNeedingSignIn[],
     keysWithoutLimits: 0,
-    recordIds: {} as Record<string, string | null>,
-    usageRecords: {} as Record<string, unknown>,
-    persisted: null as unknown,
-    refresh: async (_keys?: readonly string[]) => {},
-}));
-const modalSpy = vi.hoisted(() => vi.fn());
+    accounts: {} as NonNullable<SidebarUsageAccountFacts['accounts']>,
+};
+const modalBoundary = vi.hoisted(() => ({ show: vi.fn(() => 'modal-id') }));
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -31,51 +30,10 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock().module;
 });
 
-// The quota summaries owner has its own suite (server and daemon reads); the popover reads it
-// through the usage summary owner, exactly as the hub does.
-vi.mock('@/hooks/server/connectedServices/useConnectedServiceQuotaSummaries', () => ({
-    useConnectedServiceQuotaSummaries: () => ({
-        summaries: state.summaries,
-        accountsWithoutUsage: state.withoutUsage,
-        accountsNeedingSignIn: state.needingSignIn,
-        keysWithoutLimits: state.keysWithoutLimits,
-        inUseAccountKeys: new Set(),
-        usageRecordIdsByKey: state.recordIds,
-        isRefreshing: false,
-        hasConnectedProfiles: state.summaries.length + state.withoutUsage.length > 0,
-        refreshableKeys: state.summaries.map((summary) => (summary as { key: string }).key),
-        refreshingByKey: {},
-        errorsByKey: {},
-        refresh: state.refresh,
-    }),
-}));
-
-// The provider usage record read (server): each account's subscription.
-vi.mock('@/hooks/server/connectedServices/useProviderAccountUsageSnapshots', () => ({
-    useProviderAccountUsageSnapshots: () => ({ snapshotsByRecordId: state.usageRecords, loadingByRecordId: {}, stateByRecordId: {} }),
-}));
-
-// Device persistence (the encrypted warm cache).
-vi.mock('@/sync/domains/state/warmCachePersistence', () => ({
-    loadUsageSummaryWarmCache: () => state.persisted,
-    saveUsageSummaryWarmCache: () => {},
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useActiveServerAccountScope: () => ({ serverId: 's1', accountId: 'a1' }),
-        // "Use one" looks for a live session on this account's machine; none here.
-        useSessions: () => [],
-        useAllMachines: () => [],
-        useProfile: () => ({ connectedServicesV2: [], connectedAccountGroupsV4: [] }),
-    });
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ spies: { show: modalBoundary.show } }).module;
 });
-
-// Signing in again runs on a machine: the popover hands it to the setup modal owner.
-vi.mock('@/components/settings/connectedServices/setup/ConnectedServiceSetupModal', () => ({
-    openConnectedServiceSetupModal: modalSpy,
-}));
 
 // The popover's module graph is large; load it once up front so no single test pays for it.
 beforeAll(async () => {
@@ -88,39 +46,54 @@ afterEach(() => {
     state.withoutUsage = [];
     state.needingSignIn = [];
     state.keysWithoutLimits = 0;
-    state.recordIds = {};
-    state.usageRecords = {};
-    state.persisted = null;
-    modalSpy.mockClear();
+    state.accounts = {};
+    modalBoundary.show.mockClear();
 });
 
-function summary(key: string, accountLabel: string | null, remainingPct: number, accountEmail: string | null = null) {
+function summary(key: string, accountLabel: string | null, remainingPct: number, accountEmail: string | null = null): ConnectedServiceQuotaSummary {
     return {
         key,
         serviceLabel: 'Anthropic Claude',
         serviceGroupKey: 'plugin.anthropic/claude',
-        legacyServiceId: 'claude',
+        service: { pluginId: 'plugin.anthropic', localId: 'claude' },
+        legacyServiceId: null,
         accountLabel,
         accountEmail,
         accountId: key.split(':')[1],
+        profileId: key.split(':')[1],
         profileLabel: null,
         planLabel: 'Max',
         fetchedAt: 2_000,
         primaryMeter: null,
+        recoveryCredits: null,
         meters: [{ meterId: 'weekly', label: 'Weekly limit', remainingPct, utilizationPct: 100 - remainingPct, status: 'ok', resetsAt: null }],
     };
 }
 
 async function renderContent() {
-    const { SidebarUsagePopoverContent } = await import('./SidebarUsagePopoverContent');
-    return renderScreen(<SidebarUsagePopoverContent close={() => {}} maxHeight={520} />);
+    const { SidebarUsagePopoverView, useUsagePopoverHandlers } = await import('./SidebarUsagePopoverContent');
+    const { buildUsageSummary, buildUsageSummaryCache } = await import('@/components/hub/usage/useUsageSummary');
+    const { presentConnectedAccountIdentity } = await import('@/sync/domains/connectedServices/maskAccountEmail');
+    const { useRouter } = await import('expo-router');
+    const usage = buildUsageSummary({ live: buildUsageSummaryCache(state.summaries), saved: null, accountsWithoutUsage: state.withoutUsage });
+    function ContentFixture() {
+        const handlers = useUsagePopoverHandlers({ close: () => {}, router: useRouter() });
+        return <SidebarUsagePopoverView usage={usage}
+            facts={{ accountsNeedingSignIn: state.needingSignIn, keysWithoutLimits: state.keysWithoutLimits, accounts: state.accounts }}
+            privacy={{ hidden: false, setHidden: () => {}, present: input => presentConnectedAccountIdentity({
+                hidden: false, label: input.label ?? null, labelKind: input.labelKind,
+                email: input.email ?? null, accountId: input.accountId ?? null,
+            }) }}
+            onOpenConnectedServices={handlers.openConnectedServices} onSignInAgain={handlers.signInAgain} />;
+    }
+    return renderScreen(<ContentFixture />);
 }
 
 describe('SidebarUsagePopoverContent', () => {
     it('shows every account with what is left in each window, and an account with nothing to show', async () => {
         state.summaries = [summary('claude:a', null, 73, 'kevin@gmail.com'), summary('claude:b', 'Work', 40)];
         state.withoutUsage = [{
-            key: 'claude:c', serviceLabel: 'Anthropic Claude', legacyServiceId: 'claude',
+            key: 'claude:c', serviceLabel: 'Anthropic Claude', legacyServiceId: null,
             serviceGroupKey: 'plugin.anthropic/claude', accountLabel: 'Home', accountEmail: null, accountId: 'c', state: 'unavailable',
         }];
         const screen = await renderContent();
@@ -144,9 +117,9 @@ describe('SidebarUsagePopoverContent', () => {
             legacyServiceId: 'openai-codex',
             recoveryCredits: { availableCount: 3, nextExpiresAtMs: now + 5 * 86_400_000, credits: [] },
         }];
-        state.recordIds = { 'codex:personal': 'record-1' };
-        state.usageRecords = {
-            'record-1': {
+        state.accounts = {
+            'codex:personal': {
+                recoveryCredits: state.summaries[0].recoveryCredits,
                 subscription: {
                     status: 'subscribed', renewal: 'on', currentPeriodEndAtMs: now + 17 * 86_400_000,
                     observedAtMs: now, staleAfterMs: 86_400_000,
@@ -162,7 +135,7 @@ describe('SidebarUsagePopoverContent', () => {
 
     it('says an account is still being read rather than calling it unavailable', async () => {
         state.withoutUsage = [{
-            key: 'codex:a', serviceLabel: 'Codex', legacyServiceId: 'codex',
+            key: 'codex:a', serviceLabel: 'Codex', legacyServiceId: null,
             serviceGroupKey: 'plugin.openai/codex', accountLabel: 'Work', accountEmail: null, accountId: 'a', state: 'loading',
         }];
         const screen = await renderContent();
@@ -203,7 +176,9 @@ describe('SidebarUsagePopoverContent', () => {
 
         expect(screen.getTextContent()).toContain('sidebarFooter.usageKeysWithoutLimits(count=1)');
         await screen.pressByTestIdAsync('sidebar-usage-sign-in-again-codex:w');
-        expect(modalSpy).toHaveBeenCalledWith({ kind: 'reconnect', serviceKey: 'happier.agent.codex/openai-codex', accountId: 'w' });
+        expect(modalBoundary.show).toHaveBeenCalledWith(expect.objectContaining({ props: {
+            initialTarget: { kind: 'reconnect', serviceKey: 'happier.agent.codex/openai-codex', accountId: 'w' },
+        } }));
     });
 
     it('names every account by a name, its email or its service, never a raw id, and says an email once', async () => {
@@ -215,7 +190,7 @@ describe('SidebarUsagePopoverContent', () => {
         ];
         state.needingSignIn = [{
             key: 'claude:s1', ref: { service: { pluginId: 'plugin.anthropic', localId: 'claude' }, accountId: 's1' },
-            serviceLabel: 'Anthropic Claude', legacyServiceId: 'claude', serviceGroupKey: 'plugin.anthropic/claude',
+            serviceLabel: 'Anthropic Claude', legacyServiceId: null, serviceGroupKey: 'plugin.anthropic/claude',
             accountLabel: 'ai1@happier.dev', accountEmail: 'ai1@happier.dev', accountId: 's1',
         }];
         const text = (await renderContent()).getTextContent();
@@ -245,7 +220,7 @@ describe('SidebarUsagePopoverContent', () => {
                     summary('claude:work', 'Work', 42, 'leeroy@company.com'),
                     summary('claude:personal', null, 6, 'kevin@gmail.com'),
                     summary('claude:acct_9f2c8e71', null, 71),
-                ] as never),
+                ]),
                 saved: null,
                 accountsWithoutUsage: options.accountState ? [{
                     key: 'claude:pending', serviceLabel: 'Anthropic Claude', legacyServiceId: 'claude-subscription',
@@ -305,6 +280,16 @@ describe('SidebarUsagePopoverContent', () => {
             await screen.pressByTestIdAsync('sidebar-usage-refresh');
             expect(scopes).toEqual([['claude:work'], undefined]);
             expect(screen.getTextContent()).toContain('other_account_failed');
+        });
+
+        it('shows pending usage without replacing the last-updated timestamp or meters', async () => {
+            const screen = await renderView({ refresh: {
+                keys: ['claude:work'], refreshingByKey: { 'claude:work': true }, errorsByKey: {}, run: async () => {},
+            } });
+            expect(screen.findByTestId('sidebar-usage-refresh-status')).toBeTruthy();
+            expect(screen.findByTestId('sidebar-usage-as-of')).toBeTruthy();
+            expect(screen.getTextContent()).toContain('connectedServices.quota.remaining(percent=42%)');
+            expect(screen.findByTestId('sidebar-usage-refresh')?.props.disabled).toBe(true);
         });
 
         it('shows emails and ids as they are until the device hides them; names people gave stay', async () => {

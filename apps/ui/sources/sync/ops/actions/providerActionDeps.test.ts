@@ -1,28 +1,25 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema,
     DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
     sealProviderConnectionsContentV1, openProviderConnectionsContentV1,
 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
 
-const machineTransport = vi.hoisted(() => vi.fn(async () => {
-    throw new Error('Account source visibility must never dispatch Machine RPC');
-}));
-// Only the genuine Machine transport is substituted; Action admission and row operations stay real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: machineTransport,
-}));
+// Only Socket transport is substituted; Action admission and scoped Machine routing stay real.
+const providerHarness = createProviderSettingsHarness({ machines: [] });
+installProviderSettingsRpcBoundary(providerHarness);
 
 const account = createProviderSettingsAccountHarness();
 beforeAll(loadSyncSingletonForTests);
 afterEach(async () => {
     standardCleanup();
     await account.reset();
-    machineTransport.mockClear();
+    providerHarness.reset();
 });
 
 function catalogFixture() {
@@ -47,7 +44,7 @@ async function executeSourceVisibility(serverId: string, accountId: string, show
 }
 
 describe('Provider Account source visibility Action', () => {
-    it('admits retained Account source on first direct describe without a mounted reader or machine', async () => {
+    it('describes the retained Account source admitted by its catalog observer without a machine or Action reseed', async () => {
         const retained = catalogFixture();
         const { serverId, accountId } = await account.restore({ catalog: retained, settings: {
             providerSettingsV1: { ...retained, defaultsByAgentTargetKey: {} },
@@ -89,6 +86,11 @@ describe('Provider Account source visibility Action', () => {
                 return { body: { status: 'updated', revision, cursor: revision } };
             },
         });
+        const { useProviderCatalogForServer } = await import('@/sync/store/useProviderCatalog');
+        const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const observer = await renderHook(() => useProviderCatalogForServer(serverId));
+        await waitForHomeGovernance(() => expect(observer.getCurrent()).toMatchObject({ status: 'ready', revision: 1 }));
+        expect(rowWrites).toBe(1);
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
         const executor = createDefaultActionExecutor();
         const context = { surface: 'ui' as const, authority: 'present_user' as const,
@@ -101,7 +103,7 @@ describe('Provider Account source visibility Action', () => {
         expect(admitted).toMatchObject({ connections: retained.connections,
             manualModelsByConnectionId: retained.manualModelsByConnectionId });
         expect(rowWrites).toBe(1);
-        expect(machineTransport).not.toHaveBeenCalled();
+        expect(providerHarness.state.requests).toEqual([]);
     });
     it.each(['plain', 'e2ee'] as const)('creates, renames, manages manual models and deletes a custom %s Account connection without a machine', async mode => {
         let catalog = catalogFixture();
@@ -156,7 +158,7 @@ describe('Provider Account source visibility Action', () => {
             .toMatchObject({ ok: true, result: { status: 'success', deletedConnectionId: renamed.id } });
         expect(catalog.connections.some(entry => entry.id === renamed.id)).toBe(false);
         expect(catalog.manualModelsByConnectionId[renamed.id]).toBeUndefined();
-        expect(machineTransport).not.toHaveBeenCalled();
+        expect(providerHarness.state.requests).toEqual([]);
     });
     it('hides, shows and resets one source through captured Account row CAS without Settings or Machine writes', async () => {
         let catalog = catalogFixture();
@@ -199,7 +201,7 @@ describe('Provider Account source visibility Action', () => {
         }
         expect(rowWrites).toBe(3);
         expect(settingsWrites).toBe(0);
-        expect(machineTransport).not.toHaveBeenCalled();
+        expect(providerHarness.state.requests).toEqual([]);
     });
 
     it('returns a row CAS refusal without reporting updated or replaying the source toggle', async () => {
@@ -217,7 +219,7 @@ describe('Provider Account source visibility Action', () => {
             ok: false, details: { status: 'conflict', revision: 2 },
         });
         expect(rowWrites).toBe(1);
-        expect(machineTransport).not.toHaveBeenCalled();
+        expect(providerHarness.state.requests).toEqual([]);
     });
 
     it('refuses an incomplete catalog before dispatching any visibility write', async () => {
@@ -236,7 +238,7 @@ describe('Provider Account source visibility Action', () => {
             ok: false, details: { status: 'partial' },
         });
         expect(rowWrites).toBe(0);
-        expect(machineTransport).not.toHaveBeenCalled();
+        expect(providerHarness.state.requests).toEqual([]);
     });
 
     it('preserves an unknown post-dispatch outcome without reporting updated or replaying the write', async () => {
@@ -260,7 +262,7 @@ describe('Provider Account source visibility Action', () => {
         });
         expect(catalog.modelPickerVisibilityByConnectionId).toEqual({ pc_a: false, pc_b: false });
         expect(rowWrites).toBe(1);
-        expect(machineTransport).not.toHaveBeenCalled();
+        expect(providerHarness.state.requests).toEqual([]);
     });
 
     it('refuses an absent destination without initializing an empty catalog or retiring its source', async () => {
@@ -283,7 +285,7 @@ describe('Provider Account source visibility Action', () => {
         });
         expect(rowWrites).toBe(0);
         expect(settingsWrites).toBe(0);
-        expect(machineTransport).not.toHaveBeenCalled();
+        expect(providerHarness.state.requests).toEqual([]);
     });
 
     it('refuses a deleted destination as an unknown connection without reseeding retained source', async () => {
@@ -307,6 +309,6 @@ describe('Provider Account source visibility Action', () => {
         });
         expect(rowWrites).toBe(0);
         expect(settingsWrites).toBe(0);
-        expect(machineTransport).not.toHaveBeenCalled();
+        expect(providerHarness.state.requests).toEqual([]);
     });
 });

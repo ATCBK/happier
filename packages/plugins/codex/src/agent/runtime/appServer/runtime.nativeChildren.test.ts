@@ -38,6 +38,37 @@ function fixture() {
 }
 
 describe('managed Codex native children', () => {
+  it.each(['assistant', 'reasoning'] as const)('clears an empty authoritative child %s draft and retains the next message', async (channel) => {
+    const f = fixture();
+    try {
+      await startCodexAppServerRuntime(f.runtime);
+      await f.runtime.send({ text: 'Delegate' }, { turnId: 'host-turn' });
+      await f.notify('thread/started', { thread: { id: 'child', parentThreadId: 'parent' } });
+      await f.notify('turn/started', { threadId: 'child', turn: { id: 'child-turn' } });
+      await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn', item: { id: 'no-output', type: 'agentMessage', text: '' } });
+      await f.notify(channel === 'assistant' ? 'item/agentMessage/delta' : 'item/reasoning/textDelta', {
+        threadId: 'child', turnId: 'child-turn', itemId: 'removed', delta: 'Removed child draft',
+      });
+      await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn',
+        item: { id: 'removed', type: channel === 'assistant' ? 'agentMessage' : 'reasoning', text: '' },
+      });
+      await f.notify('item/agentMessage/delta', { threadId: 'child', turnId: 'child-turn', itemId: 'retained', delta: 'Retained child answer' });
+      await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn', item: { id: 'retained', type: 'agentMessage', text: 'Retained child answer' } });
+      await f.notify('turn/completed', { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } });
+      const childOutput = f.nativeEvents.filter((event) => 'sidechainId' in event && event.sidechainId === 'child');
+      const draft = childOutput.find((event) => event.kind === 'message-delta' && event.text === 'Removed child draft');
+      if (draft?.kind !== 'message-delta' || !draft.messageId) throw new Error('Missing child draft identity');
+      expect(childOutput.filter((event) => event.kind === 'transcript-message-committed')).toMatchObject([
+        { role: channel, messageId: draft.messageId, text: '' },
+        { role: 'assistant', text: 'Retained child answer' },
+      ]);
+      expect(childOutput.filter((event) => event.kind === 'message-delta').map((event) => event.text)).toEqual([
+        'Removed child draft', 'Retained child answer',
+      ]);
+      expect(childOutput.every((event) => !('turnId' in event))).toBe(true);
+    } finally { await f.runtime.dispose(); }
+  });
+
   it('admits another native turn on the same retained child without replaying terminal progress', async () => {
     const f = fixture();
     try {

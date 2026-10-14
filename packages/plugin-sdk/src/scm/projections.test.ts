@@ -50,6 +50,7 @@ import type {
 } from './backend.js';
 import type {
     HostingProviderContribution,
+    HostingProviderRepositoryDescribeCloneTargetsInput,
     ScmHostingProviderKind,
     ScmHostingProviderRef,
 } from './hostingProvider.js';
@@ -96,8 +97,11 @@ const ROOT_RUNTIME_EXPORTS = [
     'ScmComparisonSchema',
     'ScmComparisonSourceProtocolSchema',
     'ScmComparisonSourceSchema',
+    'ScmHistoryEntriesInputV1Schema',
+    'ScmHistoryEntriesResponseSchema',
     'ScmOperationOutcomeSchema',
     'ScmRefreshPolicySchema',
+    'ScmRepositoryProvisioningFailureResponseSchema',
     'ScmSelectedMutationPathSchema',
     'ScmWorkingSnapshotSchema',
     'buildWorktreeRelativePath',
@@ -171,7 +175,12 @@ const ROOT_TYPE_EXPORTS = [
     'ScmDiffFileRequest',
     'ScmDiffFileResponse',
     'ScmDirtyPolicy',
+    'ScmEntryHistoryV1',
     'ScmFollowupAction',
+    'ScmHistoryEntriesInputV1',
+    'ScmHistoryEntriesOutputV1',
+    'ScmHistoryEntriesRequest',
+    'ScmHistoryEntriesResponse',
     'ScmHostingRepositoryAuthSummary',
     'ScmHostingRepositoryDescribePublishTargetsRequest',
     'ScmHostingRepositoryDescribePublishTargetsResponse',
@@ -196,6 +205,7 @@ const ROOT_TYPE_EXPORTS = [
     'ScmPullRequestCheckoutRequest',
     'ScmPullRequestCheckoutResponse',
     'ScmPullRequestChecksState',
+    'ScmPullRequestErrorResponse',
     'ScmPullRequestGetRequest',
     'ScmPullRequestGetResponse',
     'ScmPullRequestListRequest',
@@ -214,6 +224,7 @@ const ROOT_TYPE_EXPORTS = [
     'ScmPullRequestState',
     'ScmPullRequestStatusProjection',
     'ScmPullRequestSummary',
+    'ScmPullRequestWorkEvidence',
     'ScmPushMode',
     'ScmReconcilePolicy',
     'ScmRefreshPolicy',
@@ -630,6 +641,14 @@ describe('SCM package-local projections', () => {
     it('keeps all approved types nameable and preserves representative identities', () => {
         expectTypeOf<RootProjectionTypes>().toMatchTypeOf<readonly unknown[]>();
         expectTypeOf<ScmCapabilities>().toEqualTypeOf<ProtocolScmCapabilities>();
+        expectTypeOf<protocolScm.ScmRepositoryCloneInput>()
+            .toEqualTypeOf<scmProjection.ScmRepositoryCloneInput>();
+        expectTypeOf<protocolScm.ScmRepositoryCloneInput['repository']>()
+            .toMatchTypeOf<HostingProviderRepositoryDescribeCloneTargetsInput['repository']>();
+        expectTypeOf<'undiscovered'>()
+            .not.toMatchTypeOf<NonNullable<scmProjection.ScmRepositoryCloneInput['repository']['visibility']>>();
+        expectTypeOf<'undiscovered'>()
+            .not.toMatchTypeOf<NonNullable<HostingProviderRepositoryDescribeCloneTargetsInput['repository']['visibility']>>();
         expectTypeOf<scmProjection.ScmOperationOutcome>()
             .toEqualTypeOf<protocolScm.ScmOperationOutcome>();
         expectTypeOf<scmProjection.ScmOperationState>()

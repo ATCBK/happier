@@ -1,13 +1,15 @@
 import 'fake-indexeddb/auto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
     AccountSettingsV2GetResponseSchema,
     AccountSettingsV2UpdateRequestSchema,
     AccountSettingsV2UpdateResponseSchema,
 } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 
-import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createAccountSettingsHttpBoundary, serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
+import { serveActionHomes } from './actionHomesHttpHarness';
+import { initializeRealAppRuntimeForTests } from './realAppRuntimeHarness';
 
 describe('served Account Settings HTTP boundary', () => {
     it('durably retires a shipped legacy key and refuses a stale replacement', async () => {
@@ -79,28 +81,59 @@ describe('served Account Settings HTTP boundary', () => {
     });
 
     it('commits an encrypted envelope from the new E2EE Account empty baseline', async () => {
-        const fixture = await serveAccountHomes({
-            homes: [{ key: 'encrypted', serverUrl: 'https://settings-cas-encrypted.test', accountId: 'settings-cas-encrypted-account', accountMode: 'e2ee' }],
-            route: () => undefined,
+        const serverUrl = 'https://settings-cas-encrypted.test';
+        const accountId = 'settings-cas-encrypted-account';
+        const boundary = createAccountSettingsHttpBoundary({
+            serverUrl,
+            initialAccounts: [{ accountId, snapshot: { content: null, version: 0 } }],
         });
-        try {
-            const endpoint = `${fixture.homes.encrypted!.serverUrl}/v2/account/settings`;
-            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-            const credentials = await TokenStorage.getCredentialsForServerUrl(fixture.homes.encrypted!.serverUrl);
-            expect(credentials).not.toBeNull();
-            const headers = { Authorization: `Bearer ${credentials!.token}`, 'Content-Type': 'application/json' };
-            expect(AccountSettingsV2GetResponseSchema.parse(await (await runtimeFetch(endpoint, { headers })).json()))
-                .toEqual({ content: null, version: 0 });
-            // Ciphertext belongs to the client crypto owner; the server stores its opaque envelope.
-            const content = { t: 'encrypted' as const, c: 'opaque-client-ciphertext' };
-            const response = await runtimeFetch(endpoint, { method: 'POST', headers, body: JSON.stringify(
-                AccountSettingsV2UpdateRequestSchema.parse({ content, expectedVersion: 0 }),
-            ) });
-            expect(AccountSettingsV2UpdateResponseSchema.parse(await response.json())).toEqual({ success: true, version: 1 });
-            expect(AccountSettingsV2GetResponseSchema.parse(await (await runtimeFetch(endpoint, { headers })).json()))
-                .toEqual({ content, version: 1 });
-        } finally {
-            await fixture.dispose();
-        }
+        const endpoint = `${serverUrl}/v2/account/settings`;
+        const token = `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+        const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+        const initial = boundary.handle(endpoint, { headers });
+        expect(initial).toBeDefined();
+        expect(AccountSettingsV2GetResponseSchema.parse(await initial!.json())).toEqual({ content: null, version: 0 });
+        // Ciphertext belongs to the client crypto owner; the server stores its opaque envelope.
+        const content = { t: 'encrypted' as const, c: 'opaque-client-ciphertext' };
+        const response = boundary.handle(endpoint, { method: 'POST', headers, body: JSON.stringify(
+            AccountSettingsV2UpdateRequestSchema.parse({ content, expectedVersion: 0 }),
+        ) });
+        expect(response).toBeDefined();
+        expect(AccountSettingsV2UpdateResponseSchema.parse(await response!.json())).toEqual({ success: true, version: 1 });
+        const committed = boundary.handle(endpoint, { headers });
+        expect(committed).toBeDefined();
+        expect(AccountSettingsV2GetResponseSchema.parse(await committed!.json())).toEqual({ content, version: 1 });
     });
+
+});
+
+let served: Awaited<ReturnType<typeof serveActionHomes>> | null = null;
+afterEach(async () => {
+    await served?.dispose();
+    served = null;
+});
+
+it('restores a genuine focused Account and retires its captured lifetime on replacement', async () => {
+    await initializeRealAppRuntimeForTests();
+    served = await serveActionHomes({ homes: [
+        { key: 'other', serverUrl: 'https://action-other.test', accountId: 'account-other', serverIdentityId: 'srv_action_other' },
+        { key: 'focused', serverUrl: 'https://action-focused.test', accountId: 'account-a', serverIdentityId: 'srv_action_focused' },
+    ], route: () => undefined });
+    const { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+    expect(getActiveServerAccountScope()).toEqual({ serverId: served.homes.focused!.id, accountId: 'account-a' });
+    expect(served.homes.focused!.id).toBe('srv_action_focused');
+    expect(served.homes.focused!.profileId).not.toBe(served.homes.focused!.id);
+    expect(await resolveServerCredentialAccountScope(served.homes.other!.id)).toMatchObject({ kind: 'bound', scope: { accountId: 'account-other' } });
+    const captured = captureActiveServerAccountScopeLifetime();
+    expect(captured?.isCurrent()).toBe(true);
+    await served.switchAccount('focused', 'account-b');
+    expect(captured?.isCurrent()).toBe(false);
+    expect(getActiveServerAccountScope()).toEqual({ serverId: served.homes.focused!.id, accountId: 'account-b' });
+    expect(await resolveServerCredentialAccountScope(served.homes.other!.id)).toMatchObject({ kind: 'bound', scope: { accountId: 'account-other' } });
+    const replacement = captureActiveServerAccountScopeLifetime();
+    expect(replacement?.isCurrent()).toBe(true);
+    await served.dispose();
+    expect(replacement?.isCurrent()).toBe(false);
+    expect(getActiveServerAccountScope()).toBeNull();
 });

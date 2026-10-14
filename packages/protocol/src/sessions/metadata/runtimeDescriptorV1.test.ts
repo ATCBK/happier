@@ -3,7 +3,13 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import * as runtimeDescriptorV1 from './runtimeDescriptorV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import {
+  buildOpenCodeAgentRuntimeDescriptorV1,
+  readCanonicalOpenCodeAgentRuntimeDescriptorV1,
+} from '../../../../plugins/opencode/src/protocol/runtimeDescriptorV1.js';
+import {
+  PortableRuntimeDescriptorV1Schema,
   RuntimeDescriptorV1Schema,
   readRuntimeDescriptorV1ForAgent,
   writeRuntimeDescriptorV1ForPersistence,
@@ -32,6 +38,51 @@ describe('runtimeDescriptorV1 aliases', () => {
     expect(readRuntimeDescriptorV1ForAgent(retained, 'ohMyPi')).toEqual(expected);
     expect(readRuntimeDescriptorV1ForAgent({ ...retained,
       agentIdentity: { ...retained.agentIdentity, localId: 7 } }, 'ohMyPi')).toBeNull();
+  });
+  it('retains source-owned runtime selection and handles when reading a persisted descriptor', () => {
+    // Current producer: plugins/opencode/src/protocol/runtimeDescriptorV1.ts
+    // #buildOpenCodeAgentRuntimeDescriptorV1, including its owned runtimeHandle.
+    const descriptor = buildOpenCodeAgentRuntimeDescriptorV1({
+      backendMode: 'acp',
+      providerSessionId: 'native-session-1',
+      serverBaseUrl: 'http://127.0.0.1:4096/',
+      serverBaseUrlExplicit: true,
+    });
+    const stored = createStoredReadSchema(RuntimeDescriptorV1Schema).parse({
+      ...descriptor,
+      unrelatedProjection: 'drop',
+    });
+
+    expect(stored).toEqual({ ...descriptor, unrelatedProjection: 'drop' });
+    expect(readCanonicalOpenCodeAgentRuntimeDescriptorV1(stored)).toMatchObject({
+      backendMode: 'acp', providerSessionId: 'native-session-1',
+      serverBaseUrl: 'http://127.0.0.1:4096/', serverBaseUrlExplicit: true,
+    });
+    // Custody of a live runtime handle does not admit it into an authored recipe.
+    expect(PortableRuntimeDescriptorV1Schema.safeParse(stored).success).toBe(false);
+  });
+
+  it('does not promote a foreign Agent handle or relax descriptor identity on stored reads', () => {
+    const storedRead = createStoredReadSchema(RuntimeDescriptorV1Schema);
+    const stored = storedRead.parse({
+      v: 1,
+      agentId: 'opencode',
+      agent: {
+        agentExtra: {
+          owner: 'codex',
+          schemaId: 'codex.agentRuntimeDescriptorExtra',
+          v: 1,
+          runtimeHandle: { backendMode: 'acp', providerSessionId: 'foreign-session' },
+        },
+      },
+    });
+    expect(readRuntimeDescriptorV1ForAgent(stored, 'codex')).toBeNull();
+    expect(readCanonicalOpenCodeAgentRuntimeDescriptorV1(stored)?.providerSessionId).toBeNull();
+    expect(PortableRuntimeDescriptorV1Schema.safeParse(stored).success).toBe(false);
+    expect(storedRead.safeParse({ v: 1, agentId: '', agent: {} }).success).toBe(false);
+    expect(storedRead.safeParse({
+      v: 1, agentId: 'opencode', agent: { agentExtra: { owner: 'opencode', schemaId: 'handle', v: 0 } },
+    }).success).toBe(false);
   });
   it('keeps canonical descriptor custody generic instead of dispatching bundled readers', () => {
     const source = readFileSync(new URL('./runtimeDescriptorV1.ts', import.meta.url), 'utf8');

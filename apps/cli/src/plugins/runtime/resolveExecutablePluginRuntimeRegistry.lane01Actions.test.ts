@@ -8,6 +8,7 @@ import { accountSettingsParse, normalizeActionsSettingsV1 } from '@happier-dev/p
 import { NO_TEAM_CAPABILITIES_V1 } from '@happier-dev/protocol/teams';
 
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { configuration } from '@/configuration';
 import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import {
@@ -32,7 +33,6 @@ const persistenceBoundary = vi.hoisted(() => ({
 }));
 const activeAccountBoundary = vi.hoisted(() => ({
     readSnapshot: vi.fn(),
-    readLifetime: vi.fn(),
     subscribe: vi.fn(),
 }));
 
@@ -52,12 +52,6 @@ vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', async (impor
         >) => {
             activeAccountBoundary.readSnapshot(...args);
             return original.getActiveAccountSettingsSnapshot(...args);
-        },
-        getActiveAccountSettingsSnapshotLifetimeToken: (...args: Parameters<
-            typeof original.getActiveAccountSettingsSnapshotLifetimeToken
-        >) => {
-            activeAccountBoundary.readLifetime(...args);
-            return original.getActiveAccountSettingsSnapshotLifetimeToken(...args);
         },
         subscribeActiveAccountSettingsSnapshot: (...args: Parameters<
             typeof original.subscribeActiveAccountSettingsSnapshot
@@ -80,6 +74,10 @@ describe('installed external plugin Lane 01 Actions', () => {
         const home = fastify();
         const homeUrl = 'http://lane01-plugin-home.test';
         const requests: Array<Readonly<{ authorization: string; body: unknown }>> = [];
+        const sessionRequests: string[] = [];
+        home.addHook('onRequest', async (request) => {
+            if (request.url.includes('/sessions')) sessionRequests.push(request.url);
+        });
         const team = {
             id: 'team-1', name: 'Platform', description: null, logo: null,
             archivedAt: 1, recovery: null,
@@ -144,7 +142,7 @@ describe('installed external plugin Lane 01 Actions', () => {
                         dangerLevel: 'safe',
                         inputSchema: {
                             type: 'object',
-                            properties: { teamId: { type: 'string', minLength: 1 } },
+                            properties: { teamId: { type: 'string', minLength: 1 }, checkVoiceDeclaration: { type: 'boolean' } },
                             required: ['teamId'],
                             additionalProperties: false,
                         },
@@ -166,6 +164,18 @@ describe('installed external plugin Lane 01 Actions', () => {
             await writeFile(join(pluginRoot, 'daemon.mjs'), `
                 export function activate(api) {
                     api.actions.register(${JSON.stringify(ACTION_ID)}, async (input, context) => {
+                        if (input.checkVoiceDeclaration) {
+                            try {
+                                await context.services.actions.execute('session.voice.preference.set', {
+                                    sessionId: 'session-voice-fixture', serverId: ${JSON.stringify(configuration.activeServerId)}, expectedMetadataRevision: 1,
+                                    preference: { providerContributionId: 'happier.voice.openai/realtime-openai',
+                                        settingFieldPath: 'model', value: 'other' },
+                                });
+                                return { accepted: true };
+                            } catch (error) {
+                                return { errorCode: error.code };
+                            }
+                        }
                         await context.services.notifications.preferences('runtime-policy');
                         const preferenceWatch = context.services.notifications.watchPreferences(
                             'runtime-policy',
@@ -230,6 +240,16 @@ describe('installed external plugin Lane 01 Actions', () => {
                 pluginId: PLUGIN_ID, family: 'actions', localId: ACTION_ID,
             }]);
 
+            expect(registry.contributes.voiceProviders.some((entry) => (
+                entry.identity.pluginId === 'happier.voice.openai' && entry.identity.localId === 'realtime-openai'
+            ))).toBe(true);
+            await expect(runWithServerHttpBaseUrl(homeUrl, () => registry!.targetActionInvocations!.invoke({
+                pluginId: PLUGIN_ID, localId: ACTION_ID,
+                input: { teamId: 'team-1', checkVoiceDeclaration: true }, surface: 'cli',
+            }))).resolves.toEqual({ status: 'executed', value: { errorCode: 'voice_missing' } });
+            expect(sessionRequests).toEqual([]);
+            expect(requests).toEqual([]);
+
             const result = await runWithServerHttpBaseUrl(homeUrl, async () => (
                 await registry?.targetActionInvocations?.invoke({
                     pluginId: PLUGIN_ID, localId: ACTION_ID,
@@ -248,7 +268,6 @@ describe('installed external plugin Lane 01 Actions', () => {
             requests.length = 0;
             persistenceBoundary.readStoredCredentials.mockClear();
             activeAccountBoundary.readSnapshot.mockClear();
-            activeAccountBoundary.readLifetime.mockClear();
             activeAccountBoundary.subscribe.mockClear();
             const scopedToken = 'restricted-runner-runtime-token';
             registry = await runWithServerHttpBaseUrl(homeUrl, async () => (
@@ -315,7 +334,6 @@ describe('installed external plugin Lane 01 Actions', () => {
             }]);
             expect(persistenceBoundary.readStoredCredentials).not.toHaveBeenCalled();
             expect(activeAccountBoundary.readSnapshot).not.toHaveBeenCalled();
-            expect(activeAccountBoundary.readLifetime).not.toHaveBeenCalled();
             expect(activeAccountBoundary.subscribe).not.toHaveBeenCalled();
 
             await registry.dispose();
@@ -346,7 +364,6 @@ describe('installed external plugin Lane 01 Actions', () => {
             expect(requests).toEqual([]);
             expect(persistenceBoundary.readStoredCredentials).not.toHaveBeenCalled();
             expect(activeAccountBoundary.readSnapshot).not.toHaveBeenCalled();
-            expect(activeAccountBoundary.readLifetime).not.toHaveBeenCalled();
             expect(activeAccountBoundary.subscribe).not.toHaveBeenCalled();
         } finally {
             restoreHttp();

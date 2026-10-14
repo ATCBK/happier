@@ -2529,6 +2529,16 @@ user. Current source publisher, Session tuple, installation and grant checks
 remain at their existing owners. This is development integration, not a claim
 that every requester lifecycle or a loaded cross-account journey is verified.
 
+The same installation-key encrypted requester box can carry a closed private
+invocation for UI Account-machine Actions: caller provenance and permission/input
+ceilings are retained independently of the credential. This is not a public
+authority field or a new encryption mode. Missing required provenance fails
+closed. Installed RPC signatures authenticate the exact encrypted box, not just
+its root and purpose. Account and API-token root issuers capture the persisted
+Account mode; neither infers it from keys. A verified API-token root can admit
+finite Session effects with its own captured grant without creating Account
+credential custody; see [the canonical Action admission owner](actions.md#canonical-owners).
+
 The installed terminal runtime consumes these same admitted original requester
 ports for an accepted Project standalone shell and an exact own local Session
 workspace. Current Machine Use and requester custody remain required for each

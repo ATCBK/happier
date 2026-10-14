@@ -1,4 +1,5 @@
 import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createMcpServerActionExecuteV1, projectMcpServerActionFailureV1,
   MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -28,7 +29,7 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
     context?: ActionExecutorContext; effectActionId?: string; exactMachine?: true;
   }>): Promise<unknown>;
 }>): NonNullable<ActionExecutorDeps['mcpServerAction']> {
-  return request => runWithServerHttpBaseUrl(params.serverHttpBaseUrl, async () => {
+  return request => runWithServerHttpBaseUrl(params.serverHttpBaseUrl, async (): Promise<ActionExecuteResult> => {
     const { context } = request;
     if (context.serverId && context.serverId !== params.serverId) {
       return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };

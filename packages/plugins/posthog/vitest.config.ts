@@ -53,6 +53,8 @@ const reactNativeWebAliases = [
     { find: /^react-dom\/client$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-dom/client.js') },
     { find: /^react-dom$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-dom/index.js') },
     { find: /^react-native$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-native-web/dist/index.js') },
+    // Match the canonical plugin-ui RNW platform boundary; Vite does not select .web files.
+    { find: /^react-native-svg$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-native-svg/lib/module/elements.web.js') },
 ];
 
 /** Source-only PostHog checks run against this package's real parsers and mappers. */
@@ -61,6 +63,7 @@ export default defineConfig({
     plugins: [createWorkspacePackageSourcesPlugin(workspacePackages)],
     test: {
         ...resolveVitestWorkers(),
+        testTimeout: 15000,
         environment: 'node',
         include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
         exclude: ['node_modules/**', 'dist/**'],

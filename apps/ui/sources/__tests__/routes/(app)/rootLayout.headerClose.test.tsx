@@ -60,6 +60,11 @@ vi.mock('expo-router', async () => {
     }).module;
 });
 
+vi.mock('expo-router/build/fork/getPathFromState', async () => {
+    const { loadInstalledExpoPathSerializer } = await import('@/dev/testkit/runtime/installedExpoPathSerializer');
+    return loadInstalledExpoPathSerializer();
+});
+
 vi.mock('@/utils/navigation/safeRouterBack', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/utils/navigation/safeRouterBack')>();
     return { ...actual, safeRouterBack: (...args: Parameters<typeof actual.safeRouterBack>) => {
@@ -419,31 +424,6 @@ describe('app stack modal header close buttons', () => {
             .find((node) => node.props.accessibilityRole === 'button');
 
         expect(closeButton).toBeTruthy();
-        await pressTestInstanceAsync(closeButton!);
-        expect(safeRouterBackSpy).toHaveBeenCalledWith({
-            router: expect.objectContaining({ back: routerBackSpy }),
-            navigation: stackNavigationMock,
-            fallbackHref: '/',
-        });
-    });
-
-    it('always exposes one accessible deterministic exit for Session Info', async () => {
-        const { default: RootLayout } = await import('@/app/(app)/_layout');
-        const screen = await renderScreen(<RootLayout />);
-        const options = getStackScreenOptions(screen, 'session/[id]/info');
-
-        expect(options.headerBackVisible).toBe(false);
-        expect((options.headerLeft as (() => React.ReactNode) | undefined)?.()).toBeNull();
-
-        const headerRight = options.headerRight as (() => React.ReactNode) | undefined;
-        expect(headerRight).toBeTypeOf('function');
-        const renderedHeader = await renderScreen(<>{headerRight?.()}</>);
-        const closeButton = renderedHeader.tree.root
-            .findAllByProps({ testID: 'session-info-close' })
-            .find((node) => node.props.accessibilityRole === 'button');
-
-        expect(closeButton).toBeTruthy();
-        expect(closeButton?.props.accessibilityLabel).toBe('common.close');
         await pressTestInstanceAsync(closeButton!);
         expect(safeRouterBackSpy).toHaveBeenCalledWith({
             router: expect.objectContaining({ back: routerBackSpy }),

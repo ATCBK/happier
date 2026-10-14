@@ -5,7 +5,8 @@ import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/ma
 import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { withUserScopedRpcSocket } from '@/session/transport/rpc/withUserScopedRpcSocket';
 import { resolveSessionControlSocketConnectTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
-import { ManagedMachineControllerError, type ManagedMachineAcquisitionDriverInput, type ManagedMachineExecutionOptions } from './acquire';
+import { ManagedMachineControllerError } from './controllerErrors';
+import type { ManagedMachineAcquisitionDriverInput, ManagedMachineExecutionOptions } from './acquire';
 import type { ManagedGuestActivityTransport } from './managedIntentReconciler';
 
 /** The Account socket invalidates observations; only the exact guest RPC decides activity. */

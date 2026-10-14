@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
+import { readBundledPluginPackageNames } from '../../apps/cli/scripts/build-owned/bundledPluginMembership.ts';
 
 import { buildIntoTempThenReplace } from '../../apps/stack/scripts/utils/fs/atomic_dir_swap.mjs';
 import { readCachedFileDigestSync } from '../../apps/stack/scripts/utils/fs/cached_file_digest.mjs';
@@ -326,8 +327,18 @@ function hasBundledWorkspaceDependencies(packageJson) {
   return collectBundledWorkspaceDependencyNames(packageJson).length > 0;
 }
 
-function buildEntersWorkspaceBundleLock(packageJson) {
-  return hasBundledWorkspaceDependencies(packageJson);
+function isBundledPluginUiWorkspacePackage(packageJson, { monorepoRoot, packageDir }) {
+  const packageName = String(packageJson.name ?? '');
+  return packageName.startsWith('@happier-dev/plugins-')
+    && typeof packageJson.scripts?.['build:ui'] === 'string'
+    && Boolean(packageJson.scripts['build:ui'].trim())
+    && resolve(packageDir) === resolve(monorepoRoot, 'packages/plugins', packageName.slice('@happier-dev/plugins-'.length))
+    && readBundledPluginPackageNames(monorepoRoot).includes(packageName);
+}
+
+function buildEntersWorkspaceBundleLock(packageJson, context) {
+  return hasBundledWorkspaceDependencies(packageJson)
+    || isBundledPluginUiWorkspacePackage(packageJson, context);
 }
 
 function collectExpectedPackageOutputTargets(packageJson) {
@@ -922,7 +933,24 @@ async function consumeWorkspacePackageBuildInputs({
   dependencyDirs,
 }) {
   const packageJson = await readJson(packageJsonPath);
+  let preparedInputFingerprint = null;
+  if (isBundledPluginUiWorkspacePackage(packageJson, { monorepoRoot, packageDir })) {
+    // Joint admission owns dependency, publication and package custody before
+    // the canonical writer prepares the package-root input consumed by capture.
+    const { prepareBundledPluginUiManifestForWorkspaceBuild } = await import(
+      '../../apps/cli/scripts/build-owned/generateBundledPluginEntries.ts'
+    );
+    const manifestInputFingerprint = readWorkspacePackageInputFingerprint({ packageDir, dependencyDirs, env });
+    const prepared = await prepareBundledPluginUiManifestForWorkspaceBuild({
+      repoRoot: monorepoRoot, packageName: packageJson.name,
+      heldLockValue: env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD, env,
+    });
+    if (prepared) preparedInputFingerprint = manifestInputFingerprint;
+  }
   let inputFingerprint = readWorkspacePackageInputFingerprint({ packageDir, dependencyDirs, env });
+  if (preparedInputFingerprint && inputFingerprint !== preparedInputFingerprint) {
+    throw new BuildInputDriftError(`[workspace-build] inputs changed after preparing the UI manifest for ${packageJson.name ?? packageDir}; retained the last coherent output; rerun the phase`);
+  }
   let builtDependencies = readWorkspaceBuiltDependencies({ monorepoRoot, dependencyDirs });
   const state = await inspectWorkspacePackageOutput(packageDir, packageJson, {
     env,
@@ -986,6 +1014,11 @@ async function consumeWorkspacePackageBuildInputs({
     builtDependencies = capture.builtDependencies;
   }
   const publishOutputs = async (tmpDistDir) => {
+    // Capture may legitimately converge to newer authored source. Its staged
+    // UI input must not be the manifest prepared from an earlier source basis.
+    if (preparedInputFingerprint && inputFingerprint !== preparedInputFingerprint) {
+      throw new BuildInputDriftError(`[workspace-build] inputs changed while capturing the UI manifest for ${packageJson.name ?? packageDir}; retained the last coherent output; rerun the phase`);
+    }
     const buildEnv = {
       ...(capture?.env ?? env),
       HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue,
@@ -1159,7 +1192,7 @@ async function ensureWorkspacePackageBuilt(packageDir, {
 
   const env = await workspaceBuildBoundary.prepareEnv(packageDir, envIn);
   const lockPath = resolveWorkspacePackageBuildLockPath(packageDir, packageJson);
-  const workspaceBundleLockPath = buildEntersWorkspaceBundleLock(packageJson)
+  const workspaceBundleLockPath = buildEntersWorkspaceBundleLock(packageJson, { monorepoRoot, packageDir })
     ? resolveWorkspaceBundleLockPath(monorepoRoot)
     : null;
   // Real process adapters run the complete publication transaction beneath
@@ -1334,8 +1367,8 @@ async function ensureWorkspacePackageNamesBuiltPass(monorepoRoot, packageNames, 
   );
   const scheduleConcurrentPackageBuild = createAsyncConcurrencyLimiter(maxConcurrentBuilds);
   const scheduleBundledWorkspacePackageBuild = createAsyncConcurrencyLimiter(1);
-  const schedulePackageBuild = (packageJson, operation) => (
-    buildEntersWorkspaceBundleLock(packageJson)
+  const schedulePackageBuild = (packageJson, packageDir, operation) => (
+    buildEntersWorkspaceBundleLock(packageJson, { monorepoRoot, packageDir })
       // Queue before taking general build capacity: a sibling otherwise starts
       // waiting on the shared publication lease held by this same invocation.
       ? scheduleBundledWorkspacePackageBuild(() => scheduleConcurrentPackageBuild(operation))
@@ -1419,7 +1452,7 @@ async function ensureWorkspacePackageNamesBuiltPass(monorepoRoot, packageNames, 
       const queuedAt = performance.now();
       let startedAt = queuedAt;
       try {
-        result = await schedulePackageBuild(packageJson, async () => {
+        result = await schedulePackageBuild(packageJson, resolvedPackageDir, async () => {
           signal?.throwIfAborted();
           startedAt = performance.now();
           return await ensureWorkspacePackageBuilt(resolvedPackageDir, {

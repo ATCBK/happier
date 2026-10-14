@@ -11,6 +11,8 @@ import {
     AccountSettingsV2UpdateResponseSchema,
     type AccountSettingsV2GetResponse,
 } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 
 // File identities belong to Node, not Vite's client asset URL transform.
 const { URL: NodeURL } = getVitestNodeBuiltin<typeof import('node:url')>('node:url');
@@ -33,8 +35,16 @@ export type ServedHomeRequest = Readonly<{
     signal: AbortSignal | null | undefined;
 }>;
 
-type HomeSpec = Readonly<{ key: string; serverUrl: string; accountId: string; settings?: Readonly<Record<string, unknown>>;
-    accountMode?: 'plain' | 'e2ee'; credentials?: AuthCredentials; currentAccount?: boolean }>;
+type HomeSpec = Readonly<{
+    key: string; serverUrl: string; accountId: string; serverIdentityId?: string;
+    /** Actual Home HTTP profile fields; its identity always comes from the authenticated bearer. */
+    profile?: Partial<Omit<ReturnType<typeof AccountProfileSchema.parse>, 'id'>>;
+    /** Actual initial settings document served before Account bootstrap starts. */
+    settings?: Readonly<Record<string, unknown>>;
+    accountMode?: 'plain' | 'e2ee';
+    credentials?: AuthCredentials;
+    currentAccount?: boolean;
+}>;
 
 function tokenFor(accountId: string, currentAccount = false): string {
     return `header.${Buffer.from(JSON.stringify({ sub: accountId, ...(currentAccount ? {
@@ -48,7 +58,10 @@ function accountOf(init: RequestInit | undefined): string | null {
     const payload = token?.split('.')[1];
     if (!payload) return null;
     try {
-        return (JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { sub?: string }).sub ?? null;
+        const parsed: unknown = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+        if (!parsed || typeof parsed !== 'object') return null;
+        const subject = Reflect.get(parsed, 'sub');
+        return typeof subject === 'string' ? subject : null;
     } catch {
         return null;
     }
@@ -127,156 +140,161 @@ export async function installRealActionExecutorModuleLoader(): Promise<() => voi
  */
 export async function serveAccountHomes(params: Readonly<{
     homes: readonly HomeSpec[];
-    route: (request: ServedHomeRequest) => Response | undefined | Promise<Response | undefined>;
+    route: (request: ServedHomeRequest) => Response | Promise<Response | undefined> | undefined;
 }>) {
-    const [{ upsertServerProfileOnly, setActiveServer }, { TokenStorage }, { setRuntimeFetch, resetRuntimeFetch }, { getStorage }] = await Promise.all([
+    if (params.homes.length === 0) throw new Error('An Action journey requires a Home');
+    const webLocks = typeof globalThis.navigator?.locks?.request === 'function' ? null : installWebLockManagerMock();
+    const { loadSyncSingletonForTests } = await import('./syncSingletonLoader');
+    await loadSyncSingletonForTests();
+    const [{ upsertServerProfileOnly, setActiveServer, getActiveServerSnapshot }, { TokenStorage }, { setRuntimeFetch, resetRuntimeFetch },
+        { restoreConnectionToActiveServer, disconnectActiveServerConnection }, { resolveServerProfileScopeIdForIdentifier, setServerProfileIdentityForUrl }] = await Promise.all([
         import('@/sync/domains/server/serverRuntime'),
         import('@/auth/storage/tokenStorage'),
         import('@/utils/system/runtimeFetch'),
-        import('@/sync/domains/state/storage'),
+        import('@/sync/runtime/orchestration/connectionManager'),
+        import('@/sync/domains/server/serverProfiles'),
     ]);
+    await disconnectActiveServerConnection();
     const accounts = new Map<string, string>();
     const byOrigin = new Map<string, string>();
-    // Store the server's envelope, not a decrypted client Settings projection.
-    // An empty new E2EE Account starts at null/version 0; JSON serialization
-    // mirrors the actual HTTP baseline (including omitted undefined fields).
-    const initialSettings = params.homes.map(home => {
+    // Store authenticated wire snapshots through one Settings CAS boundary.
+    // Empty E2EE Accounts start at null/version 0, as the real HTTP owner does.
+    const settingsByHome = new Map(params.homes.map(home => {
         const emptyEncryptedAccount = home.accountMode === 'e2ee' && home.settings === undefined;
-        return [home.key, AccountSettingsV2GetResponseSchema.parse(JSON.parse(JSON.stringify({
+        const snapshot = AccountSettingsV2GetResponseSchema.parse(JSON.parse(JSON.stringify({
             content: emptyEncryptedAccount ? null : { t: 'plain', v: home.settings ?? {} },
             version: emptyEncryptedAccount ? 0 : 1,
-        })))] as const;
-    });
-    // All consumers share the same authenticated Settings HTTP/CAS owner.
-    const settingsByHome = new Map(params.homes.map((home, index) => [home.key,
-        createAccountSettingsHttpBoundary({ serverUrl: home.serverUrl,
-            initialAccounts: [{ accountId: home.accountId, snapshot: initialSettings[index]![1] }] }),
-    ]));
+        })));
+        return [home.key, createAccountSettingsHttpBoundary({
+            serverUrl: home.serverUrl, initialAccounts: [{ accountId: home.accountId, snapshot }],
+        })] as const;
+    }));
     const specsByHome = new Map(params.homes.map(home => [home.key, home]));
-    const homes: Record<string, Readonly<{ id: string; serverUrl: string }>> = {};
-    const requests: ServedHomeRequest[] = [];
+    const homes: Record<string, Readonly<{ id: string; profileId: string; serverUrl: string }>> = {};
     const credentialWrites: HomeCredentialWriteRollback[] = [];
+    const focused = params.homes.at(-1)!;
+    const requests: ServedHomeRequest[] = [];
+    const httpRequests: ServedHomeRequest[] = [];
     async function writeCredentials(key: string, accountId: string) {
         const home = homes[key];
         if (!home) throw new Error(`Unknown served Home: ${key}`);
         const spec = specsByHome.get(key);
-        const rollback = await TokenStorage.setCredentialsForServerUrlWithRollback(
-            home.serverUrl, { serverId: home.id },
-            { ...(spec?.accountId === accountId ? spec.credentials : undefined),
-                token: tokenFor(accountId, spec?.accountId === accountId && spec.currentAccount === true) },
-        );
+        const credentials = {
+            ...(spec?.accountId === accountId ? spec.credentials : undefined),
+            token: spec?.accountId === accountId && spec.credentials
+                ? spec.credentials.token
+                : tokenFor(accountId, spec?.accountId === accountId && spec.currentAccount === true),
+        };
+        const rollback = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.id }, credentials);
         if (!rollback) throw new Error(`Served Home credentials could not be stored: ${key}`);
         credentialWrites.push(rollback);
+        accounts.set(key, accountId);
+        return credentials;
     }
-    // Activation can start readiness immediately. Install the external HTTP
-    // boundary before publishing any fixture Home, as app-entry fixtures do.
+    // Install all transport answers before activation can trigger real restoration.
     const homeFetch = async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const target = new URL(String(url));
-        if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return Response.json({});
         const home = byOrigin.get(target.origin);
         if (!home) throw new Error(`Request to an unknown Home: ${target.origin}`);
         const authenticatedAccountId = accountOf(init);
-        if (target.pathname === '/v1/account/encryption') {
-            const spec = specsByHome.get(home);
-            return Response.json({ mode: accounts.get(home) === spec?.accountId ? spec?.accountMode ?? 'plain' : 'plain', updatedAt: 0 });
-        }
-        if (target.pathname === '/v1/account/encryption/currentness') {
-            const spec = specsByHome.get(home);
-            const mode = accounts.get(home) === spec?.accountId ? spec?.accountMode ?? 'plain' : 'plain';
-            if (mode === 'plain') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 0, updatedAt: 0 }));
-        }
-        const settingsResponse = settingsByHome.get(home)!.handle(url, init);
-        if (settingsResponse) return settingsResponse;
         const request: ServedHomeRequest = {
-            home,
-            method: init?.method ?? 'GET',
-            path: target.pathname,
-            url: target,
-            accountId: authenticatedAccountId,
-            headers: new Headers(init?.headers),
+            home, method: init?.method ?? 'GET', path: target.pathname, url: target,
+            accountId: authenticatedAccountId, headers: new Headers(init?.headers),
             body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
             signal: init?.signal,
         };
+        httpRequests.push(request);
+        if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return Response.json({});
+        if (target.pathname === '/v1/account/encryption') {
+            const spec = specsByHome.get(home);
+            return Response.json({ mode: authenticatedAccountId === spec?.accountId ? spec?.accountMode ?? 'plain' : 'plain', updatedAt: 0 });
+        }
+        if (target.pathname === '/v1/account/encryption/currentness') {
+            const spec = specsByHome.get(home);
+            const mode = authenticatedAccountId === spec?.accountId ? spec?.accountMode ?? 'plain' : 'plain';
+            if (mode === 'plain') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 0, updatedAt: 0 }));
+        }
+        if (target.pathname === '/v1/account/profile') {
+            return authenticatedAccountId
+                ? Response.json(AccountProfileSchema.parse({ ...specsByHome.get(home)?.profile, id: authenticatedAccountId }))
+                : Response.json({ error: 'Not authenticated' }, { status: 401 });
+        }
+        const settingsResponse = settingsByHome.get(home)!.handle(url, init);
+        if (settingsResponse) return settingsResponse;
         requests.push(request);
         return await params.route(request) ?? Response.json({ error: 'not_found' }, { status: 404 });
     };
     setRuntimeFetch(homeFetch);
-    for (const spec of params.homes) {
-        const home = await upsertServerProfileOnly({ serverUrl: spec.serverUrl });
-        homes[spec.key] = { id: home.id, serverUrl: home.serverUrl };
-        accounts.set(spec.key, spec.accountId);
-        byOrigin.set(new URL(home.serverUrl).origin, spec.key);
-        await writeCredentials(spec.key, spec.accountId);
-        // Device selection also works in Node/native harnesses without the
-        // browser sessionStorage that owns a tab-scoped selection.
-        await setActiveServer({ serverId: home.id });
-    }
-    const focused = params.homes.at(-1)!;
-    const focusedScope = { serverId: homes[focused.key]!.id, accountId: focused.accountId };
-    getStorage().setState({ settingsScope: focusedScope, profileScope: focusedScope });
-    // A focused Home reads the applied Settings projection, not its HTTP baseline.
-    // Publish the same fixture response through the real store producer.
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    getStorage().getState().applySettingsForScope(focusedScope, settingsParse(focused.settings ?? {}), 1);
-    return {
-        homes,
-        requests,
-        /** Compose another real network boundary without replacing the Home transport. */
-        fetch: homeFetch,
-        /** Replace the external Account Settings response; the real store remains its admission owner. */
-        replaceAccountSettings(key: string, snapshot: Readonly<{
-            settings: Readonly<Record<string, unknown>>;
-            version: number;
-        }>) {
-            if (!settingsByHome.has(key)) throw new Error(`Unknown served Home: ${key}`);
-            const settings = AccountSettingsV2GetResponseSchema.parse(JSON.parse(JSON.stringify({
-                content: { t: 'plain', v: snapshot.settings }, version: snapshot.version,
-            })));
-            settingsByHome.get(key)!.replaceAccountSettings(accounts.get(key)!, settings);
-        },
-        /** Mounted content also needs the real applied Home/Account lifetime, beyond saved profiles. */
-        async restoreActiveConnection() {
-            await import('@/sync/syncEngine');
-            const credential = await TokenStorage.getCredentialsForServerUrl(homes[focused.key]!.serverUrl);
-            if (!credential) throw new Error('Served Home Account is unavailable');
-            const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
-            await restoreConnectionToActiveServer(credential);
-            return disconnectActiveServerConnection;
-        },
-        /** The Home now signs in as another Account (a sign-out and sign-in elsewhere). */
-        async switchAccount(key: string, accountId: string) {
-            accounts.set(key, accountId);
-            await writeCredentials(key, accountId);
-        },
-        async dispose() {
+    let disposed = false;
+    const dispose = async () => {
+        if (disposed) return;
+        disposed = true;
+        try {
+            await disconnectActiveServerConnection();
+            const { stopAllEndpointSupervisorsForTests } = await import('@/sync/runtime/connectivity/endpointSupervisorPool');
+            await stopAllEndpointSupervisorsForTests();
+        } finally {
+            resetRuntimeFetch();
             try {
-                for (const write of [...credentialWrites].reverse()) {
+                for (const write of credentialWrites.splice(0).reverse()) {
                     if (!await write.rollback()) throw new Error('Served Home credential rollback failed');
                 }
             } finally {
-                resetRuntimeFetch();
+                webLocks?.restore();
             }
+        }
+    };
+    try {
+        for (const spec of params.homes) {
+            let profile = await upsertServerProfileOnly({ serverUrl: spec.serverUrl });
+            if (spec.serverIdentityId) {
+                const identified = await setServerProfileIdentityForUrl(profile.serverUrl, spec.serverIdentityId);
+                if (!identified) throw new Error(`Home identity could not be established: ${spec.key}`);
+                profile = identified;
+            }
+            const id = resolveServerProfileScopeIdForIdentifier(profile.id);
+            homes[spec.key] = { id, profileId: profile.id, serverUrl: profile.serverUrl };
+            byOrigin.set(new URL(profile.serverUrl).origin, spec.key);
+            await writeCredentials(spec.key, spec.accountId);
+        }
+        await setActiveServer({ serverId: homes[focused.key]!.profileId });
+        const credentials = await TokenStorage.getCredentialsForServerUrl(homes[focused.key]!.serverUrl);
+        if (!credentials) throw new Error('Served Home Account is unavailable');
+        await restoreConnectionToActiveServer(credentials);
+    } catch (error) {
+        await dispose();
+        throw error;
+    }
+    return {
+        homes, requests, httpRequests,
+        /** Compose another real network boundary without replacing the Home transport. */
+        fetch: homeFetch,
+        replaceAccountSettings(key: string, snapshot: Readonly<{ settings: Readonly<Record<string, unknown>>; version: number }>) {
+            const boundary = settingsByHome.get(key);
+            const accountId = accounts.get(key);
+            if (!boundary || !accountId) throw new Error(`Unknown served Home: ${key}`);
+            boundary.replaceAccountSettings(accountId, AccountSettingsV2GetResponseSchema.parse(JSON.parse(JSON.stringify({
+                content: { t: 'plain', v: snapshot.settings }, version: snapshot.version,
+            }))));
         },
+        async restoreActiveConnection() {
+            const credential = await TokenStorage.getCredentialsForServerUrl(homes[focused.key]!.serverUrl);
+            if (!credential) throw new Error('Served Home Account is unavailable');
+            await restoreConnectionToActiveServer(credential);
+            return disconnectActiveServerConnection;
+        },
+        async switchAccount(key: string, accountId: string) {
+            if (disposed) throw new Error('The Action Homes have been disposed');
+            const home = homes[key];
+            if (!home) throw new Error(`Unknown served Home: ${key}`);
+            const isFocused = getActiveServerSnapshot().serverId === home.id;
+            if (isFocused) await disconnectActiveServerConnection();
+            const credentials = await writeCredentials(key, accountId);
+            if (isFocused) await restoreConnectionToActiveServer(credentials);
+        },
+        dispose,
     };
 }
 
-/** Adds the real Metro executor bridge only for journeys that invoke the Action front door. */
-export async function serveActionHomes(params: Parameters<typeof serveAccountHomes>[0]) {
-    const restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
-    try {
-        const home = await serveAccountHomes(params);
-        return {
-            ...home,
-            async dispose() {
-                try {
-                    await home.dispose();
-                } finally {
-                    restoreExecutorModuleLoader();
-                }
-            },
-        };
-    } catch (error) {
-        restoreExecutorModuleLoader();
-        throw error;
-    }
-}
+/** Domain-compatible name retained for Action compositions. */
+export const serveActionHomes = serveAccountHomes;

@@ -537,7 +537,7 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
       coverage: bindings.length === event.servers.length ? event.coverage : 'partial', bindings });
     if (!usage.success) return { projected: false, reason: 'unsupported_event' };
     await commitRequiredRuntimeTranscriptMessage({ session: params.session, provider: params.provider,
-      body: { type: 'event', data: { type: 'mcp-binding-usage', usage: usage.data } }, localId: evidenceId,
+      body: { type: 'event', id: evidenceId, data: { type: 'mcp-binding-usage', usage: usage.data } }, localId: evidenceId,
       createdAt: event.window.endMs, provenance: { kind: 'non_dependent', source: 'external' },
       eventKind: event.kind, ...(params.admission ? { admission: params.admission } : {}) });
     return { projected: true, kind: event.kind };
@@ -879,6 +879,8 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     eventKind: event.kind,
     ...(params.admission === undefined ? {} : { admission: params.admission }),
   });
-  params.runtimeMessageDeltaBridge?.discardStream(buildRuntimeMessageStreamArgs(event, event.role));
+  if (event.role !== 'user') {
+    params.runtimeMessageDeltaBridge?.discardStream(buildRuntimeMessageStreamArgs(event, event.role));
+  }
   return { projected: true, kind: event.kind };
 }

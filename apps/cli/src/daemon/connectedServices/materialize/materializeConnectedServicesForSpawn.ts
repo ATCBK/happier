@@ -399,15 +399,15 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
     const diagnostics: ConnectedServicesMaterializationDiagnostic[] = [];
     const mergeSharedStateFile = await catalogEntry?.getConnectedServiceSharedStateFileMerge?.() ?? undefined;
     let targetMaterializedRoot = params.rootDir;
+    const nativeHome = stateSharingDescriptor?.nativeHome;
     if (params.nativeHomeOnly && (!stateSharingDescriptor?.nativeHome
       || stateSharingDescriptor.providerSupportStatus !== 'supported')) {
       throw new Error('agent_native_home_unavailable');
     }
     if (
       stateSharingDescriptor?.providerSupportStatus === 'supported'
-      && stateSharingDescriptor.nativeHome
+      && nativeHome
     ) {
-      const nativeHome = stateSharingDescriptor.nativeHome;
       const homesRoot = join(params.activeServerDir, 'daemon', 'connected-services', 'homes');
       const homesRootIsOwned = await isCanonicalConnectedServiceMaterializedRoot({
         baseDir: params.activeServerDir, rootDir: homesRoot, allowMissing: true,

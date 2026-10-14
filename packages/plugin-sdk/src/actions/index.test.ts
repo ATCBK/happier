@@ -242,7 +242,7 @@ describe('ActionsService source contract', () => {
             unexpected: true,
         }).success).toBe(false);
         expectTypeOf<ActionsPluginMachineExecutionOriginV1>()
-            .toEqualTypeOf<CanonicalPluginMachineExecutionOriginV1>();
+            .branded.toEqualTypeOf<CanonicalPluginMachineExecutionOriginV1>();
     });
 
     it('projects exact canonical Action identities without a second registry', () => {

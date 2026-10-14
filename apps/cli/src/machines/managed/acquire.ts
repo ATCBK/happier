@@ -20,6 +20,9 @@ import { AcquireResultV1Schema, type AcquireResultV1 } from '@happier-dev/protoc
 import { reconcileManagedMachine, resolveManagedRoleCredentialAuthorizations } from './reconcile';
 import { reconcileManagedIntent, prepareManagedRetentionPolicy, type ManagedGuestActivityTransport } from './managedIntentReconciler';
 
+import { ManagedMachineControllerError, ManagedMachineNativeRefusal } from './controllerErrors';
+export { ManagedMachineControllerError, ManagedMachineNativeRefusal, ManagedMachineNativeEffectGuardRefusal } from './controllerErrors';
+
 export type ManagedMachineAcquisitionDriverInput = Readonly<{
     token: string;
     serverUrl: string;
@@ -49,16 +52,6 @@ export type ManagedMachineExecutionOptions = Readonly<{
     /** Content-free installed Account socket; every wake re-reads the signed row. */
     subscribeEnvironmentSetupChanges?: (callbacks: Readonly<{ onChange(): void; onError(error: unknown): void }>) => Promise<{ dispose(): void | Promise<void> }>;
 }>;
-export class ManagedMachineControllerError extends Error {
-    constructor(readonly code: string) {
-        super(code);
-        this.name = 'ManagedMachineControllerError';
-    }
-}
-/** Definite provider refusal, distinct from policy, cancellation and uncertain IO. */
-export class ManagedMachineNativeRefusal extends ManagedMachineControllerError {}
-/** A private pre-handler guard prevented native IO, not an unknown delivery. */
-export class ManagedMachineNativeEffectGuardRefusal extends ManagedMachineControllerError {}
 
 /** The controller transport consumes the server's row/currentness authority. */
 export function createManagedMachineControllerClient(input: ManagedMachineAcquisitionDriverInput, options: ManagedMachineExecutionOptions, action: ManagedMachineActionIdV1) {
@@ -389,7 +382,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                 const signal = options.signal ?? new AbortController().signal;
                 const entries = await Promise.all((input.runtimeRegistry.contributes.machineProvisioners ?? []).map(async provider => {
                     signal.throwIfAborted();
-                    const occurrenceId = input.runtimeRegistry.readPluginOccurrenceId(provider.pluginId);
+                    const occurrenceId = input.runtimeRegistry.readPluginOccurrenceId?.(provider.pluginId);
                     if (!occurrenceId) return null;
                     // Save/acquire admits exactly this Action's purposes. Other
                     // roles recheck captured selections when invoked; their
@@ -400,7 +393,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                         resolveOptionalAccess: input.runtimeRegistry.resolveOptionalAccess,
                     });
                     const authorizations = readAuthorizations();
-                    const isCurrent = () => input.runtimeRegistry.readPluginOccurrenceId(provider.pluginId) === occurrenceId
+                    const isCurrent = () => input.runtimeRegistry.readPluginOccurrenceId?.(provider.pluginId) === occurrenceId
                         && isDeepStrictEqual(authorizations, readAuthorizations());
                     currentChecks.push(isCurrent);
                     if (!authorizations) {
@@ -427,7 +420,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
             if (action === 'machines.provisioners.check' || action === 'machines.provisioners.options') {
                 const probe = ManagedMachineActionInputSchemasV1[action].parse(parsed);
                 const provider = (input.runtimeRegistry.contributes.machineProvisioners ?? []).find((candidate) => candidate.identity.pluginId === probe.contribution.pluginId && candidate.identity.localId === probe.contribution.localId);
-                const occurrenceId = provider ? input.runtimeRegistry.readPluginOccurrenceId(provider.pluginId) : null;
+                const occurrenceId = provider ? input.runtimeRegistry.readPluginOccurrenceId?.(provider.pluginId) : null;
                 if (!provider || !occurrenceId) throw new ManagedMachineControllerError('provider_unavailable');
                 const role = action === 'machines.provisioners.check' ? 'check' : 'options';
                 const localId = provider.definition.actions[role];
@@ -435,7 +428,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                 const authorizations = await resolveManagedRoleCredentialAuthorizations(input, provider.pluginId, localId, probe.credentials,
                     { descriptor: provider.definition, launch: 'selectors' in probe ? probe.selectors : undefined });
                 let current = true;
-                const isCurrent = () => current && !options.signal?.aborted && input.runtimeRegistry.readPluginOccurrenceId(provider.pluginId) === occurrenceId;
+                const isCurrent = () => current && !options.signal?.aborted && input.runtimeRegistry.readPluginOccurrenceId?.(provider.pluginId) === occurrenceId;
                 const activation = await input.managedProviderOperationAuthority.activate({
                     identity: { pluginId: provider.pluginId, localId }, operationId: options.requestId,
                     purposes: authorizations.map(authorization => authorization.purpose),
@@ -461,7 +454,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                             const repair = prerequisite.repairAction;
                             if (!repair) continue;
                             const target = input.runtimeRegistry.contributes.actionsById?.get(buildQualifiedPluginContributionKey(repair.action));
-                            if (!target || !input.runtimeRegistry.readPluginOccurrenceId(repair.action.pluginId)) {
+                            if (!target || !input.runtimeRegistry.readPluginOccurrenceId?.(repair.action.pluginId)) {
                                 throw new ManagedMachineControllerError('provider_unavailable');
                             }
                             let valid = false;

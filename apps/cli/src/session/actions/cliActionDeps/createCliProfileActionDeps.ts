@@ -214,15 +214,11 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
         assertCurrent();
         const memory = await createAuthoringMemoryClient({ credentials: params.credentials, signal: context.signal });
         const row = await memory.read('lastUsedProfile');
-        if (row.status !== 'present' && row.status !== 'absent' && row.status !== 'deleted') {
-          return { status: 'unavailable', reason: row.status };
-        }
         if (row.status === 'present') memory.open('lastUsedProfile', row.content);
         assertCurrent();
         const result = await memory.mutate('lastUsedProfile', row.status === 'absent' ? 'absent' : row.revision,
           memory.seal('lastUsedProfile', id));
-        if (result.status !== 'updated') return { status: 'unavailable', reason: result.status === 'conflict'
-          ? 'authoring_memory_revision_conflict' : result.status };
+        if (result.status !== 'updated') return { status: 'unavailable', reason: 'authoring_memory_revision_conflict' };
         return { status: 'selected', id };
       },
       edit: async () => ({ status: 'unavailable', reason: 'profile_editor_unavailable' }),

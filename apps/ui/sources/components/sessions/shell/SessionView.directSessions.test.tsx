@@ -1823,28 +1823,13 @@ describe('SessionView (direct sessions)', () => {
     accountConnection = await restoreServerAccountForTest({
       serverUrl: 'https://server-route-1',
       accountId: 'account-route-1',
-      request: async (url, init) => {
-        const address = new URL(String(url));
-        const { serverFetch } = await import('@/sync/http/client');
-        return serverFetch(`${address.pathname}${address.search}`, init);
-      },
+      request: homes.request,
     });
     // This suite has several real saved Homes. Keep readiness and captured
     // request authorities on the same endpoint-bound external HTTP answers,
     // rather than the single-Home adapter installed during Account restoration.
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
-    setRuntimeFetch(async (url, init) => {
-      const address = new URL(String(url));
-      if (!homes.findByServerUrl(address.origin)) return new Response('{}', { status: 404 });
-      if (address.pathname === '/v1/auth/ping' || address.pathname === '/health') return new Response('{}', { status: 200 });
-      const authorization = new Headers(init?.headers).get('authorization');
-      const request = createServerFetchAtEndpoint({
-        endpointUrl: address.origin,
-        credentials: authorization?.startsWith('Bearer ') ? { token: authorization.slice(7) } : null,
-      });
-      return request(`${address.pathname}${address.search}`, init);
-    });
+    setRuntimeFetch(homes.request);
     await waitForHomeGovernance(() => expect(storage.getState().endpointStatus).toBe('online'));
     // IndexedDB's preparation must complete before a case installs a fake clock.
     // The application performs this bootstrap before a Composer can be edited.

@@ -128,7 +128,7 @@ export function installPrismaModuleMock<TModule extends object>(module: ModuleMo
 
 export function createDbTransactionMock<TTx extends object>(createTxState: () => TTx): {
     transaction: ReturnType<typeof vi.fn>;
-    readSnapshot: <T>(fn: (tx: TTx) => Promise<T>) => Promise<T>;
+    readSnapshot: <T>(read: (reader: TTx) => Promise<T>) => Promise<T>;
     wrapDb: <TDb extends object>(db: TDb) => TransactionalDb<TDb, TTx>;
 } {
     const transaction = vi.fn(async <T>(fnOrOperations: ((tx: TTx) => Promise<T>) | readonly unknown[]): Promise<T> => {
@@ -141,10 +141,10 @@ export function createDbTransactionMock<TTx extends object>(createTxState: () =>
 
     return {
         transaction,
-        // SQLite read-only transactions use a separate database adapter. Supply
-        // the same fixture delegates there while keeping inTx/domain logic real.
-        readSnapshot: async <T>(fn: (tx: TTx) => Promise<T>): Promise<T> =>
-            await fn(createTxState()),
+        // Substitute the persistent connection only; the real reader callback
+        // still owns configuration, policy, and query interpretation.
+        readSnapshot: async <T>(read: (reader: TTx) => Promise<T>): Promise<T> =>
+            await read(createTxState()),
         wrapDb<TDb extends object>(db: TDb): TransactionalDb<TDb, TTx> {
             return {
                 ...db,

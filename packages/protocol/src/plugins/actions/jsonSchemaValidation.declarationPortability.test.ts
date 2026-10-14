@@ -47,7 +47,8 @@ it('emits declarations that remain valid for an external NodeNext consumer', asy
     expect(declaration).toContain('export declare const DeclarationPortableSessionDraftAuthoringFieldsSchema');
 
     await symlink(
-      join(repositoryRoot, 'packages/protocol/node_modules'),
+      // Yarn hoists the Protocol's declared consumer dependencies to the repository root.
+      join(repositoryRoot, 'node_modules'),
       join(outputDirectory, 'node_modules'),
       process.platform === 'win32' ? 'junction' : 'dir',
     );

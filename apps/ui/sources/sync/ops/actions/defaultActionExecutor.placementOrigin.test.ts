@@ -5,11 +5,9 @@ import {
     encodePlainMachineStoredContent,
     type MachinePoolSelectionOriginV1,
 } from '@happier-dev/protocol';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { getStorage } from '@/sync/domains/state/storage';
 import { fetchAndApplyMachines } from '@/sync/engine/machines/syncMachines';
 import { buildNewSessionAuthoringDraft, buildSessionSpawnNewInputV2FromAuthoringDraft } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
@@ -17,7 +15,9 @@ import { createDefaultActionExecutor } from './defaultActionExecutor';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
 import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 
@@ -33,6 +33,10 @@ const features = {
         declarationTransport: 'http-header-and-socket-auth-v1',
     } },
 };
+
+// The transport owners are static imports; bind Socket.IO before their graph loads.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 // Keep the real Socket.IO client and exact Account-scoped RPC owner. Only
 // network connection and daemon acknowledgements are substituted.
@@ -71,32 +75,41 @@ function buildSpawnInput(serverId: string) {
 
 describe('Session spawn first-dispatch placement origin', () => {
     let serverId: string;
+    let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
     beforeEach(async () => {
         getStorage().setState(initialState, true);
         resetServerFeaturesClientForTests();
         invalidateAccountEncryptionModeCache();
-        serverId = (await upsertAndActivateServer({ serverUrl: 'https://spawn-origin.test', name: 'Home' })).id;
-        outgoingServerId = serverId;
-        getStorage().getState().activateProfileScope({ serverId, accountId: 'alice' });
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
         const request = async (url: RequestInfo | URL) => {
             const pathname = new URL(String(url)).pathname;
             if (pathname === '/health' || pathname === '/v1/auth/ping') return Response.json({ ok: true });
-            if (pathname === '/v1/features') return Response.json(features);
+            if (pathname === '/v1/features' || pathname === '/v1/features/authenticated') return Response.json(features);
             if (pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+            if (pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (pathname === '/v1/machines/machine-a/access') return Response.json(MachineAccessGrantsListResponseV1Schema.parse({
+                machineId: 'machine-a', custodian: { accountId: 'alice', displayName: 'Alice' },
+                access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+                canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+            }));
             if (pathname === '/v1/machines/machine-a') return Response.json({ machine: {
                 id: 'machine-a', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
             } });
-            throw new Error(`Unexpected spawn preflight request: ${pathname}`);
+            // Unimplemented background endpoints are HTTP refusals, not a
+            // failed network dial that marks this otherwise reachable Home offline.
+            return Response.json({ error: 'not_found' }, { status: 404 });
         };
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://spawn-origin.test', accountId: 'alice', credentials: { token }, request });
+        serverId = connection.serverId;
+        outgoingServerId = serverId;
         setRuntimeFetch(request);
         vi.stubGlobal('fetch', vi.fn(request));
         await getServerFeaturesSnapshot({ serverId, force: true });
         outgoing.length = 0;
     });
-    afterEach(() => {
-        serverScopedRpcSocketPool.resetForTests();
+    afterEach(async () => {
+        await connection.dispose();
+        await serverScopedRpcSocketPool.stopAll();
         resetScopedMachineTransportCacheForTests();
         getStorage().setState(initialState, true);
         resetServerFeaturesClientForTests();

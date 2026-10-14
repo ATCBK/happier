@@ -124,8 +124,12 @@ test('bootstrap publication preserves conditional package imports without compil
     mkdirSync(resolve(sourceDir, 'dist'), { recursive: true });
     mkdirSync(resolve(sourceDir, 'runtime'), { recursive: true });
     mkdirSync(resolve(sourceDir, 'src/private'), { recursive: true });
-    const imports = { '#http': { node: './runtime/node.js', default: './dist/fetch.js' }, '#fs': 'fs', '#disabled': null };
-    writeFileSync(resolve(sourceDir, 'package.json'), JSON.stringify({ name: '@happier-dev/sdk', version: '0.0.0', type: 'module', exports: { '.': { 'happier-source': './src/index.js', default: './dist/connect.js' } }, imports }));
+    const imports = { '#http': { 'happier-source': './src/http.js', node: './runtime/node.js', default: './dist/fetch.js' }, '#fs': 'fs', '#disabled': null };
+    writeFileSync(resolve(sourceDir, 'package.json'), JSON.stringify({ name: '@happier-dev/sdk', version: '0.0.0', type: 'module', exports: { '.': { 'happier-source': './src/connect.js', default: './dist/connect.js' } }, imports }));
+    mkdirSync(resolve(sourceDir, 'src'), { recursive: true });
+    writeFileSync(resolve(sourceDir, 'src/connect.js'), 'export { transport } from "./private.js";\n');
+    writeFileSync(resolve(sourceDir, 'src/http.js'), 'export { transport } from "./private.js";\n');
+    writeFileSync(resolve(sourceDir, 'src/private.js'), 'export const transport = "source";\n');
     writeFileSync(resolve(sourceDir, 'dist/connect.js'), 'export { transport } from "#http";\n');
     writeFileSync(resolve(sourceDir, 'dist/fetch.js'), 'export const transport = "fetch";\n');
     writeFileSync(resolve(sourceDir, 'runtime/node.js'), 'export const transport = "node";\n');
@@ -135,7 +139,12 @@ test('bootstrap publication preserves conditional package imports without compil
     bootstrap.syncBundledWorkspacePackages({ repoRoot, packages: ['sdk'], hostApps: ['cli'] });
     assert.equal((await import(pathToFileURL(resolve(destinationDir, 'dist/connect.js')).href)).transport, 'node');
     assert.equal((await import(pathToFileURL(resolve(destinationDir, 'src/index.js')).href)).selected, 'source');
-    assert.deepEqual(JSON.parse(readFileSync(resolve(destinationDir, 'package.json'), 'utf8')).imports, imports);
+    assert.equal(execFileSync(process.execPath, ['--conditions=happier-source', '--input-type=module', '-e',
+      'const module = await import("@happier-dev/sdk"); console.log(module.transport);',
+    ], { cwd: resolve(repoRoot, 'apps', 'cli'), encoding: 'utf8' }).trim(), 'node');
+    assert.deepEqual(JSON.parse(readFileSync(resolve(destinationDir, 'package.json'), 'utf8')).imports, {
+      ...imports, '#http': { node: './runtime/node.js', default: './dist/fetch.js' },
+    });
     assert.equal(readFileSync(resolve(destinationDir, 'dist/fetch.js'), 'utf8'), 'export const transport = "fetch";\n');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });

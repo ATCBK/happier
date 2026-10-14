@@ -2,8 +2,6 @@ import { BUILT_IN_INSTALLABLES_REGISTRY } from '@happier-dev/protocol/installabl
 import type { InstallableContributionOwner, InstallChecksumStateV1 } from '@happier-dev/protocol/installables';
 import type { CapabilityId, InstallableKey, InstallablesRegistry, InstallableDependencyDescriptor } from '@happier-dev/protocol';
 import type { AgentInstallProgressCallback } from '@happier-dev/cli-common/agents';
-import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
-import { resolveExecutableManagedDependenciesRegistry } from '@/plugins/projection/registry/managedDependencyExecutables';
 
 import { getGitHubReleaseBinaryRuntimeInstallableAdapter } from './sourceAdapters/githubReleaseBinary';
 import { getManagedPypiWheelAssetRuntimeInstallableAdapter } from './sourceAdapters/pypiWheelAsset';
@@ -15,6 +13,8 @@ import {
   getBrowserChromiumArchiveDownloadInstallableAdapter,
   type ArchiveDownloadInstallableAdapter,
 } from './sourceAdapters/browserChromium';
+
+export { readRuntimeInstallableDescriptor, readRuntimeInstallablesRegistry } from './descriptors';
 
 export type RuntimeInstallableLaunchAvailability =
   | Readonly<{ ok: true }>
@@ -134,14 +134,6 @@ export async function getRuntimeInstallableAdapterForDescriptor(
   }
 
   throw new Error(`Installable source kind "${descriptor.source.kind}" for "${key}" is not executable by the runtime installables adapter`);
-}
-
-export function readRuntimeInstallablesRegistry(): InstallablesRegistry {
-  return resolveExecutableManagedDependenciesRegistry(readCurrentContributionRegistry().managedDependencies ?? []);
-}
-
-export function readRuntimeInstallableDescriptor(key: InstallableKey): InstallableDependencyDescriptor | null {
-  return readRuntimeInstallablesRegistry().descriptorsByKey[key]?.descriptor ?? null;
 }
 
 /**

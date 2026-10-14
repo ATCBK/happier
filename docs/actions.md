@@ -221,6 +221,31 @@ grant writes, including mediated responses. The permission footer offers only
 valid decisions; an already-authorized session grant may satisfy the current
 once-only request without creating or widening a grant.
 
+The development UI Account-machine transport preserves those host-stamped facts
+inside the existing installation-key encrypted requester Account context. Its
+closed private invocation carries caller provenance, input constraints and the
+permission ceiling; none are public Action inputs. The receiving executor
+combines that ceiling with authenticated credential authority after checking
+the original root, installation and current requester custody. Missing required
+provenance refuses execution, and a Plugin or API-token caller is never promoted
+to a present user. Session-placement reversal retains the resolved Session target
+without discarding the original admitted Machine root.
+
+Same-Session Agent changes use this one Action owner, not a parallel raw mutation
+RPC. Their installed-source signed lifecycle, cutover and input effects retain
+the original authorization. The server verifies the root, grant and signed
+effect; opaque E2EE request semantics remain the decrypted coordinator's
+responsibility. Context reads retain ordinary Account access, while API-token
+grants are evaluated against the actual requested Session, including fork
+ancestors; unavailable required lineage is refused before stopping the source.
+The installed RPC signature binds the exact private requester box, so replacing
+its encrypted invocation invalidates the signature. Daemon and Session runners
+reuse the same installed requester-preparation lifecycle. A verified API-token
+root already supplies its own provenance: finite Session effects retain that
+captured grant and automation authority without fabricating requester Account
+custody. Account-root UI/Plugin effects still require private caller provenance.
+This describes development integration, not released availability.
+
 In 0.3 development source, Actions Settings retains each contributed Action's
 danger and confirmation facts from the selected daemon's typed projection. Its
 surface default uses Protocol's `pluginActionRequiresPresentUserIntent`, the same
@@ -430,6 +455,29 @@ waiver. There is no second sharing-consent dialog or unwaivable approval floor.
 Action approval defaults remain configurable and waivable. Experimental-model
 confirmation uses its Provider Action's approval policy, with no second UI modal.
 
+In 0.3 development source, goal controls use the Session runtime while it is
+active and its recorded Machine's daemon while inactive. Setting an objective
+wakes an inactive Session through the existing resume owner with `initialGoal`;
+`resumeInactiveWithInitialGoal: false` saves it without waking. Status and budget
+edits alone do not wake the Session. The legacy `daemon.sessionGoal.set` RPC
+retains no-wake semantics; explicit wake uses the closed
+`daemon.sessionGoal.set.v2` request. An older daemon's refusal is returned rather
+than retried as a legacy write that would misleadingly report wake success.
+Agent and automation calls retain their private execution authority through
+resume; they cannot acquire present-user provenance by setting a goal.
+
+`homes.reconnect` projects the focused Home's existing single-shot connection
+recovery. It requires that Home to match the Action scope, does not change
+device focus, and refuses a canceled request or a focus change during recovery.
+The result acknowledges the retry; it does not claim a connected socket.
+
+`connectedServices.pools.selection.get` distinguishes the persisted active
+account from the candidate chosen by selection policy, including manual pools
+with no candidate. `activeSince` is the persisted clock only when its account
+identity matches that active account; missing or mismatched clocks are `null`.
+Observation time and legacy switch timestamps do not stand in for this fact.
+These are 0.3 development-source read projections, not a new selection writer.
+
 `session.draft.append { sessionId, text, sourceSessionId? }` is a client-placed
 intent on the Session's existing initial-prompt handoff owner. It returns
 `{ status: 'appended', sessionId, createdAtMs }` only after the captured Account's
@@ -447,6 +495,32 @@ private transport envelope. It uses the existing Session input admission,
 immediate-delivery intent and receipt, not a separate Claude-specific Action
 or native command transport. SDK Session handles expose the same semantic
 arm with their existing required idempotency key and host-stamped caller.
+
+In 0.3 development source, `machines.add.ssh.start` and the Add Machine UI
+share SSH task admission and completion persistence. Start accepts either a new
+target or `savedHost: { hostId, expectedRevision }`; saved references are bound
+to that catalog revision and resolved by the existing credential owner, without
+returning secret bytes. Supported authentication modes follow the selected task
+runner. Successful completion attempts to save the host through the existing
+catalog owner, without overwriting a later revision; persistence is best effort
+and does not redefine task success. Live password and private-key entry remains
+present-user UI, and existing explicit trust and provisioning prompt policies
+are unchanged. This is not a released availability claim.
+
+In 0.3 development source, `machines.local.service.status/start/stop/restart`,
+`machines.local.service.autostart.set`, `machines.local.service.update` and
+`machines.local.service.disconnect` project the desktop's existing native
+SystemTask service owner. Requests name a saved Home; its captured URL and
+identity target the local user service, while autostart changes every
+desktop-managed service's common login mode. Phones and clients without the
+desktop service bridge return `local_service_unavailable`. Native failure
+codes remain failures, and invocation cancellation cancels the admitted task.
+Status readback updates the existing shared projection only in its initiating
+Home/Account scope. Update retains the single managed-CLI update admission and
+completion owner, using the existing `this-computer` item identity rather than
+attributing a cached machine ID from another Home. Disconnect preserves user-owned services and never forgets
+the saved Home. Existing Action approval and native consent policies remain
+in force; these controls do not create another service registry or preference.
 
 #### Roles, reporting and input observation
 
@@ -2335,6 +2409,14 @@ their existing owner and preserve sibling fields. The
 `notifications.expoPush.update`; native permission and token repair are separate
 operations, not Account preference writes.
 
+In 0.3 development source, `desktop.startOnLogin` binds to the common native
+autostart mode of this computer's desktop-managed background services. The
+desktop row and Settings Action use the same `daemon.service.autostart.set.v1`
+task and shared status readback; no Account or device preference shadows the
+service fact. Unknown or mixed service modes return `setting_value_unavailable`
+for reads and writes. A write retains its invocation lifetime and reports the
+service fact after the native task settles.
+
 In 0.3 development source, discovery derives `targetKinds` and `targetRequired`
 from each declaration binding. `settings.get/set` accept an optional exact
 `target`: `{kind: 'home', serverId}`, `{kind: 'team', serverId, teamId}` or
@@ -3589,7 +3671,15 @@ reports a created approval artifact to its caller, and the present-user UI, whos
 continuation follows the artifact and consumes the replayed typed result. In 0.3 development,
 CLI invocations also return `approval_request_created` with the Artifact id before exiting;
 they do not silently retain the daemon HTTP request while waiting for a human decision.
-The operation has not executed when that result returns. The exception is
+The operation has not executed when that result returns. In development source,
+the mounted experimental Provider-model confirmation retains its exact invocation
+through the existing blocking approval owner. Changing its Agent target, Home,
+Account or Providers feature while approval is pending retires that intent. A later
+Inbox approval cannot replay the retired field intent; the canonical executor
+returns `approval_stale`. The shared approval policy still owns waivers, and a
+successful live approval writes the confirmation once.
+
+The result-custody exception is
 `approvalResultCustody: 'live_only'`, where the exact invocation stays the blocking waiter because
 its raw result must never become durable artifact custody; such a row must declare both a required
 result and a safe observation projection, which the spec schema enforces. Three rows declare it for

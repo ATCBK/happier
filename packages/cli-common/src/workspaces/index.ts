@@ -21,6 +21,7 @@ import {
   assertResolvedRuntimeDependencyMatchesDeclaration,
   collectExternalRuntimeDependencies,
   copyDirDereferenceContainedSync,
+  omitWorkspaceSourceCondition,
   parsePackageNameSegments,
   publishStagedDirectoryMountedSync,
   resolveInstalledRuntimePackage,
@@ -179,8 +180,8 @@ export function sanitizeBundledPackageJson(raw: any): any {
     main,
     module,
     types,
-    exports,
-    ...(imports === undefined ? {} : { imports }),
+    exports: omitWorkspaceSourceCondition(exports),
+    ...(imports === undefined ? {} : { imports: omitWorkspaceSourceCondition(imports) }),
     ...(bin === undefined ? {} : { bin }),
     dependencies: preservesPrepublicationAuthoringMetadata
       ? dependencies
@@ -831,8 +832,9 @@ export function bundleWorkspacePackagesWithRuntimeDependencies(params: Readonly<
       ...bundle,
       // Source-dev hosts can refresh these packages while daemons, CLIs, or test workers are
       // resolving them. Keep the package path mounted and publish the complete package plus its
-      // runtime dependency tree as one reconciled view.
-      preserveDestinationPath: true,
+      // runtime dependency tree as one reconciled view. Artifact readers instead
+      // require a physical installed tree, detached from workspace source links.
+      preserveDestinationPath: publicationMode === 'live',
       // A resolver can read the previous manifest immediately before publication and open one of
       // its targets afterward. Retain prior targets in ordinary live package trees so that in-flight reads remain valid.
       // Exact artifact publication and explicit exact prepared readers prune compatibility targets
@@ -1377,9 +1379,9 @@ function hasBundledWorkspacePackageManifestParity(
   if (!existsSync(bundledPackageJsonPath)) return false;
   if (!existsSync(workspacePackageJsonPath)) return true;
 
-  const workspaceExports = readPackageJsonField(workspacePackageJsonPath, 'exports');
+  const workspaceExports = omitWorkspaceSourceCondition(readPackageJsonField(workspacePackageJsonPath, 'exports'));
   const bundledExports = readPackageJsonField(bundledPackageJsonPath, 'exports');
-  const workspaceImports = readPackageJsonField(workspacePackageJsonPath, 'imports');
+  const workspaceImports = omitWorkspaceSourceCondition(readPackageJsonField(workspacePackageJsonPath, 'imports'));
   const bundledImports = readPackageJsonField(bundledPackageJsonPath, 'imports');
   // Conditional imports resolve in declaration order, so sorting their keys
   // could hide a change from the Node branch to the default branch.

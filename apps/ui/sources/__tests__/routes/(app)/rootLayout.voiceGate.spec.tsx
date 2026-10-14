@@ -1,7 +1,7 @@
-import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { createDeferred, standardCleanup } from '@/dev/testkit';
+import { renderRealAppRoute } from '@/dev/testkit/render/renderRealAppRoute';
+import { RootLayoutRouteContexts } from "./rootLayoutRouteContexts";
 import { initializeTerminalRouteRuntimeForTests, installTerminalRouteCommonModuleMocks } from './terminal/terminalRouteTestHelpers';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -10,6 +10,8 @@ import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/
 import { storage } from '@/sync/domains/state/storage';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 
 installTerminalRouteCommonModuleMocks({
     router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
@@ -17,6 +19,10 @@ installTerminalRouteCommonModuleMocks({
     }).module,
 });
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
+vi.mock('expo-router/build/fork/getPathFromState', async () => {
+    const { loadInstalledExpoPathSerializer } = await import('@/dev/testkit/runtime/installedExpoPathSerializer');
+    return loadInstalledExpoPathSerializer();
+});
 vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock());
 await initializeTerminalRouteRuntimeForTests();
 const RootLayout = (await import('@/app/(app)/_layout')).default;
@@ -40,6 +46,8 @@ async function arrangeVoiceHome(supported: boolean) {
         serverUrl: 'https://voice-gate.example.test', accountId: 'voice-viewer',
         request: async input => {
             const path = new URL(String(input)).pathname;
+            if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'voice-viewer' });
+            if (path === '/v1/kv/bulk') return Response.json({ values: [] });
             if (path === '/v1/features' && state.defer) {
                 state.pendingObserved = true;
                 return pendingFeatures!.promise;
@@ -54,9 +62,11 @@ async function arrangeVoiceHome(supported: boolean) {
             return new Response('{}', { status: 404 });
         },
     });
+    await vi.waitFor(() => expect(getActiveServerAccountScope()).toEqual({ serverId: connection!.serverId, accountId: 'voice-viewer' }));
     storage.setState({
         settings: {
-            ...settingsDefaults, petsEnabled: true,
+            ...settingsDefaults, experiments: true, petsEnabled: true,
+            featureToggles: { ...settingsDefaults.featureToggles, 'pets.companion': true },
             voice: {
                 ...settingsDefaults.voice,
                 providerId: 'happier.voice.elevenlabs/realtime-elevenlabs',
@@ -69,7 +79,7 @@ async function arrangeVoiceHome(supported: boolean) {
         localSettings: { ...localSettingsDefaults, activityBadgesEnabled: false },
     });
     const configuredVoice = storage.getState().settings.voice;
-    const render = () => renderScreen(<InjectedAuthProvider credentials={connection!.credentials}><RootLayout /></InjectedAuthProvider>);
+    const render = () => renderRealAppRoute(RootLayout, connection!.credentials, { contextWrapper: RootLayoutRouteContexts });
     return { state, configuredVoice, render, home: connection.home };
 }
 

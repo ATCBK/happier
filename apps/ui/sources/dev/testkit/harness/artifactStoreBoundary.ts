@@ -218,7 +218,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 rows.delete(artifactId);
                 return Promise.resolve(json({ success: true }));
             }
-            const artifactId = decodeURIComponent(path.slice(ARTIFACTS_PATH.length + 1));
+            const artifactId = decodeURIComponent(url.pathname.slice(ARTIFACTS_PATH.length + 1));
             if (!artifactId || artifactId.includes('/')) return null;
             if (method === 'GET') {
                 const row = rows.get(artifactId);

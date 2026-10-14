@@ -14,6 +14,7 @@ import { FILESYSTEM_MUTATION_ACTION_IDS, FilesystemWriteFileInputSchema } from '
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { accountSettingsParse } from '@happier-dev/protocol';
 import type { RpcActionExecutor } from './_actionDispatchAdapter';
 
@@ -40,7 +41,9 @@ function createMutationExecutor(
 ): RpcActionExecutor {
   const { executor } = createCliActionExecutorHarness({
     token: 'admitted-daemon', sessionId: '', mode: 'plain', ctx: null,
-    actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({
+    actionsSettingsProvider: createActionSettingsProvider({
+      scopeKey: resolveAccountSettingsScopeKeyForToken('admitted-daemon'),
+      accountSettings: accountSettingsParse({
       actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: options?.requireApproval ? {} : {
         'daemon.filesystem.createDirectory': ['rpc'], 'daemon.filesystem.rename': ['rpc'],
         'daemon.filesystem.delete': ['rpc'], 'daemon.filesystem.copy': ['rpc'],

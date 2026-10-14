@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse, renderScreen as renderTestScreen, type RenderScreenResult } from '@/dev/testkit';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit/render/renderWithAppProviders';
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
@@ -139,7 +140,7 @@ const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domain
 const { resolveRuntimeFeatureDecision } = await import('@/sync/domains/features/featureDecisionInputs');
 const { t } = await import('@/text');
 
-function createInputHost(element: React.ReactElement<Record<string, unknown>>) {
+function createInputHost(element: Parameters<NonNullable<RenderWithAppProvidersOptions['createNodeMock']>>[0]) {
     return element.type === 'TextInput' ? {
         setNativeProps: recording.setNativeProps,
         focus: recording.focus,

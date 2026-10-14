@@ -1,9 +1,6 @@
-import {
-    buildQualifiedPluginContributionKey,
-    createPluginContributionIdentity,
-    normalizePluginDeclarativeDocumentV1,
-    PluginDeclarativeProjectedModelV1Schema,
-} from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey, createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
+import { normalizePluginDeclarativeDocumentV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeDocument';
+import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/declarativeProjectedModelV1';
 
 /** Build a static fixture through the real document normalizer and wire schema. */
 export function createPluginDeclarativeModelFixture(input: Readonly<{

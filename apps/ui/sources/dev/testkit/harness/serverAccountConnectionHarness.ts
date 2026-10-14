@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import type { Socket } from 'socket.io-client';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import type { SessionSystemRecordStored } from '@happier-dev/protocol';
 import type { SessionEffectiveAccessV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
@@ -72,9 +73,8 @@ export async function createSocketIoClientBoundary(importOriginal: <T>() => Prom
         // These replacements belong to this cold external transport for its
         // entire lifetime, including teardown after a test restores its spies.
         socket.connect = vi.fn<typeof socket.connect>(() => socket);
-        // SDK send() delegates to emit(). A configured ready fixture must never
-        // send presence packets through an Engine.IO connection it did not open.
-        socket.emit = vi.fn<typeof socket.emit>(() => socket);
+        // Keep real Socket packet/ACK state; stop Engine.IO packets at its transport boundary.
+        socket.io._packet = vi.fn<typeof socket.io._packet>(() => undefined);
         // This cold SDK fixture never opens an Engine.IO connection or creates
         // namespace/ACK teardown state. Deliver the external disconnect event
         // through the real listeners; Sync and Account lifetime teardown stay real.
@@ -159,11 +159,18 @@ export async function restoreServerAccountForTest(params: Readonly<{
     // Match the app entry: the real implementation publishes the public Sync
     // singleton before connection restoration can hydrate or switch its Home.
     await import('@/sync/syncEngine');
+    // Home-profile mutation itself uses the browser storage lock, before any
+    // credential write or Account restoration can run.
+    const webLocks = typeof globalThis.navigator?.locks?.request === 'function' ? null : installWebLockManagerMock();
     const { upsertServerProfileOnly, setActiveServer, getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
     const { setServerProfileIdentityForUrl, getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+    const { loadSyncSingletonForTests } = await import('./syncSingletonLoader');
+    await loadSyncSingletonForTests();
     const { restoreConnectionToActiveServer, switchConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+    // Restore is the app's cold Account lifecycle, not a switch over a prior Sync Account.
+    if (params.activation !== 'switch') await disconnectActiveServerConnection();
     // Home activation may start readiness immediately; install its HTTP
     // boundary before activation rather than racing a real network request.
     const requestOrigins = new Set([params.serverUrl, ...(params.additionalRequestOrigins ?? [])].map(url => new URL(url).origin));
@@ -172,7 +179,7 @@ export async function restoreServerAccountForTest(params: Readonly<{
         if (!requestOrigins.has(requestUrl.origin)) {
             throw new Error(`Unexpected test Home request origin: ${requestUrl.origin}`);
         }
-        if (requestUrl.pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
+        if (requestUrl.pathname === '/health' || requestUrl.pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
         return await params.request?.(url, init) ?? new Response('{}', { status: 404 });
     };
     currentRuntimeFetchBoundary = requestBoundary;
@@ -188,8 +195,11 @@ export async function restoreServerAccountForTest(params: Readonly<{
     const restoredHomeUrl = canonicalizeServerUrl(home.serverUrl);
     // Device SDK storage is the boundary; the actual credential owner decides
     // Home qualification, legacy migration and mutation lifetime before activation.
-    const credentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.id }, credentials);
-    if (!credentialWrite) throw new Error('Test Home credentials could not be stored');
+    const credentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: params.serverIdentityId ?? home.id }, credentials);
+    if (!credentialWrite) {
+        webLocks?.restore();
+        throw new Error('Test Home credentials could not be stored');
+    }
     const socketResponder = params.configureSocket
         ? installDisconnectedServerSocketBoundary(params.configureSocket, { serverUrl: home.serverUrl, token: credentials.token }) : null;
     try {
@@ -203,6 +213,7 @@ export async function restoreServerAccountForTest(params: Readonly<{
             resetRuntimeFetch();
         }
         await credentialWrite.rollback();
+        webLocks?.restore();
         throw error;
     }
     // Restoration may adopt the Home's advertised portable identity. Return
@@ -211,6 +222,7 @@ export async function restoreServerAccountForTest(params: Readonly<{
     if (!restoredHome || canonicalizeServerUrl(restoredHome.serverUrl) !== restoredHomeUrl) {
         socketResponder?.dispose();
         await credentialWrite.rollback();
+        webLocks?.restore();
         throw new Error('Test Account restoration did not retain its Home');
     }
     const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
@@ -221,6 +233,7 @@ export async function restoreServerAccountForTest(params: Readonly<{
     const restoredGeneration = getActiveServerSnapshot().generation;
     return {
         home: restoredHome,
+        serverId: getActiveServerSnapshot().serverId,
         credentials,
         async dispose() {
             try {
@@ -235,7 +248,8 @@ export async function restoreServerAccountForTest(params: Readonly<{
                     currentRuntimeFetchBoundary = undefined;
                     resetRuntimeFetch();
                 }
-                await credentialWrite.rollback();
+                try { await credentialWrite.rollback(); }
+                finally { webLocks?.restore(); }
             }
         },
     };

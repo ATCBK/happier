@@ -8,12 +8,14 @@ import { SOCKET_RPC_EVENTS, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSou
 import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1 } from '../sessions/messages/sessionPendingMachineAdmissionV1.js';
 import { SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2 } from '../sessions/messages/sessionPendingExecutionRunMachineAdmissionV2.js';
 import { RPC_METHODS } from '../rpc/methods.js';
+import { SessionRequesterInstallationSealedBootstrapV1Schema } from '../sessions/creation/sessionRequesterBootstrapSchemasV1.js';
 
 export type ExternalActionMachineRpcEventV1 = typeof SOCKET_RPC_EVENTS.CALL
   | typeof SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1
   | typeof SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2;
 import { ExternalActionRequestEnvelopeSchema, ExternalActionRequestIdV1Schema, ExternalActionTargetV1Schema,
-  type ExternalActionExecutionAuthorizationBindingV1, type ExternalActionTargetV1, type ExternalActionRequestEnvelope } from './externalActionApi.js';
+  type ExternalActionExecutionAuthorizationBindingV1, type ExternalActionExecutionAuthorizationV1,
+  type ExternalActionTargetV1, type ExternalActionRequestEnvelope } from './externalActionApi.js';
 
 export function computeExternalActionRequestEnvelopeDigestV1(envelope: ExternalActionRequestEnvelope): string {
   return computeCanonicalDomainSeparatedDigest('happier-external-action-envelope-v1', [
@@ -85,6 +87,8 @@ function machineRequestBytes(request: MachineRequest): Uint8Array {
 type ApprovalInput = Readonly<{ authorizationToken: string; actionId: string; target: ExternalActionTargetV1; input: unknown }>;
 type MachineRpcRequest = Readonly<{
   authorizationToken: string;
+  /** Exact incumbent private custody, authenticated by the installed producer. */
+  requesterAccountContext?: ExternalActionExecutionAuthorizationV1['requesterAccountContext'];
   effectActionId: string;
   target: ExternalActionTargetV1;
   installationId: string;
@@ -119,6 +123,10 @@ function machineRpcRequestBytes(request: MachineRpcRequest): Uint8Array {
     computeCanonicalDomainSeparatedDigest('happier-external-action-rpc-payload-v1', [
       createCanonicalJsonSigningInput(request.params === undefined ? null : request.params),
     ]),
+    ...(request.requesterAccountContext !== undefined ? [
+      'requester-account-context-v1',
+      createCanonicalJsonSigningInput(SessionRequesterInstallationSealedBootstrapV1Schema.parse(request.requesterAccountContext)),
+    ] : []),
     ...(request.workspaceSyncSourceWriterTargetRouting !== undefined ? [
       'workspace-sync-source-writer-target-v1',
       createCanonicalJsonSigningInput(WorkspaceSyncSourceWriterTargetRoutingV1Schema.parse(request.workspaceSyncSourceWriterTargetRouting)),

@@ -1374,6 +1374,11 @@
       "types": "./dist/actions/specs/machineConnection.d.ts",
       "default": "./dist/actions/specs/machineConnection.js"
     },
+    "./actions/specs/localDaemonService": {
+      "happier-source": "./src/actions/specs/localDaemonService.ts",
+      "types": "./dist/actions/specs/localDaemonService.d.ts",
+      "default": "./dist/actions/specs/localDaemonService.js"
+    },
     "./actions/specs/machineTerminal": {
       "happier-source": "./src/actions/specs/machineTerminal.ts",
       "types": "./dist/actions/specs/machineTerminal.d.ts",

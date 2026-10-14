@@ -399,7 +399,8 @@ describe('runner daemon PluginServices host', () => {
                 ...(options?.signal ? { signal: options.signal } : {}),
             })).value),
             local: { availability: unavailable.availability, logger: unavailable.logger, sessions: unavailable.sessions,
-                managedServices: unavailable.managedServices, exec: unavailable.exec, interactions: unavailable.interactions,
+                managedServices: unavailable.managedServices, machineProvisioners: unavailable.machineProvisioners,
+                exec: unavailable.exec, interactions: unavailable.interactions,
                 targetedContributions: unavailable.targetedContributions, composerContent: unavailable.composerContent },
         });
         try {
@@ -2828,6 +2829,7 @@ describe('runner daemon PluginServices host', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 interactions: unavailable.interactions,
                 targetedContributions: unavailable.targetedContributions,
@@ -2913,6 +2915,7 @@ describe('runner daemon PluginServices host', () => {
                 connectedAccounts(agentGetBinding),
         });
         let providerCurrent = true;
+        let providerConnectedAccountsAvailable = true;
         const bootstrap = managedProviderBootstrap();
         const expectedLaunch = Object.freeze({
             serverId: 'provider-runtime',
@@ -2942,8 +2945,9 @@ describe('runner daemon PluginServices host', () => {
                     services,
                     managedProvider: {
                         bootstrap,
-                        connectedAccounts:
-                            connectedAccounts(providerGetBinding),
+                        connectedAccounts: providerConnectedAccountsAvailable
+                            ? connectedAccounts(providerGetBinding)
+                            : null,
                         isCurrent: () => providerCurrent,
                         readSupervisionLaunchAuthority: (serverId: string) =>
                             serverId === expectedLaunch.serverId
@@ -3194,6 +3198,51 @@ describe('runner daemon PluginServices host', () => {
         });
         expect(agentGetBinding).toHaveBeenCalledOnce();
         expect(providerGetBinding).toHaveBeenCalledOnce();
+
+        // Remote managed Providers have no local Connected Account service;
+        // the current projection must refuse rather than borrow Agent authority.
+        providerConnectedAccountsAvailable = false;
+        const remoteInvocationId = 'invocation-remote-provider-no-accounts';
+        await host.dispatch({
+            ...direct,
+            operation: {
+                kind: 'plugin_services.prepare_v1',
+                ...requestBase(),
+                invocationId: remoteInvocationId,
+            },
+        });
+        await expect(host.dispatch({
+            ...direct,
+            operation: {
+                kind: 'plugin_connected_accounts.get_binding_v1',
+                ...requestBase(),
+                invocationId: remoteInvocationId,
+                serviceScope: 'managedProvider',
+                purpose: 'upstream',
+            },
+        })).rejects.toMatchObject({ code: 'plugin_service_unavailable' });
+        await expect(host.dispatch({
+            ...direct,
+            operation: {
+                kind: 'plugin_connected_accounts.watch.open_v1',
+                ...requestBase(),
+                invocationId: remoteInvocationId,
+                serviceScope: 'managedProvider',
+                purpose: 'upstream',
+                subscriptionId: 'remote-provider-accounts',
+            },
+        })).rejects.toMatchObject({ code: 'plugin_service_unavailable' });
+        expect(agentGetBinding).toHaveBeenCalledOnce();
+        expect(providerGetBinding).toHaveBeenCalledOnce();
+        await host.dispatch({
+            ...direct,
+            operation: {
+                kind: 'plugin_services.close_v1',
+                ...requestBase({ lifecycle: true }),
+                invocationId: remoteInvocationId,
+            },
+        });
+        providerConnectedAccountsAvailable = true;
 
         providerCurrent = false;
         await expect(

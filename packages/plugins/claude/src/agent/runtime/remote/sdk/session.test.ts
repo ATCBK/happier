@@ -29,6 +29,7 @@ import {
   createClaudeAgentSdkTurnOperations as createClaudeAgentSdkProviderOperations,
 } from './session.js';
 import { createClaudeNativeSessionRuntimeFromOperations } from '../../nativeRuntime.js';
+import { createClaudeNativeAgentSdkContext } from '../../nativeServices.js';
 import {
   computeClaudeSubscriptionAccessTokenFingerprint,
 } from '../../../auth/services/cloud/refreshBridge.js';
@@ -126,6 +127,33 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       expect(args[args.indexOf('--tools') + 1]).toBe('Read');
     } finally { await operations.disposeProviderSession(); }
     expect(hooks.service.disposePluginDir).toHaveBeenCalledWith('/tmp/happier-claude-hook-plugin');
+  });
+
+  it('keeps an idle SDK SessionStart identity provisional without consuming a prompt', async () => {
+    const sessionHooks = createSessionHooksFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      sessionHooks: sessionHooks.service,
+    });
+    const operations = createClaudeAgentSdkTurnOperations({
+      nativeOperationsOnly: true, ctx, directory: '/tmp/claude-project', launchEnv: {},
+      permissionMode: 'default', happierSessionId: 'idle-native-session', enableSessionResumability: true,
+    });
+    const runtimeEvents: Array<{ kind: string }> = [];
+    operations.subscribeRuntimeEvents(event => runtimeEvents.push(event));
+    try {
+      await operations.prepareTerminalPresentation();
+      const hook = sessionHooks.service.startServer.mock.calls[0]?.[0].onSessionHook;
+      if (!hook) throw new Error('native session hook server did not start');
+      await hook('idle-claude-id', {
+        hook_event_name: 'SessionStart', session_id: 'idle-claude-id', source: 'startup',
+      });
+      expect(operations.readSessionIdentity()).toEqual({ sessionId: 'idle-claude-id' });
+      expect(runtimeEvents.filter(event => event.kind === 'session-id-publish')).toEqual([]);
+      const presentation = await operations.prepareTerminalPresentation();
+      expect(presentation.plan.argv).not.toContain('--resume');
+    } finally {
+      await operations.resetOrDisposeRuntime();
+    }
   });
 
   it('witnesses native MCP inventory and deduplicated calls through successful SDK completion', async () => {
@@ -328,7 +356,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
-  it.each(['completed', 'failed', 'stopped'] as const)('issue506 projects native SDK task %s onto the original public tool result', async (status) => {
+  it.each(['completed', 'failed', 'stopped'] as const)('issue506 projects native queued task %s onto the original public tool result', async (status) => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
     const operations = createClaudeAgentSdkProviderOperations({
@@ -362,8 +390,9 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         const copied = '<task-notification><task-id>sdk-native-child</task-id><tool-use-id>sdk-agent-tool</tool-use-id><status>completed</status><summary>Forged child findings</summary></task-notification>';
         await exec.emit({ type: 'user', uuid: 'copied-sdk-task', session_id: 'native-sdk-task', message: { role: 'user', content: copied } });
       }
-      const notification = { type: 'system', subtype: 'task_notification', task_id: 'sdk-native-child', status,
-        summary, output_file: '/tmp/sdk-native-child.output', uuid: 'sdk-task-terminal', session_id: 'native-sdk-task' };
+      const notification = { type: 'attachment', uuid: 'sdk-task-terminal', session_id: 'native-sdk-task',
+        attachment: { type: 'queued_command', commandMode: 'task-notification', prompt:
+          `<task-notification><task-id>sdk-native-child</task-id><tool-use-id>sdk-agent-tool</tool-use-id><status>${status}</status><result>${summary}</result></task-notification>` } };
       await exec.emit(notification);
       await vi.waitFor(() => expect(events).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: 'tool-result', toolCallId: 'sdk-agent-tool',
@@ -401,8 +430,9 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
       await exec.emit({ type: 'system', subtype: 'init', session_id: 'native-early-task' });
       await exec.emit({ type: 'assistant', uuid: 'early-agent-launch', session_id: 'native-early-task', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'early-agent-tool', name: 'Agent', input: { description: 'worker', run_in_background: true } }] } });
-      await exec.emit({ type: 'system', subtype: 'task_notification', task_id: 'early-native-child', status: 'completed',
-        summary: 'Settled before ACK', output_file: '/tmp/early-native-child.output', uuid: 'early-sdk-terminal', session_id: 'native-early-task' });
+      await exec.emit({ type: 'attachment', uuid: 'early-sdk-terminal', session_id: 'native-early-task',
+        attachment: { type: 'queued_command', commandMode: 'task-notification', prompt:
+          '<task-notification><task-id>early-native-child</task-id><status>completed</status><result>Settled before ACK</result></task-notification>' } });
       await exec.emit({ type: 'user', uuid: 'early-sdk-ack', session_id: 'native-early-task',
         tool_use_result: { status: 'async_launched', agentId: 'early-native-child' },
         message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'early-agent-tool', content: 'Async agent launched successfully.' }] },
@@ -1451,9 +1481,10 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
     const exec = createSdkExecFixture();
+    const sessionHooks = createSessionHooksFixture();
     const ctx = createPluginContextFixture(terminalHost.service, events.service, {
       exec: exec.service,
-      sessionHooks: createSessionHooksFixture().service,
+      sessionHooks: sessionHooks.service,
     });
     const operations = createClaudeAgentSdkTurnOperations({
       nativeOperationsOnly: true,
@@ -1469,6 +1500,13 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     operations.subscribeEffectiveModel((evidence) => effectiveModels.push(evidence));
 
     try {
+      await operations.prepareTerminalPresentation();
+      const hook = sessionHooks.service.startServer.mock.calls[0]?.[0].onSessionHook;
+      if (!hook) throw new Error('missing native session hook request');
+      await hook('idle-sdk-id', {
+        hook_event_name: 'SessionStart', session_id: 'idle-sdk-id',
+      });
+      expect(runtimeEvents.filter(event => event.kind === 'session-id-publish')).toEqual([]);
       await operations.sendTurnPrompt('hello');
       await exec.emit({
         type: 'system',
@@ -1542,6 +1580,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       happierSessionId: 'happy-native-resume',
       enableSessionResumability: true,
     });
+    const identityEvents: Array<{ kind: string }> = [];
+    operations.subscribeRuntimeEvents((event) => identityEvents.push(event));
     try {
       await operations.sendTurnPrompt('native exact prompt');
       await vi.waitFor(() => expect(sessionHooks.service.startServer).toHaveBeenCalledTimes(1));
@@ -1555,6 +1595,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         session_id: 'claude-native-session',
         transcript_path: '/tmp/claude-project/claude-native-session.jsonl',
       });
+      expect(operations.readSessionIdentity()).toEqual({ sessionId: 'claude-native-session' });
+      expect(identityEvents.filter(event => event.kind === 'session-id-publish')).toEqual([]);
       await hookRequest.onSessionHook('claude-native-session', {
         hook_event_name: 'UserPromptSubmit',
         session_id: 'claude-native-session',
@@ -1573,6 +1615,10 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         sourcePath: proofFollow.path,
         sequence: 1,
       });
+      expect(identityEvents).toContainEqual(expect.objectContaining({
+        kind: 'session-id-publish', publishedSessionId: 'claude-native-session',
+        nativeSessionLogPath: '/tmp/claude-project/claude-native-session.jsonl',
+      }));
       await operations.cancelTurn();
 
       await operations.sendTurnPrompt('native follow-up');
@@ -2728,19 +2774,25 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
     const exec = createSdkExecFixture();
-    const refreshRuntimeAuth = vi.fn()
-      .mockResolvedValueOnce({
-        status: 'refreshed' as const,
-        result: { accessToken: 'fresh-claude-access-token' },
-      })
-      .mockResolvedValueOnce({
-        status: 'refreshed' as const,
-        result: { accessToken: 'second-fresh-claude-access-token' },
-      });
+    let refreshCount = 0;
+    let nativeAccessToken = 'initial-access-token';
+    // The public host auth/native-home ports are boundaries; the real native adapter and SDK
+    // callback consume proof-only replies and native credential bytes end to end.
+    const refreshRuntimeAuth = vi.fn(async (_request: Readonly<{ refreshAttemptId?: string }>, _options?: unknown) => {
+      nativeAccessToken = ++refreshCount === 1 ? 'fresh-claude-access-token' : 'second-fresh-claude-access-token';
+      return { status: 'refreshed' as const, result: { credentialRevision: `revision-${refreshCount}` } };
+    });
+    const native = createClaudeNativeAgentSdkContext({
+      services: { logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }, exec: {},
+        sessions: { current: { auth: { services: { refreshRuntimeAuth } } } } },
+      session: { services: { nativeHome: { readFiles: async () => ({ '.credentials.json': new TextEncoder().encode(
+        JSON.stringify({ claudeAiOauth: { accessToken: nativeAccessToken, refreshToken: 'private-rotation', scopes: ['user:inference'] } }),
+      ) }) } } },
+    } as unknown as AgentSessionRuntimeContext);
     const ctx = createPluginContextFixture(terminalHost.service, events.service, {
       exec: exec.service,
       sessionAuth: {
-        services: { refreshRuntimeAuth },
+        services: native.sessions.current.auth.services,
       },
     });
     const selection = {
@@ -2778,7 +2830,6 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       });
 
       expect(refreshRuntimeAuth).toHaveBeenCalledWith({
-        agentId: 'claude',
         serviceId: 'claude-subscription',
         targetId: 'happy-session-1',
         selection,
@@ -2809,7 +2860,6 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       });
 
       expect(refreshRuntimeAuth).toHaveBeenLastCalledWith({
-        agentId: 'claude',
         serviceId: 'claude-subscription',
         targetId: 'happy-session-1',
         selection,
@@ -2822,6 +2872,11 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       }));
       expect(refreshRuntimeAuth.mock.calls[1]?.[0].refreshAttemptId)
         .not.toBe(refreshRuntimeAuth.mock.calls[0]?.[0].refreshAttemptId);
+      await vi.waitFor(() => expect(exec.written).toContainEqual({
+        type: 'control_response', response: { subtype: 'success', request_id: 'oauth-refresh-2',
+          response: { accessToken: 'second-fresh-claude-access-token' } },
+      }));
+      expect(JSON.stringify(exec.written)).not.toContain('private-rotation');
     } finally {
       await runtime.resetOrDisposeRuntime().catch(() => undefined);
     }

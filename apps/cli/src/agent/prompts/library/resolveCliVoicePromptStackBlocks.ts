@@ -99,7 +99,7 @@ async function prepareTarget(input?: CliVoicePromptStackInput) {
         const home = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: binding.data.targetServerId });
         const targetCredentials = home.profileId ? await readStoredCredentialsForServerId(home.profileId) : null;
         if (!targetCredentials) throw new PromptStackPreparationError('unavailable');
-        args = { ...input, credentials: targetCredentials, serverId: binding.data.targetServerId, serverUrl: home.serverUrl };
+        args = { ...input, credentials: targetCredentials, serverId: binding.data.targetServerId, serverUrl: home.applicationUrl };
       }
       target = await read(targetId, args);
       if (isVoiceConversationSystemSessionMetadata(target.metadata)) throw new PromptStackPreparationError('unavailable');

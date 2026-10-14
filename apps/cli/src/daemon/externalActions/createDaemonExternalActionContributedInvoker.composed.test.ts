@@ -42,6 +42,8 @@ import {
 } from '@happier-dev/protocol';
 import {
   createActionExecutor,
+  createTargetedActionRpcRequestV1,
+  getActionSpec,
   signExternalActionApprovalInputV1,
   verifyExternalActionApprovalInputV1,
   type ActionExecutorDeps,
@@ -691,16 +693,17 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       actionIds: ['action.invoke'],
       targetMachineId: 'machine-local',
     });
-    const { createUiAccountActionTransport } = await import('../../../../ui/sources/sync/ops/actions/accountActionTransport');
-    const action = createUiAccountActionTransport({
-      account: { serverId: 'server-external', accountId: 'account-1', assertCurrent: () => undefined },
-      resolveFallbackMachineId: () => null,
-      transport: async ({ method, payload }) => {
-        const handler = handlers.get(method);
-        if (!handler) return { ok: false, errorCode: 'method_not_found' };
-        return handler(payload);
-      },
-    });
+    // The released exact-machine RPC adapter remains an authenticated ingress.
+    // Account Actions now use the private original-root HTTP transport instead.
+    const action = async (request: Readonly<{ input: unknown; context: Readonly<{
+      defaultSessionId: string; externalActionTarget: Readonly<{ kind: 'machine'; machineId: string }>;
+    }> }>) => {
+      const method = getActionSpec('action.invoke').bindings?.rpcMethod;
+      const handler = method ? handlers.get(method) : undefined;
+      if (!handler) return { ok: false, errorCode: 'method_not_found' };
+      return handler(createTargetedActionRpcRequestV1(request.input, request.context.externalActionTarget,
+        { defaultSessionId: request.context.defaultSessionId }));
+    };
     const request = { actionId: 'action.invoke' as const, input: { action: { pluginId: 'acme.external', localId: 'inspect' }, input: {} },
       context: { serverId: 'server-external', runtimeAccountId: 'account-1', defaultSessionId: 'session-origin',
         externalActionTarget: { kind: 'machine' as const, machineId: 'machine-local' } } };

@@ -12,13 +12,17 @@ import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import type { ExternalActionExecutionAuthorizationV1, ExternalActionRequestEnvelopeV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
+import { getActionSpec } from '@happier-dev/protocol/actions';
+import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema,
+    ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 
 // Only HTTP, device credentials and Socket.IO network acknowledgements are replaced.
 // Home/Account policy, Sync, scoped RPC, the Artifact codec and versioned CAS remain real.
@@ -48,6 +52,7 @@ let initialState: StoreState;
 let executor: Executor;
 let homeId: string;
 let webLocks: ReturnType<typeof installWebLockManagerMock>;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 const context = () => ({ surface: 'ui' as const, serverId: homeId });
 const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(29));
 
@@ -163,6 +168,9 @@ function expectFailedApproval(id: string, errorCode = 'approval_stale'): void {
         status: 'failed', decision: { kind: 'approve' }, execution: { ok: false, errorCode },
     });
     expect(outgoing).toEqual([]);
+    // Tuple mutations PATCH the Session row; metadata-upgrades is a legitimate
+    // background GET. Legacy Socket metadata writes are covered by outgoing.
+    expect(homes.requests.filter(({ path, input }) => path === '/v2/sessions/s1' && input !== null)).toEqual([]);
 }
 
 // Load the real owners after boundary installation, outside timed per-test hooks.
@@ -211,19 +219,21 @@ describe('createDefaultActionExecutor approvals', () => {
             name: 'Approval Home', serverUrl: 'https://approval-actions.test',
             serverIdentityId: 'srv_approval_home', accountId: 'account-a', currentAccount: true,
         });
+        const baseFeatures = createRootLayoutFeaturesResponse();
+        const features = createRootLayoutFeaturesResponse({ capabilities: { session: {
+            ...baseFeatures.capabilities.session, pendingInput: { protocolVersion: PENDING_INPUT_PROTOCOL_VERSION_V4 },
+        } } });
+        homes.answer(homeId, '/v1/features', { body: features });
+        homes.answer(homeId, '/v1/features/authenticated', { body: features });
         homes.answer(homeId, '/v2/cursor', { body: { cursor: '0' } });
-        const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
-        const bearer = homes.findByServerUrl('https://approval-actions.test')?.token;
-        if (!bearer) throw new Error('expected_account_credentials');
-        await restoreConnectionToActiveServer({ token: bearer });
-        await connectPermissionTransport();
+        const accountCredential = homes.findByServerUrl('https://approval-actions.test')?.token;
+        if (!accountCredential) throw new Error('missing_current_account_credential');
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://approval-actions.test',
+            serverIdentityId: 'srv_approval_home', accountId: 'account-a', request: homes.request,
+            credentials: { token: accountCredential } });
+        getStorage().getState().applySettingsForScope({ serverId: connection.serverId, accountId: 'account-a' }, getStorage().getState().settings, 0);
         const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
-        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
-        // Hydrated Session rows carry the canonical Home scope, not the local
-        // profile alias returned when the Home was first added.
-        getStorage().setState({ sessions: { s1: createSessionFixture({
-            id: 's1', serverId: resolveServerProfileScopeIdForIdentifier(homeId),
-        }) } });
+        getStorage().setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId: connection.serverId, active: true }) } });
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
         executor = createDefaultActionExecutor({ resolveServerIdForSessionId: () => homeId });
         await seedApproval('artifact-1', approvalRequest());
@@ -232,11 +242,10 @@ describe('createDefaultActionExecutor approvals', () => {
         rpcResult = { ok: true };
     });
     afterEach(async () => {
-        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
-        await disconnectActiveServerConnection();
+        await connection.dispose();
         const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
-        serverScopedRpcSocketPool.resetForTests();
+        await serverScopedRpcSocketPool.stopAll();
         resetScopedMachineTransportCacheForTests();
         await homes.reset();
         const { resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
@@ -450,6 +459,80 @@ describe('createDefaultActionExecutor approvals', () => {
         expect(homes.requestsFor('/v1/teams/invitations/reissue')).toEqual([]);
         expect(outgoing).toEqual([]);
         expect(JSON.parse(homes.artifacts(homeId).readPlainBody(artifactId)!).status).not.toBe('executed');
+
+    });
+    it('admits the original Account signed HTTP approval decision at foreign Machine custody', async () => {
+        const machineId = 'foreign-controller';
+        const installationId = 'foreign-installation';
+        const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3));
+        const credential = homes.findByServerUrl('https://approval-actions.test')?.token;
+        if (!credential) throw new Error('missing_original_account_credential');
+        homes.answer(homeId, '/v1/machines', { body: [{ id: machineId, kind: 'persistent', active: true,
+            installationId, installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null,
+            replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
+            access: { custodian: { accountId: 'foreign-owner', displayName: 'Owner' }, role: 'manage',
+                resourceMode: 'plain', accessState: 'ready' } }] });
+        const actionId = 'machines.managed.rebuild';
+        const nativeInput = { homeId: 'srv_approval_home', managedMachineId: 'foreign-child', kind: 'rebuild',
+            expectedRevision: 4, reviewedEffectDigest: 'a'.repeat(64) };
+        const originalEnvelope = ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: 'original-native-request',
+            target: { kind: 'machine', machineId }, input: nativeInput });
+        const originalRoot = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'original-native-home-root', binding: {
+            accountId: 'account-a', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: 'srv_approval_home',
+            machineId, installationId, custodianAccountId: 'foreign-owner', accountEncryptionMode: 'plain',
+            actionId, requestId: originalEnvelope.requestId, target: originalEnvelope.target,
+            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(originalEnvelope),
+        } });
+        await seedApproval('foreign-native-approval', ApprovalRequestSchema.parse({ v: 2, status: 'open', createdAtMs: 1,
+            updatedAtMs: 1, createdBy: { surface: 'system' }, requestedSurface: 'ui', actionId, actionArgs: nativeInput,
+            approval: { result: 'required', flow: 'deferred' }, summary: 'Reviewed rebuild', executionOriginV1: {
+                v: 1, authority: 'present_user', surface: 'ui', caller: { kind: 'host' }, serverId: homeId,
+                serverIdentityId: 'srv_approval_home', accountId: 'account-a', machineId, target: originalEnvelope.target,
+                actionId, requestId: originalEnvelope.requestId, externalActionExecutionAuthorization: originalRoot,
+                externalActionInputSignature: 's'.repeat(86),
+            } }));
+        let decisionRequestId: string | undefined;
+        homes.answer(homeId, '/v1/actions/approval.request.decide/execution-authorization', { select: body => {
+            const mint = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            decisionRequestId = mint.envelope.requestId;
+            expect(decisionRequestId).toBeTruthy();
+            expect(mint.envelope).toMatchObject({ requestId: decisionRequestId, target: originalEnvelope.target });
+            return { body: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'fresh-decision-home-root', binding: {
+                accountId: 'account-a', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: 'srv_approval_home',
+                machineId, installationId, custodianAccountId: 'foreign-owner', accountEncryptionMode: 'plain',
+                actionId: 'approval.request.decide', requestId: decisionRequestId, target: mint.envelope.target,
+                requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(mint.envelope),
+            } }) };
+        } });
+        const nativeResult = { kind: 'conflict', currentRevision: 5 };
+        homes.answer(homeId, '/v1/actions/approval.request.decide', { select: body => {
+            const carried = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            expect(openExternalActionRequesterAccountContextV1({ authorization: carried.executionAuthorization,
+                purpose: { kind: 'external_action' }, machineId, installationId, serverIdentityId: 'srv_approval_home',
+                installationPrivateKey: installation.secretKey })).toEqual({ token: credential });
+            if (carried.envelope.v !== 1) throw new Error('expected_plain_account_envelope');
+            // The remote HTTP/daemon boundary uses the real canonical Action admission schema.
+            const admitted = getActionSpec('approval.request.decide').inputSchema.safeParse(carried.envelope.input);
+            if (!admitted.success) return { body: { v: 1, actionId: 'approval.request.decide', requestId: decisionRequestId,
+                execution: { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' } } };
+            expect(admitted.data).toEqual({ artifactId: 'foreign-native-approval', decision: 'approve',
+                serverIdentityId: 'srv_approval_home', originServerId: homeId });
+            expect(persistedApproval('foreign-native-approval')).toMatchObject({ status: 'approved', executionOriginV1: {
+                requestId: 'original-native-request', externalActionExecutionAuthorization: originalRoot } });
+            expect(JSON.stringify(carried)).not.toContain(credential);
+            return { body: { v: 1, actionId: 'approval.request.decide', requestId: decisionRequestId,
+                execution: { ok: true, result: nativeResult } } };
+        } });
+        const { createFrontDoorActionExecute } = await import('./frontDoorRuntimeActionExecutor');
+        const result = await createFrontDoorActionExecute(executor)('approval.request.decide', {
+            artifactId: 'foreign-native-approval', decision: 'approve',
+        }, { ...context(), expectedAccountId: 'account-a' });
+        expect(result, JSON.stringify({ result, paths: homes.requests.map(request => request.path) }))
+            .toEqual({ ok: true, result: nativeResult });
+        expect(outgoing).toEqual([]);
+        const sent = homes.requestsFor('/v1/actions/approval.request.decide');
+        expect(sent).toHaveLength(1);
+        expect(sent[0]).toMatchObject({ serverId: homeId, token: credential });
     });
     it('routes durable review-comment actions through the shared HTTP action executor', async () => {
         const path = '/v1/reviews/comments?projectId=project-1&states=open&includeHistory=false&limit=50&stored=true';
@@ -540,6 +623,22 @@ describe('createDefaultActionExecutor approvals', () => {
         ]);
         expect(getStorage().getState().sessions.s1).toBe(before);
     });
+    it.each(['permission', 'user-action'] as const)('refuses an unapplied %s response before local recovery or composed abort', async family => {
+        const { getStorage } = await import('@/sync/domains/state/storage');
+        const store = getStorage();
+        store.getState().applySessions([{ ...store.getState().sessions.s1, thinking: true }]);
+        store.getState().markSessionOptimisticThinking('s1');
+        const original = store.getState().sessions.s1;
+        rpcResult = { ok: false, errorCode: 'permission_request_not_found', requestId: 'missing-request' };
+        const { sessionRespondToPermission, sessionAllowWithAnswers } = await import('../sessions');
+        const pending = family === 'permission'
+            ? sessionRespondToPermission('s1', { id: 'missing-request', approved: false, decision: 'abort' }, { serverId: homeId })
+            : sessionAllowWithAnswers('s1', 'missing-request', { question: ['answer'] }, { serverId: homeId });
+        await expect(pending).rejects.toMatchObject({ rpcErrorCode: 'permission_request_not_found' });
+        expect(store.getState().sessions.s1).toBe(original);
+        expect(outgoing.map(request => request.method)).toEqual(['s1:' + (family === 'permission'
+            ? RPC_METHODS.SESSION_PERMISSION_RESPOND : RPC_METHODS.SESSION_USER_ACTION_ANSWER)]);
+    });
     it('projects successful void permission RPC responses through the canonical Action output', async () => {
         await connectPermissionTransport();
         rpcResult = undefined;
@@ -552,13 +651,17 @@ describe('createDefaultActionExecutor approvals', () => {
             .resolves.toEqual({ ok: true, result: { grants: [], nextCursor: null } });
         expect(outgoing.at(-1)).toMatchObject({ method: 's1:session.permission.remote.grants.list', params: { sessionId: 's1', limit: 50 } });
     });
-    it('routes user-action answers through the canonical session user-action RPC method', async () => {
-        rpcResult = undefined;
-        await expect(executor.execute('session.user_action.answer', {
+    it.each(['applied', 'refused'] as const)('routes user-action answers through the canonical session user-action RPC method (%s)', async outcome => {
+        rpcResult = outcome === 'refused'
+            ? { ok: false, errorCode: 'permission_response_invalid', requestId: 'user-action-1' } : undefined;
+        const result = await executor.execute('session.user_action.answer', {
             sessionId: 's1', requestId: 'user-action-1', decision: 'approve',
             answers: [{ question: 'Where should this run?', values: ['Washington, D.C.', 'Virginia', 'A custom, exact answer'] }],
             reason: ' approved from UI ', updatedPermissions: { allowedTools: ['shell'] },
-        }, context())).resolves.toEqual({ ok: true, result: { ok: true } });
+        }, context());
+        expect(result).toEqual(outcome === 'refused'
+            ? { ok: false, errorCode: 'permission_response_invalid', error: 'permission_response_invalid' }
+            : { ok: true, result: { ok: true } });
         expect(outgoing.at(-1)).toMatchObject({ method: 's1:' + RPC_METHODS.SESSION_USER_ACTION_ANSWER, params: {
             id: 'user-action-1', approved: true, answers: { 'Where should this run?': ['Washington, D.C.', 'Virginia', 'A custom, exact answer'] },
             reason: 'approved from UI', updatedPermissions: { allowedTools: ['shell'] },
@@ -573,9 +676,13 @@ describe('createDefaultActionExecutor approvals', () => {
         homes.answer(homeId, '/v1/features/authenticated', { body: features });
         const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
         primeServerFeaturesSnapshot({ serverId: homeId, snapshot: { status: 'ready', features } });
-        homes.answer(homeId, '/v2/sessions/s1/pending', { body: {
-            didWrite: true, pending: { id: 'pending-ui-input-1', localId: 'ui-input-1' },
-            pendingCount: 1, pendingVersion: 1, requestedAction: { v: 1, kind: 'steer_if_active' },
+        homes.answer(homeId, 'POST /v2/sessions/s1/pending', { select: (input) => {
+            if (!input || typeof input !== 'object') throw new Error('Expected Pending enqueue request');
+            return { body: { didWrite: true, pendingCount: 1, pendingVersion: 1,
+                requestedAction: Reflect.get(input, 'requestedAction'),
+                pending: { localId: Reflect.get(input, 'localId'), content: Reflect.get(input, 'content'),
+                    status: 'queued', position: 1, createdAt: 1, updatedAt: 1,
+                    discardedAt: null, discardedReason: null, authorAccountId: 'account-a' } } };
         } });
         const result = await executor.execute('session.message.send', { sessionId: 's1', message: 'Hello from action', localId: 'ui-input-1' }, context());
         expect(result.ok, result.ok ? undefined : `${result.errorCode}: ${result.error}`).toBe(true);

@@ -60,6 +60,15 @@ describe('plugin UI surface context', () => {
 
     expect(PluginUiSurfaceContextV1Schema.safeParse(surface).success).toBe(false);
     expect(PluginUiHostApiSurfaceContextV1Schema.parse(surface)).toEqual(surface);
+    const spinner = { style: 'hWave', speed: 'slow', pause: 'long' };
+    const withSpinner = { ...surface, theme: { ...surface.theme, spinner } };
+    expect(PluginUiHostApiSurfaceContextV1Schema.parse(withSpinner).theme.spinner).toEqual(spinner);
+    expect(PluginUiHostApiSurfaceContextV1Schema.safeParse({ ...withSpinner, theme: {
+      ...withSpinner.theme, spinner: { ...spinner, pause: 500 },
+    } }).success).toBe(false);
+    expect(PluginUiHostApiSurfaceContextV1Schema.safeParse({ ...withSpinner, theme: {
+      ...withSpinner.theme, spinner: { ...spinner, unexpected: true },
+    } }).success).toBe(false);
     const gradient = { colors: ['rgba(0,0,0,0)', 'rgba(0,0,0,0.024)'], locations: [0.3, 1], start: { x: 0.5, y: 0 }, end: { x: 0.5, y: 1 } };
     const withFinish = { ...surface, theme: { ...surface.theme, surfaceFinish: { card: { ...gradient, futurePaintHint: true }, composer: null, futureRole: gradient } } };
     expect(PluginUiHostApiSurfaceContextV1Schema.parse(withFinish).theme.surfaceFinish).toEqual({ card: gradient, composer: null });

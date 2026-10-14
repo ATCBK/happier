@@ -4,6 +4,7 @@ import type { ActionExecuteResult, ActionExecutorDeps } from '@happier-dev/proto
 import { MachineEnvironmentResolveResultV1Schema, MachineEnvironmentReportInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { listSecretReferenceOverlayV1BindingNames, readSecretReferenceOverlayV1Reference } from '@happier-dev/protocol/profiles/secretReferenceOverlayV1';
 import type { ApiMachineClient } from '@/api/apiMachine';
+import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
 import { resolveExternalActionServerRequestHeaders, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -24,7 +25,8 @@ export function createMachineEnvironmentAction(params: Readonly<{
   homeId: string;
   installation: Readonly<{ installationId: string; privateKey: ExternalActionMachineRequestSigningKey }>;
 }>): NonNullable<ActionExecutorDeps['machineEnvironmentApply']> {
-  return async ({ input, context, signal }) => {
+  return async ({ input, context, signal }: Parameters<NonNullable<ActionExecutorDeps['machineEnvironmentApply']>>[0]
+    & Readonly<{ context: RpcActionExecutorContext }>) => {
     const fail = (code: string): ActionExecuteResult => ({ ok: false, errorCode: code, error: code });
     const lifetime = signal ?? context.signal ?? new AbortController().signal;
     if (input.machineId !== params.machineId || input.homeId !== params.homeId) return fail('target_mismatch');
@@ -113,9 +115,11 @@ export function createMachineEnvironmentAction(params: Readonly<{
     };
     // Detached replay has no retained operation. Bind observation once, as the
     // managed native adapter does; an update port alone is not acceptance.
-    const result = context.operationAcceptance && context.operationOwnerUpdate ? await run({ ...context, signal: context.signal ?? lifetime, operationOwnerUpdate: context.operationOwnerUpdate,
+    const result = context.operationAcceptance && context.operationOwnerUpdate ? await run({ ...context, actionRequestId: context.actionRequestId ?? undefined,
+      resumeActionRequest: context.resumeActionRequest === true ? true : undefined,
+      signal: context.signal ?? lifetime, operationOwnerUpdate: context.operationOwnerUpdate,
       operationProgress: context.operationProgress ?? { update() {} } })
-      : await params.apiMachine.observeActionExecution({ actionId: 'machines.environment.apply', input, actionRequestId: context.actionRequestId,
+      : await params.apiMachine.observeActionExecution({ actionId: 'machines.environment.apply', input, actionRequestId: context.actionRequestId ?? undefined,
         rpcContext: context, execute: run });
     return result.ok ? result.result : result;
   };

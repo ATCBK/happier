@@ -935,7 +935,7 @@ export type ResolvedContributionRegistry = Readonly<{
     scmBackends?: readonly ResolvedScmBackendContribution[];
     connectedAccountDescriptors?: readonly ResolvedConnectedAccountDescriptorContribution[];
     voiceModelPacks?: readonly ResolvedVoiceModelPackContribution[];
-    voiceProviders?: readonly ResolvedVoiceProviderContribution[];
+    voiceProviders: readonly ResolvedVoiceProviderContribution[];
     accountCollections?: readonly ResolvedAccountCollectionContribution[];
     pluginContributionPoints?: readonly ResolvedPluginContributionPointDeclaration[];
     targetedPluginContributions?: readonly ResolvedTargetedPluginContributionDeclaration[];
@@ -973,10 +973,10 @@ export type ResolvedContributionRegistry = Readonly<{
     systemToolsById?: ReadonlyMap<string, ResolvedSystemToolContribution>;
     scmHostingProvidersById?: ReadonlyMap<string, ResolvedScmHostingProviderContribution>;
     scmBackendsById?: ReadonlyMap<string, ResolvedScmBackendContribution>;
-    connectedAccountDescriptorsById?: ReadonlyMap<string, ResolvedConnectedAccountDescriptorContribution>;
+    connectedAccountDescriptorsById: ReadonlyMap<string, ResolvedConnectedAccountDescriptorContribution>;
     catalogEntriesById: Readonly<Record<string, ResolvedCatalogEntry>>;
     agentDefinitionsById: ReadonlyMap<string, ResolvedAgentContribution>;
-    providersByContributionKey?: ReadonlyMap<string, ResolvedProviderContribution>;
+    providersByContributionKey: ReadonlyMap<string, ResolvedProviderContribution>;
     machineProvisionersByContributionKey?: ReadonlyMap<string, ResolvedMachineProvisionerContribution>;
     pluginDiagnosticsByPluginId: Readonly<Record<string, readonly PluginCompatibilityDiagnostic[]>>;
 }>;

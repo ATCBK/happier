@@ -1,30 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createMessagesDomain } from './messages';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { storage } from '@/sync/domains/state/storageStore';
+import type { StorageState } from '../types';
 
-function createHarness(initial: any) {
-    let state: any = {
-        sessions: {},
-        sessionPending: {},
-        sessionMessages: {},
-        ...initial,
-    };
-
-    const get = () => state;
-    const set = (updater: any) => {
-        const next = typeof updater === 'function' ? updater(state) : updater;
-        state = { ...state, ...next };
-    };
-
-    const domain = createMessagesDomain({ get, set } as any);
-    return { get, domain };
+function createHarness(initial: Partial<StorageState>) {
+    storage.setState(initial);
+    return { get: storage.getState, domain: storage.getState() };
 }
+
+beforeEach(async () => {
+    await loadSyncSingletonForTests();
+    storage.setState(storage.getInitialState(), true);
+});
+afterEach(() => storage.setState(storage.getInitialState(), true));
 
 describe('messages domain: isMutableToolCall', () => {
     it('treats read-only and container tools as not mutable and unknown tools as mutable', () => {
         const { domain } = createHarness({
             sessions: {
-                s1: {
+                s1: createSessionFixture({
                     id: 's1',
                     createdAt: 1,
                     active: false,
@@ -33,7 +29,7 @@ describe('messages domain: isMutableToolCall', () => {
                     metadata: null,
                     permissionMode: null,
                     permissionModeUpdatedAt: 0,
-                },
+                }),
             },
         });
 

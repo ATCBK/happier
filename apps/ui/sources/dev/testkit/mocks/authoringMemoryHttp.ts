@@ -1,7 +1,4 @@
-import {
-    AuthoringMemoryMutationRequestV1Schema,
-    type AuthoringMemoryContentV1,
-} from '@happier-dev/protocol';
+import { AuthoringMemoryMutationRequestV1Schema, type AuthoringMemoryContentV1 } from '@happier-dev/protocol/account/authoringMemory';
 
 /** Stateful reserved-row HTTP boundary; crypto, sync and store owners remain real. */
 export function createAuthoringMemoryHttpBoundary() {

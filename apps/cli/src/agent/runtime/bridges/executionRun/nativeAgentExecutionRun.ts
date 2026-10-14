@@ -605,8 +605,11 @@ function toHostMessage(
             return { type: 'status', status: 'running' };
         case 'output-delta':
             return event.channel === 'assistant'
-                ? { type: 'model-output', textDelta: event.text }
+                ? { type: 'model-output', textDelta: event.text,
+                    ...(event.messageId ? { messageId: event.messageId } : {}) }
                 : { type: 'event', name: 'thinking', payload: { textDelta: event.text } };
+        case 'output-message-committed':
+            return { type: 'model-output', messageId: event.messageId, fullText: event.text };
         case 'checkpoint':
             return {
                 type: 'event',
@@ -632,8 +635,14 @@ function sessionEventToHostMessage(
     switch (event.kind) {
         case 'message-delta':
             return event.channel === 'assistant'
-                ? { type: 'model-output', textDelta: event.text }
+                ? { type: 'model-output', textDelta: event.text,
+                    ...(event.messageId ? { messageId: event.messageId } : {}) }
                 : { type: 'event', name: 'thinking', payload: { textDelta: event.text } };
+        case 'transcript-message-committed':
+            // History and sidechain commits are not foreground Run result snapshots.
+            return event.role === 'assistant' && event.turnId && !event.sidechainId
+                ? { type: 'model-output', messageId: event.messageId, fullText: event.text }
+                : null;
         case 'provider-session-id':
             return { type: 'event', name: 'provider_session_id', payload: { sessionId: event.providerSessionId } };
         case 'turn-start':
@@ -1033,6 +1042,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
         if (normalizedEvent.kind === 'checkpoint') checkpointId = normalizedEvent.checkpointId;
         if (recovery && normalizedEvent.kind === 'run-cancelled') return;
         if (normalizedEvent.kind === 'run-progress' || normalizedEvent.kind === 'output-delta'
+            || normalizedEvent.kind === 'output-message-committed'
             || normalizedEvent.kind === 'run-complete' || normalizedEvent.kind === 'run-cancelled') {
             providerWorkObserved = true;
         }

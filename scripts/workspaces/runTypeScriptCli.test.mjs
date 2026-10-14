@@ -321,6 +321,14 @@ for (const explicitLocal of [false, true]) {
     const setup = await fixture(t, { exitCode: 0 });
     const launcher = fileURLToPath(new URL('../../apps/stack/bin/hstack-exec', import.meta.url));
     const cliPackage = JSON.parse(await readFile(new URL('../../apps/cli/package.json', import.meta.url), 'utf8'));
+    const compilerArgs = cliPackage.scripts['typecheck:source:finite'].trim().split(/\s+/u);
+    const projects = compilerArgs.filter((arg, index) => compilerArgs[index - 1] === '--project');
+    for (const [index, project] of projects.entries()) {
+      const file = `fixture-${index}.ts`;
+      await writeFile(join(setup.root, file), 'export const value = 1;\n');
+      await writeFile(join(setup.root, project), JSON.stringify({ files: [file] }));
+    }
+    await writeFile(join(setup.root, 'tsconfig.json'), JSON.stringify({ include: ['fixture-*.ts'] }));
     const binDir = join(setup.root, 'bin');
     await mkdir(binDir, { recursive: true });
     // The compiler is substituted; avoid admitting its tiny OS-boundary fixture
@@ -511,6 +519,32 @@ const recordingCompiler = `
   process.exit(config.fixtureStatus ?? 0);
 `;
 
+test('compiler partition coverage rejects new unassigned source before spawning and accepts the corrected partition', async (t) => {
+  const setup = await fixture(t, { compilerBody: recordingCompiler });
+  for (const file of ['owned.ts', 'new.ts', 'owned.test.ts']) {
+    await writeFile(join(setup.root, file), 'export const value = 1;\n');
+  }
+  await writeFile(join(setup.root, 'tsconfig.json'), JSON.stringify({ files: ['owned.ts', 'new.ts', 'owned.test.ts'] }));
+  await writeFile(join(setup.root, 'source.json'), JSON.stringify({ compilerOptions: { noEmit: false }, files: ['owned.ts'] }));
+  await writeFile(join(setup.root, 'test.json'), JSON.stringify({ compilerOptions: { noEmit: true }, files: ['owned.test.ts'] }));
+  const args = [runner, '--verifyProjectCoverage', 'tsconfig.json', '--project', 'source.json', '--project', 'test.json'];
+  const missing = setup.start(args);
+  assert.deepEqual(await once(missing.child, 'exit'), [1, null], missing.stderr());
+  assert.match(missing.stderr(), /partition coverage.*new\.ts/s);
+  await assert.rejects(readFile(setup.pidFile), { code: 'ENOENT' });
+  await writeFile(join(setup.root, 'source.json'), JSON.stringify({ compilerOptions: { noEmit: false }, files: ['owned.ts', 'new.ts'] }));
+  const corrected = setup.start(args);
+  assert.deepEqual(await once(corrected.child, 'exit'), [0, null], corrected.stderr());
+  const executions = (await readFile(join(setup.root, 'executions.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(executions.map(({ project }) => project), ['source.json', 'test.json']);
+  assert.ok(executions.every(({ args }) => !args.includes('--verifyProjectCoverage')));
+  await writeFile(join(setup.root, 'test.json'), JSON.stringify({ compilerOptions: { noEmit: true }, files: ['owned.test.ts', 'owned.ts'] }));
+  const duplicate = setup.start(args);
+  assert.deepEqual(await once(duplicate.child, 'exit'), [1, null], duplicate.stderr());
+  assert.match(duplicate.stderr(), /duplicate: owned\.ts.*source\.json.*test\.json/);
+  assert.equal((await readFile(join(setup.root, 'executions.jsonl'), 'utf8')).trim().split('\n').length, 2);
+});
+
 test('compiler projects run serially with their own emission modes and retain all diagnostic failures', async (t) => {
   const setup = await fixture(t, { compilerBody: recordingCompiler });
   for (const [name, noEmit, fixtureStatus] of [['source', false, 7], ['test', true, 2], ['last', true, 0]]) {
@@ -572,7 +606,8 @@ test('compiler measurement cancellation during filesystem setup never starts a c
 });
 
 test('compiler measurement reports distinct per-project peaks after a diagnostic failure', { skip: process.platform !== 'linux' }, async (t) => {
-  const setup = await fixture(t, { compilerBody: recordingCompiler });
+  const setup = await fixture(t, { compilerBody: recordingCompiler.replace('process.exit(config.fixtureStatus ?? 0);',
+    'setTimeout(() => process.exit(config.fixtureStatus ?? 0), 150);') });
   await writeFile(join(setup.root, 'small.json'), JSON.stringify({ compilerOptions: { noEmit: false }, fixtureMemoryMiB: 1, fixtureStatus: 7 }));
   await writeFile(join(setup.root, 'large.json'), JSON.stringify({ compilerOptions: { noEmit: true }, fixtureMemoryMiB: 64 }));
   const { child, stderr } = setup.start([runner, '--project', 'small.json', '--project', 'large.json'], { env: measuredEnv });
@@ -584,6 +619,11 @@ test('compiler measurement reports distinct per-project peaks after a diagnostic
   ]);
   assert.ok(reports[0].maxRssKiB > 0);
   assert.ok(reports[1].maxRssKiB > reports[0].maxRssKiB, 'separate child peaks must reflect materially different resident allocations');
+  assert.ok(reports.every(({ elapsedMs }) => Number.isFinite(elapsedMs) && elapsedMs > 0),
+    'each native compiler measurement must report its elapsed duration beside its resident peak');
+  assert.ok(reports.every(({ aggregateMaxRssKiB, ancestorMaxRssKiB, maxRssKiB }) =>
+    aggregateMaxRssKiB > maxRssKiB && ancestorMaxRssKiB > 0),
+  'the memory witness must include the admitted ancestor processes as well as the native compiler');
   t.diagnostic(JSON.stringify(reports));
 });
 

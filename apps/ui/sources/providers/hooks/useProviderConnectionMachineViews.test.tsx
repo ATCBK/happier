@@ -271,4 +271,44 @@ describe('useProviderConnectionMachineViews', () => {
         const afterLateA = rendered.getCurrent().byTargetKey[key];
         expect(afterLateA?.status === 'success' ? afterLateA.connection?.displayName : null).toBe('Account B');
     });
+    it('does not publish a peer read acknowledged after that peer Account retires', async () => {
+        let releaseB!: (value: unknown) => void;
+        let retired = false;
+        let calls = 0;
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async () => {
+            calls += 1;
+            if (calls === 1) {
+                await account.home.switchAccount(otherServerId, 'peer-account-b');
+                retired = true;
+                return createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({
+                    connectionId: 'pc_a', displayName: 'Retired peer Account A',
+                })] });
+            }
+            return await new Promise(resolve => { releaseB = resolve; });
+        });
+        const { useProviderConnectionMachineViews } = await import('./useProviderConnectionMachineViews');
+        const targets = [row('srv_peer', 'machine-a', otherServerId)];
+        const publishedAfterRetirement: Array<string | null> = [];
+        const rendered = await renderHook(() => {
+            const views = useProviderConnectionMachineViews({ enabled: true, connectionId: 'pc_a', targets });
+            const peer = views.byTargetKey['srv_peer\u0000machine-a'];
+            if (retired) publishedAfterRetirement.push(peer && peer.status !== 'error' ? peer.connection?.displayName ?? null : null);
+            return views;
+        });
+        await waitForHomeGovernance(() => expect(calls).toBe(2));
+        try {
+            expect(publishedAfterRetirement).not.toContain('Retired peer Account A');
+        } finally {
+            await act(async () => {
+                releaseB(createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({
+                    connectionId: 'pc_a', displayName: 'Current peer Account B',
+                })] }));
+            });
+        }
+        await waitForHomeGovernance(() => {
+            const peer = rendered.getCurrent().byTargetKey['srv_peer\u0000machine-a'];
+            expect(peer?.status === 'success' ? peer.connection?.displayName : null).toBe('Current peer Account B');
+        });
+    });
+
 });

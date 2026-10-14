@@ -204,6 +204,15 @@ describe("Home managed identity-provider routes", () => {
                 },
             }),
         ]);
+        await db.teamIdentityConnection.create({
+            data: {
+                teamId: null,
+                providerInstanceId: provider.id,
+                externalReference: { v: 1, kind: "github_app_identity", installationId: installation.id },
+                settings: { v: 1, kind: "github_app_identity", organizationLogin: "Acme" },
+                enabled: true,
+            },
+        });
 
         await db.teamIdentityConnection.create({ data: {
             teamId: null,

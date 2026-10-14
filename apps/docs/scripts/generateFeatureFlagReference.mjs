@@ -9,26 +9,25 @@
  * self-hoster had no way to discover them.
  *
  * Sources:
- *   - `@happier-dev/protocol`'s `FEATURE_CATALOG` — the 71 canonical ids, their
+ *   - `@happier-dev/protocol`'s `FEATURE_CATALOG` — the canonical ids, their
  *     descriptions, whether the server or the client owns them, and their
  *     dependencies. Imported from the built package.
- *   - `packages/protocol/.../featurePreferenceMutations.ts` — which flags the app exposes as a
+ *   - Protocol's `UI_FEATURE_REGISTRY` — which of those the app exposes as a
  *     user-facing toggle, and whether it is experimental and on by default.
- *     Parsed from the canonical registry source; `collectUiToggles` asserts it
- *     found every catalog id, so a shape change
- *     fails here rather than silently publishing a short list.
+ *     Imported from the same built package the client re-exports; missing
+ *     metadata fails here rather than silently publishing a short list.
  *
  * Regenerate with `yarn --cwd apps/docs generate:reference`.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..');
 
 const CATALOG_DIST = join(REPO, 'packages', 'protocol', 'dist', 'features', 'catalog.js');
-const UI_REGISTRY = join(REPO, 'packages', 'protocol', 'src', 'actions', 'settings', 'featurePreferenceMutations.ts');
+const UI_REGISTRY_DIST = join(REPO, 'packages', 'protocol', 'dist', 'actions', 'settings', 'featurePreferenceMutations.js');
 const TRANSLATIONS = join(REPO, 'apps', 'ui', 'sources', 'text', 'translations', 'en.ts');
 const ENV_SCHEMA = join(REPO, 'apps', 'server', 'sources', 'app', 'features', 'catalog', 'featureEnvSchema.ts');
 export const OUTPUT_PATH = join(HERE, '..', 'content', 'docs', 'extras', 'feature-flags.mdx');
@@ -55,40 +54,12 @@ export function collectTranslationLeaves(source) {
 }
 
 /** Per-feature toggle metadata, or `null` where the app exposes no toggle. */
-export function collectUiToggles(source, featureIds) {
-  const toggles = {};
-  const seen = new Set();
-  // Entries sit at four-space indent; read each block up to the next one.
-  const ENTRY = /^ {4}'?([A-Za-z0-9._]+)'?\s*:\s*\{/gm;
-  const matches = [...source.matchAll(ENTRY)];
-  for (let i = 0; i < matches.length; i += 1) {
-    const id = matches[i][1];
-    const start = matches[i].index;
-    const end = i + 1 < matches.length ? matches[i + 1].index : source.length;
-    const block = source.slice(start, end);
-    seen.add(id);
-    if (/settingsToggle\s*:\s*undefined/.test(block)) {
-      toggles[id] = null;
-      continue;
-    }
-    const bool = (name) => new RegExp(`${name}\\s*:\\s*(true|false)`).exec(block)?.[1] === 'true';
-    const titleKey = /titleKey\s*:\s*'([^']+)'/.exec(block)?.[1] ?? null;
-    if (!/settingsToggle\s*:\s*\{/.test(block)) {
-      toggles[id] = null;
-      continue;
-    }
-    toggles[id] = {
-      showInSettings: bool('showInSettings'),
-      isExperimental: bool('isExperimental'),
-      defaultEnabled: bool('defaultEnabled'),
-      titleKey,
-    };
-  }
-  const missing = featureIds.filter((id) => !seen.has(id));
+export function collectUiToggles(registry, featureIds) {
+  const missing = featureIds.filter((id) => !Object.hasOwn(registry, id));
   if (missing.length) {
-    throw new Error(`feature preference registry did not yield entries for: ${missing.join(', ')}`);
+    throw new Error(`UI_FEATURE_REGISTRY did not yield entries for: ${missing.join(', ')}`);
   }
-  return toggles;
+  return Object.fromEntries(featureIds.map((id) => [id, registry[id].settingsToggle ?? null]));
 }
 
 function table(headers, rows) {
@@ -126,13 +97,16 @@ export function deriveEnabledEnvKey(id) {
 
 export async function renderFeatureFlagReferenceMarkdown({
   catalogModulePath = CATALOG_DIST,
-  uiRegistryPath = UI_REGISTRY,
+  uiRegistryModulePath = UI_REGISTRY_DIST,
   translationsPath = TRANSLATIONS,
   envSchemaPath = ENV_SCHEMA,
 } = {}) {
-  const { FEATURE_CATALOG } = await import(`file://${catalogModulePath}`);
+  const [{ FEATURE_CATALOG }, { UI_FEATURE_REGISTRY }] = await Promise.all([
+    import(pathToFileURL(catalogModulePath).href),
+    import(pathToFileURL(uiRegistryModulePath).href),
+  ]);
   const ids = Object.keys(FEATURE_CATALOG).sort();
-  const toggles = collectUiToggles(readFileSync(uiRegistryPath, 'utf8'), ids);
+  const toggles = collectUiToggles(UI_FEATURE_REGISTRY, ids);
   const strings = collectTranslationLeaves(readFileSync(translationsPath, 'utf8'));
   const envKeys = collectFeatureEnvKeys(readFileSync(envSchemaPath, 'utf8'));
   const envKeyFor = (id) => {

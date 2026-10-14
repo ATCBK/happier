@@ -138,7 +138,9 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       : undefined;
     if (resetValue && !resetValue.success) return refuse('setting_reset_unsupported');
     const requested = actionId === 'settings.set' ? SettingsDeclarationActionInputSchemasV1[actionId].parse(input)
-      : actionId === 'settings.reset' && resetValue?.success ? { ...SettingsDeclarationActionInputSchemasV1[actionId].parse(input), value: resetValue.value }
+      : actionId === 'settings.reset' && resetValue?.success ? SettingsDeclarationActionInputSchemasV1['settings.set'].parse({
+        ...SettingsDeclarationActionInputSchemasV1[actionId].parse(input), value: resetValue.value,
+      })
       : undefined;
     const ownerActionId = actionId === 'settings.reset' ? 'settings.set' : actionId;
     if (storage.scope === 'home' || storage.scope === 'team') {

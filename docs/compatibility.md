@@ -712,6 +712,24 @@ binary is eligible for 0.3 updates. Remove the guard only when no supported
 eligible binary can lack the SDK; delivering native modules still requires a
 native app build.
 
+### Voice duration settings (0.3 development)
+
+The canonical Local conversation and Local direct settings schemas accept
+positive integer speech-request timeouts, retaining only the JavaScript timer
+maximum of 2,147,483,647 milliseconds. Local conversation accepts positive
+integer idle-agent TTLs in seconds without a Happier upper bound. There is no
+protocol minimum of sixty seconds for idle TTLs or one thousand milliseconds
+for speech requests.
+
+The released `ui-web-v0.2.15` and `ui-mobile-v0.2.15` readers at
+`88d45f33a5e5faf3235f621ee168a6f0ca58762d` admit idle TTLs of
+60–21,600 seconds and speech-request timeouts of 1,000–60,000 milliseconds.
+Their parser rejects an out-of-range Local adapter and retains its defaults.
+On 2026-10-08 the maintainer explicitly approved longer values and removal of
+unsupported lower bounds, accepting this older-client defaulting consequence.
+Current readers still accept settings within the released ranges; current
+writes preserve admitted values without a transition, shim or parallel policy.
+
 ### Voice presence settings (development)
 
 The device-local `voicePresenceContainer` chooses `top_bar`, `island`, or `orb`.
@@ -946,6 +964,21 @@ Every member change writes `state.activeSince: { accountId, atMs }` and the same
 and fallback after disabling or removing a member. Re-selecting the same member
 keeps its time; runtime status writes cannot replace it. Clearing the active
 member clears both timestamp fields.
+
+The same selection transaction records the existing `state.lastSwitchReason`.
+The closed V4 active-account mutation accepts an optional `switchReason`, using
+the stored cause's string shape; omission means `manual`, including re-selecting
+the same account. Runtime-state writes preserve recorded provenance. Disabling
+or removing an active member records a manual replacement through this same
+owner. No V3 switch header or legacy group transport is added on this line.
+
+With priority strategy and `autoRestorePrimaryWhenReset` enabled, the canonical
+candidate selector can restore an eligible primary from fresh healthy quota
+observed after an automatic limit fallback, without requiring a provider reset
+time or surviving member failure marker. Manual provenance prevents the override.
+Older rows without provenance retain the landed-reset proof; unknown history is
+not treated as an automatic fallback. Existing quota freshness and member
+eligibility policies are unchanged.
 
 `useQualifiedConnectedAccountGroups` exposes that identity-bound `activeSince`.
 An older row without a matching identity-bound clock remains readable, but its

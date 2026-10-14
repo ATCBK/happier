@@ -693,6 +693,13 @@ export async function requestUserPluginChange(
   }
   if (input.approval === 'none') return result;
 
+  const confirm = dependencies.confirm ?? ((
+    message: string,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ) => promptConfirmYesNo(message, {
+    default: 'no',
+    ...(options?.signal ? { signal: options.signal } : {}),
+  }));
   if (result.kind === 'managedResourcesReviewRequired') {
     if (input.approval !== 'prompt') return result;
     if ((request.kind !== 'disable' && request.kind !== 'uninstall' && request.kind !== 'uninstallAndDeleteData')
@@ -700,7 +707,7 @@ export async function requestUserPluginChange(
       return { kind: 'failed', code: 'plugin_managed_resource_review_target_mismatch' };
     }
     const answer = await requestConfirmation(
-      dependencies.confirm ?? promptConfirmYesNo,
+      confirm,
       `These retained resources may continue to exist and incur provider charges. Manage or delete them through their resource controls, or accept manual responsibility before ${request.kind}.\n${JSON.stringify(result.resources, null, 2)}\nContinue with manual responsibility?`,
       input.signal,
     );
@@ -770,13 +777,6 @@ export async function requestUserPluginChange(
     return decisionResult;
   }
 
-  const confirm = dependencies.confirm ?? ((
-    message: string,
-    options?: Readonly<{ signal?: AbortSignal }>,
-  ) => promptConfirmYesNo(message, {
-    default: 'no',
-      ...(options?.signal ? { signal: options.signal } : {}),
-  }));
   if (result.kind === 'reviewRequired' && result.reviewKind === 'projectTrust') {
     const projectTrustConfirmation = await requestConfirmation(
       confirm,

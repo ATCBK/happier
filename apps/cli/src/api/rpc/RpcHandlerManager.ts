@@ -407,13 +407,30 @@ export class RpcHandlerManager {
                 && request.callerAuthority === expectedAuthority
                 && isDeepStrictEqual(binding.sessionActionOrigin, request.sessionActionOrigin);
         })();
+        const sessionTransitionInputAuthorizationMatchesRequest = (() => {
+            if (!parsedInputAuthorization?.success || !this.localMachineId
+                || this.scopePrefix === this.localMachineId) return false;
+            const binding = parsedInputAuthorization.data.binding;
+            const privateAccountCustody = !!parsedInputAuthorization.data.requesterAccountContext && !!this.prepareRequesterAccountContext;
+            const apiRootAdmission = 'grant' in binding && !parsedInputAuthorization.data.requesterAccountContext && !!this.authorizeRequest;
+            if (!privateAccountCustody && !apiRootAdmission) return false;
+            const expectedAuthority = 'authentication' in binding && !binding.sessionActionOrigin && !binding.workflowActionOrigin
+                ? 'present_user' : 'account_automation';
+            return binding.actionId === 'session.agent.transition' && binding.machineId === this.localMachineId
+                && (binding.target.kind === 'machine' && binding.target.machineId === this.localMachineId
+                    || binding.target.kind === 'session' && binding.target.sessionId === this.scopePrefix)
+                && (targetMethod === SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION
+                    || targetMethod === SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND)
+                && request.method === `${this.scopePrefix}:${targetMethod}` && request.callerAuthority === expectedAuthority
+                && isDeepStrictEqual(binding.sessionActionOrigin, request.sessionActionOrigin);
+        })();
         const sessionActionOrigin = request.sessionActionOrigin === undefined
             ? null : SessionActionRpcOriginV1Schema.safeParse(request.sessionActionOrigin);
         if (sessionActionOrigin && (!sessionActionOrigin.success
             || request.callerAuthority !== 'account_automation'
             || isWorkspaceTargetPhase && !workspaceSyncTargetRouting?.success
                 && (!machineAdmission?.success || machineAdmission.data.machineId !== this.scopePrefix || !this.authorizeRequest)
-            || !machineInputAuthorizationMatchesRequest && !sourceInputAuthorizationMatchesRequest
+            || !machineInputAuthorizationMatchesRequest && !sessionTransitionInputAuthorizationMatchesRequest && !sourceInputAuthorizationMatchesRequest
                 && !writerTargetInputAuthorizationMatchesRequest && !seedInputAuthorizationMatchesRequest
                 && !isSessionActionRpcMethodV1(this.readUnprefixedMethod(request.method)))) {
             return await deny('session_action_origin', { error: 'Invalid Session Action origin', errorCode: RPC_ERROR_CODES.FORBIDDEN });
@@ -447,7 +464,7 @@ export class RpcHandlerManager {
             ? parsedRequestId.data
             : null;
         if (parsedInputAuthorization) {
-            let matchesRequest = machineInputAuthorizationMatchesRequest || sourceInputAuthorizationMatchesRequest
+            let matchesRequest = machineInputAuthorizationMatchesRequest || sessionTransitionInputAuthorizationMatchesRequest || sourceInputAuthorizationMatchesRequest
                 || writerTargetInputAuthorizationMatchesRequest || seedInputAuthorizationMatchesRequest;
             if (!matchesRequest && parsedInputAuthorization.success && requestId) {
                 const binding = parsedInputAuthorization.data.binding;
@@ -580,7 +597,7 @@ export class RpcHandlerManager {
                     ...(workspaceSyncTargetRouting?.success ? { workspaceSyncTargetRouting: Object.freeze(workspaceSyncTargetRouting.data) } : {}),
                     ...(workspaceSyncSourceWriterTargetRouting?.success ? { workspaceSyncSourceWriterTargetRouting: Object.freeze(workspaceSyncSourceWriterTargetRouting.data) } : {}),
                     ...(workspaceSyncSeedRouting?.success ? { workspaceSyncSeedRouting: Object.freeze(workspaceSyncSeedRouting.data) } : {}),
-                    ...((sourceInputAuthorizationMatchesRequest || writerTargetInputAuthorizationMatchesRequest || seedInputAuthorizationMatchesRequest) && parsedInputAuthorization?.success
+                    ...((sessionTransitionInputAuthorizationMatchesRequest || sourceInputAuthorizationMatchesRequest || writerTargetInputAuthorizationMatchesRequest || seedInputAuthorizationMatchesRequest) && parsedInputAuthorization?.success
                         ? { callerInputAuthorization: parsedInputAuthorization.data } : {}),
                     signal: controller.signal,
             });
@@ -680,13 +697,29 @@ export class RpcHandlerManager {
             }
 
             let callerInputAuthorization = parsedInputAuthorization?.success ? parsedInputAuthorization.data : undefined;
+            let requesterInvocation: import('@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1').ExternalActionRequesterInvocationV1 | undefined;
+            if (machineInputAuthorizationMatchesRequest && callerInputAuthorization?.binding.actionId === 'session.agent.transition') {
+                const phase = decryptedParams && typeof decryptedParams === 'object' && !Array.isArray(decryptedParams)
+                    ? decryptedParams as Record<string, unknown> : null;
+                if (!phase || typeof phase.sessionId !== 'string' || !phase.sessionId.trim()
+                    || targetMethod !== RPC_METHODS.STOP_SESSION && phase.type !== 'resume-session') {
+                    return await respond(request, { error: RPC_ERROR_MESSAGES.FORBIDDEN, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+                }
+            }
+            if (sessionTransitionInputAuthorizationMatchesRequest && targetMethod === SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION) {
+                const phase = decryptedParams && typeof decryptedParams === 'object' && !Array.isArray(decryptedParams)
+                    ? decryptedParams as Record<string, unknown> : null;
+                if (phase?.serviceId !== 'session.agentTransition' || (phase.action !== 'enforce' && phase.action !== 'clear')) {
+                    return await respond(request, { error: RPC_ERROR_MESSAGES.FORBIDDEN, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+                }
+            }
             if (callerInputAuthorization?.requesterAccountContext) {
-                if (!machineInputAuthorizationMatchesRequest || !this.prepareRequesterAccountContext
+                if ((!machineInputAuthorizationMatchesRequest && !sessionTransitionInputAuthorizationMatchesRequest) || !this.prepareRequesterAccountContext
                     || controller.signal.aborted) {
                     return await deny('requester_account_admission');
                 }
                 const prepared = await this.prepareRequesterAccountContext({ authorization: callerInputAuthorization,
-                    purpose: { kind: 'machine_rpc', method: request.method, params: decryptedParams }, signal: controller.signal });
+                    purpose: { kind: 'machine_rpc', method: this.readUnprefixedMethod(request.method), params: decryptedParams }, signal: controller.signal });
                 if (!prepared) {
                     return await deny('requester_account_preparation');
                 }
@@ -696,6 +729,7 @@ export class RpcHandlerManager {
                     return await deny('requester_account_binding');
                 }
                 callerInputAuthorization = prepared.authorization;
+                requesterInvocation = prepared.invocation;
             }
 
             // Call the handler
@@ -706,7 +740,8 @@ export class RpcHandlerManager {
             const result = await handler(decryptedParams, Object.freeze({
                 signal: controller.signal,
                 reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),
-                callerAuthority: request.callerAuthority === 'present_user' ? request.callerAuthority : 'account_automation',
+                callerAuthority: requesterInvocation?.authority === 'account_automation' ? 'account_automation'
+                    : request.callerAuthority === 'present_user' ? request.callerAuthority : 'account_automation',
                 ...(sessionActionOrigin?.success ? { sessionActionOrigin: sessionActionOrigin.data } : {}),
                 ...(workspaceSyncSourceRouting?.success ? { workspaceSyncSourceRouting: workspaceSyncSourceRouting.data } : {}),
                 ...(workspaceSyncSourceExecution?.success ? { workspaceSyncSourceExecution: workspaceSyncSourceExecution.data } : {}),
@@ -717,7 +752,8 @@ export class RpcHandlerManager {
                 ...(workspaceSyncSeedRouting?.success ? { workspaceSyncSeedRouting: workspaceSyncSeedRouting.data } : {}),
                 ...(callerInputAuthorization ? {
                     callerInputAuthorization,
-                    ...('grant' in callerInputAuthorization.binding ? {
+                ...(requesterInvocation?.callerInputConstraints ? { callerInputConstraints: requesterInvocation.callerInputConstraints }
+                  : 'grant' in callerInputAuthorization.binding ? {
                     callerInputConstraints: {
                         models: callerInputAuthorization.binding.grant.models,
                         permissionModes: callerInputAuthorization.binding.grant.permissionModes,

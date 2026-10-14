@@ -94,15 +94,13 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
     const enabled = useFeatureEnabled('providers');
     const administration = useAgentAdministrationCatalog({ loadProjection: false });
     const administrationTargetSelection = administration.targetSelection;
+    const executionTarget = administration.executionTarget;
     const accountScope = useAccountSettingsScope();
-    // Saved models belong to the captured Account Home. A machine may add
-    // runtime facts only for that same Home; its absence never withdraws the catalog.
-    const serverId = accountScope?.serverId ?? null;
-    const executionTarget = administration.executionTarget && serverId
-        && areServerProfileIdentifiersEquivalent(administration.executionTarget.serverId, serverId)
-        ? administration.executionTarget
-        : null;
     const machineId = executionTarget?.machine.id ?? null;
+    // A selected machine retains its exact Home even offline; only an absent
+    // selection falls back to Account-only model management.
+    const serverId = administration.projectionScope?.serverId
+        ?? (administrationTargetSelection.selectedTarget === null ? accountScope?.serverId ?? null : null);
     const { mutateProviderModelSettings, setProviderDefaultModelSelection } = useProviderActionClient(serverId);
     const providerCatalog = useProviderCatalogForServer(serverId);
     const modelConnectionIds = React.useMemo(() => providerCatalog?.data?.connections.map(connection => connection.id) ?? [],
@@ -126,8 +124,9 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         () => resolveAgentModelsSettingsAccess(providerCatalog),
         [providerCatalog],
     );
-    const providerSettings = useProviderSettingsForServer(serverId);
-    const defaultSelection = providerSettings.defaultsByAgentTargetKey[props.agentTargetKey] ?? null;
+    const providerSettings = settingsAccess.settings;
+    const modelVisibilityByRef = providerCatalog?.data?.modelVisibilityByRef ?? providerSettings.modelVisibilityByRef;
+    const defaultSelection = useProviderSettingsForServer(serverId).defaultsByAgentTargetKey[props.agentTargetKey] ?? null;
     const [favorites, setFavorites] = useCurrentFavoriteModelSelectionsV1Mutable();
     // Favorites are Account settings: they are read and written only for the Account's own Home.
     const favoritesInScope = Boolean(accountScope && serverId
@@ -165,8 +164,8 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
     const nativeModels = React.useMemo(() => resolveAgentNativeModels({
         runtimeAgentId: props.runtimeAgentId,
         agentTargetKey: props.agentTargetKey,
-        modelVisibilityByRef: providerSettings.modelVisibilityByRef,
-    }), [props.agentTargetKey, props.runtimeAgentId, providerSettings.modelVisibilityByRef]);
+        modelVisibilityByRef,
+    }), [props.agentTargetKey, props.runtimeAgentId, modelVisibilityByRef]);
 
     const showError = React.useCallback((
         error: ProviderErrorV1,

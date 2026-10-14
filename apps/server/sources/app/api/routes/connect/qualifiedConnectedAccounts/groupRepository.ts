@@ -668,13 +668,14 @@ function encodeStoredState(
     return JSON.stringify(schema.parse(value));
 }
 
-/** The group row owns active-member identity and its clock in one write. */
+/** The group row owns active-member identity, switch provenance and its clock in one write. */
 export function encodeQualifiedGroupStateForActiveAccount(input: Readonly<{
     currentStateJson: string | null;
     nextState?: unknown;
     previousActiveAccountId: string | null;
     nextActiveAccountId: string | null;
     nowMs?: number;
+    switchReason?: string;
 }>): string {
     const previous = parseStoredJson(
         ConnectedServiceAuthGroupStateV1Schema,
@@ -691,6 +692,10 @@ export function encodeQualifiedGroupStateForActiveAccount(input: Readonly<{
                 : null;
     return encodeStoredState(ConnectedServiceAuthGroupStateV1Schema, {
         ...next,
+        lastSwitchReason: input.switchReason
+            ?? (input.nextActiveAccountId !== input.previousActiveAccountId
+                ? "manual"
+                : previous.lastSwitchReason ?? next.lastSwitchReason),
         activeSince: activeSince ?? undefined,
         lastSwitchAt: activeSince?.atMs,
     });
@@ -1787,6 +1792,7 @@ export async function setQualifiedConnectedAccountGroupActiveAccount(
                     currentStateJson: current.stateJson,
                     previousActiveAccountId: current.activeConnectedAccountId,
                     nextActiveAccountId: mutation.connectedAccountId,
+                    switchReason: mutation.switchReason ?? "manual",
                 }),
                 activeProfileId:
                     current.vendor === null

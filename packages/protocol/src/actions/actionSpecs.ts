@@ -129,6 +129,8 @@ import { PROJECT_DEFINITION_ACTION_SPECS, PROJECT_DEFINITION_ACTION_INPUT_SCHEMA
 import { PROJECT_ACTION_SPECS_V1, PROJECT_ACTION_INPUT_SCHEMAS_V1, PROJECT_ACTION_OUTPUT_SCHEMAS_V1, type ProjectActionIdV1 } from './projectActionFamily.js';
 import { SESSION_CANVAS_ACTION_SPECS, SESSION_CANVAS_ACTION_INPUT_SCHEMAS, SESSION_CANVAS_ACTION_OUTPUT_SCHEMAS, type SessionCanvasActionId } from './sessionCanvasActionFamily.js';
 import { SESSION_TERMINAL_ACTION_SPECS, SESSION_TERMINAL_ACTION_INPUT_SCHEMAS, SESSION_TERMINAL_ACTION_OUTPUT_SCHEMAS, type SessionTerminalActionId } from './sessionTerminalActionFamily.js';
+import { SESSION_AGENT_TRANSITION_ACTION_SPECS, SESSION_AGENT_TRANSITION_ACTION_INPUT_SCHEMAS,
+  SESSION_AGENT_TRANSITION_ACTION_OUTPUT_SCHEMAS, type SessionAgentTransitionActionId } from './sessionAgentTransitionActionFamily.js';
 import { COMMAND_PALETTE_ACTION_SPECS } from './commandPaletteActionSpecs.js';
 import { FIND_ACTION_SPECS } from './findActionSpecs.js';
 import { PROMPT_PICKER_ACTION_SPECS } from './promptPickerActionSpecs.js';
@@ -671,6 +673,7 @@ import type { WidgetInstanceActionIdV1, WidgetInstanceActionInputSchemasV1, Widg
 import type { WidgetDefinitionActionIdV1, WidgetDefinitionActionInputSchemasV1, WidgetDefinitionActionOutputSchemasV1 } from '../widgets/definitionActionsV1.js';
 import type { WidgetLayoutFragmentActionIdV1, WidgetLayoutFragmentActionInputSchemasV1, WidgetLayoutFragmentActionOutputSchemasV1 } from '../widgets/fragmentActionsV1.js';
 import { MACHINE_CONNECTION_ACTION_SPECS } from './specs/machineConnection.js';
+import { LOCAL_DAEMON_SERVICE_ACTION_SPECS } from './specs/localDaemonService.js';
 import { MACHINE_TERMINAL_ACTION_SPECS, MACHINE_TERMINAL_ACTION_IDS, MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS,
   MACHINE_TERMINAL_ACTION_OUTPUT_SCHEMAS, type MachineTerminalActionId } from './specs/machineTerminal.js';
 import { MACHINE_ACCESS_ACTION_SPECS } from './specs/machineAccess.js';
@@ -1661,6 +1664,7 @@ const SessionGoalSetInputSchema = lazyZodSchema(() => z.object({
   objective: z.string().trim().min(1).max(4000).optional(),
   status: SessionWorkStateStatusV1Schema.optional(),
   tokenBudget: z.number().finite().positive().nullable().optional(),
+  resumeInactiveWithInitialGoal: z.boolean().optional(),
 }).passthrough().refine((value) => (
   typeof value.objective === 'string'
   || typeof value.status === 'string'
@@ -4845,6 +4849,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   | (typeof HOME_IDENTITY_ACTION_SPECS)[number]
   | (typeof SESSION_ORGANIZATION_RESOURCE_ACTION_SPECS)[number]
   | (typeof MACHINE_CONNECTION_ACTION_SPECS)[number]
+  | (typeof LOCAL_DAEMON_SERVICE_ACTION_SPECS)[number]
   | (typeof MACHINE_TERMINAL_ACTION_SPECS)[number]
   | (typeof MACHINE_ACCESS_ACTION_SPECS)[number]
   | (typeof MACHINE_VITALS_ACTION_SPECS)[number]
@@ -4883,6 +4888,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   ...HOME_IDENTITY_ACTION_SPECS,
   ...SESSION_ORGANIZATION_RESOURCE_ACTION_SPECS,
   ...MACHINE_CONNECTION_ACTION_SPECS,
+  ...LOCAL_DAEMON_SERVICE_ACTION_SPECS,
   ...MACHINE_TERMINAL_ACTION_SPECS,
   ...MACHINE_ACCESS_ACTION_SPECS,
   ...MACHINE_VITALS_ACTION_SPECS,
@@ -4927,6 +4933,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING = Object.freeze(defineAc
   ...LIST_REORDER_ACTION_SPECS,
   ...TODO_SESSION_LINK_ACTION_SPECS,
   ...SESSION_TERMINAL_ACTION_SPECS,
+  ...SESSION_AGENT_TRANSITION_ACTION_SPECS,
   ...APP_SHELL_ACTION_SPECS,
   ...NOTIFICATION_CONFIGURATION_ACTION_SPECS,
   ...APP_UPDATE_ACTION_SPECS,
@@ -6983,7 +6990,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       presentation: { onStart: 'current' },
     },
     title: 'Hand off session',
-    description: 'Move the current session to another machine while keeping the same session id.',
+    description: 'Move the current session to another machine or another directory on the same machine while keeping the same session id. Select target storage and workspace transfer behavior explicitly when needed.',
     safety: 'safe',
     placements: ['session_action_menu', 'session_info'],
     bindings: {
@@ -7004,10 +7011,17 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       },
     inputHints: {
       title: 'Hand off a session',
-      description: 'Moves the current session to another machine.',
+      description: 'Move to another machine or directory on the same machine. The daemon resolves the source and workspace endpoints.',
       fields: [
         { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'targetMachineId', title: 'Target machine id', widget: 'text' },
+        { path: 'targetPath', title: 'Target directory', widget: 'text',
+          description: 'Destination path on the target machine, including a directory move on the source machine.' },
+        { path: 'targetSessionStorageMode', title: 'Target session storage', widget: 'select', options: [
+          { value: 'direct', label: 'Direct' }, { value: 'persisted', label: 'Persisted' },
+        ] },
+        { path: 'workspaceAction', title: 'Workspace transfer', widget: 'json',
+          description: 'Workspace intent: none, copy_once, create_relationship, relationship or linked_workspace, with the fields required by that intent. Omit to leave workspace intent unspecified.' },
       ],
     },
     outputSchema: SessionHandoffActionResultV1Schema,
@@ -9113,7 +9127,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       agent: true,
       mcp: true,
       cli: true,
-      rpc: false,
+      rpc: true,
     },
     inputHints: {
       description: 'Set the goal a session works towards.',
@@ -9123,6 +9137,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
         { path: 'objective', title: 'Objective', widget: 'textarea' },
         { path: 'status', title: 'Status', widget: 'text' },
         { path: 'tokenBudget', title: 'Token budget', widget: 'text' },
+        { path: 'resumeInactiveWithInitialGoal', title: 'Resume inactive session with goal', widget: 'boolean' },
       ],
     },
     outputSchema: StrictJsonValueSchema,
@@ -12319,6 +12334,7 @@ export type PluginProvenanceOnlyActionId = keyof typeof PLUGIN_PROVENANCE_ONLY_A
 const CLIENT_EXECUTION_PLACEMENT_ACTION_IDS = [
   ...ACTION_ID_FAMILIES_V1.bug_report_submission,
   'browser.workspace.open',
+  ...ACTION_ID_FAMILIES_V1.local_daemon_services,
   ...ACTION_ID_FAMILIES_V1.account_home_continuation,
   ...ACTION_ID_FAMILIES_V1.session_authoring,
   ...ACTION_ID_FAMILIES_V1.composer_ingress,
@@ -12791,7 +12807,7 @@ type NonRuntimeActionSpecDefinition<TSpec> = TSpec extends Readonly<{
 }>
   // These families have exact per-ID schema definitions below. Their generic
   // row factories must not reintroduce widened schema unions into the catalog.
-  ? TActionId extends RuntimeActionIdV1 | SessionTerminalActionId | MachineTerminalActionId | WorkspaceActionId | ProjectDefinitionActionId
+  ? TActionId extends RuntimeActionIdV1 | SessionTerminalActionId | SessionAgentTransitionActionId | MachineTerminalActionId | WorkspaceActionId | ProjectDefinitionActionId
     | SessionCanvasActionId | WidgetInstanceActionIdV1 | WidgetDefinitionActionIdV1 | WidgetLayoutFragmentActionIdV1
     | ArtifactFolderActionIdV1 | ProfileActionIdV1 | ProviderActionIdV1 | RemoteHostActionIdV1 | HomeRuntimeActionIdV1 | ProjectActionIdV1 | WorkflowEffectActionIdV1 | UsageSourceActionId
     ? never
@@ -13197,6 +13213,9 @@ export type CanonicalActionSpecDefinition =
       (typeof UpdatesActionInputSchemas)[Id], (typeof UpdatesActionOutputSchemas)[Id]>
     }[UpdatesActionId]
   | SessionTerminalActionSpecDefinition
+  | { [Id in SessionAgentTransitionActionId]: CanonicalActionSchemaDefinition<Id,
+      (typeof SESSION_AGENT_TRANSITION_ACTION_INPUT_SCHEMAS)[Id], (typeof SESSION_AGENT_TRANSITION_ACTION_OUTPUT_SCHEMAS)[Id]>
+    }[SessionAgentTransitionActionId]
   | MachineTerminalActionSpecDefinition
   | WorkspaceActionSpecDefinition
   | ProjectDefinitionActionSpecDefinition

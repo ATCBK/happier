@@ -427,20 +427,21 @@ describe('accountSettings', () => {
     expect(accountSettingsParse({ executionRunsGuidanceEnabled: false }).executionRunsGuidanceEnabled).toBe(false);
   });
 
-  it('keeps valid machine-bound recent paths when sibling rows are malformed', () => {
+  it('keeps valid machine-bound recent paths, including long predecessor values, when sibling rows are malformed', () => {
+    const longRetainedPath = 'x'.repeat(16 * 1024 + 1);
     const recentMachinePaths = [
       { machineId: 'machine-1', path: '/workspace/project' },
       { machineId: 'machine-2', path: '/workspace/secondary', ignoredByCurrentSchema: true },
       { machineId: '', path: '/workspace/missing-machine' },
       { machineId: 'machine-3', path: '' },
-      { machineId: 'machine-4', path: 'x'.repeat(16 * 1024 + 1) },
+      { machineId: 'machine-4', path: longRetainedPath },
       'legacy-path-without-machine',
     ];
 
     expect(LegacyRecentMachinePathsSchema.parse(recentMachinePaths)).toEqual([
       { machineId: 'machine-1', path: '/workspace/project' },
       { machineId: 'machine-2', path: '/workspace/secondary' },
-      { machineId: 'machine-4', path: 'x'.repeat(16 * 1024 + 1) },
+      { machineId: 'machine-4', path: longRetainedPath },
     ]);
     expect(LegacyRecentMachinePathsSchema.parse('not-an-array')).toEqual([]);
   });
@@ -1901,7 +1902,7 @@ describe('isExpoPushNotificationChannelEnabled', () => {
 
 });
 
-it('keeps Classic validation errors at generated definition and handoff boundaries', () => {
+it('keeps Classic validation errors and strict policy writes separate from stored field recovery', () => {
  const definition=accountCatalogDefinition(z.string().trim().min(1),' default ',{semanticDomain:'test preference',classification:'preference',maximumSerializedValueBytes:1024,recoverMalformed:false});
  expect(definition.default).toBe('default');
  expect(definition.schema.parse(undefined)).toBe('default');
@@ -1909,6 +1910,13 @@ it('keeps Classic validation errors at generated definition and handoff boundari
   expect(result.success).toBe(false);
   if(!result.success)expect(result.error).toBeInstanceOf(z.ZodError);
  }
+ const storedPolicy = { v: 99, allowCrossMachine: false, allowModelOverride: 'invalid', futurePolicy: true };
+ expect(accountSettingsParse({ sessionAgentSpawnPolicyV1: storedPolicy }).sessionAgentSpawnPolicyV1)
+   .toMatchObject({ v: 1, allowCrossMachine: false, allowModelOverride: true });
+ expect(accountSettingsParse({ sessionAgentSpawnPolicyV1: storedPolicy }).sessionAgentSpawnPolicyV1)
+   .not.toHaveProperty('futurePolicy');
+ expect(ACCOUNT_SETTING_DEFINITIONS.sessionAgentSpawnPolicyV1.parseMutationValue(storedPolicy))
+   .toMatchObject({ success: false, reason: 'invalidValue' });
 });
 it('keeps preference bounds distinct from size-tolerant legacy reads', () => {
  const read=createStoredReadSchema(AccountSettingsSchema);
@@ -1918,10 +1926,13 @@ it('keeps preference bounds distinct from size-tolerant legacy reads', () => {
  const parsed=read.parse({favoriteModelSelectionsV1:overLimit,profiles:overLimit});
  expect(parsed.favoriteModelSelectionsV1).toEqual([]);
  expect(parsed).not.toHaveProperty('profiles');
- expect(parseRetainedAccountSettingsEntitySourceV1('profiles',overLimit)).toMatchObject({success:true,data:overLimit});
+ expect(ACCOUNT_SETTING_DEFINITIONS).not.toHaveProperty('profiles');
+ expect(AccountSettingsPersistedObjectSchema.parse({ profiles: overLimit }).profiles).toEqual(overLimit);
+ expect(parseRetainedAccountSettingsEntitySourceV1('profiles', overLimit))
+   .toEqual({ success: true, data: overLimit });
  expect(ACCOUNT_SETTING_DEFINITIONS.favoriteModelSelectionsV1.schema.parse([undefined])).toEqual([]);
- const malformedSource=parseRetainedAccountSettingsEntitySourceV1('profiles',[undefined]);
- expect(malformedSource).toMatchObject({success:false,reason:'invalidValue'});
+ expect(parseRetainedAccountSettingsEntitySourceV1('profiles', [undefined]))
+   .toMatchObject({ success: false, reason: 'invalidValue' });
  for(const target of ['draft-7','draft-2020-12'] as const)for(const io of ['input','output'] as const) {
   expect(z.toJSONSchema(read,{target,io,unrepresentable:'any'})).toHaveProperty(['properties','favoriteModelSelectionsV1','anyOf',1,'maxItems'],256);
  }

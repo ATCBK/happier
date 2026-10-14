@@ -1,3 +1,7 @@
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -40,7 +44,9 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
 });
 // Machine transport is a genuine boundary. No Account operation may reach it.
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope }));
+const providerHarness = createProviderSettingsHarness({ machines: [] });
+installProviderSettingsRpcBoundary(providerHarness);
+providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, request => machineRpcWithServerScope(request));
 const account = createProviderSettingsAccountHarness();
 const accountConnectionId = ProviderConnectionIdSchema.parse('pc_account');
 await loadSyncSingletonForTests();
@@ -577,4 +583,110 @@ describe('Account Provider UI actions without a machine', () => {
         expect(writes).toBe(1);
         expect(machineRpcWithServerScope).not.toHaveBeenCalled();
     });
+    it('keeps the addressed Account Agent title when its selected same-Home machine is missing', async () => {
+        const { serverId } = await account.restore({ serverIdentityId: 'srv_agent_same_home', machines: [] });
+        const agent = { id: 'same-home-agent', name: 'same-home-agent', title: 'Addressed Account Agent title',
+            command: 'same-home-agent', createdAt: 1, updatedAt: 1 };
+        const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [agent] });
+        account.home.answer(serverId, `GET ${ACP_CATALOG_ROWS_ROUTE_V1}`, {
+            body: { status: 'present', revision: 1, content: { t: 'plain', v: record } },
+        });
+        const { useAcpCatalogForServer } = await import('@/sync/store/useAcpCatalog');
+        const acp = await renderHook(() => useAcpCatalogForServer(serverId));
+        await waitForHomeGovernance(() => expect(acp.getCurrent().snapshot?.catalog).toMatchObject({ status: 'ready', record }));
+        await account.selectMachine(serverId, 'missing-same-home-machine', 'agents');
+        const [{ useMachineAdministrationTargetSelection }, { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 }] = await Promise.all([
+            import('@/sync/domains/machines/administration/useTargetSelection'),
+            import('@/sync/domains/machines/administration/selectionPreferences'),
+        ]);
+        const selection = await renderHook(() => useMachineAdministrationTargetSelection(MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents));
+        expect(selection.getCurrent().selectedTarget).toEqual({
+            serverIdentityId: 'srv_agent_same_home', machineId: 'missing-same-home-machine',
+        });
+        expect(selection.getCurrent().state.kind).toBe('missing');
+        expect(selection.getCurrent().selectedTargetServerMatchesActiveAccount).toBe(true);
+        expect(selection.getCurrent().resolveExecutionTarget()).toBeNull();
+        let writes = 0;
+        for (const route of ['POST /v2/account/settings', `POST ${ACP_CATALOG_ROWS_ROUTE_V1}`]) {
+            account.home.answer(serverId, route, { select: () => {
+                writes += 1;
+                return { status: 500, body: { error: 'unexpected_write' } };
+            } });
+        }
+        const { AgentModelsScreen } = await import('@/components/settings/agents/AgentModelsScreen');
+        const agentTargetKey = resolveBackendTargetKeyV2({ kind: 'backend', backendId: agent.id, configuredBackendId: agent.id });
+        const screen = await renderScreen(<AgentModelsScreen agentTargetKey={agentTargetKey} runtimeAgentId={null} />);
+        expect(screen.findByTestId('settings.agents.models.header')).not.toBeNull();
+        expect(screen.getTextContent()).toContain(agent.title);
+        expect(writes).toBe(0);
+        expect(account.catalogMutations).toEqual([]);
+        expect(providerHarness.state.requests).toEqual([]);
+    });
+
+    it.each(['revoked', 'missing'] as const)('does not disclose active Account sources or Agent titles through an inaccessible foreign Agent Home (%s)', async state => {
+        const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            connections: [{ v: 1, id: 'pc_private_active', source: { kind: 'custom', template: customTemplate() },
+                role: 'named', displayName: 'Private active Account source', displayNameMode: 'custom',
+                revision: 1, createdAt: 1, updatedAt: 1 }],
+            manualModelsByConnectionId: { pc_private_active: [{ id: 'private-active-model', addedAt: 1 }] },
+        });
+        const { serverId } = await account.restore({ catalog, serverIdentityId: 'srv_agent_active', machines: [] });
+        const { useProviderCatalogForServer } = await import('@/sync/store/useProviderCatalog');
+        const admitted = await renderHook(() => useProviderCatalogForServer(serverId));
+        await waitForHomeGovernance(() => expect(admitted.getCurrent()).toMatchObject({ status: 'ready', revision: 1 }));
+        const privateAgent = { id: 'private-active-agent', name: 'private-active-agent',
+            title: 'Private active Account Agent title', command: 'private-agent', createdAt: 1, updatedAt: 1 };
+        const acpRecord = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [privateAgent] });
+        account.home.answer(serverId, `GET ${ACP_CATALOG_ROWS_ROUTE_V1}`, {
+            body: { status: 'present', revision: 1, content: { t: 'plain', v: acpRecord } },
+        });
+        const { useAcpCatalogForServer } = await import('@/sync/store/useAcpCatalog');
+        const acp = await renderHook(() => useAcpCatalogForServer(serverId));
+        await waitForHomeGovernance(() => expect(acp.getCurrent().snapshot?.catalog).toMatchObject({
+            status: 'ready', record: acpRecord,
+        }));
+        const peerId = await account.addHome({ name: 'Foreign Agent Home', serverUrl: 'https://foreign-agent-home.test',
+            accountId: 'peer-account', serverIdentityId: 'srv_agent_foreign', active: false });
+        const peerMachine = createMachineFixture({ id: 'peer-machine', active: true, activeAt: Date.now() });
+        if (state === 'revoked') await account.publishMachines(peerId, [peerMachine]);
+        await account.selectMachine(peerId, peerMachine.id, 'agents');
+        if (state === 'revoked') await account.publishMachines(peerId, [{ ...peerMachine, seq: peerMachine.seq + 1,
+            updatedAt: peerMachine.activeAt + 1, metadataVersion: peerMachine.metadataVersion + 1,
+            daemonStateVersion: peerMachine.daemonStateVersion + 1, revokedAt: Date.now() }]);
+        const [{ useMachineAdministrationTargetSelection }, { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 }] = await Promise.all([
+            import('@/sync/domains/machines/administration/useTargetSelection'),
+            import('@/sync/domains/machines/administration/selectionPreferences'),
+        ]);
+        const selection = await renderHook(() => useMachineAdministrationTargetSelection(MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents));
+        expect(selection.getCurrent().selectedTarget).toEqual({ serverIdentityId: 'srv_agent_foreign', machineId: peerMachine.id });
+        expect(['offline', 'locked', 'missing', 'replaced', 'revoked']).toContain(selection.getCurrent().state.kind);
+        expect(selection.getCurrent().selectedTargetServerMatchesActiveAccount).toBe(false);
+        expect(selection.getCurrent().resolveExecutionTarget()).toBeNull();
+        let settingsWrites = 0;
+        let acpWrites = 0;
+        for (const homeId of [serverId, peerId]) {
+            account.home.answer(homeId, 'POST /v2/account/settings', { select: () => {
+                settingsWrites += 1;
+                return { status: 500, body: { error: 'unexpected_settings_write' } };
+            } });
+            account.home.answer(homeId, `POST ${ACP_CATALOG_ROWS_ROUTE_V1}`, { select: () => {
+                acpWrites += 1;
+                return { status: 500, body: { error: 'unexpected_acp_write' } };
+            } });
+        }
+        const { AgentModelsScreen } = await import('@/components/settings/agents/AgentModelsScreen');
+        const agentTargetKey = resolveBackendTargetKeyV2({ kind: 'backend', backendId: privateAgent.id, configuredBackendId: privateAgent.id });
+        const screen = await renderScreen(<AgentModelsScreen agentTargetKey={agentTargetKey} runtimeAgentId={null} />);
+        expect(screen.findByTestId('settings.agents.models.header')).not.toBeNull();
+        expect(screen.findByTestId('agent-models')).toBeNull();
+        expect(screen.findByTestId('agent-models-source-visibility:pc_private_active')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('private-active-model');
+        expect(screen.getTextContent()).not.toContain(privateAgent.title);
+        expect(account.catalogMutations).toEqual([]);
+        expect(settingsWrites).toBe(0);
+        expect(acpWrites).toBe(0);
+        expect(account.readCatalogRow()).toMatchObject({ revision: 1, content: { t: 'plain', v: catalog } });
+        expect(providerHarness.state.requests).toEqual([]);
+    });
+
 });

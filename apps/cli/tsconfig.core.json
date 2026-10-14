@@ -1,10 +1,13 @@
 {
-  "extends": "./tsconfig.source.json",
+  "extends": "./tsconfig.json",
   "compilerOptions": {
+    "composite": true,
+    "noEmit": false,
+    "emitDeclarationOnly": true,
     "outDir": "node_modules/.cache/tsc/cli.core.declarations",
-    "tsBuildInfoFile": "node_modules/.cache/tsc/cli.core.typecheck.tsbuildinfo"
+    "tsBuildInfoFile": "node_modules/.cache/tsc/cli.core.typecheck.tsbuildinfo",
+    "disableSourceOfProjectReferenceRedirect": true
   },
-  "include": [],
   "references": [
     {
       "path": "./tsconfig.foundation.json"
@@ -307,6 +310,7 @@
     "src/api/machine/resolveCurrentAccountMachineTarget.ts",
     "src/api/machine/resolveExecutionRunAccountSettingsSnapshot.ts",
     "src/api/machine/rpcHandlers.agentInstallJobs.ts",
+    "src/api/machine/rpcHandlers.agentSignIn.ts",
     "src/api/machine/rpcHandlers.connectedAccounts.ts",
     "src/api/machine/rpcHandlers.connectedServiceQuotas.ts",
     "src/api/machine/rpcHandlers.diagnostics.ts",
@@ -767,6 +771,7 @@
     "src/daemon/connectedServices/refresh/credentialHealthReprobe.ts",
     "src/daemon/connectedServices/refresh/refreshQualifiedConnectedAccount.ts",
     "src/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthRecovery.ts",
+    "src/daemon/connectedServices/requestAuth/agentPurposeDeclarations.ts",
     "src/daemon/connectedServices/requestAuth/createDaemonQualifiedRequestAuthCallbacks.ts",
     "src/daemon/connectedServices/requestAuth/firstPartyConnectedAccountRequestAuthAdapter.ts",
     "src/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn.ts",
@@ -1232,6 +1237,7 @@
     "src/notifications/activity/sendExpoPushActivityNotification.ts",
     "src/notifications/activity/sendWebhookActivityNotification.ts",
     "src/notifications/activity/sessionActivityNotificationEligibility.ts",
+    "src/packagedRuntime/installables/descriptors.ts",
     "src/packagedRuntime/installables/ensureForLaunch.ts",
     "src/packagedRuntime/installables/ghRuntimeInstallable.ts",
     "src/packagedRuntime/installables/optionalRuntimes.ts",
@@ -1354,7 +1360,6 @@
     "src/plugins/runtime/context/daemonDatabase.ts",
     "src/plugins/runtime/context/daemonDatabaseLimitsPolicy.ts",
     "src/plugins/runtime/context/daemonDatabaseWorker.ts",
-    "src/plugins/runtime/context/daemonDatabaseWorkerEntry.ts",
     "src/plugins/runtime/context/declaredPluginSecrets.ts",
     "src/plugins/runtime/context/session/ordinaryPluginSessionLiveCapabilities.ts",
     "src/plugins/runtime/context/session/services/auth.ts",
@@ -2044,5 +2049,6 @@
     "src/workspaces/sync/workspaceSyncTargetAuthority.ts",
     "src/workspaces/sync/workspaceSyncTargetBootstrap.ts",
     "src/workspaces/sync/workspaceSyncTypes.ts"
-  ]
+  ],
+  "include": []
 }

@@ -1,4 +1,6 @@
 import { renderHook as renderBaseHook, standardCleanup } from '@/dev/testkit';
+import * as React from 'react';
+import { t } from '@/text';
 import type { RenderHookOptions } from '@/dev/testkit/hooks/renderHook';
 import { storage } from '@/sync/domains/state/storageStore';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
@@ -69,6 +71,7 @@ function v4Account(params: Readonly<{
 }>): Record<string, unknown> {
     return {
         revisionSemantics: 'legacy_unfenced',
+        credentialRevision: null,
         ref: {
             service: { pluginId: params.pluginId, localId: params.localId },
             accountId: params.accountId,
@@ -77,7 +80,6 @@ function v4Account(params: Readonly<{
         authenticationModeId: null,
         configurationReady: true,
         configurationRevision: null,
-        credentialRevision: null,
         kind: params.kind ?? null,
         expiresAt: null,
         lastUsedAt: null,
@@ -478,22 +480,22 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         const { useSessionConnectedServicesAuthSwitch } = await import('./useSessionConnectedServicesAuthSwitch');
         const consumer = { pluginId: 'happier.agent.claude', localId: 'claude' };
         const service = { pluginId: 'happier.agent.claude', localId: 'anthropic' };
-        const hook = await renderHook(() => useSessionConnectedServicesAuthSwitch({
+        const hook = await renderHook(({ withdrawn }: { withdrawn: boolean }) => useSessionConnectedServicesAuthSwitch({
                 applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-1', agentId: 'happier.agent.codex/codex', machineId: 'machine-1',
             connectedAccounts: CODEX_CONNECTED_ACCOUNTS,
             sessionMetadata: { connectedServices: { v: 2, bindingsByServiceId: {
                 [CODEX_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'happier' },
             } } },
-            armedContinuationAgent: {
+            armedAuthoringTarget: withdrawn ? null : {
                 agentId: 'happier.agent.claude/claude', agentIdentity: consumer,
                 connectedAccounts: [{ purpose: 'primary', service }],
             },
             settings: {
-                connectedServicesProfileLabelByKey: {}, connectedServicesDefaultProfileByServiceId: {},
+                connectedServicesDefaultProfileByServiceId: {},
             },
             switchingDisabledReason: null,
-        }));
+        }), { initialProps: { withdrawn: false } });
         await act(async () => { applyConnectedAccountCatalogSnapshot({ serverId: 'server-1', accountId: 'account-a' }, 'purposes', {
             status: 'ready', revision: 1, record: { key: 'purposes', value: { v: 1, bindings: profileId === null ? [] : [{
                 purpose: { consumer, purpose: 'primary' },
@@ -502,14 +504,19 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         }, true); });
         const chip = hook.getCurrent().connectedServicesAuthChip;
         expect(chip?.collapsedContentPopover?.label).toBe(profileId === null
-            ? 'Native' : `Anthropic API key · ${profileId === 'work' ? 'Work' : profileId}`);
+            ? 'Native' : `Anthropic API key: ${profileId === 'work' ? 'Work' : t('common.unavailable')}`);
+        if (profileId !== null) expect(chip?.collapsedContentPopover?.label).not.toBe('Native');
         const renderContent = chip?.collapsedContentPopover?.renderContent;
-        if (typeof renderContent !== 'function') throw new Error('Expected target auth content renderer');
-        const content = renderContent({ requestClose: vi.fn(), maxHeight: 320 }) as {
-            props: { actions: readonly { disabled?: boolean; onPress?: () => void }[] };
-        };
+        if (typeof renderContent !== 'function') throw new Error('Expected target auth preview content');
+        const content = renderContent({ requestClose: vi.fn(), maxHeight: 320 });
+        if (!React.isValidElement<{ actions: readonly { disabled?: boolean; onPress?: () => void }[] }>(content)) {
+            throw new Error('Expected target auth preview element');
+        }
         expect(content.props.actions).toEqual([expect.objectContaining({ disabled: true })]);
         expect(content.props.actions[0].onPress).toBeUndefined();
+        expect(setSessionConnectedServiceAuthBindingMock).not.toHaveBeenCalled();
+        await hook.rerender({ withdrawn: true });
+        expect(hook.getCurrent().connectedServicesAuthChip).toBeNull();
         expect(setSessionConnectedServiceAuthBindingMock).not.toHaveBeenCalled();
     });
 
@@ -533,7 +540,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             teamCredentialResourceCurrentKeys: new Set(availability === 'available' ? ['team-1:resource-1'] : []),
             teamNameById: { 'team-1': 'Acme' }, sessionMetadata: {}, switchingDisabledReason: null,
             settings: {
-                connectedServicesProfileLabelByKey: {}, connectedServicesDefaultProfileByServiceId: {},
+                connectedServicesDefaultProfileByServiceId: {},
             },
         }));
         await act(async () => { applyConnectedAccountCatalogSnapshot({ serverId: 'server-1', accountId: 'account-a' }, 'purposes', {
@@ -574,7 +581,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -623,7 +629,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -683,7 +688,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                 },
             },
             settings: {
-                connectedServicesProfileLabelByKey: {},
                 connectedServicesDefaultProfileByServiceId: {},
             },
             switchingDisabledReason: null,
@@ -768,7 +772,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                 connectedAccounts: NOVEL_CONNECTED_ACCOUNTS,
                 sessionMetadata: props.sessionMetadata,
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -821,7 +824,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -894,7 +896,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -956,7 +957,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -1007,7 +1007,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -1056,7 +1055,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1126,7 +1124,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1186,7 +1183,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1251,7 +1247,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1328,7 +1323,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1403,7 +1397,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1461,7 +1454,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1547,7 +1539,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1655,7 +1646,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1713,7 +1703,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -1776,7 +1765,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                 },
             },
             settings: {
-                connectedServicesProfileLabelByKey: {},
                 connectedServicesDefaultProfileByServiceId: {},
                 connectedServicesProviderStateSharingSettingsV1: {
                     v: 1,
@@ -1867,7 +1855,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesProviderStateSharingSettingsV1: {
                         v: 1,
@@ -2016,7 +2003,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -2111,7 +2097,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -2175,7 +2160,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -2204,7 +2188,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -2232,7 +2215,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -2272,7 +2254,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -2297,8 +2278,8 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         expect(routerPushMock).toHaveBeenCalledWith({
             pathname: '/(app)/settings/connected-services',
             params: {
-                connect: '1',
                 service: CLAUDE_SERVICE_KEY,
+                connect: '1',
             },
         });
     });
@@ -2360,7 +2341,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                 },
             },
             settings: {
-                connectedServicesProfileLabelByKey: {},
                 connectedServicesDefaultProfileByServiceId: {},
             },
             switchingDisabledReason: null,
@@ -2445,7 +2425,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -2489,7 +2468,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                 },
             },
             settings: {
-                connectedServicesProfileLabelByKey: {},
                 connectedServicesDefaultProfileByServiceId: {},
             },
             switchingDisabledReason: null,
@@ -2540,7 +2518,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS,
             sessionMetadata: props.sessionMetadata,
             settings: {
-                connectedServicesProfileLabelByKey: {},
                 connectedServicesDefaultProfileByServiceId: {},
             },
             switchingDisabledReason: null,
@@ -2667,7 +2644,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS,
             sessionMetadata: props.sessionMetadata,
             settings: {
-                connectedServicesProfileLabelByKey: {},
                 connectedServicesDefaultProfileByServiceId: {},
             },
             switchingDisabledReason: null,
@@ -2742,7 +2718,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -2792,7 +2767,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                     },
                 },
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,
@@ -2846,7 +2820,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS,
             sessionMetadata: props.sessionMetadata,
             settings: {
-                connectedServicesProfileLabelByKey: {},
                 connectedServicesDefaultProfileByServiceId: {},
             },
             switchingDisabledReason: null,
@@ -2920,7 +2893,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                         },
                     },
                     settings: {
-                        connectedServicesProfileLabelByKey: {},
                         connectedServicesDefaultProfileByServiceId: {},
                     },
                     switchingDisabledReason: null,
@@ -2999,7 +2971,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                 connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS,
                 sessionMetadata: props.sessionMetadata,
                 settings: {
-                    connectedServicesProfileLabelByKey: {},
                     connectedServicesDefaultProfileByServiceId: {},
                 },
                 switchingDisabledReason: null,

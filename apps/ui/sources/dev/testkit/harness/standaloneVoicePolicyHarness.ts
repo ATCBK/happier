@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { CurrentCursorResponseSchema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { loadSyncSingletonForTests } from './syncSingletonLoader';
 import { installVitestRnShim } from '@/dev/vitestRnShim';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';

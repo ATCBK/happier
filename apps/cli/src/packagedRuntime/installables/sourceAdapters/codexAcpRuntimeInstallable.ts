@@ -1,7 +1,7 @@
 import { compareVersions } from '@happier-dev/cli-common/update';
 import type { CapabilityId, InstallableDependencyDescriptor, InstallableKey } from '@happier-dev/protocol';
 import { resolveManagedDependencyCommand, validateManagedDependencyCommand, type ManagedDependencyCommand } from '@happier-dev/cli-common/agents';
-import { readRuntimeInstallableDescriptor } from '@/packagedRuntime/installables/registry';
+import { readRuntimeInstallableDescriptor } from '@/packagedRuntime/installables/descriptors';
 
 import {
   getCodexAcpDepStatus,

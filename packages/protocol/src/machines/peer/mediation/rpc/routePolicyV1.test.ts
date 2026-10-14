@@ -13,6 +13,7 @@ import { resolveMachineRpcGovernance } from './governanceV1.js';
 import { getActionSpec } from '../../../../actions/actionSpecs.js';
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '../../../../actions/operations/v1.js';
 import { CONNECTED_SERVICE_POOL_SELECTION_RPC_METHOD } from '../../../../connect/connectedServicePoolSelection.js';
+import { resolveSocketRpcSessionAuthorization } from '../../../../rpc/socket.js';
 
 async function importRpcPolicy() {
   return await import('./index').catch((error: unknown) => ({ importError: error }));
@@ -64,6 +65,27 @@ describe('MachineRpcRoutePolicyV1', () => {
         rpcClassification: 'action_spec_bound', actionSpecId: actionId });
       expect(resolveMachineRpcExternalActionEffectV1(method)).toBe(actionId);
     }
+  });
+  it('retains the transition root only for its named stop and activation effects', async () => {
+    const { resolveMachineRpcExternalActionEffectV1: resolve } = await import('./routePolicyV1');
+    const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'transition-root', binding: {
+      accountId: 'requester', custodianAccountId: 'requester', authentication: { kind: 'account', tokenEpoch: 1 },
+      serverIdentityId: 'home', machineId: 'machine', installationId: 'installation', actionId: 'session.agent.transition',
+      requestId: 'original', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
+    } }).binding;
+    for (const method of [RPC_METHODS.STOP_SESSION, RPC_METHODS.SPAWN_HAPPY_SESSION, RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE]) {
+      expect(resolve(method, binding)).toBe('session.agent.transition');
+    }
+    expect(resolve(RPC_METHODS.SESSION_SPAWN_NEW, binding)).not.toBe('session.agent.transition');
+    expect(resolve(RPC_METHODS.STOP_SESSION)).not.toBe('session.agent.transition');
+  });
+  it('admits versioned inactive goal wake only as its canonical Session Action', async () => {
+    const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
+    const method = RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2;
+    expect(resolveMachineRpcGovernance(method)).toEqual({ rpcClassification: 'action_spec_bound', actionSpecId: 'session.goal.set' });
+    expect(resolveMachineRpcRoutePolicy(method)).toMatchObject({ routeClass: 'server_required',
+      serverRequiredReason: 'durable_session_write', commandReceiptRequired: false });
+    expect(resolveMachineRpcExternalActionEffectV1(method)).toBe('session.goal.set');
   });
   it('binds committed-copy review to the public read without granting shared Machine access or removal', async () => {
     const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
@@ -330,6 +352,74 @@ describe('MachineRpcRoutePolicyV1', () => {
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.SESSION_FORK_PROVIDER_SAFE)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
     expect(protocol.resolveMachineRpcRoutePolicy('not.registered')).toMatchObject({ sharedMachineAccess: 'custodian_only' });
+  });
+  it('keeps session role, notes and runtime mutations on the exact Session server route without granting Runner Machine access', async () => {
+    const protocol = await importRpcPolicy();
+    if ('importError' in protocol) throw protocol.importError;
+    for (const method of [
+      SESSION_RPC_METHODS.SESSION_ROLE_SET,
+      SESSION_RPC_METHODS.SESSION_ROLES_CONFIGURATION_SET,
+      SESSION_RPC_METHODS.SESSION_ROLES_OVERRIDE_SET,
+      SESSION_RPC_METHODS.SESSION_ROLES_OVERRIDE_CLEAR,
+      SESSION_RPC_METHODS.SESSION_ROLES_ADD,
+      SESSION_RPC_METHODS.SESSION_ROLES_REMOVE,
+      SESSION_RPC_METHODS.SESSION_NOTES_SET,
+      SESSION_RPC_METHODS.SESSION_ROLES_APPLY_TO_REPORTS,
+      SESSION_RPC_METHODS.SESSION_WORKFLOW_STEP_WITHDRAW,
+      SESSION_RPC_METHODS.SESSION_PROVIDER_CLI_ATTACH_PREPARE,
+    ]) {
+      expect(protocol.resolveMachineRpcRoutePolicy(method)).toMatchObject({
+        routeClass: 'server_required', serverRequiredReason: 'durable_session_write',
+        scope: { accountRequired: true, machineRequired: true, sessionRequired: true, serverRequired: true },
+      });
+      expect(protocol.resolveEphemeralRunnerMachineRpcAuthority(method)).toBeNull();
+    }
+  });
+
+  it('keeps plugin catalog freshness on the owner Session route without granting direct or Runner Machine authority', async () => {
+    const protocol = await importRpcPolicy();
+    if ('importError' in protocol) throw protocol.importError;
+    const method = SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1;
+    const policy = protocol.resolveMachineRpcRoutePolicy(method);
+    expect(policy).toMatchObject({
+      routeClass: 'server_required', serverRequiredReason: 'reconnect_catch_up',
+      sharedMachineAccess: 'custodian_only', commandReceiptRequired: false,
+      scope: { accountRequired: true, machineRequired: true, sessionRequired: true, serverRequired: true },
+    });
+    expect(protocol.isMachineRpcDirectRoutePolicy(policy)).toBe(false);
+    expect(protocol.validateMachineRpcGrantAllowedMethods([method])).toEqual({
+      ok: false, reasonCode: 'machine_rpc_method_server_required', method,
+    });
+    expect(protocol.resolveEphemeralRunnerMachineRpcAuthority(method)).toBeNull();
+    expect(protocol.resolveMachineRpcExternalActionEffectV1(method)).toBeNull();
+    expect(resolveSocketRpcSessionAuthorization(`session-1:${method}`)).toEqual({
+      method, authority: 'sessionOwner', routeToSessionOwnerDaemon: true,
+    });
+  });
+
+  it('binds SCM comparison operations to their existing Action authority without opening direct or Runner routes', async () => {
+    const protocol = await importRpcPolicy();
+    if ('importError' in protocol) throw protocol.importError;
+    const methods = [
+      [RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE, 'scm.diffSummary.capture'],
+      [RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_EDIT, 'scm.diffSummary.result.edit'],
+      [RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_UNDO, 'scm.diffSummary.result.undo'],
+      [RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_DELETE, 'scm.diffSummary.result.delete'],
+      [RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_CLEAR, 'scm.diffSummary.result.clear'],
+      [RPC_METHODS.SCM_DIFF_SUMMARY_REFINE, 'scm.diffSummary.refine'],
+      [RPC_METHODS.SCM_DIFF_SUMMARY_ADD_OUTPUTS, 'scm.diffSummary.addOutputs'],
+      [RPC_METHODS.SCM_DIFF_SUMMARY_DISCUSS, 'scm.diffSummary.discuss'],
+      [RPC_METHODS.SCM_DIFF_SUMMARY_REVIEWED_MARK, 'scm.diffSummary.reviewed.mark'],
+      [RPC_METHODS.SCM_DIFF_SUMMARY_REVIEWED_UNMARK, 'scm.diffSummary.reviewed.unmark'],
+      [RPC_METHODS.SCM_COMMIT_RESOLVE_OUTCOME, 'scm.commit.resolveOutcome'],
+      [RPC_METHODS.SCM_COMMIT_UNDO_LAST, 'scm.commit.undoLast'],
+    ] as const;
+    for (const [method, actionSpecId] of methods) {
+      expect(protocol.resolveMachineRpcRoutePolicy(method)).toMatchObject({
+        routeClass: 'server_required', rpcClassification: 'action_spec_bound', actionSpecId,
+      });
+      expect(protocol.resolveEphemeralRunnerMachineRpcAuthority(method)).toBeNull();
+    }
   });
   it('keeps explicit machine log reads on the classified Account and Machine server route', async () => {
     const protocol = await importRpcPolicy();

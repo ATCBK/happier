@@ -37,8 +37,23 @@ vi.mock('../../../../scripts/testing/process/managedChildLifecycle.mjs', () => (
 }));
 
 describe('runVitestShards', () => {
-  it('defaults shard count to 8', () => {
+  it('retains the eight-shard default when no unit configuration is supplied', () => {
     expect(resolveVitestShardCount({})).toBe(8);
+  });
+
+  it('runs the whole unit configuration once while retaining the integration default', () => {
+    expect(resolveVitestShardCount({}, 'vitest.config.ts')).toBe(1);
+    expect(resolveVitestShardCount({}, 'vitest.integration.config.ts')).toBe(8);
+    expect(resolveVitestShardCount({ HAPPIER_CLI_VITEST_SHARDS: '4' }, 'vitest.config.ts')).toBe(4);
+  });
+
+  it('assigns one native unit shard to each valid nightly part', () => {
+    const env = { HAPPIER_CLI_VITEST_PART: '1', HAPPIER_CLI_VITEST_PARTS: '2' };
+    const count = resolveVitestShardCount(env, 'vitest.config.ts');
+    expect(count).toBe(2);
+    expect(resolveVitestShardRange(env, count)).toEqual({ start: 1, end: 1, part: 1, parts: 2 });
+    expect(resolveVitestShardRange({ ...env, HAPPIER_CLI_VITEST_PART: '2' }, count))
+      .toEqual({ start: 2, end: 2, part: 2, parts: 2 });
   });
 
   it('uses HAPPIER_CLI_VITEST_SHARDS override when valid', () => {
@@ -169,6 +184,94 @@ describe('runVitestShards', () => {
       process.argv = prevArgv;
       if (prevShardCount === undefined) delete process.env.HAPPIER_CLI_VITEST_SHARDS;
       else process.env.HAPPIER_CLI_VITEST_SHARDS = prevShardCount;
+    }
+  });
+
+  it('starts one unfiltered unit process without empty tolerance and retains its post-suite checks', async () => {
+    const prevArgv = process.argv.slice();
+    const envKeys = ['HAPPIER_CLI_VITEST_SHARDS', 'HAPPIER_CLI_VITEST_PART', 'HAPPIER_CLI_VITEST_PARTS'] as const;
+    const previous = envKeys.map(key => process.env[key]);
+    try {
+      for (const key of envKeys) delete process.env[key];
+      runManagedChildCommandMock.mockClear();
+      process.argv = ['node', fileURLToPath(new URL('../runVitestShards.mjs', import.meta.url)), '--config', 'vitest.config.ts', '--unit-checks'];
+      vi.resetModules();
+      await import('../runVitestShards.mjs');
+      await vi.waitFor(() => {
+        expect(runManagedChildCommandMock.mock.calls.map(([input]) => input.args)).toContainEqual(
+          expect.arrayContaining(['-s', 'test:import-cycles']),
+        );
+      });
+      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => input.args ?? []);
+      expect(calls.filter(args => args[0] === 'list')).toHaveLength(0);
+      expect(calls.filter(args => args[0] === 'run')).toEqual([['run', '--config', 'vitest.config.ts']]);
+      expect(calls).toContainEqual(['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs']);
+    } finally {
+      process.argv = prevArgv;
+      envKeys.forEach((key, index) => {
+        if (previous[index] === undefined) delete process.env[key];
+        else process.env[key] = previous[index];
+      });
+    }
+  });
+
+  it.each(['1', '2'])('executes only native partition %s/2 with no repeated collection or empty tolerance', async (part) => {
+    const prevArgv = process.argv.slice();
+    const envKeys = ['HAPPIER_CLI_VITEST_SHARDS', 'HAPPIER_CLI_VITEST_PART', 'HAPPIER_CLI_VITEST_PARTS'] as const;
+    const previous = envKeys.map(key => process.env[key]);
+    try {
+      delete process.env.HAPPIER_CLI_VITEST_SHARDS;
+      process.env.HAPPIER_CLI_VITEST_PART = part;
+      process.env.HAPPIER_CLI_VITEST_PARTS = '2';
+      runManagedChildCommandMock.mockClear();
+      process.argv = ['node', fileURLToPath(new URL('../runVitestShards.mjs', import.meta.url)), '--config', 'vitest.config.ts', '--unit-checks'];
+      vi.resetModules();
+      await import('../runVitestShards.mjs');
+      await vi.waitFor(() => {
+        expect(runManagedChildCommandMock.mock.calls.map(([input]) => input.args)).toContainEqual(
+          expect.arrayContaining(['-s', 'test:import-cycles']),
+        );
+      });
+      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => input.args ?? []);
+      expect(calls.filter(args => args[0] === 'list')).toHaveLength(0);
+      expect(calls.filter(args => args[0] === 'run')).toEqual([['run', '--config', 'vitest.config.ts', '--shard', `${part}/2`]]);
+    } finally {
+      process.argv = prevArgv;
+      envKeys.forEach((key, index) => {
+        if (previous[index] === undefined) delete process.env[key];
+        else process.env[key] = previous[index];
+      });
+    }
+  });
+
+  it('retains a failed empty unit result and does not enter the post-suite checks', async () => {
+    const prevArgv = process.argv.slice();
+    const prevExitCode = process.exitCode;
+    const envKeys = ['HAPPIER_CLI_VITEST_SHARDS', 'HAPPIER_CLI_VITEST_PART', 'HAPPIER_CLI_VITEST_PARTS'] as const;
+    const previous = envKeys.map(key => process.env[key]);
+    const defaultBoundary = runManagedChildCommandMock.getMockImplementation()!;
+    try {
+      for (const key of envKeys) delete process.env[key];
+      process.exitCode = undefined;
+      runManagedChildCommandMock.mockClear();
+      // Vitest is the subprocess boundary: an empty run exits 1 without passWithNoTests.
+      runManagedChildCommandMock.mockImplementation(async input => input.args?.[0] === 'run'
+        ? { ok: true, code: 1, signal: null }
+        : await defaultBoundary(input));
+      process.argv = ['node', fileURLToPath(new URL('../runVitestShards.mjs', import.meta.url)), '--config', 'vitest.config.ts', '--unit-checks'];
+      vi.resetModules();
+      await import('../runVitestShards.mjs');
+      await vi.waitFor(() => expect(process.exitCode).toBe(1));
+      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => input.args ?? []);
+      expect(calls).toEqual([['run', '--config', 'vitest.config.ts']]);
+    } finally {
+      runManagedChildCommandMock.mockImplementation(defaultBoundary);
+      process.argv = prevArgv;
+      process.exitCode = prevExitCode;
+      envKeys.forEach((key, index) => {
+        if (previous[index] === undefined) delete process.env[key];
+        else process.env[key] = previous[index];
+      });
     }
   });
 

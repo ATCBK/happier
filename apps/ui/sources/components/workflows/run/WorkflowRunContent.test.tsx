@@ -247,11 +247,10 @@ describe('WorkflowRunContent', () => {
             saveAsWorkflowPending: true,
         });
 
-        const save = screen.findAllHostsByTestId('workflow-run-save-as-workflow')[0];
+        const save = screen.findHostByTestId('workflow-run-save-as-workflow');
         expect(save).toBeDefined();
-        // This suite uses the web platform boundary; the shared Pressable emits its DOM role.
-        expect(save?.props.role).toBe('button');
-        expect(save?.props.accessibilityState).toEqual({ disabled: true, busy: true });
+        expect(save?.props.accessibilityRole ?? save?.props.role).toBe('button');
+        expect(save?.props.accessibilityState).toMatchObject({ disabled: true, busy: true });
         await screen.pressByTestIdAsync('workflow-run-save-as-workflow');
         expect(onSave).not.toHaveBeenCalled();
     });
@@ -656,11 +655,13 @@ describe('WorkflowRunContent', () => {
             });
             expect(screen.findByTestId('workflow-run-steps-notify-occurrence-notify-old')).toBeNull();
             await screen.pressByTestIdAsync('workflow-run-steps-notify-select-occurrence');
+            await vi.waitFor(() => expect(screen.findHostByTestId('workflow-run-steps-notify-occurrence-notify-old')).not.toBeNull());
             await screen.pressByTestIdAsync('workflow-run-steps-notify-occurrence-notify-old');
-            expect(onSelectInvocation.mock.calls.at(-1)?.[0]).toBe('notify-old');
+            await vi.waitFor(() => expect(onSelectInvocation.mock.calls.at(-1)?.[0]).toBe('notify-old'));
             await screen.pressByTestIdAsync('workflow-run-steps-held-select-occurrence');
+            await vi.waitFor(() => expect(screen.findHostByTestId('workflow-run-steps-held-occurrence-wait-new')).not.toBeNull());
             await screen.pressByTestIdAsync('workflow-run-steps-held-occurrence-wait-new');
-            expect(onSelectInvocation.mock.calls.at(-1)?.[0]).toBe('wait-new');
+            await vi.waitFor(() => expect(onSelectInvocation.mock.calls.at(-1)?.[0]).toBe('wait-new'));
         });
     });
 

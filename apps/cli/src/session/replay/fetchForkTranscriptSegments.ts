@@ -12,6 +12,7 @@ export type ForkTranscriptSegment = Readonly<{
 /** One lineage acquisition owner; dialog and visual readers retain their own content admission. */
 export async function fetchForkTranscriptSegments(params: Readonly<{
     credentials: StoredCredentials;
+    resolveAuthorizationHeaders?: Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders'];
     accountEncryptionMode: 'plain' | 'e2ee';
     startingSessionId: string;
     upToSeqInclusive?: number;
@@ -32,7 +33,9 @@ export async function fetchForkTranscriptSegments(params: Readonly<{
         if (visited.has(currentSessionId)) break;
         visited.add(currentSessionId);
         const rawSession = depth === 0 && params.startingRawSession ? params.startingRawSession
-            : await fetchSessionByIdCompat({ token: params.credentials.token, sessionId: currentSessionId }).catch(error => {
+            : await fetchSessionByIdCompat({ token: params.credentials.token, sessionId: currentSessionId,
+                ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+            }).catch(error => {
                 acquisitionError = error;
                 return null;
             });

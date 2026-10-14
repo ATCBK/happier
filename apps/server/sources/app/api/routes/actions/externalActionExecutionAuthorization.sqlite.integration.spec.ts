@@ -35,11 +35,12 @@ import {
     type ExternalActionRequestEnvelopeV1,
     type ExternalActionServerPrincipalV1,
     type ExternalActionDaemonDispatchRequest,
+    type ExternalActionExecutionAuthorizationV1,
 } from "@happier-dev/protocol/actions";
 import { EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2 } from '@happier-dev/protocol/actions/externalActionApi';
 import { API_TOKEN_FULL_GRANT_V1, MACHINE_PLAIN_DATA_KEY_MARKER, SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, ACCOUNT_API_TOKENS_CREATE_HTTP_PATH_V1, encodePlainMachineStoredContent, encodePasswordCredentialFieldV1, type AccountPasswordCredentialV1 } from "@happier-dev/protocol";
 import { SOCKET_RPC_EVENTS, SessionActionRpcOriginV1Schema, WorkspaceSyncSourceContextV1Schema, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSourceWriterTargetRoutingV1Schema } from "@happier-dev/protocol/socketRpc";
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MachineInstallationProofPayloadV1Schema, signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { registerMachineAdmissionRoutes } from '@/app/api/routes/machines/registerMachineAdmissionRoutes';
 import { SessionRequesterHandoffBootstrapRpcRequestV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
@@ -84,7 +85,7 @@ import { buildProjectAccountRowPhysicalKeyV1, ProjectAccountRowListResponseV1Sch
 import { resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import { auth } from "@/app/auth/auth";
-import { verifyExternalActionMachineRpcExecution, verifyCurrentExternalActionPrincipal, verifyWorkspaceSyncHandoffSourceAuthorization, verifyExternalActionDomainExecutionRequest, isOriginalAccountExecutionAction, isOriginalTerminalExecutionAction } from "@/app/auth/externalActionExecutionAuthorization";
+import { verifyExternalActionMachineRpcExecution, verifyCurrentExternalActionPrincipal, verifyWorkspaceSyncHandoffSourceAuthorization, readCurrentWorkspaceSyncProjectSourceAuthorization, verifyExternalActionDomainExecutionRequest, isOriginalAccountExecutionAction, isOriginalTerminalExecutionAction } from "@/app/auth/externalActionExecutionAuthorization";
 import { qualifyTeamAuthenticationInTx } from "@/app/auth/entry/qualifyTeamAuthentication";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
@@ -100,6 +101,11 @@ import { createExternalActionDaemonDispatcher, resolveCurrentSessionMachineFromS
 import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
 import { getAccountSessionSocketRoom } from "@/app/api/socketRooms";
 import { registerSocketRpcHandlers } from '@/app/api/socket/rpc/registerSocketRpcHandlers';
+import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { openExternalActionRequesterAccountContextV1, sealExternalActionRequesterAccountContextV1,
+    type ExternalActionRequesterAccountContextPurposeV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { registerAccountProfileRoute } from '@/app/api/routes/account/registerAccountProfileRoute';
 import { machineUpdateHandler } from "@/app/api/socket/machineUpdateHandler";
 import { createFakeSocket, getSocketHandler, createSocketRoomDiscoveryHarness } from "@/app/api/testkit/socketHarness";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
@@ -153,6 +159,24 @@ function createFixtureCopyOnceWorkspaceAction() {
         ...policyInput, policyDigest: computeWorkspaceSyncPolicyDigest(policyInput),
     }) };
 }
+
+async function importTestModule<T>(specifier: string): Promise<T> {
+    // Existing cross-program integration pattern: Vitest executes real CLI
+    // source while this package's compiler stays rooted in server source.
+    return import(specifier) as Promise<T>;
+}
+
+type TestStoredCredentials = Readonly<{ token: string; encryption: null | Readonly<{ type: 'legacy'; secret: Uint8Array }> }>;
+type TestRequesterPreparation = Readonly<{
+    authorization: ExternalActionExecutionAuthorizationV1;
+    purpose?: ExternalActionRequesterAccountContextPurposeV1;
+    signal?: AbortSignal;
+}>;
+type TestAdmittedRequester = Readonly<{
+    credentials: TestStoredCredentials;
+    accountSettingsContext: Readonly<{ settings: Record<string, unknown> }>;
+    isCurrent(): Promise<boolean>;
+}>;
 
 describe("external Action execution authorization", () => {
     let harness: LightSqliteHarness;
@@ -298,6 +322,7 @@ describe("external Action execution authorization", () => {
         registerAccountSettingsRoutes(app);
         kvRoutes(app);
         if (usageReads) registerQualifiedConnectedAccountCredentialRoutesV4(app);
+        registerAccountProfileRoute(app);
         registerSessionListingRoutes(app);
         registerSessionMessageRoutes(app);
         registerSessionFollowSourceRoutes(app);
@@ -1654,6 +1679,17 @@ describe("external Action execution authorization", () => {
                 sourceContext: { machineAdmission: context, callerAuthority: 'present_user' as const }, originalActionEnvelope };
             expect(workspaceSyncSourceRouting.operationId).not.toBe(root.binding.requestId);
             expect(workspaceSyncSourceRouting).not.toHaveProperty('sourceSessionId');
+            if (version === 1 && boundary === 'Home') {
+                const current = await verifyCurrentExternalActionPrincipal(root.binding);
+                expect(current).toMatchObject({ authority: 'present_user' });
+                const attenuated = await readCurrentWorkspaceSyncProjectSourceAuthorization(root, {
+                    ...workspaceSyncSourceRouting,
+                    sourceContext: { ...workspaceSyncSourceRouting.sourceContext, callerAuthority: 'account_automation' },
+                }, writer.id);
+                expect(attenuated).not.toBeNull();
+                expect(attenuated?.verified.principal).toEqual(current);
+                expect(attenuated?.verified).toMatchObject({ effectiveAuthority: 'account_automation' });
+            }
             const originalTransportRequestId = crypto.randomUUID();
             const signedRequest = { authorizationToken: root.token, effectActionId: 'projects.open', target: root.binding.target,
                 installationId: target.installationId!, method, requestId: originalTransportRequestId, params: input,
@@ -3277,6 +3313,19 @@ describe("external Action execution authorization", () => {
                 sourceMachineId: child.id, sourceRootPath: '/child/source', sourceSessionId: session.id,
                 sourceContext: { machineAdmission, callerAuthority: 'account_automation',
                     callerInputConstraints } };
+            await auth.updateApiToken({ accountId: fixture.account.id, tokenId: pat.tokenId,
+                grant: { ...API_TOKEN_FULL_GRANT_V1, ...callerInputConstraints } });
+            const current = await verifyCurrentExternalActionPrincipal(authorization.binding);
+            if (!current || 'authentication' in current) throw new Error('Current verified PAT facts required');
+            const boundFacts = { ...current, grant: authorization.binding.grant };
+            const admittedSource = await verifyWorkspaceSyncHandoffSourceAuthorization(authorization,
+                WorkspaceSyncSourceRoutingV1Schema.parse({ ...workspaceSyncSourceRouting,
+                    operationId: authorization.binding.requestId }), resolvePublisher);
+            expect(admittedSource).not.toBeNull();
+            expect(admittedSource?.principal).toEqual(boundFacts);
+            expect(admittedSource).toMatchObject({ effectiveAuthority: 'account_automation' });
+            expect((await verifyExternalActionMachineRpcExecution(execution, { method, requestId, params,
+                resolveCurrentSessionMachine: resolvePublisher }))?.principal).toEqual(boundFacts);
             const call = (callParams: unknown = params, sourceRouting: unknown = workspaceSyncSourceRouting) => getSocketHandler(socket, SOCKET_RPC_EVENTS.CALL)({ method, requestId,
                 params: callParams, externalActionExecution: execution, workspaceSyncSourceRouting: sourceRouting }, callback);
             const callback = vi.fn();
@@ -4651,6 +4700,377 @@ describe("external Action execution authorization", () => {
             await db.sessionPendingMessage.deleteMany({ where: { sessionId: session.id } });
             await db.accessKey.deleteMany({ where: { sessionId: session.id } });
         }
+    });
+
+    it.each(['account', 'api_token'] as const)('admits only the installed transition first-input packet under its original %s root', async credential => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const session = await db.session.create({ data: {
+            accountId: fixture.account.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain',
+        } });
+        await db.machine.update({ where: { accountId_id: { accountId: fixture.account.id, id: fixture.machine.id } },
+            data: { operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1 } });
+        await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id, sessionId: session.id, data: 'key' } });
+        const grant = { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['session.agent.transition' as const] },
+            targets: { sessions: [session.id], machines: [fixture.machine.id] }, permissionModes: ['default' as const] };
+        const pat = await auth.createApiToken({ accountId: fixture.account.id, tokenId: crypto.randomUUID(), label: 'transition', grant });
+        const token = credential === 'account'
+            ? await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' }) : pat.token;
+        const { app } = await createApp(fixture.team.id);
+        try {
+            const authorization = await mint(app, { ...fixture, pat: { ...pat, token } }, 'session.agent.transition', {
+                ...fixture.envelope, input: { sessionId: session.id, expectedCurrentAgentId: 'claude',
+                    selection: { v: 1, agentId: 'codex' }, input: { text: 'continue', localId: 'transition-first-input' } },
+            });
+            if (credential === 'api_token') await auth.updateApiToken({ accountId: fixture.account.id, tokenId: pat.tokenId, grant: API_TOKEN_FULL_GRANT_V1 });
+            const request = { v: 1 as const, sessionId: session.id, targetMachineId: fixture.machine.id, localId: 'transition-first-input',
+                content: { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'continue' } } },
+                requestedAction: { v: 1 as const, kind: 'send_now' as const } };
+            const target = { kind: 'session' as const, sessionId: session.id };
+            const sign = (params: unknown, event = SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, signingTarget = target) => ({
+                v: 1 as const, authorization, target: signingTarget, effectActionId: 'session.message.send',
+                installationId: fixture.machine.installationId!, machineSignature: signExternalActionMachineRpcRequestV1({
+                    authorizationToken: authorization.token, target: signingTarget, effectActionId: 'session.message.send',
+                    installationId: fixture.machine.installationId!, requestId: authorization.binding.requestId,
+                    event, method: event, params, privateKey: fixture.keyPair.secretKey,
+                }),
+            });
+            const socket = createFakeSocket({ data: { clientType: 'machine-scoped', machineId: fixture.machine.id,
+                verifiedMachineInstallationId: fixture.machine.installationId } });
+            // Only Socket.IO is replaced: installed proof, root currentness and durable custody remain real.
+            machineUpdateHandler(fixture.account.id, socket as unknown as Socket, {
+                operationSocketBatchLimits: { ok: true, limits: { maxItems: 200, maxSerializedBytes: 524_288 } },
+            });
+            const invoke = getSocketHandler(socket, SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1);
+            let response: unknown;
+            const proof = sign(request);
+            for (const packet of [
+                { ...request, localId: 'forged-input', externalAction: proof },
+                { ...request, externalAction: { ...proof, authorization: undefined } },
+                { ...request, externalAction: { ...proof, machineSignature: 'A'.repeat(86) } },
+                { ...request, externalAction: sign(request, SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, { kind: 'session', sessionId: 'wrong-session' }) },
+                { ...request, requestedAction: { v: 1, kind: 'reset_start' }, externalAction: proof },
+            ]) {
+                await invoke(packet, (value: unknown) => { response = value; });
+                expect(response).toMatchObject({ result: { status: 'rejected' } });
+                expect(await db.sessionPendingMessage.findFirst({ where: { sessionId: session.id } })).toBeNull();
+            }
+            const wrongPurpose = { ...request, requestedAction: { v: 1 as const, kind: 'steer_if_active' as const } };
+            await invoke({ ...wrongPurpose, externalAction: sign(wrongPurpose) }, (value: unknown) => { response = value; });
+            expect(response).toMatchObject({ result: { status: 'rejected', code: 'session_input_unauthorized' } });
+            await invoke({ ...request, externalAction: proof }, (value: unknown) => { response = value; });
+            expect(response).toMatchObject({ result: { status: 'accepted', localId: request.localId } });
+            const row = await db.sessionPendingMessage.findFirst({ where: { sessionId: session.id, localId: request.localId } });
+            expect(row).toMatchObject({ inputAdmissionReceipt: { issuer: 'authenticatedMachine',
+                ...(credential === 'api_token' ? { callerInputConstraints: { models: null, permissionModes: ['default'] } } : {}) } });
+            if (credential === 'account') await db.account.update({ where: { id: fixture.account.id }, data: { tokenEpoch: { increment: 1 } } });
+            else await auth.updateApiToken({ accountId: fixture.account.id, tokenId: pat.tokenId,
+                grant: { ...grant, actions: { families: [], ids: ['session.message.send'] } } });
+            await invoke({ ...request, externalAction: proof }, (value: unknown) => { response = value; });
+            expect(response).toMatchObject({ result: { status: 'rejected', code: 'session_input_unauthorized' } });
+        } finally {
+            await app.close();
+            await db.sessionPendingMessage.deleteMany({ where: { sessionId: session.id } });
+            await db.accessKey.deleteMany({ where: { sessionId: session.id } });
+        }
+    });
+
+    it.each(['account', 'api_token'] as const)('retains ordinary ancestor transcript access without widening an exact-Session transition %s grant', async credential => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const [session, ancestor] = await Promise.all([0, 1].map(() => db.session.create({ data: {
+            accountId: fixture.account.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain',
+        } })));
+        const { app } = await createApp(fixture.team.id);
+        const token = credential === 'account'
+            ? await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' }) : fixture.pat.token;
+        try {
+            const authorization = await mint(app, { ...fixture, pat: { ...fixture.pat, token } }, 'session.agent.transition', {
+                ...fixture.envelope, input: { sessionId: session.id, expectedCurrentAgentId: 'claude',
+                    selection: { v: 1, agentId: 'codex' }, input: { text: 'continue', localId: 'transition-first-input' } },
+            });
+            const rootTarget = { kind: 'session' as const, sessionId: session.id };
+            const read = async (captured = authorization, requestedSessionId = ancestor.id) => {
+                const path = `/v1/sessions/${requestedSessionId}/messages?afterSeq=0&limit=10`;
+                return app.inject({ method: 'GET', url: path, headers: machineHeaders({
+                    authorizationToken: captured.token, effectActionId: 'session.agent.transition', target: rootTarget,
+                    method: 'GET', path, body: undefined, privateKey: fixture.keyPair.secretKey,
+                }) });
+            };
+            expect((await read()).statusCode).toBe(200);
+            const foreignAccount = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });
+            const foreignSession = await db.session.create({ data: { accountId: foreignAccount.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+            expect((await read(authorization, foreignSession.id)).statusCode).toBe(404);
+            if (credential === 'api_token') {
+                const grant = { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['session.agent.transition' as const] },
+                    targets: { sessions: [session.id], machines: [] } };
+                const pat = await auth.createApiToken({ accountId: fixture.account.id, tokenId: crypto.randomUUID(), label: 'exact-session', grant });
+                const principal = (await auth.verifyTokenForRoute(pat.token))?.apiTokenPrincipal;
+                if (!principal) throw new Error('Missing authenticated test principal');
+                const exactEnvelope = { ...fixture.envelope, requestId: crypto.randomUUID(), target: rootTarget,
+                    input: { sessionId: session.id, expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
+                        input: { text: 'continue', localId: 'transition-first-input' } } };
+                const exact = await auth.mintExternalActionExecutionAuthorization({ serverIdentityId: authorization.binding.serverIdentityId,
+                    accountId: fixture.account.id, principalId: principal.principalId, credentialId: principal.credentialId, grant,
+                    machineId: fixture.machine.id, actionId: 'session.agent.transition', requestId: exactEnvelope.requestId,
+                    requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(exactEnvelope), target: rootTarget });
+                authorizationRequests.set(exact.token, { target: rootTarget, installationId: fixture.machine.installationId!, requestId: exact.binding.requestId });
+                expect((await read(exact, session.id)).statusCode).toBe(200);
+                expect((await read(exact)).statusCode).toBe(401);
+                await auth.updateApiToken({ accountId: fixture.account.id, tokenId: pat.tokenId, grant: API_TOKEN_FULL_GRANT_V1 });
+                expect((await read(exact)).statusCode).toBe(401);
+                const machineGrant = { ...grant, targets: { sessions: [], machines: [fixture.machine.id] } };
+                const machinePat = await auth.createApiToken({ accountId: fixture.account.id, tokenId: crypto.randomUUID(), label: 'machine-scope', grant: machineGrant });
+                const machinePrincipal = (await auth.verifyTokenForRoute(machinePat.token))?.apiTokenPrincipal;
+                if (!machinePrincipal) throw new Error('Missing authenticated Machine-scoped principal');
+                const machineRoot = await auth.mintExternalActionExecutionAuthorization({ serverIdentityId: authorization.binding.serverIdentityId,
+                    accountId: fixture.account.id, principalId: machinePrincipal.principalId, credentialId: machinePrincipal.credentialId, grant: machineGrant,
+                    machineId: fixture.machine.id, actionId: 'session.agent.transition', requestId: exactEnvelope.requestId,
+                    requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(exactEnvelope), target: rootTarget });
+                authorizationRequests.set(machineRoot.token, { target: rootTarget, installationId: fixture.machine.installationId!, requestId: machineRoot.binding.requestId });
+                expect((await read(machineRoot)).statusCode).toBe(401);
+                const accessKey = await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id,
+                    sessionId: ancestor.id, data: 'key' } });
+                expect((await read(machineRoot)).statusCode).toBe(200);
+                await db.accessKey.delete({ where: { id: accessKey.id } });
+                expect((await read(machineRoot)).statusCode).toBe(401);
+            }
+        } finally { await app.close(); }
+    });
+
+    it.each(['plain', 'e2ee'] as const)('captures persisted %s Account mode in the production PAT transition issuer and private carrier', async mode => {
+        const { encodeStoredCredentials } = await importTestModule<{
+            encodeStoredCredentials(credentials: TestStoredCredentials): Parameters<typeof sealExternalActionRequesterAccountContextV1>[0]['credentials'];
+        }>('../../../../../../cli/src/persistence');
+        const fixture = await createFixture({ qualifiedPat: false });
+        await db.account.update({ where: { id: fixture.account.id }, data: { encryptionMode: mode } });
+        const principal = (await auth.verifyTokenForRoute(fixture.pat.token))?.apiTokenPrincipal;
+        if (!principal) throw new Error('Missing authenticated PAT principal');
+        const root = await auth.mintExternalActionExecutionAuthorization({ serverIdentityId: await getOrCreateServerIdentityId(),
+            accountId: principal.accountId, principalId: principal.principalId, credentialId: principal.credentialId, grant: principal.grant,
+            machineId: fixture.machine.id, actionId: 'session.agent.transition', requestId: fixture.envelope.requestId!,
+            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(fixture.envelope), target: fixture.envelope.target! });
+        expect(root.binding.accountEncryptionMode).toBe(mode);
+        const purpose = { kind: 'external_action' as const };
+        const sealed = sealExternalActionRequesterAccountContextV1({ authorization: root,
+            credentials: encodeStoredCredentials({ token: fixture.pat.token, encryption: mode === 'plain' ? null
+                : { type: 'legacy', secret: tweetnacl.randomBytes(32) } }),
+            invocation: { caller: { kind: 'host' }, surface: 'api', authority: 'account_automation' }, purpose,
+            installationPublicKey: fixture.keyPair.publicKey, randomBytes: tweetnacl.randomBytes });
+        expect(openExternalActionRequesterAccountContextV1({ authorization: sealed, purpose, machineId: fixture.machine.id,
+            installationId: fixture.machine.installationId!, installationPrivateKey: fixture.keyPair.secretKey,
+            serverIdentityId: root.binding.serverIdentityId })?.token).toBe(fixture.pat.token);
+        await db.account.update({ where: { id: fixture.account.id }, data: { encryptionMode: mode === 'plain' ? 'e2ee' : 'plain' } });
+        expect(await verifyCurrentExternalActionPrincipal(root.binding)).toBeNull();
+    });
+
+    it.each(['account', 'api_token'] as const)('relays the verified transition %s root into the actual Session fence receiver', async credential => {
+        const [{ RpcHandlerManager }, { prepareRequesterAccountActionContext }, { createCliActionExecutorFromCredentials },
+            { verifyExternalActionExecutionAuthorizationCurrent }, { encodeStoredCredentials }] = await Promise.all([
+            importTestModule<{ RpcHandlerManager: new (options: unknown) => {
+                registerHandler(method: string, handler: (request: unknown,
+                    context?: Pick<SocketRpcRequestPayload, 'callerInputAuthorization' | 'callerAuthority' | 'callerInputConstraints'>) => unknown): void;
+                handleRequest(request: SocketRpcRequestPayload): Promise<unknown>;
+            } }>('../../../../../../cli/src/api/rpc/RpcHandlerManager'),
+            importTestModule<{ prepareRequesterAccountActionContext(input: unknown): Promise<unknown> }>(
+                '../../../../../../cli/src/daemon/sessionEncryption/requesterAccountActionProjection'),
+            importTestModule<{ createCliActionExecutorFromCredentials(input: unknown):
+                NonNullable<ExternalActionExecutionAuthorizationV1['requesterAccountExecutor']> }>(
+                '../../../../../../cli/src/session/actions/createCliActionExecutorFromCredentials'),
+            importTestModule<{ verifyExternalActionExecutionAuthorizationCurrent(input: Readonly<{
+                authorization: ExternalActionExecutionAuthorizationV1; effectActionId: string;
+                target: ExternalActionExecutionAuthorizationV1['binding']['target']; installationId: string;
+                privateKey: Uint8Array; serverHttpBaseUrl: string; signal?: AbortSignal;
+            }>): Promise<boolean> }>('../../../../../../cli/src/api/externalActionExecutionAuthorization'),
+            importTestModule<{ encodeStoredCredentials(credentials: TestStoredCredentials):
+                Parameters<typeof sealExternalActionRequesterAccountContextV1>[0]['credentials'] }>('../../../../../../cli/src/persistence'),
+        ]);
+        const fixture = await createFixture({ qualifiedPat: false });
+        const session = await db.session.create({ data: { accountId: fixture.account.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id, sessionId: session.id, data: 'key' } });
+        const presence = createSessionPublisherPresence();
+        const serverHttpBaseUrl = 'https://transition-home.test';
+        const receiver = new RpcHandlerManager({ scopePrefix: session.id, localMachineId: fixture.machine.id, encryptionMode: 'plain', logger: () => {},
+            ...(credential === 'api_token' ? { authorizeRequest: async ({ callerInputAuthorization, signal }: Readonly<{
+                callerInputAuthorization?: ExternalActionExecutionAuthorizationV1; signal?: AbortSignal;
+            }>) => {
+                if (!callerInputAuthorization || callerInputAuthorization.binding.machineId !== fixture.machine.id
+                    || callerInputAuthorization.binding.installationId !== fixture.machine.installationId) return { ok: false as const, error: 'Installed transition root unavailable' };
+                const current = await verifyExternalActionExecutionAuthorizationCurrent({ authorization: callerInputAuthorization,
+                    effectActionId: callerInputAuthorization.binding.actionId, target: callerInputAuthorization.binding.target,
+                    installationId: fixture.machine.installationId!, privateKey: fixture.keyPair.secretKey, serverHttpBaseUrl, signal });
+                return current ? { ok: true as const } : { ok: false as const, error: 'Transition root no longer current' };
+            } } : {}),
+            ...(credential === 'account' ? {
+            prepareRequesterAccountContext: async ({ authorization, purpose, signal }: TestRequesterPreparation) => prepareRequesterAccountActionContext({
+                authorization, purpose: purpose ?? { kind: 'external_action' }, machineId: fixture.machine.id,
+                installationId: fixture.machine.installationId!, installationPrivateKey: fixture.keyPair.secretKey,
+                serverId: 'transition-home', serverIdentityId: authorization.binding.serverIdentityId, serverHttpBaseUrl, signal,
+                isCurrent: () => verifyExternalActionExecutionAuthorizationCurrent({ authorization,
+                    effectActionId: authorization.binding.actionId, target: authorization.binding.target,
+                    installationId: fixture.machine.installationId!, privateKey: fixture.keyPair.secretKey, serverHttpBaseUrl, signal }),
+                createExecutor: (admitted: TestAdmittedRequester) => createCliActionExecutorFromCredentials({ credentials: admitted.credentials, serverId: 'transition-home',
+                    serverApiUrl: serverHttpBaseUrl, serverIdentityId: authorization.binding.serverIdentityId, machineId: fixture.machine.id,
+                    externalActionMachineInstallationId: fixture.machine.installationId!, externalActionMachineRequestPrivateKey: fixture.keyPair.secretKey,
+                    readCredentials: async () => await admitted.isCurrent() ? admitted.credentials : null,
+                    actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1(admitted.accountSettingsContext.settings.actionsSettingsV1),
+                        getAccountSettings: () => admitted.accountSettingsContext.settings },
+                }),
+            }),
+            } : {}),
+        });
+        receiver.registerHandler(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, async (_request, context) => ({
+            rootActionId: context?.callerInputAuthorization?.binding.actionId,
+            rootAccountId: context?.callerInputAuthorization?.binding.accountId,
+            callerAuthority: context?.callerAuthority,
+            constraints: context?.callerInputConstraints,
+        }));
+        let delivered: SocketRpcRequestPayload | undefined;
+        // Only Socket.IO delivery is replaced: the relay producer and CLI receiver remain real.
+        const publisher = { id: `transition-publisher-${credential}`, data: {}, timeout: () => ({
+            emitWithAck: async (_event: string, request: SocketRpcRequestPayload) => {
+                delivered = request;
+                return await receiver.handleRequest(request);
+            },
+        }) };
+        expect((await presence.registerPublisher({ socket: publisher,
+            binding: { accountId: fixture.account.id, machineId: fixture.machine.id, sessionId: session.id },
+            completeActivitySnapshot: { state: 'active', activeCount: 1 } })).status).toBe('registered');
+        const method = `${session.id}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`;
+        const io = createSocketRoomDiscoveryHarness(async room => room === `rpc:${fixture.account.id}:${method}`
+            || room === publisher.id || room === getAccountSessionSocketRoom(fixture.account.id, session.id) ? [publisher] : []);
+        const { app } = await createApp(fixture.team.id);
+        const get = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
+            const response = await app.inject({ method: 'GET', url: new URL(String(url)).pathname,
+                headers: config?.headers as Record<string, string> });
+            return { status: response.statusCode, data: response.json() };
+        });
+        const post = vi.spyOn(axios, 'post').mockImplementation(async (url, payload, config) => {
+            const response = await app.inject({ method: 'POST', url: new URL(String(url)).pathname,
+                headers: config?.headers as Record<string, string>, payload });
+            return { status: response.statusCode, data: response.json() };
+        });
+        try {
+            const grant = { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['session.agent.transition' as const] },
+                targets: { sessions: [session.id], machines: [fixture.machine.id] }, permissionModes: ['default' as const] };
+            const pat = await auth.createApiToken({ accountId: fixture.account.id, tokenId: crypto.randomUUID(), label: 'fence', grant });
+            const originalToken = credential === 'account' ? await auth.createToken(fixture.account.id, undefined,
+                { kind: 'account', authority: 'present_user' }) : pat.token;
+            if (!originalToken) throw new Error('Original caller credential unavailable');
+            const root = await mint(app, { ...fixture, pat: { ...pat, token: originalToken } }, 'session.agent.transition', {
+                ...fixture.envelope, input: { sessionId: session.id, expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
+                    input: { text: 'continue', localId: 'first-input' } },
+            });
+            if (credential === 'api_token') await auth.updateApiToken({ accountId: fixture.account.id, tokenId: pat.tokenId, grant: API_TOKEN_FULL_GRANT_V1 });
+            const target = { kind: 'session' as const, sessionId: session.id };
+            const params = { action: 'enforce', serviceId: 'session.agentTransition', groupId: 'group', epochId: 'epoch' };
+            const authorization = credential === 'api_token' ? root : sealExternalActionRequesterAccountContextV1({ authorization: root,
+                credentials: encodeStoredCredentials({ token: originalToken, encryption: null }),
+                invocation: { caller: { kind: 'plugin', pluginId: 'happier.agent.codex', contributionLocalId: 'automation' },
+                    surface: 'plugin', authority: 'account_automation', callerInputConstraints: { models: null, permissionModes: ['default'] },
+                    workspaceWrites: 'deny',
+                    defaultSessionId: session.id },
+                purpose: { kind: 'machine_rpc', method: SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, params },
+                installationPublicKey: fixture.keyPair.publicKey, randomBytes: tweetnacl.randomBytes });
+            const execution = { v: 1 as const, authorization, effectActionId: 'session.agent.transition', target,
+                installationId: fixture.machine.installationId!, machineSignature: signExternalActionMachineRpcRequestV1({
+                    authorizationToken: authorization.token, effectActionId: 'session.agent.transition', target,
+                    requesterAccountContext: authorization.requesterAccountContext,
+                    installationId: fixture.machine.installationId!, event: SOCKET_RPC_EVENTS.CALL,
+                    method, requestId: authorization.binding.requestId, params, privateKey: fixture.keyPair.secretKey,
+                }) };
+            expect(await verifyExternalActionMachineRpcExecution(execution, { method, params, requestId: authorization.binding.requestId })).not.toBeNull();
+            const ambientAuthority = 'present_user';
+            const ambientToken = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: ambientAuthority });
+            const socket = Object.assign(createFakeSocket({ id: `transition-caller-${credential}`, data: { clientType: 'machine-scoped',
+                machineId: fixture.machine.id, verifiedMachineInstallationId: fixture.machine.installationId,
+                authTokenKind: 'account', authAuthority: ambientAuthority } }), { handshake: { auth: { token: ambientToken,
+                    ...currentAccountStoredContentCompatibilitySocketAuth } } });
+            qualifyCurrentAccountStoredContentSocket(socket);
+            registerSocketRpcHandlers({ userId: fixture.account.id, socket: socket as unknown as Socket, io, sessionPublisherPresence: presence });
+            const callback = vi.fn();
+            if (credential === 'account') {
+            const reboxedHost = sealExternalActionRequesterAccountContextV1({ authorization: root,
+                credentials: encodeStoredCredentials({ token: originalToken, encryption: null }),
+                invocation: { caller: { kind: 'host' }, surface: 'ui', authority: 'present_user', defaultSessionId: session.id },
+                purpose: { kind: 'machine_rpc', method: SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, params },
+                installationPublicKey: fixture.keyPair.publicKey, randomBytes: tweetnacl.randomBytes });
+            // A public installation key can rebox known credentials, but cannot
+            // replace the signed private Plugin ceiling with host authority.
+            await getSocketHandler(socket, SOCKET_RPC_EVENTS.CALL)({ method, requestId: authorization.binding.requestId, params,
+                externalActionExecution: { ...execution, authorization: reboxedHost } }, callback);
+            expect(delivered).toBeUndefined();
+            expect(callback).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+            callback.mockClear();
+            }
+            await getSocketHandler(socket, SOCKET_RPC_EVENTS.CALL)({ method, requestId: authorization.binding.requestId, params,
+                externalActionExecution: execution }, callback);
+            expect(delivered?.callerInputAuthorization).toEqual(authorization);
+            expect(delivered?.callerAuthority).toBe(credential === 'account' ? 'present_user' : 'account_automation');
+            expect(callback).toHaveBeenCalledWith({ ok: true, result: { rootActionId: 'session.agent.transition', rootAccountId: fixture.account.id,
+                callerAuthority: 'account_automation', constraints: { models: null, permissionModes: ['default'] } } });
+            delivered = undefined;
+            const otherMachine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: fixture.account.id,
+                metadata: fixture.machine.metadata, dataEncryptionKey: fixture.machine.dataEncryptionKey ? new Uint8Array(fixture.machine.dataEncryptionKey) : null,
+                installationId: crypto.randomUUID(), installationPublicKey: new Uint8Array(tweetnacl.sign.keyPair().publicKey) } });
+            await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: otherMachine.id, sessionId: session.id, data: 'other-key' } });
+            expect((await presence.registerPublisher({ socket: publisher,
+                binding: { accountId: fixture.account.id, machineId: otherMachine.id, sessionId: session.id },
+                completeActivitySnapshot: { state: 'active', activeCount: 1 } })).status).toBe('registered');
+            callback.mockClear();
+            await getSocketHandler(socket, SOCKET_RPC_EVENTS.CALL)({ method, requestId: authorization.binding.requestId, params,
+                externalActionExecution: execution }, callback);
+            expect(delivered).toBeUndefined();
+            expect(callback).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+        } finally { get.mockRestore(); post.mockRestore(); await app.close(); }
+    });
+
+    it('bounds transition phase proofs to the named Session lifecycle and cutover purposes', async () => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const { app } = await createApp(fixture.team.id);
+        try {
+            const sessionId = 'transition-session';
+            const authorization = await mint(app, fixture, 'session.agent.transition', {
+                ...fixture.envelope, input: { sessionId, expectedCurrentAgentId: 'claude',
+                    selection: { v: 1, agentId: 'codex' }, input: { text: 'continue', localId: 'transition-first-input' } },
+            });
+            const target = { kind: 'session' as const, sessionId };
+            const verifyRpc = (method: string, params: unknown, signingTarget = target) => {
+                const execution = { v: 1 as const, authorization, effectActionId: 'session.agent.transition', target: signingTarget,
+                    installationId: fixture.machine.installationId!, machineSignature: signExternalActionMachineRpcRequestV1({
+                        authorizationToken: authorization.token, target: signingTarget, effectActionId: 'session.agent.transition',
+                        installationId: fixture.machine.installationId!, requestId: authorization.binding.requestId,
+                        method, params, privateKey: fixture.keyPair.secretKey,
+                    }) };
+                return verifyExternalActionMachineRpcExecution(execution, { method, params, requestId: authorization.binding.requestId });
+            };
+            const fence = { action: 'enforce', serviceId: 'session.agentTransition', groupId: 'group', epochId: 'epoch' };
+            expect(await verifyRpc(`${sessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`, fence)).not.toBeNull();
+            expect(await verifyRpc(`${fixture.machine.id}:${RPC_METHODS.STOP_SESSION}`, { sessionId })).not.toBeNull();
+            for (const method of [RPC_METHODS.SPAWN_HAPPY_SESSION, RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE]) {
+                expect(await verifyRpc(`${fixture.machine.id}:${method}`, { type: 'resume-session', sessionId, directory: '/workspace' })).not.toBeNull();
+                expect(await verifyRpc(`${fixture.machine.id}:${method}`, { type: 'spawn-in-directory', directory: '/workspace' })).toBeNull();
+                expect(await verifyRpc(`${fixture.machine.id}:${method}`, { type: 'resume-session', sessionId: 'other', directory: '/workspace' })).toBeNull();
+            }
+            expect(await verifyRpc(`${sessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`, { ...fence, serviceId: 'other' })).toBeNull();
+            expect(await verifyRpc(`${fixture.machine.id}:${RPC_METHODS.STOP_SESSION}`, { sessionId: 'other' })).toBeNull();
+            expect(await verifyRpc(`other-machine:${RPC_METHODS.STOP_SESSION}`, { sessionId })).toBeNull();
+            expect(await verifyRpc(`${fixture.machine.id}:${RPC_METHODS.SPAWN_HAPPY_SESSION}`, 'sealed-resume')).not.toBeNull();
+            expect(await verifyRpc(`${fixture.machine.id}:${RPC_METHODS.STOP_SESSION}`, { sessionId }, { kind: 'session', sessionId: 'other' })).toBeNull();
+            const verifyHttp = (method: string, path: string, body?: unknown) => verifyExternalActionDomainExecutionRequest({
+                authorizationToken: authorization.token, effectActionId: 'session.agent.transition',
+                encodedTarget: encodeExternalActionResolvedTargetV1(target), method, path, body,
+                machineSignature: signExternalActionMachineRequestV1({ authorizationToken: authorization.token,
+                    effectActionId: 'session.agent.transition', target, installationId: fixture.machine.installationId!,
+                    requestId: authorization.binding.requestId, method, path, body, privateKey: fixture.keyPair.secretKey }),
+            });
+            expect(await verifyHttp('GET', `/v2/sessions/${sessionId}`)).not.toBeNull();
+            expect(await verifyHttp('GET', `/v1/machines/${fixture.machine.id}`)).not.toBeNull();
+            expect(await verifyHttp('GET', '/v1/account/encryption/currentness')).not.toBeNull();
+            expect(await verifyHttp('POST', `/v2/sessions/${sessionId}/agent-transition/cutover`, { v: 1 })).not.toBeNull();
+            expect(await verifyHttp('POST', `/v2/sessions/${sessionId}/pending`, { localId: 'unrelated' })).toBeNull();
+            expect(await verifyHttp('POST', `/v1/sessions/${sessionId}/archive`, {})).toBeNull();
+            expect(await verifyHttp('POST', '/v2/sessions/other/agent-transition/cutover', { v: 1 })).toBeNull();
+            expect(await verifyHttp('GET', '/v1/machines/other')).toBeNull();
+        } finally { await app.close(); }
     });
 
     it("uses the originating PAT evidence rather than daemon ambient qualification", async () => {

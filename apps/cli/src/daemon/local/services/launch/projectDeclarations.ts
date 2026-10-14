@@ -36,7 +36,7 @@ import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 type ActionContext = RuntimeActionExecuteArgs['context'];
 type CanonicalPoolRead = RuntimeActionExecuteArgs['executeCanonicalAction'];
-type SupportedServiceCommand = PreparedProjectSetupCommand;
+type SupportedServiceCommand = Exclude<PreparedProjectSetupCommand, { kind: 'pluginNativeReference' }>;
 type SelectedDeclaration = Readonly<{ targetId: string; reviewedEffectDigest: string }>;
 type PluginRuntimeLease = Readonly<{
     registry: Readonly<{ projectManagedServices: Pick<ReturnType<typeof createManagedServicesOwner>, 'superviseProject'> }>;

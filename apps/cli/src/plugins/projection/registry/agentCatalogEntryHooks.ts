@@ -1165,7 +1165,7 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
             const requested = { toolId, args: mode.launch.args ?? [] };
             const command = contribution.managedServiceCommands?.find((candidate) => isExactPreflightCommand(candidate, requested));
             if (!command || !declaredSystemToolIds.has(requested.toolId)) throw new Error('Agent preflight managed service command is not declared');
-            if (mode.launch.cwd?.root !== 'workspace' || mode.launch.cwd.relativePath !== '') throw new Error('Agent preflight managed service must use its scoped working directory');
+            if (typeof mode.launch.cwd === 'string' || mode.launch.cwd?.root !== 'workspace' || mode.launch.cwd.relativePath !== '') throw new Error('Agent preflight managed service must use its scoped working directory');
             if (!params.bindManagedServices) throw new Error('Agent preflight managed service owner is unavailable');
             return await withPreparedPreflightCommand(command, { ...input, bypassCache: probeParams.bypassCache, signal }, environment, async (args, env) => {
                 assertCurrent();

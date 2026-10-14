@@ -458,21 +458,30 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
         }
         let managedAdmission: Awaited<ReturnType<typeof admitManagedAcquire>> | undefined;
         const mint = async (): Promise<ExternalActionExecutionAuthorizationV1> => {
-            const { authority: _authority, ...provenance } = request.principal;
             const handoffAdmission = request.envelope.handoffAdmission && isOriginalAccountHandoffAction(request.actionId)
                 ? await readCurrentExternalActionHandoffBindingInTx(db, { accountId: request.principal.accountId,
                     handoffAdmission: request.envelope.handoffAdmission, requireSourceOnline: true }) : null;
             if (request.envelope.handoffAdmission && !handoffAdmission) throw new Error('handoff_admission_unavailable');
-            return mintExecutionAuthorization({
-                serverIdentityId: await getServerIdentityId(), ...provenance, machineId,
+            const routing = {
+                serverIdentityId: await getServerIdentityId(), machineId,
                 actionId: request.actionId, requestId: request.envelope.requestId ?? randomUUID(),
                 requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), target,
                 ...(pendingResetStartAdmission ? { pendingResetStartAdmission } : {}),
                 ...(handoffAdmission ? { handoffAdmission } : {}),
                 ...(request.managedContinuation ? { managedContinuation: request.managedContinuation } : {}),
                 ...(request.sessionActionSource ? { sessionActionSource: request.sessionActionSource } : {}),
-            }, { input: request.envelope.v === 1 ? request.envelope.input : request.envelope.sessionSpawnAdmission,
-                ...(request.sessionActionSource ? { resolveCurrentSessionMachine: resolveSessionMachine } : {}) });
+            };
+            const context = { input: request.envelope.v === 1 ? request.envelope.input : request.envelope.sessionSpawnAdmission,
+                ...(request.sessionActionSource ? { resolveCurrentSessionMachine: resolveSessionMachine } : {}) };
+            const principal = request.principal;
+            if ('authentication' in principal) {
+                const { authority: _authority, authentication, ...provenance } = principal;
+                return authentication.kind === 'account'
+                    ? mintExecutionAuthorization({ ...routing, ...provenance, authentication }, context)
+                    : mintExecutionAuthorization({ ...routing, ...provenance, authentication }, context);
+            }
+            const { authority: _authority, ...provenance } = principal;
+            return mintExecutionAuthorization({ ...routing, ...provenance }, context);
         };
         if (request.actionId === 'machines.managed.acquire') {
             if (target.kind !== 'machine' || !request.envelope.requestId) {

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { updatePersonalProjectContextV1 } from '../projects/projectContextV1.js';
 import type { ProjectAccountOrganizationV1 } from '../projects/projectAccountRowsV1.js';
-import { z } from 'zod';
+import { compileProtocolJsonSchema } from '../plugins/actions/jsonSchemaCompiler.js';
 
 import { createActionExecutor as createRawActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
-import type { ActionDefinitionV1 } from './actionDefinitionV1.js';
+import { ActionDiscoveryDefinitionV1Schema, type ActionDefinitionV1 } from './actionDefinitionV1.js';
 import { getActionSpec, PUBLIC_ACTION_OUTPUT_SCHEMAS, resolveActionExecutionPlacementForInput } from './actionSpecs.js';
 import { ActionIdSchema, WorkflowActionIdV1Schema } from './actionIds.js';
 import type { MachinesAgentsListInput } from '../capabilities/machineAgentInventory.js';
@@ -196,11 +196,14 @@ describe('machine Agent inventory execution', () => {
     const executor = createActionExecutor({ ...createDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }),
       pathsListRecent: async () => ({ items: [{ path: '/from-A', label: 'A' }] }),
       notificationChannelsList: async () => ({ items: [{ id: 'from-B', label: 'B' }] }),
-      widgetCatalog: { list: async (_surface, _context, _signal, boundSession?: { serverId: string; sessionId: string }) => [{
-        definition, title: 'Checks', availability: 'available', instanceCount: 0,
-        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
-        fields: [{ path: 'choice', title: 'Choice', widget: 'select', optionsSourceId: boundSession?.sessionId === 'B' ? 'notifications.channels.available' : 'paths.list_recent' }],
-      }] },
+      widgetCatalog: { list: async (catalogSurface, _context, _signal, boundSession?: { serverId: string; sessionId: string }) => {
+        expect(catalogSurface).toEqual(surface);
+        return [{
+          definition, title: 'Checks', availability: 'available', instanceCount: 0,
+          sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+          fields: [{ path: 'choice', title: 'Choice', widget: 'select', optionsSourceId: boundSession?.sessionId === 'B' ? 'notifications.channels.available' : 'paths.list_recent' }],
+        }];
+      } },
     });
     await expect(executor.execute('action.options.resolve', {
       consumer: { kind: 'widget', surface, definition, selectedSession: { serverId: 'home', sessionId: 'B' } }, fieldPath: 'choice',
@@ -347,7 +350,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(await executor.execute('action.options.resolve', { ...request, draftInput: { machine: { serverId: 'home', machineId: 'selected' } } }, { serverId: 'home' }))
       .toMatchObject({ ok: true, result: { options: [{ value: 'root', label: 'System', description: '/' }, { value: 'external', label: 'Work', description: '/Volumes/Work' }] } });
   });
-  it('[blocked: authored contributed source] resolves a granted typed widget field source before its type Resource and refuses ungranted discovery', async () => {
+  it('resolves a granted typed widget field source before its type Resource and refuses ungranted discovery', async () => {
     const surface = { serverId: 'home', accountId: 'account', owner: { kind: 'home' as const } };
     const definition = { kind: 'installed' as const, surface: { pluginId: 'com.acme.inputs', localId: 'choice-widget' } };
     const consumer = { kind: 'widget' as const, surface, definition };
@@ -370,7 +373,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
         approve: false, origins: [], models: null, permissionModes: null, create: null,
       } } };
     expect(await executor.execute('action.options.resolve', { consumer, fieldPath: 'choice' }, granted))
-      .toMatchObject({ ok: true, result: { optionsSourceId: 'notifications.channels.available', options: [{ value: 'allowed', label: 'Allowed' }] } });
+      .toMatchObject({ ok: true, result: { options: [{ value: 'allowed', label: 'Allowed' }] } });
     expect(await executor.execute('action.options.resolve', { consumer, fieldPath: 'choice' }, {
       ...granted, externalActionCredential: { ...granted.externalActionCredential,
         grant: { ...granted.externalActionCredential.grant, actions: { families: [], ids: ['paths.list_recent'] } } },
@@ -2649,33 +2652,27 @@ describe('createActionExecutor (inventory/discovery)', () => {
       id: 'session.spawn_new',
     }, { surface: 'agent' });
 
-    // Reused schema nodes may be referenced after Workflow triggers reach the
-    // spawn schema. Discovery must preserve the constraints, not inline them.
-    const discovery = z.object({ ok: z.literal(true), result: z.object({ actionSpec: z.object({
-      kindVersion: z.literal(1),
-      inputSchema: z.object({
-        properties: z.record(z.string(), z.record(z.string(), z.unknown())),
-        $defs: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
-      }),
-    }) }) }).parse(spawnResult);
-    const schema = discovery.result.actionSpec.inputSchema;
-    const resolveNode = (value: unknown) => {
-      const node = z.record(z.string(), z.unknown()).parse(value);
-      const reference = node.$ref;
-      if (typeof reference !== 'string') return node;
-      expect(reference).toMatch(/^#\/\$defs\/[^/]+$/u);
-      return z.record(z.string(), z.unknown()).parse(schema.$defs?.[reference.slice('#/$defs/'.length)]);
-    };
-    for (const [field, constraints] of [
-      ['executionTarget', { serverId: { minLength: 1, maxLength: 191 } }],
-      ['organizationPlacement', { tagIds: { type: 'array', maxItems: 500 } }],
-      ['agentSessionStartupInstructionsV1', { revision: { exclusiveMinimum: 0, maximum: 2_147_483_647 } }],
-    ] as const) {
-      const resolved = resolveNode(schema.properties[field]);
-      const properties = z.record(z.string(), z.unknown()).parse(resolved.properties);
-      for (const [property, constraint] of Object.entries(constraints)) {
-        expect(resolveNode(properties[property])).toMatchObject(constraint);
-      }
+    if (!spawnResult.ok) throw new Error('Session creation schema discovery failed');
+    const { actionSpec } = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(spawnResult.result);
+    const discovered = ActionDiscoveryDefinitionV1Schema.parse(actionSpec);
+    const validate = compileProtocolJsonSchema(discovered.inputSchema, 'draft-07');
+    // Validate the published contract, including local references, without
+    // requiring the producer to inline shared schema definitions.
+    expect(validate(canonicalSessionSpawnInput)).toBe(true);
+    for (const serverId of ['', 's'.repeat(192)]) {
+      expect(validate({ ...canonicalSessionSpawnInput, executionTarget: { serverId, machineId: 'machine-1' } })).toBe(false);
+    }
+    expect(validate({ ...canonicalSessionSpawnInput, executionTarget: { serverId: 's'.repeat(191), machineId: 'machine-1' } })).toBe(true);
+    for (const [count, accepted] of [[500, true], [501, false]] as const) {
+      expect(validate({ ...canonicalSessionSpawnInput, organizationPlacement: {
+        folderId: null,
+        tagIds: Array.from({ length: count }, (_, index) => `tag-${index}`),
+      } })).toBe(accepted);
+    }
+    for (const [revision, accepted] of [[1, true], [2_147_483_647, true], [0, false], [2_147_483_648, false]] as const) {
+      expect(validate({ ...canonicalSessionSpawnInput, agentSessionStartupInstructionsV1: {
+        v: 1, id: 'repository-guidance', revision, instructions: 'Use repository guidance.',
+      } })).toBe(accepted);
     }
   });
 

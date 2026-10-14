@@ -388,6 +388,7 @@ describe('public Provider operations composed routing', () => {
         logger: unavailable.logger,
         sessions: unavailable.sessions,
         managedServices: unavailable.managedServices,
+        machineProvisioners: unavailable.machineProvisioners,
         exec: unavailable.exec,
         interactions: unavailable.interactions,
         targetedContributions: unavailable.targetedContributions,

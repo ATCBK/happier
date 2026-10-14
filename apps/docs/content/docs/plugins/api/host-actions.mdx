@@ -4448,6 +4448,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `acceptInsecureHttp` (boolean): Accept insecure HTTP
 - `acceptCanonicalUrl` (boolean): Use the advertised canonical address
 
+## `homes.reconnect`
+
+**Retry the focused Home connection** — Retry the current Home through its existing connection recovery owner. This does not switch device focus to another Home.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `serverId` (text, required): Focused Home ID
+
 ## `identity.githubApps.create`
 
 **Create managed GitHub App** — Create a managed GitHub App registration for one Home or Team owner.
@@ -5717,6 +5731,105 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `serverId` (text): Home ID
 - `limit` (text): Limit
 - `refresh` (boolean): Refresh machine inventory
+
+## `machines.local.service.autostart.set`
+
+**Set desktop login start** — Set the common login-start mode of every desktop-managed service, not a stored preference.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `serverId` (text, required): Home ID
+- `autostart` (text, required): Login-start mode
+
+## `machines.local.service.disconnect`
+
+**Disconnect local service from Home** — Remove only the desktop-managed service for this Home. Preserve user-owned services and the saved Home profile.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `serverId` (text, required): Home ID
+
+## `machines.local.service.restart`
+
+**Restart local background service** — Restart the native user service for this Home; this can interrupt its sessions.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `serverId` (text, required): Home ID
+
+## `machines.local.service.start`
+
+**Start local background service** — Start the existing native user service for this Home.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `serverId` (text, required): Home ID
+
+## `machines.local.service.status`
+
+**Read local background service** — Read the native user service for this Home on the invoking desktop.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `serverId` (text, required): Home ID
+
+## `machines.local.service.stop`
+
+**Stop local background service** — Stop the native user service for this Home; this can interrupt its sessions.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `serverId` (text, required): Home ID
+
+## `machines.local.service.update`
+
+**Update desktop-managed CLI** — Use the shared managed-CLI update task and its scoped completion/readback.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `serverId` (text, required): Home ID
 
 ## `machines.managed.acquire`
 
@@ -12039,6 +12152,23 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `view` (select): View — The released activity digest, or the canonical awareness projection.
 - `windowSeconds` (text): Window seconds
 
+## `session.agent.transition`
+
+**Switch Session Agent** — Continue the same Session with the exact target Agent and first input. Retain localId and the entire input on retry. Rejected, partial and indeterminate outcomes retain their canonical effect facts.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session id
+- `expectedCurrentAgentId` (text, required): Expected current Agent
+- `selection` (json, required): Exact target Agent selection
+- `input` (json, required): Exact first input and retained localId
+
 ## `session.approval_reviewer.set`
 
 **Set session approval reviewer** — Enable or disable request-only background approval review for this session.
@@ -12411,6 +12541,21 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `serverId` (text, required): Home id
 - `expectedMetadataRevision` (number, required): Reviewed metadata revision
 - `intent` (json, required): Context intent
+
+## `session.continuation.inspect`
+
+**Inspect Agent continuation** — Inspect one exact Agent selection for this Session through the hosting machine. Eligibility grants no mutation authority; switching rechecks it.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session id
+- `selection` (json, required): Exact target Agent selection
 
 ## `session.continue_with_replay`
 
@@ -12899,7 +13044,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -12907,10 +13052,11 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `objective` (textarea): Objective
 - `status` (text): Status
 - `tokenBudget` (text): Token budget
+- `resumeInactiveWithInitialGoal` (boolean): Resume inactive session with goal
 
 ## `session.handoff`
 
-**Hand off session** — Move the current session to another machine while keeping the same session id.
+**Hand off session** — Move the current session to another machine or another directory on the same machine while keeping the same session id. Select target storage and workspace transfer behavior explicitly when needed.
 
 - Safety: `safe`; side effect: not classified.
 - Approval: `optional` result; `deferred` flow.
@@ -12922,6 +13068,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `sessionId` (text): Session id
 - `targetMachineId` (text): Target machine id
+- `targetPath` (text): Target directory — Destination path on the target machine, including a directory move on the source machine.
+- `targetSessionStorageMode` (select): Target session storage
+- `workspaceAction` (json): Workspace transfer — Workspace intent: none, copy_once, create_relationship, relationship or linked_workspace, with the fields required by that intent. Omit to leave workspace intent unspecified.
 
 ## `session.handoff.status.get`
 

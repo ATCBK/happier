@@ -13,8 +13,9 @@ import { AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/accou
 import { createPlainProjectAccountRowListFixture } from '../fixtures/projectAccountRows';
 import { navigationHydrationBrowser } from './navigationHydrationBrowser';
 import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '../fixtures/workflowRunFixtures';
-import { materializeWorkflowAcceptedSnapshotV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
-    serializeWorkflowStoredContentEnvelopeV1, WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
+import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import { WorkflowInvocationListRequestV1Schema, WorkflowRunGetRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol';
 import { z } from 'zod';

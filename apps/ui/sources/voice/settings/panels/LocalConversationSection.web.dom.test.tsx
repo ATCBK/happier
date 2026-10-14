@@ -2,9 +2,10 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture, createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
-import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture, createProviderSettingsAccountHarness,
+    createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -21,13 +22,20 @@ import { PROFILE_ROWS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1 } from '@happie
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
-import { buildApprovalRequestArtifactHeaderV1, encodePlainArtifactStoredContent, StoredApprovalRequestSchema,
+import { StoredApprovalRequestSchema,
     tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const transport = vi.hoisted(() => ({ projection: null as unknown, projectionReads: [] as unknown[] }));
-vi.mock('socket.io-client', async original =>
-    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const daemon = createProviderSettingsHarness();
+installProviderSettingsRpcBoundary(daemon);
+// Only Socket delivery is replaced; routing, Action admission and receipt arbitration stay real.
+beforeEach(() => {
+    daemon.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, async request => {
+        transport.projectionReads.push(request.payload);
+        return transport.projection;
+    });
+});
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
@@ -63,14 +71,6 @@ vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
 vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
 
 const account = createProviderSettingsAccountHarness();
-// Socket RPC is the genuine daemon-delivery boundary. Scoped routing/admission stay real.
-installSessionActionRpcBoundary(async request => {
-    if (!request.method.endsWith(`:${RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION}`)) {
-        throw new Error('unsupported fixture RPC');
-    }
-    transport.projectionReads.push(request.params);
-    return transport.projection;
-});
 let mounted: { root: Root; container: HTMLElement } | null = null;
 let locks: ReturnType<typeof installWebLockManagerMock> | undefined;
 afterEach(async () => {
@@ -83,6 +83,7 @@ afterEach(async () => {
     locks?.restore();
     locks = undefined;
     transport.projectionReads.length = 0;
+    daemon.reset();
 });
 
 function press(node: HTMLElement) {
@@ -167,6 +168,29 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
         let providerWrites = 0;
         let importedModelSettings: unknown;
         let approvedResourceId: string | undefined;
+        if (usesPersonalApproval) account.home.answer(scope.serverId, 'POST /v1/account/saved-secrets/resources/promote', {
+            select: raw => {
+                const input = SharedSavedSecretPromoteInputV1Schema.parse(raw);
+                expect(input.expectedSettingsVersion).toBe(settingsVersion);
+                if (input.nextSettings?.t !== 'plain') throw new Error('Expected the captured Plain source');
+                approvedResourceId = input.resourceId;
+                stored = input.nextSettings.v;
+                settingsVersion += 1;
+                account.home.answer(scope.serverId, '/v2/account/settings', { body: { content: input.nextSettings, version: settingsVersion } });
+                account.home.answer(scope.serverId, '/v1/account/saved-secrets/resources/materials', { body: { resources: [
+                    SavedSecretResourceMaterialV1Schema.parse({ resourceId: input.resourceId, encryptionMode: 'plain',
+                        storedContent: input.storedContent, recipientEnvelope: null, entry: {
+                            ref: formatSharedSavedSecretRefV1(input.resourceId), source: 'shared_resource', relationship: 'owner',
+                            ownerAccountId: scope.accountId, name: input.displayName, kind: input.kind, encryptionMode: 'plain',
+                            revision: 1, materialStatus: 'ready', capabilities: {
+                                use: true, rename: true, rotate: true, manageAccess: true, delete: true,
+                            },
+                        },
+                    }),
+                ] } });
+                return { body: { resourceId: input.resourceId, settingsVersion } };
+            },
+        });
         account.home.answer(scope.serverId, `POST ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { select: input => {
             providerWrites += 1;
             const mutation = ProviderConnectionsRowMutationV1Schema.parse(input);
@@ -249,52 +273,24 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
                 const request = StoredApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(artifact.id)!));
                 if (request.v !== 2) throw new Error('Expected the original result-bearing approval');
                 const input = SharedSavedSecretPromoteInputV1Schema.parse(request.actionArgs);
-                const settledAt = request.createdAtMs + 1;
-                const settled = StoredApprovalRequestSchema.parse(outcome === 'personal-approval-canceled'
-                    ? { ...request, status: 'canceled', updatedAtMs: settledAt }
-                    : { ...request, status: 'executed', updatedAtMs: settledAt,
-                        decision: { kind: 'approve', decidedAtMs: settledAt },
-                        execution: { ok: true, executedAtMs: settledAt, result: { resourceId: input.resourceId, settingsVersion: 2 } } });
                 if (outcome === 'personal-approval-unmounted') {
                     const editor = mounted;
                     await act(async () => editor.root.unmount());
                     editor.container.remove();
                     mounted = null;
                 }
-                if (outcome !== 'personal-approval-canceled') {
-                    approvedResourceId = input.resourceId;
-                    if (input.nextSettings?.t !== 'plain') throw new Error('Expected the captured Plain source');
-                    stored = input.nextSettings.v;
-                    settingsVersion = 2;
-                    account.home.answer(scope.serverId, '/v2/account/settings', { body: { content: input.nextSettings, version: settingsVersion } });
-                    account.home.answer(scope.serverId, '/v1/account/saved-secrets/resources/materials', { body: { resources: [
-                        SavedSecretResourceMaterialV1Schema.parse({ resourceId: input.resourceId, encryptionMode: 'plain',
-                            storedContent: input.storedContent, recipientEnvelope: null, entry: {
-                                ref: formatSharedSavedSecretRefV1(input.resourceId), source: 'shared_resource', relationship: 'owner',
-                                ownerAccountId: scope.accountId, name: input.displayName, kind: input.kind, encryptionMode: 'plain',
-                                revision: 1, materialStatus: 'ready', capabilities: {
-                                    use: true, rename: true, rotate: true, manageAccess: true, delete: true,
-                                },
-                            },
-                        }),
-                    ] } });
-                }
-                const response = await artifacts.handle(`/v1/artifacts/${artifact.id}`, { method: 'POST', body: JSON.stringify({
-                    header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(settled)), expectedHeaderVersion: artifact.headerVersion,
-                    body: encodePlainArtifactStoredContent({ body: JSON.stringify(settled) }), expectedBodyVersion: artifact.bodyVersion,
-                }) });
-                expect(await response?.json()).toMatchObject({ success: true });
-                const persistedArtifact = artifacts.read(artifact.id);
-                if (!persistedArtifact) throw new Error('Expected the acknowledged terminal Artifact');
-                const { storage } = await import('@/sync/domains/state/storage');
-                await act(async () => { storage.getState().updateArtifact({ id: artifact.id,
-                    header: buildApprovalRequestArtifactHeaderV1(settled), body: JSON.stringify(settled), title: null,
-                    headerVersion: persistedArtifact.headerVersion, bodyVersion: persistedArtifact.bodyVersion,
-                    seq: persistedArtifact.seq, createdAt: persistedArtifact.createdAt, updatedAt: persistedArtifact.updatedAt, isDecrypted: true }); });
+                const canceled = outcome === 'personal-approval-canceled';
+                await act(async () => {
+                    await expect(decideApprovalAsInbox(scope.serverId, artifact.id, canceled ? 'cancel' : 'approve'))
+                        .resolves.toMatchObject({ ok: true, result: { status: canceled ? 'canceled' : 'executed' } });
+                });
+                expect(StoredApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(artifact.id)!)))
+                    .toMatchObject({ status: canceled ? 'canceled' : 'executed',
+                        ...(canceled ? {} : { execution: { ok: true, result: { resourceId: input.resourceId, settingsVersion: 2 } } }) });
+                expect(account.home.requestsFor('/v1/account/saved-secrets/resources/promote')).toHaveLength(canceled ? 0 : 1);
                 if (outcome === 'personal-approval-unmounted') {
                     expect(providerWrites).toBe(0);
                     expect(stored.voice).toEqual(original.voice);
-                    expect(account.home.requestsFor('/v1/account/saved-secrets/resources/promote')).toEqual([]);
                     return;
                 }
                 if (outcome === 'personal-approval-canceled') {

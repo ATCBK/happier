@@ -200,6 +200,16 @@ async function connectClient(input: Readonly<{
 }
 
 describe('hosted-web surface context over the real bridge and public client (§3.2, §3.3)', () => {
+    it('carries optional spinner preferences through the existing hosted context without changing motion policy', async () => {
+        const initial = createHostSurface({ themeProfileIndex: 0, locale: 'en' });
+        const spinner = { style: 'hWave', speed: 'slow', pause: 'long' };
+        const hostSurface = { ...initial, reducedMotion: true, theme: { ...initial.theme, spinner } };
+        const { client } = await connectClient({ surface: hostSurface });
+        const observed = await client.context();
+        expect(observed.theme.spinner).toEqual(spinner);
+        expect(observed.reducedMotion).toBe(true);
+        expect(observed.target).toEqual(initial.target);
+    });
     it('delivers the exact target, the semantic theme and the plugin translation bundle', async () => {
         const hostSurface = createHostSurface({ themeProfileIndex: 0, locale: 'fr' });
         const { client } = await connectClient({ surface: hostSurface });

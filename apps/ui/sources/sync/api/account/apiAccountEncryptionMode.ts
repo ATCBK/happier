@@ -4,7 +4,7 @@ import { parseToken } from '@/utils/auth/parseToken';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { backoff, backoffForever } from '@/utils/timing/time';
 import type { ApiChangeEntry } from '@/sync/api/types/apiTypes';
-import { serverFetch } from '@/sync/http/client';
+import { createServerFetchForActiveServer, serverFetch } from '@/sync/http/client';
 import {
     getActiveServerSnapshot,
     getActiveServerHomeCarrier,
@@ -298,9 +298,12 @@ export async function fetchAccountEncryptionMode(
         request?: (path: string, init?: RequestInit) => Promise<Response>;
     }> = {},
 ): Promise<AccountEncryptionModeResult> {
+    const request = opts.request ?? (() => {
+        const focusedRequest = createServerFetchForActiveServer();
+        return (path: string, init?: RequestInit) => focusedRequest(path, init, { includeAuth: false });
+    })();
     const run = async (): Promise<AccountEncryptionModeResponse> => {
-        const response = await (opts.request ?? ((path, init) =>
-            serverFetch(path, init, { includeAuth: false })))(
+        const response = await request(
             '/v1/account/encryption',
             {
                 method: 'GET',
@@ -416,8 +419,9 @@ export async function updateAccountEncryptionMode(
     mode: AccountEncryptionMode,
     opts: Readonly<{ retry?: 'default' | 'none' }> = {},
 ): Promise<AccountEncryptionModeResult> {
+    const request = createServerFetchForActiveServer();
     const run = async (): Promise<AccountEncryptionModeResponse> => {
-        const response = await serverFetch(
+        const response = await request(
             '/v1/account/encryption',
             {
                 method: 'PATCH',

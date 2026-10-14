@@ -1,4 +1,5 @@
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { type ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ScmComparisonCaptureInputSchema, ScmDiffSummaryGenerateInputSchema,
     buildScmReviewedMarksKey, createScmReviewedMarksRecordPort } from '@happier-dev/protocol/scm';

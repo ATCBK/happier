@@ -105,16 +105,6 @@ export function registerMachineSessionRpcHandlers(params: Readonly<{
   });
   registerSessionAgentTransitionRpcHandlers(params.rpcHandlerManager, {
     readCredentials: readStoredCredentials,
-    // Protected E2EE Session input can only be admitted through the
-    // authenticated machine transport — the Account route cannot carry the
-    // host-derived equality assertion — and the transition admits the user's
-    // initiating message AFTER the source is stopped and the target current
-    // view is committed. Without this the ordinary E2EE switch leaves the
-    // Session on the target with the message unadmitted, so the transport this
-    // daemon already owns for Session-start admission is threaded here too.
-    ...(params.deps?.sessionServerStart?.machineAdmissionTransport
-      ? { machineAdmissionTransport: params.deps.sessionServerStart.machineAdmissionTransport }
-      : {}),
   });
   return sessionSpawnDirectTargetTransport
     ? { sessionSpawnDirectTargetTransport }

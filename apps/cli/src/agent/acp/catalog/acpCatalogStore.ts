@@ -178,12 +178,12 @@ export function createCliAcpCatalogStore(input: Readonly<{
             return { status: 'settings-conflict' as const, revision: capturedSource.version };
           }
           const { importLegacySavedSecretsForOperation } = await import('@/settings/secrets/hydrateSavedSecretCatalog');
-          const promotionSource = capturedSource;
+          const sourceExpectation = expectation?.expectedRevision === 'absent' ? {
+            mode: capturedSource.mode, raw: capturedSource.raw, version: capturedSource.version,
+          } : undefined;
           const imported = await runWithServerHttpBaseUrl(base, () => importLegacySavedSecretsForOperation({
             expectedScopeKey: scopeKey, signal: input.signal, operationContext: operation,
-            ...(expectation?.expectedRevision === 'absent' ? { sourceExpectation: {
-              mode: promotionSource.mode, raw: promotionSource.raw, version: promotionSource.version,
-            } } : {}),
+            ...(sourceExpectation ? { sourceExpectation } : {}),
           }));
           await admitCurrent();
           if (imported.status !== 'complete') {

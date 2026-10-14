@@ -11,7 +11,7 @@ import {
 } from '@/auth/resolveActiveServerAuthReadiness';
 import { configuration } from '@/configuration';
 import { resolveDaemonStartupSourceServiceManagedState } from '@/daemon/ownership/daemonOwnershipMetadata';
-import { DaemonLocallyPersistedStateSchema, inspectDaemonLockOwner, readSettings } from '@/persistence';
+import { DaemonLocallyPersistedStateSchema, inspectDaemonLockOwner, readSettings, reclaimDeadDaemonPublication } from '@/persistence';
 import { logger } from '@/ui/logger';
 import { resolveDaemonServiceInstallationSnapshotFromEnv } from '@/daemon/service/cli';
 import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineIdForServerFromSettings';
@@ -479,8 +479,8 @@ export type DaemonsStopResult = Readonly<
 /**
  * Best-effort stop for every durable daemon publication and startup lock in the current home.
  * Safety: does not force-kill processes; uses the daemon control HTTP endpoint.
- * State and lifecycle-lock cleanup remain owned by the exact daemon lock holder or the next
- * CLI lock acquisition; this cross-profile observer must not delete a successor publication.
+ * Persistence reclaims proven-dead, unchanged publications; normal shutdown cleanup remains
+ * daemon-owned. Exact-owner checks preserve successor publications.
  */
 export async function stopAllDaemonsBestEffort(opts: StopDaemonOptions = {}): Promise<DaemonsStopResult> {
   let statePaths: readonly string[];
@@ -503,12 +503,17 @@ export async function stopAllDaemonsBestEffort(opts: StopDaemonOptions = {}): Pr
       const owner = await inspectDaemonLockOwner(`${statePath}.lock`);
       if (owner.status === 'starting') {
         incomplete ??= new DaemonStopIncompleteError({ reason: 'startup_in_progress', pid: owner.pid });
+      } else {
+        await reclaimDeadDaemonPublication({ stateFile: statePath });
       }
       continue;
     }
 
     const observation = observePublishedDaemonOwner(state, `${statePath}.lock`);
-    if (!await observation.isPresent()) continue;
+    if (!await observation.isPresent()) {
+      await observation.reclaimIfDead();
+      continue;
+    }
 
     const stopped = await stopDaemonViaHttpBestEffort(state, opts);
     if (!stopped) {
@@ -527,6 +532,7 @@ export async function stopAllDaemonsBestEffort(opts: StopDaemonOptions = {}): Pr
       });
       continue;
     }
+    await observation.reclaimIfDead();
     stoppedCount += 1;
     if (observation.hasHiddenPid()) hiddenPublicationPaths.add(statePath);
   }

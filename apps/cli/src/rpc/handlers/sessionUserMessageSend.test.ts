@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { SessionStructuredInputAdmissionError } from '@/session/services/admitSessionStructuredInputV1';
@@ -87,6 +89,22 @@ describe('session user message send', () => {
     })).resolves.toMatchObject({ ok: false, errorCode: 'model_not_granted' });
     await expect(handler({ text: 'restricted mode', localId: 'restricted-mode', meta: {} }, {
       signal, callerInputConstraints: { models: null, permissionModes: ['default'] },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'permission_mode_not_granted' });
+    expect(handleUserMessage).not.toHaveBeenCalled();
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'verified-root', binding: {
+      accountId: 'account', principalId: 'principal', credentialId: 'credential', custodianAccountId: 'account',
+      serverIdentityId: 'home', machineId: 'machine', installationId: 'installation', actionId: 'session.message.send',
+      requestId: 'original', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'session', sessionId: 'session' },
+      grant: API_TOKEN_FULL_GRANT_V1,
+    } });
+    await expect(handler({ text: 'private restricted mode', localId: 'private-restricted', meta: {} }, {
+      signal, callerInputAuthorization: authorization,
+      callerInputConstraints: { models: null, permissionModes: ['default'] },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'permission_mode_not_granted' });
+    await expect(handler({ text: 'grant restricted mode', localId: 'grant-restricted', meta: {} }, {
+      signal, callerInputAuthorization: { ...authorization, binding: { ...authorization.binding,
+        grant: { ...API_TOKEN_FULL_GRANT_V1, permissionModes: ['default'] } } },
+      callerInputConstraints: { models: null, permissionModes: null },
     })).resolves.toMatchObject({ ok: false, errorCode: 'permission_mode_not_granted' });
     expect(handleUserMessage).not.toHaveBeenCalled();
     // A body claim is not authority, and restriction never becomes Session state.

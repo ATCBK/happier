@@ -5,6 +5,7 @@ import { buildRemoteSshManageHostSystemTaskSpec } from '@/components/systemTasks
 import { buildSshTunnelEnsureSystemTaskSpec } from '@/components/systemTasks/specs/localControl/buildSshTunnelSystemTaskSpec';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { ResolvedHomeTarget } from '@happier-dev/cli-common/homeTarget';
 import type { RemoteHostEffectiveSshConfig } from '@/sync/domains/remoteHosts/resolveRemoteHostEffectiveSshConfig';
 import { resolvePreferredPublicReleaseRingLabelForCurrentApp } from '@/sync/runtime/resolvePublicReleaseRing';
@@ -21,6 +22,39 @@ type TaskAdmission = Readonly<{ runner: SystemTaskRunner; config: RemoteHostEffe
     assertCurrent(): void; assertAccountCurrent?: () => void; signal?: AbortSignal; accountScope?: SystemTaskAccountScope }>;
 type TaskStarted = Readonly<{ status: 'task_started'; taskId: string }>;
 type Unavailable = Readonly<{ status: 'unavailable'; reason: string }>;
+
+/** Task completion and Account retirement have one owner for saved-host and machine-add setup. */
+export function observeRemoteHostSystemTaskCompletion(input: Readonly<{
+    runner: SystemTaskRunner; taskId: string; lifetime: ServerAccountScopeLifetime;
+    onSuccess(completion: Readonly<{ machineId: string | null; relayRuntimeUrl: string | null }>): void;
+    onRetire?(): void;
+}>): () => void {
+    let settled = false;
+    let unsubscribe: (() => void) | undefined;
+    let retirement: Readonly<{ dispose(): void }> | undefined;
+    const release = () => { unsubscribe?.(); retirement?.dispose(); };
+    const observe = () => {
+        const result = input.runner.getSnapshot(input.taskId)?.result;
+        if (!result || settled) return;
+        settled = true;
+        release();
+        if (!result.ok || !input.lifetime.isCurrent()) return;
+        const data = result.data;
+        input.onSuccess({
+            machineId: data && typeof data === 'object' && 'machineId' in data && typeof data.machineId === 'string' ? data.machineId : null,
+            relayRuntimeUrl: data && typeof data === 'object' && 'relayRuntimeUrl' in data && typeof data.relayRuntimeUrl === 'string' ? data.relayRuntimeUrl : null,
+        });
+    };
+    unsubscribe = input.runner.subscribe(input.taskId, observe);
+    retirement = input.lifetime.onRetire(() => {
+        settled = true;
+        release();
+        input.onRetire?.();
+    });
+    observe();
+    if (settled) release();
+    return () => { settled = true; release(); };
+}
 
 export async function startAdmittedRemoteHostSystemTask(input: Pick<TaskAdmission, 'runner' | 'assertCurrent' | 'assertAccountCurrent' | 'signal' | 'accountScope'>, spec: SystemTaskSpec): Promise<TaskStarted> {
     input.signal?.throwIfAborted();
@@ -63,21 +97,8 @@ export async function startRemoteHostSetupTask(input: TaskAdmission & Readonly<{
     }
     const spec = buildRemoteHostBootstrapSystemTaskSpec(input);
     const started = await startAdmittedRemoteHostSystemTask(input, spec);
-    let settled = false;
-    let unsubscribe: (() => void) | undefined;
-    let retirement: Readonly<{ dispose(): void }> | undefined;
-    const release = () => { unsubscribe?.(); retirement?.dispose(); };
-    const observe = () => {
-        const result = input.runner.getSnapshot(started.taskId)?.result;
-        if (!result || settled) return;
-        settled = true;
-        release();
-        if (!result.ok || !lifetime.isCurrent()) return;
-        const data = result.data;
-        const completion = {
-            machineId: data && typeof data === 'object' && 'machineId' in data && typeof data.machineId === 'string' ? data.machineId : null,
-            relayRuntimeUrl: data && typeof data === 'object' && 'relayRuntimeUrl' in data && typeof data.relayRuntimeUrl === 'string' ? data.relayRuntimeUrl : null,
-        };
+    observeRemoteHostSystemTaskCompletion({ runner: input.runner, taskId: started.taskId, lifetime,
+        onRetire: () => { void input.runner.cancel(started.taskId).catch(() => undefined); }, onSuccess: completion => {
         void persistSavedRemoteHostAfterRemoteSshCompletion({ scope: input.scope, host: input.host,
             expectedRevision: input.expectedRevision, completion, assertCurrent: () => {
                 if (!lifetime.isCurrent()) throw new Error('action_account_scope_changed');
@@ -86,14 +107,7 @@ export async function startRemoteHostSetupTask(input: TaskAdmission & Readonly<{
             }, () => {
                 if (lifetime.isCurrent()) Modal.alert(t('common.error'), t('settings.remoteHostsSetupAsMachineFailed'));
             });
-    };
-    unsubscribe = input.runner.subscribe(started.taskId, observe);
-    retirement = lifetime.onRetire(() => {
-        release();
-        void input.runner.cancel(started.taskId).catch(() => undefined);
-    });
-    observe();
-    if (settled) release();
+    } });
     return started;
 }
 

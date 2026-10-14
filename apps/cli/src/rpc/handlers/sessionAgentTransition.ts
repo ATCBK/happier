@@ -1,20 +1,18 @@
-import { SessionAgentTransitionBriefPreviewRequestV1Schema, SessionAgentTransitionBriefPreviewV1Schema, SessionAgentTransitionRequestV1Schema, SessionAgentTransitionResultV1Schema, SessionContinuationInspectionBatchRequestV1Schema, SessionContinuationInspectionBatchResultV1Schema, SessionContinuationInspectionRequestV1Schema, SessionContinuationInspectionV1Schema } from '@happier-dev/protocol/sessions/agentTransition';
-import { rejectUndispatchedSessionAgentTransition } from '@happier-dev/protocol/sessions/agentTransitionEffectStage';
-import type { SessionAgentTransitionBriefPreviewV1, SessionAgentTransitionResultV1, SessionContinuationInspectionV1 } from '@happier-dev/protocol';
+import { SessionAgentTransitionBriefPreviewRequestV1Schema, SessionAgentTransitionBriefPreviewV1Schema, SessionContinuationInspectionBatchRequestV1Schema, SessionContinuationInspectionBatchResultV1Schema, SessionContinuationInspectionRequestV1Schema, SessionContinuationInspectionV1Schema } from '@happier-dev/protocol/sessions/agentTransition';
+import type { SessionAgentTransitionBriefPreviewV1, SessionContinuationInspectionV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { StoredCredentials } from '@/persistence';
-import { runSessionAgentTransition } from '@/session/agentTransition/sessionAgentTransitionCoordinator';
 import { previewSessionAgentTransitionBrief } from '@/session/agentTransition/previewSessionAgentTransitionBrief';
 import {
     inspectSessionContinuation,
     inspectSessionContinuations,
 } from '@/session/agentTransition/sessionContinuationInspection';
-import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 
 /**
- * The three machine-scoped continuation operations.
+ * Machine-scoped read-only continuation operations. Mutation enters through
+ * the canonical admitted Account Action transport, not a parallel raw RPC.
  *
  * All are thin: request validation in, the canonical owner, zod-validated
  * result out. No transition state, retry loop, or recovery command lives here.
@@ -22,20 +20,7 @@ import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 
 export type SessionAgentTransitionRpcRegistrationOptions = Readonly<{
     readCredentials: () => Promise<StoredCredentials | null>;
-    machineAdmissionTransport?: Parameters<typeof sendSessionMessage>[0]['machineAdmissionTransport'];
 }>;
-
-/**
- * Both transition rejections this handler can raise happen BEFORE the
- * coordinator is dispatched — a request that failed schema validation, or a
- * process holding no credentials — so nothing addressed the Session and there
- * is no `localId` to correlate. They are built through the single arm owner
- * (`rejectUndispatchedSessionAgentTransition`) rather than as literals, so the
- * handler cannot drift into naming an arm the coordinator's effect stages
- * forbid.
- */
-const CREDENTIALS_UNAVAILABLE_TRANSITION: SessionAgentTransitionResultV1 =
-    rejectUndispatchedSessionAgentTransition('forbidden');
 
 const CREDENTIALS_UNAVAILABLE_INSPECTION: SessionContinuationInspectionV1 = {
     type: 'unavailable',
@@ -57,27 +42,6 @@ export function registerSessionAgentTransitionRpcHandlers(
     rpc: RpcHandlerRegistrar,
     options: SessionAgentTransitionRpcRegistrationOptions,
 ): void {
-    rpc.registerHandler(RPC_METHODS.SESSION_AGENT_TRANSITION, async (raw: unknown) => {
-        const parsed = SessionAgentTransitionRequestV1Schema.safeParse(raw);
-        if (!parsed.success) {
-            return SessionAgentTransitionResultV1Schema.parse(
-                rejectUndispatchedSessionAgentTransition('unsupported_operation'),
-            );
-        }
-        const credentials = await options.readCredentials();
-        if (!credentials) {
-            return SessionAgentTransitionResultV1Schema.parse(CREDENTIALS_UNAVAILABLE_TRANSITION);
-        }
-        const result = await runSessionAgentTransition({
-            credentials,
-            request: parsed.data,
-            ...(options.machineAdmissionTransport
-                ? { machineAdmissionTransport: options.machineAdmissionTransport }
-                : {}),
-        });
-        return SessionAgentTransitionResultV1Schema.parse(result);
-    });
-
     rpc.registerHandler(RPC_METHODS.SESSION_CONTINUATION_INSPECT, async (raw: unknown) => {
         const parsed = SessionContinuationInspectionRequestV1Schema.safeParse(raw);
         if (!parsed.success) {

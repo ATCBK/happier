@@ -267,6 +267,7 @@ export function createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator(
                             input.expectedConfigurationRevision,
                     },
                     overrideRuntimeCooldown: true,
+                    switchReason: input.reason,
                 },
             });
             assertExactGroup(group, service, input.groupId);

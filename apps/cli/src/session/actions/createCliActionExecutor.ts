@@ -311,6 +311,11 @@ export function createCliActionExecutor(
     // Ordinary Account UI ingress retains its human cause only at its exact
     // credential-backed receiver, after the incumbent Home verifier checks
     // the installed destination's signed request. A raw origin cannot confer it.
+    const privatelyReconciledSession = Boolean(admittedPrivateUiCustody && authorization
+      && authorization.binding.target.kind === 'machine'
+      && authorization.binding.target.machineId === authorization.binding.machineId
+      && context?.externalActionTarget?.kind === 'session'
+      && context.defaultSessionId === context.externalActionTarget.sessionId);
     const ordinaryUiBinding = authorization && 'authentication' in authorization.binding
       && !authorization.binding.sessionActionOrigin && surface === 'ui' && context?.authority === 'present_user'
       && privateKey && params.serverId && params.serverIdentityId === authorization.binding.serverIdentityId
@@ -319,7 +324,7 @@ export function createCliActionExecutor(
       && params.externalActionMachineInstallationId === authorization.binding.installationId
       && context.actionRequestId === authorization.binding.requestId
       && context.defaultSessionMachineId === authorization.binding.machineId
-      && sameStrictJsonValue(context.externalActionTarget, authorization.binding.target)
+      && (sameStrictJsonValue(context.externalActionTarget, authorization.binding.target) || privatelyReconciledSession)
       ? authorization.binding : null;
     // Only the live registered Machine ingress can install receiver custody.
     // A source factory with the same Home proof does not acquire the foreign key.

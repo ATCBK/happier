@@ -23,7 +23,7 @@ import {
 import { isServerIdFilesystemSafe, sanitizeServerIdForFilesystem } from './server/serverId';
 import { isLocalishServerUrl } from './server/serverUrlClassification';
 import type { PublicReleaseRingLabel } from '@happier-dev/release-runtime/releaseRings';
-import { isPidPresent, parseDaemonLockSnapshot, type DaemonLockRecord, type DaemonLockSnapshot } from '@happier-dev/cli-common/process';
+import { isPidPresent, isPidProvablyAbsent, parseDaemonLockSnapshot, type DaemonLockRecord, type DaemonLockSnapshot } from '@happier-dev/cli-common/process';
 export type { DaemonLockSnapshot } from '@happier-dev/cli-common/process';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 import { processGenerationProvesReuse } from '@happier-dev/cli-common/processInstance';
@@ -1365,7 +1365,7 @@ async function inspectDaemonLockSnapshotOwner(snapshot: DaemonLockSnapshot, opti
     return { status: 'replaceable', pid, reason: 'unrelated' };
   }
 
-  const { classifyDaemonLifecycleProcessByPid } = await import('@/daemon/doctor');
+  const { classifyDaemonLifecycleProcessByPid } = await import('@/daemon/processInspection');
   const ownerProcess = await classifyDaemonLifecycleProcessByPid(pid)
     .catch(() => ({ kind: 'unknown' as const }));
   if (ownerProcess.kind === 'daemon') {
@@ -1392,6 +1392,55 @@ export async function clearReplaceableDaemonLock(): Promise<void> {
   const owner = await inspectDaemonLockSnapshotOwner(snapshot);
   if (owner.status === 'replaceable') {
     await reclaimJsonOwnerFileLockSnapshot(configuration.daemonLockFile, snapshot.raw);
+  }
+}
+
+/** Reclaim only a proven-dead publication whose observed state and lifecycle lock are unchanged. */
+export async function reclaimDeadDaemonPublication(options: Readonly<{
+  stateFile?: string;
+  expectedState?: Readonly<{ pid: number; httpPort: number; startedAt?: number; controlToken?: string }> | null;
+  expectedPid?: number;
+  expectedLockRaw?: string | null;
+}> = {}): Promise<boolean> {
+  const stateFile = options.stateFile ?? configuration.daemonStateFile;
+  const lockFile = `${stateFile}.lock`;
+  const readOptional = (path: string): string | null => {
+    try { return readFileSync(path, 'utf8'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+  try {
+    const lockRaw = options.expectedLockRaw === undefined ? readOptional(lockFile) : options.expectedLockRaw;
+    const expected = options.expectedState ?? null;
+    const lockPid = lockRaw === null ? null : parseDaemonLockSnapshot(lockRaw).pid;
+    const pid = expected?.pid ?? lockPid;
+    if (options.expectedPid !== undefined && pid !== options.expectedPid) return false;
+    if (!pid || !Number.isSafeInteger(pid) || pid <= 0 || !isPidProvablyAbsent(pid)) return false;
+    if (lockRaw !== null && lockPid !== pid) return false;
+    if (readOptional(lockFile) !== lockRaw) return false;
+    const stateRaw = readOptional(stateFile);
+    if (stateRaw !== null) {
+      const parsed = DaemonLocallyPersistedStateSchema.safeParse(JSON.parse(stateRaw));
+      if (!parsed.success || !expected) return false;
+      const current = normalizeDaemonState(parsed.data);
+      if (!daemonStateMatchesOwner(current, { ...expected, startedAt: expected.startedAt ?? current.startedAt })) return false;
+      const reclaimed = await reclaimJsonOwnerFileLockSnapshot(stateFile, stateRaw, async (quarantinePath) => {
+        const raw = await readFile(quarantinePath, 'utf8');
+        if (!isPidProvablyAbsent(pid) || readOptional(lockFile) !== lockRaw) throw new Error('Daemon owner changed during cleanup');
+        return raw;
+      });
+      if (reclaimed !== 'reclaimed') return false;
+    }
+    if (lockRaw === null) return true;
+    return await reclaimJsonOwnerFileLockSnapshot(lockFile, lockRaw, async (quarantinePath) => {
+      const raw = await readFile(quarantinePath, 'utf8');
+      if (!isPidProvablyAbsent(pid) || readOptional(stateFile) !== null) throw new Error('Daemon publication changed during cleanup');
+      return raw;
+    }) === 'reclaimed';
+  } catch {
+    return false;
   }
 }
 

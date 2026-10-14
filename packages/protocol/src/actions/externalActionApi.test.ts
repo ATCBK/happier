@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as externalActionApi from './externalActionApi.js';
-import { ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
+import { API_TOKEN_FULL_GRANT_V1, ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
 import { SessionActionRpcOriginV1Schema } from '../rpc/socket.js';
 
 const invocationGrant = ApiTokenGrantV1Schema.parse({ v: 1, actions: { families: [], ids: ['session.title.set'] },
@@ -197,7 +197,7 @@ it('carries an offline admitted row receipt only on target unavailability, never
   expect(() => externalActionApi.projectExternalActionHttpError('invalid_envelope', 'request', receipt)).toThrow();
 });
 
-it('requires canonical spawn facts on sealed managed child requests while retaining explicit Plain framing', () => {
+it('frames sealed managed setup without spawn facts while keeping supplied facts closed and Plain explicit', () => {
   const envelope = { v: 2, requestId: 'child', target: { kind: 'machine', machineId: 'guest' },
     payload: { t: 'encrypted', c: 'sealed-private-startup' }, sessionSpawnAdmission: {
       executionTarget: { serverId: 'home', machineId: 'guest' }, directory: { kind: 'managed' },
@@ -207,8 +207,9 @@ it('requires canonical spawn facts on sealed managed child requests while retain
     managedContinuation: { managedId: 'managed', creationRequestId: 'acquire', expectedIntentRevision: 0 } };
   expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.parse(body)).toEqual(body);
   const { sessionSpawnAdmission: _facts, ...missingFacts } = envelope;
+  // The HTTP Action owner requires spawn facts for Session spawn, not environment setup.
   expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.safeParse({ ...body,
-    envelope: missingFacts }).success).toBe(false);
+    envelope: missingFacts }).success).toBe(true);
   // Persisted Account mode, not this framing parser, authorizes Plain ingress.
   expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.safeParse({ ...body,
     envelope: { v: 1, requestId: 'child', target: envelope.target, input: envelope.sessionSpawnAdmission } }).success).toBe(true);
@@ -255,6 +256,15 @@ it('carries Home-issued invocation authority only in the trusted daemon dispatch
     .toMatchObject({ accountId: 'account-1', custodianAccountId: 'custodian-1', installationId: 'installation-1' });
   const { custodianAccountId: _custodian, ...missingCustodian } = executionAuthorization.binding;
   expect(externalActionApi.ExternalActionExecutionAuthorizationBindingV1Schema.safeParse(missingCustodian).success).toBe(false);
+  expect(externalActionApi.ExternalActionDaemonDispatchRequestSchema.safeParse({
+    actionId: 'session.title.set', envelope, principal: { ...principal, grant: undefined },
+    placement: { machineId: 'machine-1', target }, executionAuthorization,
+  }).success).toBe(false);
+  expect(externalActionApi.ExternalActionDaemonDispatchRequestSchema.safeParse({
+    actionId: 'session.title.set', envelope, principal,
+    placement: { machineId: 'machine-1', target },
+    executionAuthorization: { ...executionAuthorization, binding: { ...executionAuthorization.binding, grant: undefined } },
+  }).success).toBe(false);
 });
 
 import {
@@ -505,6 +515,7 @@ describe('External Action API envelope v1', () => {
         principalId: 'principal-1',
         credentialId: 'credential-1',
         authority: 'account_automation',
+        grant: API_TOKEN_FULL_GRANT_V1,
       },
       placement: {
         machineId: 'machine-1',

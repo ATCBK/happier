@@ -1,0 +1,39 @@
+import { z } from 'zod';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { SystemTaskResultSchema } from '../../system/tasks/spec.js';
+import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+
+export const LOCAL_DAEMON_SERVICE_ACTION_IDS = [
+  'machines.local.service.status', 'machines.local.service.start', 'machines.local.service.stop',
+  'machines.local.service.restart', 'machines.local.service.autostart.set',
+  'machines.local.service.update', 'machines.local.service.disconnect',
+] as const;
+export type LocalDaemonServiceActionId = typeof LOCAL_DAEMON_SERVICE_ACTION_IDS[number];
+export const LocalDaemonServiceInputSchema = lazyZodSchema(() => z.object({ serverId: z.string().trim().min(1) }).strict());
+export const LocalDaemonServiceAutostartInputSchema = lazyZodSchema(() => LocalDaemonServiceInputSchema.extend({ autostart: z.enum(['at-login', 'on-demand']) }).strict());
+export const LocalDaemonServiceOutputSchema = lazyZodSchema(() => z.object({ taskId: z.string().min(1), result: SystemTaskResultSchema }).strict());
+export const LocalDaemonServiceDisconnectOutputSchema = lazyZodSchema(() => z.discriminatedUnion('outcome', [
+  z.object({ outcome: z.enum(['removed', 'no_service']) }).strict(),
+  z.object({ outcome: z.literal('user_owned'), label: z.string().nullable() }).strict(),
+]));
+export const LOCAL_DAEMON_SERVICE_INPUT_SCHEMAS = {
+  'machines.local.service.status': LocalDaemonServiceInputSchema,
+  'machines.local.service.start': LocalDaemonServiceInputSchema,
+  'machines.local.service.stop': LocalDaemonServiceInputSchema,
+  'machines.local.service.restart': LocalDaemonServiceInputSchema,
+  'machines.local.service.autostart.set': LocalDaemonServiceAutostartInputSchema,
+  'machines.local.service.update': LocalDaemonServiceInputSchema,
+  'machines.local.service.disconnect': LocalDaemonServiceInputSchema,
+} as const;
+const surfaces = { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false } as const;
+const common = { executionPlacement: 'client', placements: [], surfaces, approval: { result: 'required' },
+  inputHints: { fields: [{ path: 'serverId', title: 'Home ID', widget: 'text', required: true }] } } as const;
+export const LOCAL_DAEMON_SERVICE_ACTION_SPECS = [
+  { ...common, id: 'machines.local.service.status', title: 'Read local background service', description: 'Read the native user service for this Home on the invoking desktop.', safety: 'safe', sideEffectClass: 'read', bindings: { mcpToolName: 'machines_local_service_status' }, inputSchema: LocalDaemonServiceInputSchema, outputSchema: LocalDaemonServiceOutputSchema },
+  { ...common, id: 'machines.local.service.start', title: 'Start local background service', description: 'Start the existing native user service for this Home.', safety: 'safe', sideEffectClass: 'write', bindings: { mcpToolName: 'machines_local_service_start' }, inputSchema: LocalDaemonServiceInputSchema, outputSchema: LocalDaemonServiceOutputSchema },
+  { ...common, id: 'machines.local.service.stop', title: 'Stop local background service', description: 'Stop the native user service for this Home; this can interrupt its sessions.', safety: 'danger', sideEffectClass: 'danger', bindings: { mcpToolName: 'machines_local_service_stop' }, inputSchema: LocalDaemonServiceInputSchema, outputSchema: LocalDaemonServiceOutputSchema },
+  { ...common, id: 'machines.local.service.restart', title: 'Restart local background service', description: 'Restart the native user service for this Home; this can interrupt its sessions.', safety: 'danger', sideEffectClass: 'danger', bindings: { mcpToolName: 'machines_local_service_restart' }, inputSchema: LocalDaemonServiceInputSchema, outputSchema: LocalDaemonServiceOutputSchema },
+  { ...common, id: 'machines.local.service.autostart.set', title: 'Set desktop login start', description: 'Set the common login-start mode of every desktop-managed service, not a stored preference.', safety: 'safe', sideEffectClass: 'write', bindings: { mcpToolName: 'machines_local_service_autostart_set' }, inputSchema: LocalDaemonServiceAutostartInputSchema, outputSchema: LocalDaemonServiceOutputSchema, inputHints: { fields: [...common.inputHints.fields, { path: 'autostart', title: 'Login-start mode', widget: 'text', required: true }] } },
+  { ...common, id: 'machines.local.service.update', title: 'Update desktop-managed CLI', description: 'Use the shared managed-CLI update task and its scoped completion/readback.', safety: 'danger', sideEffectClass: 'danger', bindings: { mcpToolName: 'machines_local_service_update' }, inputSchema: LocalDaemonServiceInputSchema, outputSchema: LocalDaemonServiceOutputSchema },
+  { ...common, id: 'machines.local.service.disconnect', title: 'Disconnect local service from Home', description: 'Remove only the desktop-managed service for this Home. Preserve user-owned services and the saved Home profile.', safety: 'danger', sideEffectClass: 'danger', bindings: { mcpToolName: 'machines_local_service_disconnect' }, inputSchema: LocalDaemonServiceInputSchema, outputSchema: LocalDaemonServiceDisconnectOutputSchema },
+] as const satisfies readonly PreNormalizedActionSpec[];

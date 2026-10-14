@@ -52,8 +52,11 @@ import {
     type AgentProviderRequirementsV1,
     type CodingPromptBehaviorV1,
     type SessionTurnMutationV1,
+    SessionTurnsProjectionV1Schema,
 } from '@happier-dev/protocol';
 import type { ProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
+import type { Message } from '@happier-dev/session-core/messages';
+import type { SessionRollbackRangeV1 } from '@happier-dev/protocol/sessions/metadata/sessionRollbackRangesV1';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
@@ -93,6 +96,7 @@ import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/erro
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createProviderCliAttachSurface } from '@/session/attach/providerCliAttach';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import { runTerminalRemoteSessionModeLoop } from '@/agent/runtime/session/loop/runTerminalRemoteSessionModeLoop';
 import { bindProcessLogger, Logger, logger } from '@/ui/logger';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
@@ -1847,16 +1851,21 @@ describe('native Agent session host adapter', () => {
         }
 
         const turnMutations: SessionTurnMutationV1[] = [];
+        const session = createMutableApiSessionClientFixture({
+            sessionId: 'session-runner-owned-runtime',
+            overrides: {
+                getLastObservedMessageSeq: () => 42,
+                enqueueSessionTurnMutation: async (mutation: SessionTurnMutationV1) => {
+                    turnMutations.push(mutation);
+                },
+            },
+        });
 
         const created = await plan.config.createSessionRuntime({
             directory: '/tmp/acme-runner-owned-runtime',
             metadata: {},
             machineId: 'machine-1',
-            session: createNativeSessionClientTestPort('session-runner-owned-runtime', {
-                enqueueSessionTurnMutation: async (mutation: SessionTurnMutationV1) => {
-                    turnMutations.push(mutation);
-                },
-            }),
+            session,
             transcriptSession: {},
             messageBuffer: {},
             messageQueue: new MessageQueue2<
@@ -1864,9 +1873,10 @@ describe('native Agent session host adapter', () => {
                 { text: string }
             >((mode) => mode.permissionMode),
             mcpServers: {},
-            permissionHandler: {
-                cancelByPlugin: vi.fn(async () => undefined),
-            },
+            permissionHandler: createProviderEnforcedPermissionHandler({
+                session,
+                logPrefix: '[runner-owned runtime test]',
+            }),
             getPermissionMode: () => currentPermissionMode,
             setThinking: () => undefined,
             memoryRecallGuidanceEnabled: false,
@@ -4222,6 +4232,143 @@ describe('native Agent session host adapter', () => {
         expect(hostServices.features.isEnabled('malformed.feature.decision')).toBe(false);
         expect(isEnabled).toHaveBeenCalledTimes(3);
         await created.operations.resetOrDisposeRuntime();
+    });
+
+    it.each([
+        ['live', 'revert'],
+        ['resume', 'revert'],
+        ['resume', 'methodNotFound'],
+        ['resume', 'applied'],
+        ['resume', 'notApplied'],
+        ['resume', 'missingCheckpoint'],
+    ] as const)('rolls back completed and interrupted Codex turns through native evidence (%s, %s)', async (attachment, outcome) => {
+        // Load the actual cross-package UI consumer without pulling its UI-owned @ alias
+        // source graph into the CLI compiler program. Vitest resolves its real imports.
+        const rollbackUiModulePath = '../../../../../../../apps/ui/sources/sync/domains/sessionRollback/rollbackUiSupport.ts';
+        const { isMessageRolledBack, readSessionRollbackRangesV1 }: Readonly<{
+            isMessageRolledBack(params: Readonly<{ message: Message; rollbackRanges: readonly SessionRollbackRangeV1[] }>): boolean;
+            readSessionRollbackRangesV1(metadata: Record<string, unknown> | null | undefined): readonly SessionRollbackRangeV1[];
+        }> = await import(rollbackUiModulePath);
+        await withCodexNativeAttachFixture(async (fixture) => {
+            const sessionId = 'actual-happier-session';
+            const agentId = 'acme-codex-checkpoint-agent';
+            const contributions = createExternalContributionFixtures(agentId);
+            const agent: ResolvedAgentContribution = {
+                ...contributions.agent,
+                richDefinition: {
+                    ...contributions.agent.richDefinition,
+                    definition: {
+                        ...contributions.agent.richDefinition.definition,
+                        capabilities: {
+                            sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true, conversationRollback: true },
+                        },
+                    },
+                },
+            };
+            const mutations: SessionTurnMutationV1[] = [];
+            const events: AgentSessionRuntimeEvent[] = [];
+            let persisted: ReturnType<typeof SessionTurnsProjectionV1Schema.parse> | null = null;
+            const hostSession = createNativeSessionClientTestPort(sessionId, {
+                readSessionTurnsProjection: async () => persisted,
+                getLastObservedMessageSeq: () => 25,
+                enqueueSessionTurnMutation: (mutation: SessionTurnMutationV1) => { mutations.push(mutation); },
+            });
+            const openHost = async (resume: boolean) => {
+                const plan = await createNativeAgentRuntimeSessionPlan({
+                    runtime: { sessions: { open: (request) => fixture.openConfiguredSession(request.kind === 'resume' ? request.providerSessionId : undefined) } },
+                    lease: createLease(agentId), backend: contributions.backend, agent,
+                    sessionInput: buildPluginSessionBindingInput({
+                        credentials, directory: '/tmp/codex-cancelled-checkpoints',
+                        backendTarget: { kind: 'backend', backendId: agentId },
+                        ...(resume ? { resume: 'fresh-thread' } : {}),
+                    }),
+                    createSessionHostServiceOwners: () => createSessionHostServiceOwners(),
+                });
+                if (!plan.config.createSessionRuntime) throw new Error('Expected native session runtime');
+                const created = await plan.config.createSessionRuntime({
+                    directory: '/tmp/codex-cancelled-checkpoints', metadata: {}, machineId: 'machine-1',
+                    session: hostSession, transcriptSession: {}, messageBuffer: {}, mcpServers: {},
+                    permissionHandler: createProviderEnforcedPermissionHandler({ session: hostSession as never, logPrefix: 'codex-checkpoints' }),
+                    getPermissionMode: () => 'default', setThinking: () => undefined,
+                    memoryRecallGuidanceEnabled: false,
+                } as never);
+                const lifecycle = createSessionTurnLifecycle({ agentId, session: {
+                    sessionId, enqueueSessionTurnMutation: (mutation) => { mutations.push(mutation); },
+                } });
+                created.operations.subscribeRuntimeEvents((event) => {
+                    if (!('kind' in event)) return;
+                    events.push(event);
+                    lifecycle.observeRuntimeEvent(event);
+                });
+                return created;
+            };
+            let created = await openHost(false);
+            try {
+                await created.operations.sendTurnPrompt('Complete turn A', { localId: 'prompt-a', turnId: 'host-turn-a', userMessageSeq: 10 });
+                fixture.emitNotification('item/agentMessage/delta', { threadId: 'fresh-thread', turnId: 'provider-turn-1', itemId: 'reply-a', delta: 'Completed A' });
+                fixture.emitNotification('turn/completed', { threadId: 'fresh-thread', turn: { id: 'provider-turn-1', status: 'completed' } });
+                await created.operations.waitForTurnCompletion();
+                await created.operations.sendTurnPrompt('Partially answer turn B', { localId: 'prompt-b', turnId: 'host-turn-b', userMessageSeq: 21 });
+                fixture.emitNotification('item/agentMessage/delta', { threadId: 'fresh-thread', turnId: 'provider-turn-2', itemId: 'reply-b', delta: 'Partial B' });
+                await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ kind: 'message-delta', turnId: 'host-turn-b' })));
+                await created.operations.cancelTurn();
+                await created.operations.waitForTurnCompletion();
+                await vi.waitFor(() => expect(mutations.filter((mutation) => mutation.action === 'mark_rollback_eligible')).toHaveLength(2));
+                expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-cancelled', turnId: 'host-turn-b' }));
+                // Persistence is a system boundary. Round-trip the actual host-produced checkpoint
+                // mutations using the canonical read schema; never derive checkpoints from turn ids.
+                persisted = SessionTurnsProjectionV1Schema.parse({
+                    v: 1, sessionId, updatedAt: Date.now(),
+                    turns: ['host-turn-a', 'host-turn-b'].map((turnId, index) => {
+                        const boundary = mutations.find((mutation) => mutation.action === 'mark_rollback_eligible' && mutation.turnId === turnId);
+                        if (!boundary || boundary.action !== 'mark_rollback_eligible') throw new Error('Expected persisted native checkpoint');
+                        return {
+                            turnId, status: index === 0 ? 'completed' : 'cancelled', startedAt: 1, updatedAt: 2,
+                            transcriptAnchors: outcome === 'missingCheckpoint' && index === 1
+                                ? { startUserMessageSeq: boundary.transcriptAnchors?.startUserMessageSeq }
+                                : boundary.transcriptAnchors,
+                            rollback: outcome === 'missingCheckpoint' && index === 1
+                                ? { state: 'not_eligible', updatedAt: 2 }
+                                : { state: 'eligible', providerCheckpoint: boundary.transcriptAnchors?.providerCheckpoint, updatedAt: 2 },
+                        };
+                    }),
+                });
+                expect(mutations.some((mutation) => mutation.action === 'mark_rolled_back')).toBe(false);
+                expect(hostSession.getMetadataSnapshot()).not.toHaveProperty('sessionRollbackRangesV1');
+                if (attachment === 'resume') {
+                    await created.operations.resetOrDisposeRuntime();
+                    created = await openHost(true);
+                }
+                if (outcome === 'methodNotFound' || outcome === 'applied' || outcome === 'notApplied') fixture.failNextRevert(outcome);
+                const controls = created.nativeRuntime as typeof created.nativeRuntime & Readonly<{
+                    rollbackConversation(request: Readonly<{ v: 1; target: Readonly<{ type: 'before_user_message'; userMessageSeq: number }> }>): Promise<unknown>;
+                }>;
+                if (outcome === 'missingCheckpoint') {
+                    expect(await controls.rollbackConversation({ v: 1, target: { type: 'before_user_message', userMessageSeq: 21 } })).toMatchObject({
+                        ok: false, errorCode: 'native_conversation_rollback_target_unavailable',
+                    });
+                }
+                const result = await controls.rollbackConversation({ v: 1, target: { type: 'before_user_message', userMessageSeq: 10 } });
+                if (outcome === 'missingCheckpoint' || outcome === 'notApplied') {
+                    expect(result).toMatchObject({ ok: false, errorCode: outcome === 'missingCheckpoint' ? 'codex_rollback_checkpoint_unavailable' : 'native_conversation_rollback_not_applied' });
+                    expect(hostSession.getMetadataSnapshot()).not.toHaveProperty('sessionRollbackRangesV1');
+                    expect(mutations.some((mutation) => mutation.action === 'mark_rolled_back')).toBe(false);
+                    if (outcome === 'missingCheckpoint') expect(fixture.requests.some((request) => request.method === 'thread/revert' || request.method === 'thread/rollback')).toBe(false);
+                    return;
+                }
+                expect(result).toMatchObject({ ok: true });
+                expect(mutations.filter((mutation) => mutation.action === 'mark_rolled_back').map((mutation) => mutation.turnId)).toEqual(['host-turn-a', 'host-turn-b']);
+                expect(fixture.requests).toContainEqual(outcome === 'methodNotFound'
+                    ? { method: 'thread/rollback', params: { threadId: 'fresh-thread', numTurns: 2 } }
+                    : { method: 'thread/revert', params: { threadId: 'fresh-thread', beforeTurnId: 'provider-turn-1' } });
+                if (outcome === 'applied') expect(fixture.requests.some((request) => request.method === 'thread/turns/list')).toBe(true);
+                const rollbackRanges = readSessionRollbackRangesV1(hostSession.getMetadataSnapshot());
+                expect(rollbackRanges).toEqual([{ startSeqInclusive: 10, endSeqInclusive: 25 }]);
+                for (const seq of [10, 11, 21, 22]) expect(isMessageRolledBack({ message: { seq } as Message, rollbackRanges })).toBe(true);
+            } finally {
+                await created.operations.resetOrDisposeRuntime();
+            }
+        });
     });
 
     it('projects declared native direct facets and persists the pre-dispatch rollback range without an Agent-id branch', async () => {
@@ -10048,7 +10195,7 @@ describe('native Agent session host adapter', () => {
         }));
     });
 
-    it('publishes a cached native checkpoint once when exact accepted settlement arrives after turn completion', async () => {
+    it.each(['turn-complete', 'turn-cancelled'] as const)('publishes a cached native checkpoint once when exact accepted settlement arrives after %s', async (terminalKind) => {
         const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
         const session: AgentSessionRuntime = {
             send: vi.fn(async () => ({ status: 'admitted' as const })),
@@ -10110,18 +10257,20 @@ describe('native Agent session host adapter', () => {
                 sequence: 3,
                 sessionId: 'session-checkpoint-late-anchor',
                 emittedAtMs: 3,
-                kind: 'turn-rollback-boundary',
+                ...(terminalKind === 'turn-cancelled'
+                    ? { kind: 'turn-cancelled' as const, cause: 'user' as const }
+                    : { kind: 'turn-complete' as const }),
                 turnId: 'host-turn-late-anchor',
                 agentTurnId: 'provider-turn-late-anchor',
-                providerCheckpoint: 'provider-turn-late-anchor',
             });
             listener({
                 sequence: 4,
                 sessionId: 'session-checkpoint-late-anchor',
                 emittedAtMs: 4,
-                kind: 'turn-complete',
+                kind: 'turn-rollback-boundary',
                 turnId: 'host-turn-late-anchor',
                 agentTurnId: 'provider-turn-late-anchor',
+                providerCheckpoint: 'provider-turn-late-anchor',
             });
         }
         expect(onRollbackBoundary).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { API_TOKEN_FULL_GRANT_V1, getActionSpec, ProjectWorkerActionInputSchemasV1 } from '@happier-dev/protocol';
 import { decodeBase64, decrypt, encodeBase64, encrypt, getRandomBytes } from '@/api/encryption';
@@ -102,6 +102,10 @@ import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/pro
 import { ApprovalRequestV2Schema, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { signExternalActionApprovalInputV1, verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { HappierStorageSummaryV1Schema, MachineStorageCategoryListResultV1Schema, MachineStoragePileResultV1Schema, PileReviewV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { createSpawnedSession } from '@/session/services/createSpawnedSession';
+import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 
 /** Account content material exactly as the CLI persists it: a box seed plus its own public key. */
 function accountDataKeyCredentials(seedByte: number) {
@@ -1673,6 +1677,161 @@ describe('callMachineRpc', () => {
    * Nothing re-homes those rows, so a CLI/MCP send or resume still addresses the
    * PREDECESSOR; reaching the successor is what makes the replacement usable.
    */
+  describe('exact session creation target', () => {
+    const credentials = { token: 'plain-token', encryption: null };
+    const creationOutcome = { disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } } as const;
+
+    beforeEach(() => {
+      // Fetch, HTTP and Socket.IO are the boundaries; creation, target selection,
+      // request codecs and nonce settlement all run their production logic.
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'account' }), { status: 200 })));
+      axiosGet.mockImplementation(async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/machines') return { status: 200, data: [
+          { id: 'remote', replacedByMachineId: 'replacement' },
+          { id: 'replacement', replacedByMachineId: null },
+        ] };
+        if (path.startsWith('/v1/machines/')) return { status: 200, data: { machine: {
+          id: path.slice('/v1/machines/'.length), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+        } } };
+        if (path.startsWith('/v2/sessions/')) return { status: 200, data: { session: createSessionRecordFixture({
+          id: 'remote-session', encryptionMode: 'plain', machineId: 'remote',
+          metadata: JSON.stringify({ path: '/remote-only/project', machineId: 'remote' }),
+        }) } };
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1 } };
+        throw new Error(`Unexpected creation HTTP read: ${path}`);
+      });
+    });
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it.each([false, true])('settles a remote-only path on the selected machine (provider-bound: %s)', async providerBound => {
+      const methods: string[] = [];
+      socket.emit.mockImplementation((event, payload, ack) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        methods.push(payload.method);
+        if (payload.method === `remote:${RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE}`) {
+          expect(payload.params).toMatchObject({ spawnNonce: 'remote-launch' });
+          ack({ ok: true, result: { status: 'success', sessionId: 'remote-session', sessionCreationOutcome: creationOutcome } });
+          return;
+        }
+        expect(payload.method).toBe(`remote:${providerBound ? RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE : RPC_METHODS.SPAWN_HAPPY_SESSION}`);
+        expect(payload.params).toMatchObject({ machineId: 'remote', directory: '/remote-only/project', spawnNonce: 'remote-launch' });
+        ack({ ok: true, result: { success: true, status: 'pending', spawnNonce: 'remote-launch' } });
+      });
+      await expect(createSpawnedSession({ credentials, machineId: 'remote', directory: '/remote-only/project',
+        backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, spawnNonce: 'remote-launch',
+        ...(providerBound ? { modelSelection: { v: 1 as const, ref: {
+          agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_work', modelId: 'model' }, updatedAt: 1 } } : {}),
+      })).resolves.toMatchObject({ sessionId: 'remote-session', disposition: 'created' });
+      expect(methods).toEqual([
+        `remote:${providerBound ? RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE : RPC_METHODS.SPAWN_HAPPY_SESSION}`,
+        `remote:${RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE}`,
+      ]);
+    });
+
+    it.each([false, true])('fails an unreachable explicit target without spawning on its replacement or locally (provider-bound: %s)', async providerBound => {
+      const methods: string[] = [];
+      socket.emit.mockImplementation((event, payload, ack) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        methods.push(payload.method);
+        if (payload.method.startsWith('remote:')) ack({ ok: false,
+          error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+        else ack({ ok: true, result: { type: 'success', sessionId: 'remote-session', sessionCreationOutcome: creationOutcome } });
+      });
+      await expect(createSpawnedSession({ credentials, machineId: 'remote', directory: '/remote-only/project',
+        backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+        ...(providerBound ? { modelSelection: { v: 1 as const, ref: {
+          agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_work', modelId: 'model' }, updatedAt: 1 } } : {}),
+      })).rejects.toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE });
+      expect(methods).toEqual([`remote:${providerBound ? RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE : RPC_METHODS.SPAWN_HAPPY_SESSION}`]);
+    });
+
+    it('preserves a missing explicit target HTTP refusal before any spawn emission', async () => {
+      // Axios supplies a typed HTTP failure when GET /v1/machines/:id is 404.
+      const missingTarget = Object.assign(new Error('Request failed with status code 404'), {
+        code: 'ERR_BAD_REQUEST', response: { status: 404 },
+      });
+      axiosGet.mockRejectedValueOnce(missingTarget);
+      await expect(createSpawnedSession({ credentials, machineId: 'missing', directory: '/remote-only/project',
+        backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+      })).rejects.toMatchObject({ code: 'ERR_BAD_REQUEST', response: { status: 404 } });
+      expect(socket.emit).not.toHaveBeenCalled();
+      expect(axiosGet.mock.calls.map(call => String(call[0]))).toEqual(['https://api.example.test/v1/machines/missing']);
+    });
+
+    it('keeps directory approval preparation on the selected machine when it has a replacement', async () => {
+      const methods: string[] = [];
+      socket.emit.mockImplementation((event, payload, ack) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        methods.push(payload.method);
+        if (payload.method.startsWith('remote:')) ack({ ok: false,
+          error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+        else ack({ ok: true, result: { ok: true, directory: '/remote-only/project', directoryKind: 'path',
+          directoryCreationRequired: false, checkout: null } });
+      });
+      const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId: '', mode: 'plain', ctx: null });
+      await expect(deps.sessionSpawnNewDirectoryApprovalPreflight!({ input: {
+        executionTarget: { serverId: 'home', machineId: 'remote' }, directory: { kind: 'path', path: '/remote-only/project' },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      } })).resolves.toMatchObject({ type: 'error', result: { type: 'error', code: 'incompatible_target', retryable: false } });
+      expect(methods).toEqual([`remote:${RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE}`]);
+    });
+
+    it('does not recover an accepted nonce on another machine after the selected target becomes unreachable', async () => {
+      const methods: string[] = [];
+      socket.emit.mockImplementation((event, payload, ack) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        methods.push(payload.method);
+        if (payload.method === `remote:${RPC_METHODS.SPAWN_HAPPY_SESSION}`) ack({ ok: true,
+          result: { success: true, status: 'pending', spawnNonce: 'remote-launch' } });
+        else if (payload.method.startsWith('remote:')) ack({ ok: false,
+          error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+        else ack({ ok: true, result: { status: 'success', sessionId: 'remote-session', sessionCreationOutcome: creationOutcome } });
+      });
+      await expect(createSpawnedSession({ credentials, machineId: 'remote', directory: '/remote-only/project',
+        backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, spawnNonce: 'remote-launch',
+      })).rejects.toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.UNEXPECTED });
+      expect(methods).toEqual([`remote:${RPC_METHODS.SPAWN_HAPPY_SESSION}`, `remote:${RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE}`]);
+    });
+
+    it.each(['disconnect', 'relay_timeout'] as const)('retains the submitted nonce after %s and resumes observation on that machine without redispatch', async failure => {
+      const methods: string[] = [];
+      socket.emit.mockImplementation((event, payload, ack) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        methods.push(payload.method);
+        if (failure === 'disconnect') socketHandlers.get('disconnect')?.();
+        else ack({ ok: false, error: 'Machine RPC forwarding timeout' });
+      });
+      const attempt = { credentials, machineId: 'remote', directory: '/remote-only/project',
+        backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } as const, spawnNonce: 'remote-launch' };
+      const disconnected = await createSpawnedSession(attempt).catch(error => error);
+      expect(readMachineRpcRequestDisposition(disconnected)).toBe('outcomeUnknown');
+      expect(disconnected).toMatchObject({ details: { spawnNonce: 'remote-launch' } });
+      socket.emit.mockImplementation((event, payload, ack) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        methods.push(payload.method);
+        expect(payload.params).toMatchObject({ spawnNonce: 'remote-launch' });
+        ack({ ok: true, result: { status: 'success', sessionId: 'remote-session', sessionCreationOutcome: creationOutcome } });
+      });
+      await expect(createSpawnedSession({ ...attempt, resumeOnly: true })).resolves.toMatchObject({ sessionId: 'remote-session' });
+      expect(methods).toEqual([`remote:${RPC_METHODS.SPAWN_HAPPY_SESSION}`, `remote:${RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE}`]);
+    });
+
+    it('does not claim an accepted spawn when disconnected before sending', async () => {
+      socket.connect.mockImplementationOnce(() => {
+        socketHandlers.get('connect')?.();
+        socketHandlers.get('disconnect')?.();
+      });
+      const disconnected = await createSpawnedSession({ credentials, machineId: 'remote', directory: '/remote-only/project',
+        backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, spawnNonce: 'remote-launch',
+      }).catch(error => error);
+      expect(readMachineRpcRequestDisposition(disconnected)).toBe('notSent');
+      expect(disconnected).not.toHaveProperty('details.spawnNonce');
+      expect(socket.emit).not.toHaveBeenCalled();
+    });
+  });
+
   describe('replaced machine', () => {
     const PLAIN_MARKER = encodeBase64(
       new TextEncoder().encode(JSON.stringify({ t: 'plain', v: null })),

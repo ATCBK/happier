@@ -194,7 +194,8 @@ export function createMemoryIndexQueueDb(db: SqliteDatabaseSync): MemoryIndexQue
   return {
     getMemorySessionIndexStatus: sessionId => {
       const row = sessionStatusStmt.get(sessionId);
-      return typeof row?.status === 'string' ? row.status : null;
+      return row && typeof row === 'object' && 'status' in row && typeof row.status === 'string'
+        ? row.status : null;
     },
     recordMemorySessionIndexState: (state: MemorySessionIndexStateUpdate) => {
       const id = String(state.sessionId ?? '').trim();

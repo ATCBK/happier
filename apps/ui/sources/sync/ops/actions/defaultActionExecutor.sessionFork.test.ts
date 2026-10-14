@@ -7,12 +7,14 @@ import { AgentNativeResumeIdentityV1Schema, buildQualifiedPluginContributionKey,
   type ActionExecutorContext, type SessionRollbackTarget } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { parseSocketRpcAuthorizationContext, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SettingsWriteDelta } from '@/sync/domains/settings/settings';
 import type { CurrentProjectedAgentCapabilities } from '@/agents/backendCatalog/currentAgentCapabilities';
 import { readCurrentProjectedAgentCapabilities } from '@/agents/backendCatalog/currentAgentCapabilities';
 import { createSessionFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -25,6 +27,8 @@ import { definePlugin } from '@happier-dev/plugin-sdk';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { MINIMUM_CLI_SESSION_FORK_REQUEST_ID_VERSION } from '@/utils/system/versionUtils';
+import { readMachineDaemonCliVersionForServerScope } from '@/sync/domains/machines/readMachineDaemonCliVersionForServerScope';
 
 let daemonAnswer: (request: SocketRpcRequestPayload) => unknown = () => { throw new Error('Unexpected daemon request'); };
 const outgoing = installSessionActionRpcBoundary(request => daemonAnswer(request));
@@ -35,7 +39,6 @@ const restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader(
 afterAll(restoreExecutorModuleLoader);
 const { storage } = await import('@/sync/domains/state/storage');
 const { sync } = await import('@/sync/sync');
-const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { useSessionForkStrategyFlow } = await import('@/sync/domains/sessionFork/useSessionForkStrategyFlow');
 const { getExistingSessionDraftProjection, resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
@@ -71,16 +74,24 @@ const context = () => ({ surface: 'ui' as const, authority: 'present_user' as co
 function installSession(overrides: Partial<Session> = {}) {
   return installSessionActionFixture({ homes, storage, serverId, session: { id: 'sess_parent', ...overrides } });
 }
-function installForkRequestIdentityMachine() {
-  const machine = storage.getState().machines.machine_1;
-  if (!machine) throw new Error('Expected installed machine');
-  const currentMachine = createMachineFixture({ ...machine, daemonState: { cliVersion: '0.3.0' } });
-  storage.setState({ machines: { ...storage.getState().machines, machine_1: currentMachine },
-    machineListByServerId: { ...storage.getState().machineListByServerId,
-      [serverId]: (storage.getState().machineListByServerId[serverId] ?? []).map(row => row.id === currentMachine.id ? currentMachine : row) } });
-}
 function setSettings(delta: SettingsWriteDelta) {
   storage.getState().applySettingsLocal(delta);
+}
+function publishRequestIdCapableForkMachine() {
+  const daemonState = MachinePublishedDaemonStateV1Schema.parse({
+    status: 'running', cliVersion: MINIMUM_CLI_SESSION_FORK_REQUEST_ID_VERSION,
+  });
+  const machine = storage.getState().machines.machine_1;
+  if (!machine) throw new Error('Expected installed fork Machine');
+  storage.getState().applyMachines([createMachineFixture({ ...machine, daemonState })], false, { sourceServerId: serverId });
+  homes.answer(serverId, '/v1/machines', { body: [
+    { ...createPlainMachineRowFixture({ id: 'machine_1', accountId: 'alice' }), daemonState: encodePlainMachineStoredContent(daemonState) },
+    createPlainMachineRowFixture({ id: 'machine_2', accountId: 'alice' }),
+  ] });
+  const state = storage.getState();
+  expect(readMachineDaemonCliVersionForServerScope({
+    state, machineId: 'machine_1', serverId, activeServerId: state.profileScope?.serverId,
+  })).toBe(MINIMUM_CLI_SESSION_FORK_REQUEST_ID_VERSION);
 }
 function installOwnerMetadataUnavailableSession() {
   const session = installSession();
@@ -116,12 +127,12 @@ describe('default Action executor Session lifecycle contracts', () => {
     storage.setState(originalState, true);
     await homes.reset();
     serverId = await homes.addHome({ name: 'Session Home', serverUrl: 'https://session-actions.test', accountId: 'alice' });
+    homes.answer(serverId, '/v1/machines', { body: [
+      createPlainMachineRowFixture({ id: 'machine_1', accountId: 'alice' }),
+      createPlainMachineRowFixture({ id: 'machine_2', accountId: 'alice' }),
+    ] });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://session-actions.test', accountId: 'alice',
-      request: async (url, init) => {
-        const endpoint = new URL(String(url));
-        const token = new Headers(init?.headers).get('Authorization')?.replace(/^Bearer /, '');
-        return createServerFetchAtEndpoint({ endpointUrl: endpoint.origin, ...(token ? { credentials: { token } } : {}) })(`${endpoint.pathname}${endpoint.search}`, init);
-      } });
+      request: homes.request });
     storage.getState().activateProfileScope({ serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
@@ -268,7 +279,7 @@ describe('default Action executor Session lifecycle contracts', () => {
 
   it('keeps the daemon attempt identity stable for a safe retry and distinct for another route', async () => {
     installSession();
-    installForkRequestIdentityMachine();
+    publishRequestIdCapableForkMachine();
     daemonAnswer = () => ({ ok: false, errorCode: 'SPAWN_FAILED', errorMessage: 'not created' });
     const { harness } = await mountForkFlow();
     await act(async () => { await harness.getCurrent().submit('native'); });
@@ -283,7 +294,7 @@ describe('default Action executor Session lifecycle contracts', () => {
 
   it('keeps an ambiguous fork pending and adopts a subsequently visible child without reissuing the mutation', async () => {
     installSession();
-    installForkRequestIdentityMachine();
+    publishRequestIdCapableForkMachine();
     daemonAnswer = () => ({ ok: false, errorCode: 'SESSION_WEBHOOK_TIMEOUT', errorMessage: 'pending' });
     const { harness, navigate } = await mountForkFlow();
     await act(async () => { await harness.getCurrent().submit('replay'); });
@@ -470,6 +481,7 @@ describe('default Action executor Session lifecycle contracts', () => {
       { sessionId: 'sess_parent', targetMachineId: 'machine_2' }, { ...context(), serverId: parentServerId });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     expect(rpcRequests(RPC_METHODS.DAEMON_SESSION_HANDOFF_START_V3)[0]?.params).toHaveProperty('accountServerId', parentServerId);
+    expect(homes.requestsFor('/v1/machines')).toContainEqual(expect.objectContaining({ serverId: parentServerId }));
     expect(homes.requestsFor('/v1/machines/machine_1')).toContainEqual(expect.objectContaining({ serverId: parentServerId }));
   });
 

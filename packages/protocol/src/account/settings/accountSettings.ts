@@ -578,6 +578,8 @@ type AccountCatalogDefinitionOptions = Readonly<{
   compatibility?: Readonly<{ provenance: string; removalCondition: string }>;
   /** Present malformed authority-bearing values must fail instead of recovering to a default. */
   recoverMalformed?: boolean;
+  /** Use the canonical additive stored projection while mutation admission stays strict. */
+  storedRead?: boolean;
   /** Strict write admission when the stored schema deliberately recovers malformed fields. */
   mutationSchema?: z.core.$ZodType;
 }>;

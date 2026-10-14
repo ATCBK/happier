@@ -140,6 +140,10 @@ describe('Pending reset start custody (real SQLite)', () => {
         let outcome: unknown;
         await release({ v: 1, sessionId: f.session.id, localId: f.params.localId, reset }, (value: unknown) => { outcome = value; });
         expect(outcome).toMatchObject({ ok: true, didUpdate: true });
+        // Installed custodian authority releases custody, not requester Account activation.
+        expect(await db.session.findUniqueOrThrow({ where: { id: f.session.id }, select: {
+            pendingActivationRequestId: true, pendingActivationStatus: true,
+        } })).toEqual({ pendingActivationRequestId: null, pendingActivationStatus: null });
         expect(await materializeNextPendingMessage(f.claim)).toMatchObject({ didMaterialize: true, message: { localId: f.params.localId } });
     });
 
@@ -159,6 +163,10 @@ describe('Pending reset start custody (real SQLite)', () => {
         expect(await materializeNextPendingMessage(f.claim)).toMatchObject({ didMaterialize: false });
         await release(payload, (result: unknown) => { outcome = result; });
         expect(outcome).toMatchObject({ v: 1, ok: true, didUpdate: true });
+        // The same socket can arm activation only through its current owner admission.
+        expect(await db.session.findUniqueOrThrow({ where: { id: f.session.id }, select: {
+            pendingActivationRequestId: true, pendingActivationStatus: true,
+        } })).toEqual({ pendingActivationRequestId: f.params.localId, pendingActivationStatus: 'waiting' });
         expect(await materializeNextPendingMessage(f.claim)).toMatchObject({ didMaterialize: true, message: { localId: f.params.localId } });
     });
 

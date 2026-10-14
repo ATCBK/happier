@@ -18,6 +18,7 @@ import {
     subscribeAccountEncryptionModeCacheInvalidation,
 } from '@/sync/api/account/apiAccountEncryptionMode';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useLocalSetting } from '@/sync/store/hooks';
 import { getPreferredLanguage } from '@/text';
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import type { PluginSurfaceTargetKind } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
@@ -208,7 +209,15 @@ export function usePluginSurfaceEnvironment(
     const columnVisible = useAppShellColumn().columnVisible;
     const locale = getPreferredLanguage();
     const resolvedPlatform = normalizePluginSurfacePlatform(platform);
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const spinnerStyle = useLocalSetting('loadingIndicatorStyle');
+    const spinnerSpeed = useLocalSetting('loadingIndicatorSpeed');
+    const spinnerPause = useLocalSetting('loadingIndicatorPause');
+    const spinner = React.useMemo(() => Object.freeze({
+        style: spinnerStyle,
+        speed: spinnerSpeed,
+        pause: spinnerPause,
+    }), [spinnerStyle, spinnerSpeed, spinnerPause]);
+    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme, spinner), [theme, spinner]);
     return React.useMemo(() => Object.freeze({
         platform: resolvedPlatform,
         locale,

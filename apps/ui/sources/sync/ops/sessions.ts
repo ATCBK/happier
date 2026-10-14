@@ -989,6 +989,13 @@ export async function sessionRespondToPermission(
     if (params.decision === 'abort') await sessionAbort(sessionId, options);
 }
 
+function assertSessionInteractionResponseApplied(result: unknown): void {
+    if (result && typeof result === 'object' && 'ok' in result && result.ok === false
+        && 'errorCode' in result && typeof result.errorCode === 'string' && result.errorCode.length > 0) {
+        throw createRpcCallError({ error: result.errorCode, errorCode: result.errorCode });
+    }
+}
+
 async function sendSessionPermissionResponse(
     sessionId: string,
     params: Omit<SessionPermissionRespondRpcParamsV1, 'answers'>,
@@ -1005,13 +1012,7 @@ async function sendSessionPermissionResponse(
         method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
         payload: request,
     });
-    if (result && typeof result === 'object' && 'ok' in result && result.ok === false) {
-        const errorCode = 'errorCode' in result && typeof result.errorCode === 'string'
-            ? result.errorCode : 'permission_response_failed';
-        const error = 'errorMessage' in result && typeof result.errorMessage === 'string'
-            ? result.errorMessage : errorCode;
-        throw createRpcCallError({ error, errorCode });
-    }
+    assertSessionInteractionResponseApplied(result);
     if (params.approved) return;
     // Keep deny's existing best-effort thinking recovery on the applied Home.
     if (options?.serverId !== undefined && !areServerProfileIdentifiersEquivalent(options.serverId, getActiveServerSnapshot().serverId)) return;
@@ -1107,12 +1108,14 @@ export async function sessionRespondToUserAction(
     params: SessionPermissionRespondRpcParamsV1,
     options?: Readonly<{ serverId?: string }>,
 ): Promise<unknown> {
-    return await sessionRpcWithPreferredSessionScope<unknown, SessionPermissionRespondRpcParamsV1>({
+    const result = await sessionRpcWithPreferredSessionScope<unknown, SessionPermissionRespondRpcParamsV1>({
         sessionId,
         ...(options?.serverId !== undefined ? { serverId: options.serverId } : {}),
         method: RPC_METHODS.SESSION_USER_ACTION_ANSWER,
         payload: { ...params, answeringClientCategory: readAnsweringClientCategory() },
     });
+    assertSessionInteractionResponseApplied(result);
+    return result;
 }
 
 /**

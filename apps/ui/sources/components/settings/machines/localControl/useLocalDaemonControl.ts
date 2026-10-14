@@ -29,6 +29,7 @@ import { buildRelayDriftRepairSystemTaskSpec } from '@/sync/domains/server/relay
 import { useAppAccountIdentity } from './useThisComputerConnection';
 import { readThisComputerServiceRows, type ThisComputerServiceRow } from '@/sync/domains/server/relayDrift/thisComputerConnection';
 import { resolveWebappUrlFromServerUrl } from '@/sync/domains/server/url/resolveWebappUrlFromServerUrl';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 export type LocalCliUpdateStatus = Readonly<{
     currentVersion: string;
@@ -178,10 +179,22 @@ export function readLocalDaemonStatusData(result: SystemTaskResult | null): Loca
  * for a change made outside the app's own controls (the tray's native Start / Restart / Stop). A
  * read that fails leaves the last shared status in place.
  */
-export async function refreshLocalDaemonStatus(runner: SystemTaskRunner): Promise<void> {
+export async function refreshLocalDaemonStatus(runner: SystemTaskRunner, options: Readonly<{
+    scope?: LocalDaemonServiceScope;
+    signal?: AbortSignal;
+    isCurrent?: () => boolean;
+}> = {}): Promise<void> {
     if (runner.mode === 'unavailable') return;
-    const taskId = await runner.start(buildLocalDaemonServiceSystemTaskSpec('daemon.service.status.v1'));
-    const status = readLocalDaemonStatusData(await waitForSystemTaskResult(runner, taskId));
+    throwIfAborted(options.signal);
+    if (options.isCurrent?.() === false) return;
+    const taskId = await runner.start(buildLocalDaemonServiceSystemTaskSpec('daemon.service.status.v1', options.scope));
+    const result = await waitForSystemTaskResult(runner, taskId, { signal: options.signal }).catch(async (error: unknown) => {
+        if (options.signal?.aborted) await runner.cancel(taskId);
+        throw error;
+    });
+    const status = readLocalDaemonStatusData(result);
+    throwIfAborted(options.signal);
+    if (options.isCurrent?.() === false) return;
     if (status) publishLocalDaemonStatus(runner, status);
 }
 

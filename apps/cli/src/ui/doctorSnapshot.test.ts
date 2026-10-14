@@ -148,12 +148,13 @@ describe('doctor snapshot projection', () => {
 
       expect(DoctorSnapshotSchema.safeParse(snapshot).success).toBe(true);
       expect(snapshot.server.activeServerId).toBe('stack_main__id_default');
-      expect(snapshot.server.serverUrl).toBe('http://127.0.0.1:3005');
+      expect(snapshot.server.serverUrl).toBe('https://relay.happier.dev');
       expect(snapshot.settings.activeServerId).toBe('cloud');
       expect(snapshot.settings.servers.map((entry) => entry.id)).toContain('cloud');
       expect(snapshot.settings.knownAccountIds).toEqual(['acct_123', 'acct_old']);
       expect(snapshot.accountId).toBe('acct_123');
       expect(snapshot.daemonStatus?.auth.needsAuth).toBe(true);
+      expect(snapshot.daemonStatus?.server.serverUrl).toBe('http://127.0.0.1:3005');
       expect(snapshot.daemonStatus?.server.publicServerUrl).toBe('https://relay.happier.dev');
       expect(snapshot.daemonStatus?.daemon).toMatchObject({
         startedWithCliVersion: '1.2.3', startedWithPublicReleaseChannel: 'preview',

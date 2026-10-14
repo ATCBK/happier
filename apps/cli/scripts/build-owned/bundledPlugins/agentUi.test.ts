@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ScriptKind, ScriptTarget, createSourceFile, isCallExpression, isIdentifier, isObjectLiteralExpression, isPropertyAssignment, isSatisfiesExpression, isVariableStatement } from 'typescript';
 
 import { renderUiBundledPluginEntriesTs } from './agentUi.ts';
@@ -103,6 +108,34 @@ describe('bundled Agent exclusion projections', () => {
         const ui = renderUiBundledPluginEntriesTs({ packageNames: [], pluginPackages });
         expect(emittedMapKeys(ui, 'BUNDLED_CANONICAL_AGENTS_CORE')).toEqual([]);
         expect(emittedMapKeys(ui, 'BUNDLED_CANONICAL_AGENTS_UI')).toEqual([]);
+        // Compile the emitted public declarations: omitted presentation is a valid
+        // publication outcome even while the shared Agent identity remains known.
+        const file = createSourceFile('projection.ts', ui, ScriptTarget.Latest, true, ScriptKind.TS);
+        const maps = file.statements.filter(isVariableStatement).filter(statement => (
+            statement.declarationList.declarations.some(declaration => (
+                isIdentifier(declaration.name) && ['BUNDLED_CANONICAL_AGENTS_CORE', 'BUNDLED_CANONICAL_AGENTS_UI'].includes(declaration.name.text)
+            ))
+        )).map(statement => statement.getText(file));
+        const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-agent-ui-declarations-'));
+        try {
+            const fixturePath = join(fixtureDir, 'projection.ts');
+            writeFileSync(fixturePath, [
+                "type CanonicalAgentId = 'qwen' | 'custom-acp';",
+                'type AgentCoreConfig = Readonly<{ id: CanonicalAgentId }>;',
+                'type AgentUiConfig = Readonly<{ id: string }>;',
+                ...maps,
+                "const core: AgentCoreConfig | undefined = BUNDLED_CANONICAL_AGENTS_CORE['custom-acp'];",
+                "const ui: AgentUiConfig | undefined = BUNDLED_CANONICAL_AGENTS_UI['custom-acp'];",
+            ].join('\n'));
+            const compilation = spawnSync(process.execPath, [
+                fileURLToPath(new URL('../../../../../scripts/workspaces/runTypeScriptCli.mjs', import.meta.url)),
+                '--ignoreConfig', '--noEmit', '--strict', '--target', 'ES2022', fixturePath,
+            ], { encoding: 'utf8', env: process.env });
+            expect(compilation.error).toBeUndefined();
+            expect(compilation.status, compilation.stdout + compilation.stderr).toBe(0);
+        } finally {
+            rmSync(fixtureDir, { recursive: true, force: true });
+        }
         expect(emittedMapKeys(ui, 'BUNDLED_CANONICAL_AGENT_DECLARATIONS')).toEqual([]);
         expect(renderCliBundledPluginEntriesTs({ pluginPackages })).not.toContain('happier.agent.qwen');
         expect(renderCliBundledPluginManifestEntriesTs({ pluginPackages })).not.toContain('happier.agent.qwen');

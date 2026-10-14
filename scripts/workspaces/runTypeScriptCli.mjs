@@ -19,7 +19,10 @@ let coverageBaseline;
 for (let index = 0; index < args.length; index += 1) {
   if (args[index] !== '--verifyProjectCoverage') continue;
   coverageBaseline = args[index + 1];
-  if (!coverageBaseline || coverageBaseline.startsWith('-')) throw new Error('--verifyProjectCoverage requires a baseline tsconfig path');
+  if (!coverageBaseline || coverageBaseline.startsWith('-')) {
+    process.stderr.write('--verifyProjectCoverage requires a baseline tsconfig path\n');
+    process.exit(1);
+  }
   args.splice(index, 2);
   index -= 1;
 }

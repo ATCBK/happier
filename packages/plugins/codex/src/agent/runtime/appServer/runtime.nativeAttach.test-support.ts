@@ -23,6 +23,8 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   resume(): Promise<unknown>;
   failRead(): void;
   failResume(message: string): void;
+  emitNotification(method: string, params: Record<string, unknown>): void;
+  failNextRevert(outcome: 'methodNotFound' | 'applied' | 'notApplied'): void;
   openConfiguredSession(providerSessionId?: string): Promise<AgentSessionRuntime>;
   openConfiguredRun(): Promise<AgentExecutionRunConversationRuntimeV1>;
 }) => Promise<void>, options: {
@@ -67,6 +69,19 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   let resumeFailure: string | null = null;
   let extraRootsSetOccurrence = 0;
   let turnStartOccurrence = 0;
+  let revertFailure: 'methodNotFound' | 'applied' | 'notApplied' | null = null;
+  const nativeServers = new Set([ws]);
+  const turns: Array<{ id: string; status: string }> = [];
+  const emitNotification = (method: string, params: Record<string, unknown>) => {
+    if (method === 'turn/completed' && params.turn && typeof params.turn === 'object') {
+      const observed = params.turn as { id?: unknown; status?: unknown };
+      const turn = turns.find((entry) => entry.id === observed.id);
+      if (turn && typeof observed.status === 'string') turn.status = observed.status;
+    }
+    for (const webSockets of nativeServers) {
+      for (const socket of webSockets.clients) socket.send(JSON.stringify({ method, params }));
+    }
+  };
   const bindServer = (webSockets: WebSocketServer) => webSockets.on('connection', (socket) => socket.on('message', async (payload) => {
     const message = JSON.parse(payload.toString()) as {
       id?: number; method: string; params?: Record<string, unknown>;
@@ -81,7 +96,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     let result: unknown = {};
     let error: unknown;
     const turnId = message.method === 'turn/start'
-      ? options.turnIdForStart?.(++turnStartOccurrence) ?? 'fixture-turn' : 'fixture-turn';
+      ? options.turnIdForStart?.(++turnStartOccurrence) ?? `provider-turn-${turnStartOccurrence}` : 'fixture-turn';
     if (message.method === 'initialize') {
       result = { userAgent: 'happier_cli/0.162.1 (fixture)' };
     } else if (message.method === 'config/read') {
@@ -89,19 +104,38 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     } else if (message.method === 'thread/start') {
       result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
     } else if (message.method === 'turn/start') {
-      result = { turn: { id: turnId, status: 'inProgress', items: [] } };
+      const turn = { id: turnId, status: 'inProgress' };
+      turns.push(turn);
+      materialized = true;
+      result = { turn: { ...turn, items: [] } };
     } else if (message.method === 'thread/name/set') {
       named = true;
     } else if (message.method === 'thread/read') {
       if (rejectRead) error = { code: -32000, message: 'rollout persistence failed' };
       else {
-        materialized = named && params.includeTurns === true;
-        result = { thread: { id: params.threadId, turns: [] } };
+        materialized ||= named && params.includeTurns === true;
+        result = { thread: { id: params.threadId, turns } };
       }
     } else if (message.method === 'thread/resume') {
       if (resumeFailure) error = { code: -32000, message: resumeFailure };
       else if (params.threadId === 'fresh-thread' && !materialized) error = { code: -32000, message: 'no rollout found' };
-      else result = { thread: { id: params.threadId, turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
+      else result = { thread: { id: params.threadId, turns }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
+    } else if (message.method === 'turn/interrupt') {
+      const turn = turns.find((entry) => entry.id === params.turnId);
+      if (!turn) throw new Error('Cannot interrupt an unknown fixture turn');
+      turn.status = 'interrupted';
+    } else if (message.method === 'thread/revert') {
+      if (revertFailure === 'methodNotFound') error = { code: -32601, message: 'Method not found' };
+      else if (revertFailure) error = { code: -32000, message: 'Rollback reply lost' };
+      if (!revertFailure || revertFailure === 'applied') {
+        const index = turns.findIndex((turn) => turn.id === params.beforeTurnId);
+        if (index >= 0) turns.splice(index);
+      }
+      revertFailure = null;
+    } else if (message.method === 'thread/rollback') {
+      turns.splice(-Number(params.numTurns));
+    } else if (message.method === 'thread/turns/list') {
+      result = { data: turns, nextCursor: null };
     } else if (message.method === 'experimentalFeature/list') {
       result = { data: [{ name: 'realtime_conversation', enabled: true }], nextCursor: null };
     } else if (message.method === 'skills/extraRoots/set' && options.rejectExtraRootsSet) {
@@ -109,6 +143,9 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     }
     socket.send(JSON.stringify({ id: message.id, ...(error ? { error } : { result }) }));
     if (message.method === 'turn/start') await options.onTurnStart?.({ socket, params, turnId });
+    if (message.method === 'turn/interrupt') {
+      emitNotification('turn/completed', { threadId: params.threadId, turn: { id: params.turnId, status: 'interrupted' } });
+    }
     if (message.method === 'thread/realtime/start') {
       socket.send(JSON.stringify({ method: 'thread/realtime/started', params: { threadId: 'fresh-thread', realtimeSessionId: null, version: 'v3' } }));
       socket.send(JSON.stringify({ method: 'thread/realtime/sdp', params: { threadId: 'fresh-thread', sdp: 'answer' } }));
@@ -171,6 +208,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       await mkdir(dirname(nativeSocketPath), { recursive: true, mode: 0o700 });
       const nativeServer = createServer();
       const nativeWebSockets = new WebSocketServer({ server: nativeServer });
+      nativeServers.add(nativeWebSockets);
       bindServer(nativeWebSockets);
       await new Promise<void>((resolve, reject) => {
         nativeServer.once('error', reject);
@@ -185,12 +223,15 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
           await new Promise<void>((resolve) => nativeWebSockets.close(() => resolve()));
           await new Promise<void>((resolve, reject) => nativeServer.close((error) => error ? reject(error) : resolve()));
           settleExit({ termination: { observed: { kind: 'exit', exitCode: 0 } } });
+          nativeServers.delete(nativeWebSockets);
         },
       };
     },
   } as unknown as ExecService;
   try {
-    await run({ runtime, requests, exec: nativeExec, endpoints, nativeLaunches, failRead: () => { rejectRead = true; }, failResume: (message) => { resumeFailure = message; }, async openConfiguredSession(providerSessionId) {
+    await run({ runtime, requests, exec: nativeExec, endpoints, nativeLaunches, emitNotification,
+      failNextRevert: (outcome) => { revertFailure = outcome; },
+      failRead: () => { rejectRead = true; }, failResume: (message) => { resumeFailure = message; }, async openConfiguredSession(providerSessionId) {
       // Exec and host SDK services are genuine external boundaries; native/runtime/client logic stays real.
       const context = {
         signal: new AbortController().signal,

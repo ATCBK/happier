@@ -837,11 +837,6 @@ function resolvePluginPolicyAgentId(params: Readonly<{
     agent: EngineResolutionAgent;
     registeredAgentIdentity?: RegisteredExternalAgentIdentity;
 }>): string {
-    if (params.backend.provenance === 'configured' || params.agent.provenance === 'configured') {
-        throw new Error(
-            `Host-configured Agent '${params.agent.id}' requires an explicit host policy identity`,
-        );
-    }
     const policyAgentId = resolveContributionCatalogAgentId({
         backend: params.backend,
         agent: params.agent,

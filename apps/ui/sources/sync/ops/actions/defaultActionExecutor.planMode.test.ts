@@ -1,14 +1,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { ExecutionRunStartResponseSchema, SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema,
-  SessionMetadataTuplePatchSuccessV1Schema,
+  SessionMetadataTuplePatchSuccessV1Schema, MACHINE_PLAIN_DATA_KEY_MARKER,
   SessionSpawnNewInputV2Schema, SessionOwnerMetadataEnvelopeV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -26,6 +26,11 @@ vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock();
 });
+import nacl from 'tweetnacl';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { ExternalActionExecutionAuthorizationRequestV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 
 const outgoing: SocketRpcRequestPayload[] = [];
 // Native file APIs are an OS boundary, outside this HTTP/Action journey.
@@ -54,7 +59,6 @@ await loadSyncSingletonForTests();
 const restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
 afterAll(restoreExecutorModuleLoader);
 const { storage } = await import('@/sync/domains/state/storage');
-const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { resetDynamicModelProbeCacheForTests } = await import('@/sync/domains/models/dynamicModelProbeCache');
 const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
@@ -107,6 +111,95 @@ function installActionSettings(actions: NonNullable<Settings['actionsSettingsV1'
 }
 
 describe('default Action executor mode and catalog contracts', () => {
+  it('inspects an exact continuation through the selected Session daemon', async () => {
+    installSession('inspect-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const machine = createMachineFixture({ id: 'machine-a', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    storage.setState({ machines: { 'machine-a': machine }, machineListByServerId: { [serverId]: [machine] } });
+    const selection = { v: 1, agentId: 'codex' };
+    daemonAnswer = () => ({ type: 'available', protocolVersion: 1, sameSessionTransition: true });
+    const features = createRootLayoutFeaturesResponse({ features: { sessions: { enabled: true, agentSwitching: { enabled: true } } } });
+    homes.answer(serverId, '/v1/features', { body: features });
+    homes.answer(serverId, '/v1/features/authenticated', { body: features });
+    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+    const result = await createDefaultActionExecutor().execute('session.continuation.inspect', { sessionId: 'inspect-session', selection }, context());
+    expect(result, JSON.stringify(result))
+      .toMatchObject({ ok: true, result: { status: 'answered', inspection: { type: 'available' } } });
+    expect(outgoing).toEqual([{ method: `machine-a:${RPC_METHODS.SESSION_CONTINUATION_INSPECT}`,
+      params: { v: 1, sourceSessionId: 'inspect-session', selection } }]);
+  });
+  it('switches through the same Session daemon without replacing the exact first input', async () => {
+    installSession('switch-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const machine = createMachineFixture({ id: 'machine-a', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    storage.setState({ machines: { 'machine-a': machine }, machineListByServerId: { [serverId]: [machine] } });
+    const selection = { v: 1, agentId: 'codex' };
+    const request = { sessionId: 'switch-session', expectedCurrentAgentId: 'claude', selection,
+      input: { localId: 'retained-input', text: 'Expanded prompt', meta: { displayText: 'Attachment', reasoningEffort: 'high' } } };
+    const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
+    homes.answer(serverId, '/v1/machines', { body: [{ id: 'machine-a', kind: 'persistent', active: true,
+      installationId: 'switch-installation', installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null,
+      replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
+      access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }] });
+    let transitionInput: unknown;
+    homes.answer(serverId, '/v1/actions/session.agent.transition/execution-authorization', { select: body => {
+      const authorized = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      return { body: { v: 1, token: 'switch-root', binding: { accountId: 'alice', authentication: { kind: 'account', tokenEpoch: 0 },
+        serverIdentityId: 'srv_mode_home', machineId: 'machine-a', installationId: 'switch-installation', custodianAccountId: 'alice',
+        accountEncryptionMode: 'plain', actionId: 'session.agent.transition', requestId: authorized.envelope.requestId,
+        target: authorized.envelope.target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(authorized.envelope) } } };
+    } });
+    homes.answer(serverId, '/v1/actions/session.agent.transition', { select: body => {
+      const authorized = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      expect(authorized.machineId).toBe('machine-a');
+      expect(openExternalActionRequesterAccountContextV1({ authorization: authorized.executionAuthorization,
+        purpose: { kind: 'external_action' }, machineId: 'machine-a', installationId: 'switch-installation', serverIdentityId: 'srv_mode_home',
+        installationPrivateKey: installation.secretKey, includeInvocation: true })).toMatchObject({ invocation: {
+          caller: { kind: 'host' }, surface: 'ui', authority: 'present_user' } });
+      transitionInput = authorized.envelope.input;
+      return { body: { v: 1, actionId: 'session.agent.transition', requestId: authorized.envelope.requestId,
+        execution: { ok: true, result: { type: 'rejected', code: 'unsupported_operation', sourceEffect: 'none' } } } };
+    } });
+    const features = createRootLayoutFeaturesResponse({ features: { sessions: { enabled: true, agentSwitching: { enabled: true } } } });
+    homes.answer(serverId, '/v1/features', { body: features });
+    homes.answer(serverId, '/v1/features/authenticated', { body: features });
+    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+    daemonAnswer = rpc => rpc.method.endsWith(RPC_METHODS.SESSION_CONTINUATION_INSPECT)
+      ? { type: 'available', protocolVersion: 1, sameSessionTransition: true }
+      : { type: 'rejected', code: 'unsupported_operation', sourceEffect: 'none' };
+    const execute = createDefaultActionExecutor().execute;
+    expect(await execute('session.continuation.inspect', { sessionId: request.sessionId, selection }, context()))
+      .toMatchObject({ ok: true, result: { status: 'answered', inspection: { type: 'available' } } });
+    const switched = await execute('session.agent.transition', request, context());
+    expect(switched, JSON.stringify(homes.requests.map(({ path }) => path)))
+      .toEqual({ ok: true, result: { type: 'rejected', code: 'unsupported_operation', sourceEffect: 'none' } });
+    expect(outgoing.map(rpc => rpc.method)).toEqual([`machine-a:${RPC_METHODS.SESSION_CONTINUATION_INSPECT}`]);
+    expect(transitionInput).toEqual(request);
+    expect(storage.getState().sessions['switch-session']?.metadata?.flavor).toBe('claude');
+  });
+  it('executes goal get, wake and clear through the selected Session daemon', async () => {
+    installSession('goal-session', { path: '/repo', machineId: 'machine-a', flavor: 'codex', codexSessionId: 'native-thread' });
+    const session = storage.getState().sessions['goal-session'];
+    storage.setState({ sessions: { ...storage.getState().sessions, 'goal-session': { ...session, active: false } },
+      machines: { ...storage.getState().machines, 'machine-a': createMachineFixture({ id: 'machine-a',
+        storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+        metadata: { host: 'goal.test', daemonSessionGoalControlsSupported: true } }) } });
+    daemonAnswer = () => ({ workState: null });
+    const executor = createDefaultActionExecutor();
+    const goalGet = await executor.execute('session.goal.get', { sessionId: 'goal-session' }, context());
+    expect(goalGet, JSON.stringify(goalGet))
+      .toMatchObject({ ok: true, result: { workState: null } });
+    expect(await executor.execute('session.goal.set', { sessionId: 'goal-session', objective: 'Finish the task', tokenBudget: null }, context()))
+      .toMatchObject({ ok: true });
+    expect(await executor.execute('session.goal.clear', { sessionId: 'goal-session' }, context()))
+      .toMatchObject({ ok: true });
+    expect(outgoing.map(request => request.method)).toEqual([
+      `machine-a:${RPC_METHODS.DAEMON_SESSION_GOAL_GET}`, 'machine-a:daemon.sessionGoal.set.v2',
+      `machine-a:${RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR}`,
+    ]);
+    expect(outgoing[1]?.params).toMatchObject({ sessionId: 'goal-session', objective: 'Finish the task',
+      tokenBudget: null, resumeInactiveWithInitialGoal: true });
+  });
   it('preserves definitive API-token send outcomes at the transcript boundary', async () => {
     const read = installSession('external-send', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
     if (!connection) throw new Error('Missing connected Home fixture');
@@ -307,13 +400,9 @@ describe('default Action executor mode and catalog contracts', () => {
     storage.setState(originalState, true);
     await homes.reset();
     resetDynamicModelProbeCacheForTests();
-    serverId = await homes.addHome({ name: 'Mode Home', serverUrl: 'https://mode-actions.test', accountId: 'alice' });
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://mode-actions.test', accountId: 'alice',
-      request: async (url, init) => {
-        const endpoint = new URL(String(url));
-        const token = new Headers(init?.headers).get('Authorization')?.replace(/^Bearer /, '');
-        return createServerFetchAtEndpoint({ endpointUrl: endpoint.origin, ...(token ? { credentials: { token } } : {}) })(`${endpoint.pathname}${endpoint.search}`, init);
-      } });
+    const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }) };
+    serverId = await homes.addHome({ name: 'Mode Home', serverUrl: 'https://mode-actions.test', serverIdentityId: 'srv_mode_home', accountId: 'alice', credentials });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://mode-actions.test', accountId: 'alice', credentials, request: homes.request });
     storage.getState().activateProfileScope({ serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });

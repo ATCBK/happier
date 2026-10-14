@@ -5,6 +5,13 @@ import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/ca
 import { getProfileEnvironmentVariables, type AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
 import { isRunnerProviderOwnedEnvironmentKey } from '@/sync/domains/ephemeralRunner/runnerAuthoringCompatibility';
 import type { SavedSecretReferenceResolution } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import type { ActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import {
+    projectAiLaunchProfileForLegacyUi,
+    readUiSelectedProfileCatalogProfile,
+    readUiVisibleProfileCatalogSnapshot,
+} from '@/sync/domains/profiles/aiLaunchProfileCollection';
+import { readProfileCatalogProjectionInContext } from '@/sync/api/account/apiProfileCatalog';
 
 // Optimized profile lookup utility
 export const useProfileMap = (profiles: AIBackendProfile[]) => {
@@ -120,6 +127,24 @@ export function assertLaunchProfileReviewCurrent(
     if (!isLaunchProfileReviewCurrent(reviewed, current)) {
         throw new LaunchProfileReviewChangedError();
     }
+}
+
+/** Re-read the reviewed selection at the captured launch Account before materialization. */
+export async function readCurrentLaunchProfileForReview(input: Readonly<{
+    context: ActionAccountContext;
+    profileId: string;
+    reviewedProfile: AIBackendProfile | null;
+    signal?: AbortSignal;
+}>): Promise<Readonly<{ profile: AIBackendProfile; profiles: readonly AIBackendProfile[] }>> {
+    const projection = await readProfileCatalogProjectionInContext(input.context, input.signal);
+    input.context.assertCurrent();
+    const rawSettings = await input.context.readRawSettings();
+    input.context.assertCurrent();
+    const snapshot = readUiVisibleProfileCatalogSnapshot(projection, rawSettings, { lastUsedProfile: input.profileId });
+    const selected = readUiSelectedProfileCatalogProfile(snapshot, rawSettings, input.profileId);
+    const currentProfile = selected ? projectAiLaunchProfileForLegacyUi(selected) : null;
+    assertLaunchProfileReviewCurrent(input.reviewedProfile, currentProfile);
+    return { profile: currentProfile, profiles: snapshot.profiles.map(projectAiLaunchProfileForLegacyUi) };
 }
 
 /**

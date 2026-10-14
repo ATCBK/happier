@@ -16,7 +16,7 @@ import {
 } from '@/session/external/externalSessionFollowFailure';
 import { isExternalSessionProviderFailureError } from '@/session/external/providerOps';
 import { isAgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sessions/external';
-import { ExternalSessionPersistedTakeoverPreflightError } from './materializeAction';
+import { ExternalSessionPersistedTakeoverPreflightError } from './persistedTakeoverPreflightError';
 
 const TAKEOVER_ADMISSION_INVARIANT_CODES = [
     'persisted_takeover_admission_invalid_metadataVersion',

@@ -48,6 +48,7 @@ import { useMachineAddPaths } from './useMachineAddPaths';
 import { buildMachineAddCommand, detectClientCommandOs, MACHINE_ADD_COMMAND_OS, type MachineAddCommandOs } from './machineAddCommand';
 import { cancelMachineAddFlowTasks, discardMachineAddFlowDraft, readMachineAddFlowDraft, updateMachineAddFlowDraft, useMachineAddFlowDraft, useMachineAddFlowDraftSelector, type MachineAddTaskHandle } from './machineAddFlowStore';
 import { beginMachineAddWatch, startMachineAddTask, hasRunningMachineAddTask as hasRunningTask } from './machineAddTaskLifetime';
+import { getMachineAddSshSupportedAuthModes } from './machineAddSshTask';
 
 export type MachineAddDraftRow = Readonly<{ title: string; entityTitle: string | null; status: string | null; tone: 'waiting' | 'running' | 'failed' | 'arrived' }>;
 export type MachineAddStep = Readonly<{ id: string; label: string; state: 'done' | 'running' | 'pending' | 'failed'; elapsedMs: number | null }>;
@@ -180,6 +181,7 @@ export function useMachineAddFlow(options: Readonly<{ serverId?: string; initial
     const setDraft = React.useCallback((next: SshCredentialsDraft) => update((current) => ({ ...current, sshDraft: { ...next,
         privateKeyMaterial: next.authMode === 'keyfile' ? current.sshDraft.privateKeyMaterial : undefined,
         savedHostId: ['host', 'username', 'port', 'authMode', 'identityFilePath'].every((key) => next[key as keyof SshCredentialsDraft] === current.sshDraft[key as keyof SshCredentialsDraft]) ? current.sshDraft.savedHostId : null,
+        savedHostExpectedRevision: ['host', 'username', 'port', 'authMode', 'identityFilePath'].every((key) => next[key as keyof SshCredentialsDraft] === current.sshDraft[key as keyof SshCredentialsDraft]) ? current.sshDraft.savedHostExpectedRevision : undefined,
     } })), [update]);
     const suggestions = React.useMemo(() => [
         ...savedHosts.map((host) => ({ id: host.id, title: host.name, subtitle: host.ssh.target, apply: () => {
@@ -188,12 +190,14 @@ export function useMachineAddFlow(options: Readonly<{ serverId?: string; initial
                 ...buildSshCredentialsDraftFromRemoteHostConfig({ sshTarget: host.ssh.target, sshPort: host.ssh.port ?? null,
                     sshAuth: host.ssh.authMode, identityFilePath: overrides?.identityFilePath ?? '',
                     sshConfigFilePath: overrides?.sshConfigFilePath ?? '', identityPrivateKey: '', password: '' }), savedHostId: host.id,
+                savedHostExpectedRevision: hostCatalog && !hostCatalog.stale && hostCatalog.catalog.status === 'ready' && hostCatalog.catalog.cleanup !== 'pending'
+                    ? hostCatalog.catalog.revision : undefined,
             } });
         } })),
         ...configuredHosts.map((host) => ({ id: host.id, title: host.alias, subtitle: host.hostname, apply: () => update((current) => ({
             ...current, sshDraft: { ...applyConfiguredSshHostSuggestionToDraft(current.sshDraft, host), savedHostId: null },
         })) })),
-    ], [configuredHosts, savedHosts, serverId, update]);
+    ], [configuredHosts, hostCatalog, savedHosts, serverId, update]);
     const chosen = paths.find((candidate) => candidate.id === draft.path) ?? null;
     const choosePath = React.useCallback((id: MachineAddPathId) => {
         if (!paths.some((candidate) => candidate.id === id) || hasRunningTask()) return;
@@ -300,7 +304,7 @@ export function useMachineAddFlow(options: Readonly<{ serverId?: string; initial
         choosePath, os: draft.os, detectedOs, setOs: (os: MachineAddCommandOs) => update((current) => ({ ...current, os })), commands,
         ssh: { draft: draft.sshDraft, setDraft, ready: isSshCredentialsDraftReady(draft.sshDraft) && sshActions.ready,
             hostError: taskError && ['connection-failed', 'network-captive-portal'].includes(taskError.code) ? t('machineAdd.cannotReachHost') : null,
-            suggestions, supportedAuthModes: runner.mode === 'native' ? ['keyfile', 'password'] as const : ['agent', 'keyfile', 'password'] as const,
+            suggestions, supportedAuthModes: getMachineAddSshSupportedAuthModes(runner),
             privateKeyMaterial: draft.sshDraft.privateKeyMaterial ?? '', setPrivateKeyMaterial: (value: string) => update((current) => ({ ...current, sshDraft: { ...current.sshDraft, privateKeyMaterial: value, savedHostId: null } })),
         },
         thisComputer, run, approval: sshActions.approval,

@@ -576,17 +576,13 @@ class AuthModule {
         const machine = await db.machine.findUnique({ where: { id: input.machineId },
             select: { accountId: true, installationId: true } });
         if (!machine?.installationId) throw new ApiTokenOperationError('invalid_token');
-        const needsAccountMode = 'authentication' in input || input.actionId === 'session.pending.resetStart.set'
-            || ManagedMachineActionIdV1Schema.safeParse(input.actionId).success
-            || input.managedContinuation || Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, input.actionId);
-        const accountMode = needsAccountMode
-            ? await db.account.findUnique({ where: { id: input.accountId }, select: { encryptionMode: true } }) : null;
-        if (needsAccountMode && !accountMode) {
+        const accountMode = await db.account.findUnique({ where: { id: input.accountId }, select: { encryptionMode: true } });
+        if (!accountMode) {
             throw new ApiTokenOperationError('invalid_token');
         }
         const supplied = ExternalActionExecutionAuthorizationBindingV1Schema.parse({
             ...input, custodianAccountId: machine.accountId, installationId: machine.installationId,
-            ...(accountMode ? { accountEncryptionMode: accountMode.encryptionMode } : {}),
+            accountEncryptionMode: accountMode.encryptionMode,
         });
         if ('authentication' in supplied) {
             const { isOriginalTerminalExecutionAction, hasCurrentOriginalSessionActionTargetInTx } = await import('./externalActionExecutionAuthorization');

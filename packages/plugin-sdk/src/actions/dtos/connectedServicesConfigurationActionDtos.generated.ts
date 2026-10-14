@@ -529,6 +529,7 @@ export type ConnectedServicesConfigurationActionInputById = {
             configurationRevision: string | null;
         } | undefined;
         overrideRuntimeCooldown?: boolean | undefined;
+        switchReason?: string | undefined;
     };
     readonly "connectedServices.pools.reorder": {
         group: {
@@ -3498,6 +3499,17 @@ export type ConnectedServicesConfigurationActionResultById = {
             strategy: 'manual' | 'expiry_first' | 'priority' | 'least_limited';
             atMs: number;
         } | undefined;
+        activeAccountRef?: {
+            service: {
+                pluginId: string;
+                localId: string;
+            };
+            accountId: string;
+        } | null | undefined;
+        activeSince?: {
+            accountId: string;
+            atMs: number;
+        } | null | undefined;
     } | {
         status: 'unavailable';
         code: 'unsupported' | 'connected_account_daemon_owner_unavailable' | 'connected_account_daemon_runtime_unavailable' | 'connected_account_daemon_response_invalid';

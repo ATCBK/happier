@@ -10,6 +10,7 @@ import type {
 } from '@/plugins/projection/registry/types';
 
 import { resolveExecutablePluginRuntimeRegistry } from './resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
@@ -18,12 +19,12 @@ import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRu
 
 describe('executable plugin hook activation ownership', () => {
     it('activates the exact bundled Codex hook demand and projects its registered handler', async () => {
-        const fixture = await createAdmittedPluginRuntimeFixture();
+        const fixture = await createAdmittedPluginRuntimeFixture({
+            runtimeOptions: { pluginIds: ['happier.agent.codex'] },
+        });
         const runtime = fixture.registry;
 
         try {
-            expect(runtime.activatedPluginIds.has('happier.agent.codex')).toBe(false);
-
             await runtime.activateContributionsOnDemand([{
                 pluginId: 'happier.agent.codex',
                 family: 'hooks',

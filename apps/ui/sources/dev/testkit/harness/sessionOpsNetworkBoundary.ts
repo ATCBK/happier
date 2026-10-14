@@ -1,5 +1,6 @@
 import { vi } from 'vitest';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 
 export type SessionOpsRpcRequest = Readonly<{
     serverUrl: string;
@@ -30,7 +31,7 @@ type SessionOpsSocketBoundary = ReturnType<typeof import('../mocks/socketIo').cr
 
 export type SessionOpsNetworkBoundary = Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
 
-/** Scoped operations use real Home/Account admission and credentials; only network transports are replaced. */
+/** Scoped operations use real Home/Account admission and custody; only network and device locking are replaced. */
 export async function installSessionOpsNetworkBoundary() {
     const requests: SessionOpsRpcRequest[] = [];
     const responses = new Map<string, unknown>();
@@ -89,14 +90,15 @@ export async function installSessionOpsNetworkBoundary() {
     });
 
     // This harness serves scoped saved Homes. It does not fabricate a focused Sync Account.
-    const { upsertServerProfile, resolveUniqueServerProfileByUrl } = await import('@/sync/domains/server/serverProfiles');
+    const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     const { createPlainMachineRowFixture } = await import('../fixtures/machineFixtures');
     const { createAccountTokenForTests } = await import('./homeGovernanceHarness');
     const { canonicalizeServerUrl } = await import('@/sync/domains/server/url/serverUrlCanonical');
-    const homes = new Set<string>();
-    const accountIdsByHome = new Map<string, string>();
+    const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+    const locks = typeof globalThis.navigator?.locks?.request === 'function' ? null : installWebLockManagerMock();
+    const homes = new Map<string, { serverId: string; accountId: string; encryptionMode: 'plain' | 'e2ee' }>();
     const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
     const credentialRequests: Array<{ serverUrl: string; serverId: string | undefined }> = [];
     const readCredentials = TokenStorage.getCredentialsForServerUrl;
@@ -118,7 +120,9 @@ export async function installSessionOpsNetworkBoundary() {
         // contract is the HTTP status, not a response body.
         if (url.pathname === '/health') return new Response(null, { status: 200 });
         if (url.pathname === '/v1/auth/ping') return Response.json({});
-        const accountId = accountIdsByHome.get(url.origin);
+        if (url.pathname === '/v1/account/encryption') return Response.json({ mode: homes.get(url.origin)!.encryptionMode, updatedAt: 1 });
+        if (url.pathname === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
+        const accountId = homes.get(url.origin)?.accountId;
         if (!accountId) throw new Error(`Test Home Account is unavailable: ${url.origin}`);
         if (url.pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine-1', accountId })]);
         if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
@@ -130,16 +134,19 @@ export async function installSessionOpsNetworkBoundary() {
     return {
         requests,
         httpRequests,
-        credentialRequests,
+        request: runtimeFetchBoundary,
+        get credentialRequests() {
+            return credentialRequests;
+        },
         socketBoundaries,
         resetRequests() {
             // The global UI cleanup retires runtimeFetch after every test.
             setRuntimeFetch(runtimeFetchBoundary);
             credentialObserver.mockRestore();
             credentialObserver = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(observeCredentialRead);
+            credentialRequests.length = 0;
             requests.length = 0;
             httpRequests.length = 0;
-            credentialRequests.length = 0;
             socketBoundaries.length = 0;
             responses.clear();
             rpcResponder = null;
@@ -166,26 +173,30 @@ export async function installSessionOpsNetworkBoundary() {
         },
         async setAccount(homeUrl: string, accountId: string) {
             const serverUrl = canonicalizeServerUrl(homeUrl);
-            if (!homes.has(serverUrl)) throw new Error(`Test Home is not registered: ${serverUrl}`);
-            const profile = resolveUniqueServerProfileByUrl(serverUrl);
-            if (!profile) throw new Error(`Test Home profile is not uniquely registered: ${serverUrl}`);
-            const write = await TokenStorage.setCredentialsForServerUrlWithRollback(
-                serverUrl, { serverId: profile.id }, { token: createAccountTokenForTests(accountId) },
-            );
-            if (!write) throw new Error(`Test Home credentials could not be stored: ${serverUrl}`);
+            const home = homes.get(serverUrl);
+            if (!home) throw new Error(`Test Home is not registered: ${serverUrl}`);
+            const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+            const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+            const applied = getActiveServerAccountScope()?.serverId === resolveServerProfileScopeIdForIdentifier(home.serverId);
+            const { disconnectActiveServerConnection, restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+            if (applied) await disconnectActiveServerConnection();
+            const credentials = { token: createAccountTokenForTests(accountId) };
+            const write = await TokenStorage.setCredentialsForServerUrlWithRollback(serverUrl, { serverId: home.serverId }, credentials);
+            if (!write) throw new Error(`Test Home credential replacement was refused: ${serverUrl}`);
             credentialWrites.push(write);
-            accountIdsByHome.set(serverUrl, accountId);
+            home.accountId = accountId;
+            if (applied) await restoreConnectionToActiveServer(credentials);
         },
-        async addHome(serverUrl: string, accountId: string) {
+        async addHome(serverUrl: string, accountId: string, options: Readonly<{
+            credentials?: AuthCredentials; encryptionMode?: 'plain' | 'e2ee';
+        }> = {}) {
             const profile = await upsertServerProfile({ serverUrl, name: accountId });
-            const token = createAccountTokenForTests(accountId);
-            const write = await TokenStorage.setCredentialsForServerUrlWithRollback(
-                profile.serverUrl, { serverId: profile.id }, { token },
-            );
-            if (!write) throw new Error(`Test Home credentials could not be stored: ${profile.serverUrl}`);
+            const credentials = options.credentials ?? { token: createAccountTokenForTests(accountId) };
+            const write = await TokenStorage.setCredentialsForServerUrlWithRollback(profile.serverUrl, { serverId: profile.id }, credentials);
+            if (!write) throw new Error(`Test Home credential publication was refused: ${profile.serverUrl}`);
             credentialWrites.push(write);
-            homes.add(profile.serverUrl);
-            accountIdsByHome.set(profile.serverUrl, accountId);
+            homes.set(profile.serverUrl, { serverId: profile.id, accountId, encryptionMode: options.encryptionMode ?? 'plain' });
+            const token = credentials.token;
             return { ...profile, accountId, token };
         },
         async dispose() {
@@ -198,7 +209,8 @@ export async function installSessionOpsNetworkBoundary() {
             resetRuntimeFetch();
             credentialObserver.mockRestore();
             vi.doUnmock('socket.io-client');
-            for (const write of credentialWrites.splice(0).reverse()) await write.rollback();
+            try { for (const write of credentialWrites.splice(0).reverse()) await write.rollback(); }
+            finally { locks?.restore(); }
         },
     };
 }

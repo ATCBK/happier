@@ -314,9 +314,14 @@ describe('happier providers command domain', () => {
     await expect(executeProvidersCommand(args, deps)).rejects.toMatchObject({ code: 'approval_stale' });
     expect(h.getRaw()).toEqual(before);
     decision = 'approve';
-    await expect(executeProvidersCommand(args, deps)).resolves.toMatchObject({ ok: true });
+    const approved = await executeProvidersCommand(args, deps);
+    expect(approved).toMatchObject({ ok: true });
+    if (!approved.ok || typeof approved.data !== 'object' || approved.data === null
+      || !('connectionId' in approved.data) || typeof approved.data.connectionId !== 'string') {
+      throw new Error('Expected the approved command to return its connection');
+    }
     expect((h.getRaw().secrets as readonly unknown[])).toContainEqual(prepared.record);
-    const connectionId = workflow === 'machine-secret' ? 'pc_1' : 'pc_5';
+    const connectionId = approved.data.connectionId;
     const bindings = settings(h.getRaw()).secretBindingsByConnectionId[connectionId];
     expect(workflow === 'machine-secret' ? bindings?.byMachineId?.['machine-a'] : bindings?.account)
       .toEqual({ apiKey: prepared.id });

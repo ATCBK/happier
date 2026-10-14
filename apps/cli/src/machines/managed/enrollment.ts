@@ -75,7 +75,7 @@ export async function runManagedMachineEnrollment(input: Readonly<{
       const result = await owner.wait(task);
       if (!result.ok) throw new SystemTaskExecutionError(result.error?.code ?? 'system_task_failed', result.error?.message ?? 'Managed guest setup failed.');
       const data = result.data;
-      const machineId = data && typeof data === 'object' && !Array.isArray(data) && typeof data.machineId === 'string' ? data.machineId : '';
+      const machineId = data && typeof data === 'object' && !Array.isArray(data) && 'machineId' in data && typeof data.machineId === 'string' ? data.machineId : '';
       if (!machineId) throw new SystemTaskExecutionError('machine_registration_unconfirmed', 'Managed guest registration was not confirmed.');
       await assertCurrent();
       return { machineId };

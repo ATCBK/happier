@@ -1,6 +1,5 @@
 import { RPC_METHODS } from '../rpc/methods.js';
 import type { EntityDragScopeV1 } from '../plugins/ui/entityDragDrop.js';
-
 /** Action identity must not import the schemas that themselves consume the catalog. */
 export const WORKFLOW_AUTHORING_ACTION_IDS = [
   'workflow.authoring.conversation.bind', 'workflow.authoring.draft.get', 'workflow.authoring.draft.edit',

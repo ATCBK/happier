@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react';
 import { HappierSpinnerHost } from '@happier-dev/plugin-ui/presentation';
 
 import { mountThroughReactNativeWebAsync, type RnwMount } from '../../rnwMount.testSupport.js';
 import { HappierSpinner, resolveHappierSpinnerPresentation, resolveHappierWebSpinnerPresentation } from './Spinner.js';
+import { Spinner } from '../../components/Spinner.js';
+import { PluginUiProviderInternal } from '../../components/PluginUiProvider.js';
+import { createHostApiStub, createSurfaceContext } from '../../surfaceFixture.testSupport.js';
 
 describe('shared web-spinner presentation', () => {
   it.each([false, true])('keeps an explicitly stopped classic ring visible and still with reduced motion %s', (reducedMotion) => {
@@ -148,6 +152,60 @@ describe('HappierSpinner on web (dot styles)', () => {
     if (!payload) throw new Error(`Expected a frame-sheet rule for ${key}`);
     return decodeURIComponent(payload);
   }
+
+  it('updates the public Spinner mark, playback speed and absolute pause from live host preferences', async () => {
+    const initial = createSurfaceContext();
+    const withPreferences = (style: string, speed: string, pause: string) => ({
+      ...initial,
+      theme: { ...initial.theme, spinner: { style, speed, pause } },
+    });
+    let publish: ((context: ReturnType<typeof withPreferences>) => void) | undefined;
+    const context = withPreferences('hWave', 'slow', 'long');
+    const hostApi = createHostApiStub(context, {
+      watchContext: async (listener) => {
+        publish = listener;
+        return { dispose() {} };
+      },
+    });
+    const render = () => <PluginUiProviderInternal hostApi={hostApi} context={context} surfaceActivity={{ active: true }}>
+      <Spinner testID="public-spinner" accessibilityLabel="Saving" />
+    </PluginUiProviderInternal>;
+    mount = await mountThroughReactNativeWebAsync(render());
+
+    expect(frameSheetFor(strip()).match(/<circle /g)).toHaveLength(47 * 7);
+    expect(strip().style.animationDuration).toBe('1572ms');
+    expect(mount.container.querySelector('[data-testid="public-spinner"]')?.getAttribute('aria-label')).toBe('Saving');
+
+    await act(async () => { publish!(withPreferences('hWave', 'fast', 'long')); });
+    expect(strip().style.animationDuration).toBe('1036ms');
+
+    await act(async () => { publish!(withPreferences('hWave', 'fast', 'none')); });
+    expect(strip().style.animationDuration).toBe('536ms');
+
+    await act(async () => { publish!(withPreferences('classicRing', 'fast', 'none')); });
+    expect(mount.container.querySelector('[data-happier-activity-spinner]')).toBeNull();
+    expect(mount.container.querySelector<HTMLElement>('[data-testid="public-spinner"]')?.style.animationName).toBe('happierActivitySpinnerSpin');
+  });
+
+  it('retains the host-selected mark while reduced motion breathes it and an inactive surface holds it still', async () => {
+    const initial = createSurfaceContext({ reducedMotion: true });
+    const context = { ...initial, theme: { ...initial.theme, spinner: { style: 'hWave', speed: 'fast', pause: 'none' } } };
+    const hostApi = createHostApiStub(context);
+    const render = (presentationActive: boolean) => <PluginUiProviderInternal
+      hostApi={hostApi} context={context} surfaceActivity={{ active: true }} presentationActive={presentationActive}
+    ><Spinner testID="public-spinner" /></PluginUiProviderInternal>;
+    mount = await mountThroughReactNativeWebAsync(render(true));
+    expect(frameSheetFor(strip()).match(/<circle /g)).toHaveLength(7);
+    expect(strip().style.animationName).toBe('happierActivitySpinnerBreath');
+
+    await mount.render(render(false));
+    expect(frameSheetFor(strip()).match(/<circle /g)).toHaveLength(7);
+    expect(strip().style.animationName).toBe('');
+    expect(mount.container.querySelector('[data-testid="public-spinner"]')).not.toBeNull();
+
+    await mount.render(render(true));
+    expect(strip().style.animationName).toBe('happierActivitySpinnerBreath');
+  });
 
   it.each(['classicRing', 'wave'] as const)('installs %s keyframes when the public host renders directly without an adapter', async (indicatorStyle) => {
     document.getElementById('happier-spinner-keyframes')?.remove();

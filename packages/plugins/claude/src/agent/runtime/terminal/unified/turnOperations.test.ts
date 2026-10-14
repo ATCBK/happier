@@ -1339,9 +1339,17 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
       });
       let followCount = 0;
       const transcripts = createManualTranscriptFollowFixture();
-      transcripts.service.fileFollow.follow = vi.fn(async () => {
+      type FollowInput = Parameters<typeof transcripts.service.fileFollow.follow>[0];
+      transcripts.service.fileFollow.follow = vi.fn(async (input: FollowInput) => {
         followCount += 1;
         if (followCount === 1) return await firstFollow;
+        await input.onLine({
+          line: JSON.stringify({
+            type: 'user', uuid: 'hook-winner-prompt', sessionId: 'claude-hook-winner',
+            timestamp: new Date().toISOString(), message: { role: 'user', content: 'winner prompt' },
+          }),
+          sourcePath: hookTranscriptPath, sequence: 1,
+        });
         return {
           id: `hook-follow-${followCount}`,
           drainNow: vi.fn(async () => undefined),
@@ -1415,7 +1423,7 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
       }
     });
 
-    it('adopts and publishes the SessionStart id before the transcript file is readable', async () => {
+    it('keeps the SessionStart id provisional before the transcript file is readable', async () => {
       const { mkdtemp, rm } = await import('node:fs/promises');
       const { tmpdir } = await import('node:os');
       const { join } = await import('node:path');
@@ -1454,25 +1462,59 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
         });
 
         expect(runtime.readSessionIdentity()).toEqual({ sessionId: 'claude-session-before-jsonl' });
-        expect(runtimeEvents).toContainEqual(expect.objectContaining({
-          kind: 'session-id-publish',
-          publishedSessionId: 'claude-session-before-jsonl',
-          source: 'claude-unified-session-start',
-        }));
+        expect(runtimeEvents.filter((event) => event.kind === 'session-id-publish')).toEqual([]);
 
         await options.onSessionHook?.('claude-session-before-jsonl', {
           session_id: 'claude-session-before-jsonl',
           transcript_path: transcriptPath,
           hook_event_name: 'SessionStart',
         });
-        expect(runtimeEvents.filter((event) => event.kind === 'session-id-publish')).toHaveLength(1);
+        expect(runtimeEvents.filter((event) => event.kind === 'session-id-publish')).toEqual([]);
       } finally {
         await runtime.resetOrDisposeRuntime().catch(() => undefined);
         await rm(tempDir, { recursive: true, force: true });
       }
     });
 
-    it('withholds proof for a deferred bind and republishes the SAME id once its transcript attaches', async () => {
+    it('publishes a provisional id only for matching primary transcript evidence', async () => {
+      const terminalHost = createTerminalHostFixture();
+      const transcripts = createManualTranscriptFollowFixture();
+      const sessionHooks = createStatuslineSessionHooksFixture();
+      const ctx = createPluginContextFixture(terminalHost.service, createEventsFixture().service, {
+        transcripts: transcripts.service, sessionHooks: sessionHooks.service,
+      });
+      const runtime = expectRuntimeEnvelope(createClaudeUnifiedTerminalTurnOperations({
+        ctx, directory: '/tmp/claude-project', happierSessionId: 'happy-primary-identity-proof',
+        hostPreference: 'zellij', launchEnv: {}, permissionMode: 'default',
+      })).operations;
+      const events: ClaudeProviderEvent[] = [];
+      runtime.subscribeRuntimeEvents(event => events.push(event));
+      const publishes = () => events.filter(event => event.kind === 'session-id-publish');
+      try {
+        await runtime.startProviderSession();
+        const options = sessionHooks.startServerOptions[0] as {
+          onSessionHook?: (providerSessionId: string, data: Record<string, unknown>) => void | Promise<void>;
+        };
+        await options.onSessionHook?.('claude-provider-session-1', {
+          hook_event_name: 'SessionStart', session_id: 'claude-provider-session-1',
+          transcript_path: '/tmp/claude-provider-session-1.jsonl',
+        });
+        const row = { type: 'user', uuid: 'identity-proof', sessionId: 'claude-provider-session-1',
+          message: { role: 'user', content: 'first prompt' } } as const;
+        await transcripts.emitRow({ ...row, sessionId: 'another-session' });
+        await transcripts.emitRow({ ...row, isSidechain: true });
+        expect(publishes()).toEqual([]);
+        await transcripts.emitRow(row);
+        expect(publishes()).toEqual([expect.objectContaining({
+          publishedSessionId: 'claude-provider-session-1',
+          nativeSessionLogPath: '/tmp/claude-provider-session-1.jsonl',
+        })]);
+      } finally {
+        await runtime.resetOrDisposeRuntime();
+      }
+    });
+
+    it('publishes a provisional id only once a matching transcript row materializes', async () => {
       const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
       const { tmpdir } = await import('node:os');
       const { join } = await import('node:path');
@@ -1509,28 +1551,27 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
           hook_event_name: 'SessionStart',
         };
 
-        // The transcript file does not exist yet, so the bind is `deferred`: the id is
-        // published as identity only and that unattached path is NEVER proof.
         await options.onSessionHook?.('claude-matched-proof-session', sessionStartHook);
-        expect(publishes()).toHaveLength(1);
-        expect(publishes()[0]).toEqual(expect.objectContaining({
-          publishedSessionId: 'claude-matched-proof-session',
-        }));
-        expect(publishes()[0]).not.toHaveProperty('nativeSessionLogPath');
+        expect(publishes()).toEqual([]);
 
         // Same id, now attachable: an id-keyed dedupe would swallow the update that
         // actually carries the proof, so the matched pair must republish.
         await writeFile(transcriptPath, '', 'utf8');
         await options.onSessionHook?.('claude-matched-proof-session', sessionStartHook);
-        expect(publishes()).toHaveLength(2);
-        expect(publishes()[1]).toEqual(expect.objectContaining({
+        expect(publishes()).toEqual([]);
+        await writeFile(transcriptPath, `${JSON.stringify({
+          type: 'user', uuid: 'first-prompt', sessionId: 'claude-matched-proof-session',
+          timestamp: new Date().toISOString(), message: { role: 'user', content: 'first prompt' },
+        })}\n`, 'utf8');
+        await vi.waitFor(() => expect(publishes()).toHaveLength(1));
+        expect(publishes()[0]).toEqual(expect.objectContaining({
           publishedSessionId: 'claude-matched-proof-session',
           nativeSessionLogPath: transcriptPath,
         }));
 
         // The identical proven pair is published exactly once.
         await options.onSessionHook?.('claude-matched-proof-session', sessionStartHook);
-        expect(publishes()).toHaveLength(2);
+        expect(publishes()).toHaveLength(1);
       } finally {
         await runtime.resetOrDisposeRuntime().catch(() => undefined);
         await rm(tempDir, { recursive: true, force: true });
@@ -1544,7 +1585,10 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
       const tempDir = await mkdtemp(join(tmpdir(), 'claude-unified-rekey-proof-'));
       const provenTranscriptPath = join(tempDir, 'claude-first-session.jsonl');
       const unreadableTranscriptPath = join(tempDir, 'claude-second-session.jsonl');
-      await writeFile(provenTranscriptPath, '', 'utf8');
+      await writeFile(provenTranscriptPath, `${JSON.stringify({
+        type: 'user', uuid: 'first-session-prompt', sessionId: 'claude-first-session',
+        timestamp: new Date().toISOString(), message: { role: 'user', content: 'first prompt' },
+      })}\n`, 'utf8');
 
       const terminalHost = createTerminalHostFixture();
       const events = createEventsFixture();
@@ -1576,13 +1620,13 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
           transcript_path: provenTranscriptPath,
           hook_event_name: 'SessionStart',
         });
+        await vi.waitFor(() => expect(publishes()).toHaveLength(1));
         expect(publishes().at(-1)).toEqual(expect.objectContaining({
           publishedSessionId: 'claude-first-session',
           nativeSessionLogPath: provenTranscriptPath,
         }));
 
-        // A second Claude session takes over. Its own transcript is not attachable, so the
-        // new id must publish unproven rather than inherit the first id's proof.
+        // A new provisional id cannot replace the established resume identity.
         await options.onSessionHook?.('claude-second-session', {
           session_id: 'claude-second-session',
           transcript_path: unreadableTranscriptPath,
@@ -1590,9 +1634,9 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
         });
         const rekeyed = publishes().at(-1);
         expect(rekeyed).toEqual(expect.objectContaining({
-          publishedSessionId: 'claude-second-session',
+          publishedSessionId: 'claude-first-session',
+          nativeSessionLogPath: provenTranscriptPath,
         }));
-        expect(rekeyed).not.toHaveProperty('nativeSessionLogPath');
       } finally {
         await runtime.resetOrDisposeRuntime().catch(() => undefined);
         await rm(tempDir, { recursive: true, force: true });

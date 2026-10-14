@@ -4,6 +4,17 @@ Happier ships binary installers. First-party runtime paths must work on machines
 
 ## Runtime contract
 
+In current development source, `scripts/pipeline/release/bun-standalone.entitlements.plist`
+owns the macOS hardened-runtime permissions for shipped Bun executables. Standalone
+signing consumes it directly. Desktop sidecar preparation derives
+`apps/ui/src-tauri/Entitlements.plist` from this policy plus the desktop's
+microphone permission; the committed projection also serves bundle-only
+finalization. Tauri applies that file when signing the app and external binaries,
+including `hsetup`.
+Signature validity and notarization alone do not prove startup: release validation
+must inspect the bundled helper's JIT entitlement and execute `hsetup --help` on
+the native target without disabling JIT.
+
 The daemon owns Plugin UI compilation and invokes the SDK's bundled esbuild
 implementation from the published workspace dependency closure. Shipped hosts
 do not spawn Vite, Re.Pack, Metro, Node, or a package manager to load a plugin.
@@ -154,7 +165,7 @@ Published hosts and bundled libraries currently include:
 
 Their `prepack` scripts run `scripts/bundleWorkspaceDeps.mjs`, which delegates to `bundleWorkspacePackagesWithRuntimeDependencies(...)`. That canonical publisher stages each workspace together with its external runtime dependency tree and publishes the internal dependency closure in dependency-first order.
 
-Current source bundling preserves package-local `imports` declarations and their conditional order, alongside `exports`. The existing workspace copier and bootstrap sync include exact relative import targets outside `dist`; external package targets still use the package's declared dependency closure. Live bundle health checks compare the retained import map and target files, and Stack bundle freshness observes package-root targets so changing only an imported runtime helper requires a refresh.
+Current 0.3 workspace bundling preserves runtime package-local `imports` declarations and their conditional order, alongside `exports`. Compiled bundled copies omit the development-only `happier-source` condition at every level of both maps, so source-enabled callers still resolve their complete compiled runtime. Authored source tools continue selecting workspace roots through the canonical source resolver. The existing workspace copier and bootstrap sync include exact retained relative import targets outside `dist`; external package targets still use the package's declared dependency closure. Live bundle health checks compare the retained import map and target files, and Stack bundle freshness observes package-root targets so changing only an imported runtime helper requires a refresh.
 
 In 0.3 development, CLI testkit and publisher runtime-tree checks share the
 workspace health owner. Third-party declaration-only targets (`types`, including
@@ -168,7 +179,10 @@ Public npm/SDK publication retains the workspace package-build owner, dependency
 graph admission, captured package inputs, compiler state, currentness records and
 publication locks. Strict packing/publishing still requires checked declarations
 and valid runtime outputs. The public CLI package keeps CommonJS/ESM exports with
-matching declarations; pkgroll remains an npm-publication tool, not a prerequisite
+matching declarations. Its strict native compiler emits the checked declaration
+graph once; pkgroll bundles that graph into public CommonJS/ESM declarations,
+with internal aliases resolving inside the checked graph rather than reopening
+TypeScript source. Pkgroll remains an npm-publication tool, not a prerequisite
 for native executables or source QA.
 
 Remaining workspace dist consumers share build-mode selection and compiler

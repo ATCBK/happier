@@ -7,7 +7,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { spawn as spawnChildProcess } from 'node:child_process';
+import { execFileSync, spawn as spawnChildProcess, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,9 +15,46 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTempDirSync } from '../../src/testkit/fs/tempDir';
-import { collectPkgrollInputPaths, runPkgrollBuild } from '../runPkgrollBuild.mjs';
+import { collectPkgrollInputPaths, resolvePkgrollCliPath, runPkgrollBuild } from '../runPkgrollBuild.mjs';
+import { resolveTypeScriptCliInvocation } from '../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 
 const cliPackageRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+async function runRealPkgrollSource(source: string, format: 'esm' | 'cjs' = 'esm') {
+  const fixtureParent = join(cliPackageRoot, '.project', 'tmp');
+  mkdirSync(fixtureParent, { recursive: true });
+  // Keep the actual CLI package-local and hoisted dependency resolution ancestry.
+  const packageRoot = createTempDirSync('pkgroll-runtime-resolution-', fixtureParent);
+  const packageJsonPath = join(packageRoot, 'package.json');
+  const cliManifest = JSON.parse(readFileSync(join(cliPackageRoot, 'package.json'), 'utf8'));
+  const outputDir = 'dist.staging.test';
+  const outputFile = format === 'esm' ? 'index.mjs' : 'index.cjs';
+  try {
+    writeFileSync(packageJsonPath, JSON.stringify({
+      ...cliManifest,
+      name: '@happier-dev/pkgroll-runtime-resolution-fixture',
+      main: `./dist/${outputFile}`,
+      module: undefined,
+      types: undefined,
+      exports: { '.': `./dist/${outputFile}`, './secondary': `./dist/secondary.${format === 'esm' ? 'mjs' : 'cjs'}` },
+      imports: undefined,
+      bin: undefined,
+    }), 'utf8');
+    mkdirSync(join(packageRoot, 'src'));
+    writeFileSync(join(packageRoot, 'src', 'index.ts'), source, 'utf8');
+    // The real CLI has several entries in each format. Exercise any shared
+    // Pkgroll chunks rather than accepting a single-entry-only repair.
+    writeFileSync(join(packageRoot, 'src', 'secondary.ts'), source, 'utf8');
+    await runPkgrollBuild({ packageJsonPath, outputDir, pkgrollCliPath: resolvePkgrollCliPath() });
+    return spawnSync(process.execPath, [join(packageRoot, outputDir, outputFile)], {
+      cwd: packageRoot,
+      env: { ...process.env, NODE_PATH: '' },
+      encoding: 'utf8',
+    });
+  } finally {
+    rmSync(packageRoot, { recursive: true, force: true });
+  }
+}
 
 function writeIsolatedPkgrollRepo(prefix: string) {
   const repoRoot = createTempDirSync(prefix);
@@ -117,29 +154,49 @@ async function runPhysicalPackageAlias(aliasKind: 'directory' | 'file') {
 }
 
 describe('runPkgrollBuild', () => {
-  it('emits public declarations with the real pkgroll compiler during publication', async () => {
+  it('bundles native-checked public declarations without reopening aliased TypeScript source', async () => {
     const fixture = writeIsolatedPkgrollRepo('happier-cli-pkgroll-public-types-');
     try {
       writeFileSync(fixture.packageJsonPath, JSON.stringify({
         name: '@happier-dev/pkgroll-fixture', version: '0.0.0',
         main: './dist/index.cjs', module: './dist/index.mjs', types: './dist/index.d.cts',
+        exports: { '.': {
+          require: { types: './dist/index.d.cts', default: './dist/index.cjs' },
+          import: { types: './dist/index.d.mts', default: './dist/index.mjs' },
+        } },
       }));
       mkdirSync(join(fixture.packageRoot, 'src'));
       mkdirSync(join(fixture.packageRoot, 'node_modules'));
       // Pkgroll resolves its optional TypeScript API peer from this package.
       symlinkSync(dirname(createRequire(import.meta.url).resolve('typescript/package.json')),
         join(fixture.packageRoot, 'node_modules', 'typescript'), process.platform === 'win32' ? 'junction' : 'dir');
-      writeFileSync(join(fixture.packageRoot, 'src', 'index.ts'), 'export const runtime: string = "public";\n');
+      writeFileSync(join(fixture.packageRoot, 'src', 'index.ts'), 'export { runtime } from "@/value";\n');
+      const valuePath = join(fixture.packageRoot, 'src', 'value.ts');
+      writeFileSync(valuePath, 'export const runtime: { value: string } = { value: "public" };\n');
       writeFileSync(join(fixture.packageRoot, 'tsconfig.json'), JSON.stringify({
-        compilerOptions: { strict: true, types: [], skipLibCheck: true },
+        compilerOptions: { strict: true, types: [], skipLibCheck: true, noEmit: true,
+          module: 'ESNext', moduleResolution: 'Bundler', paths: { '@/*': ['./src/*'] } },
         include: ['src/index.ts'],
       }));
+      const declarationSourceDir = join(fixture.packageRoot, 'checked-declarations');
+      const compiler = resolveTypeScriptCliInvocation({ processExecPath: process.execPath });
+      execFileSync(compiler.command, [...compiler.argsPrefix, '-p', 'tsconfig.json',
+        '--noEmit', 'false', '--emitDeclarationOnly', '--declaration',
+        '--rootDir', 'src', '--outDir', declarationSourceDir, '--singleThreaded'],
+      { cwd: fixture.packageRoot, stdio: 'pipe' });
+      // The checked declaration input is authoritative. Reopening this source
+      // would create the second semantic program that exhausted the CI heap.
+      writeFileSync(valuePath, 'export const runtime: number = "unread source";\n');
       await runPkgrollBuild({
         packageJsonPath: fixture.packageJsonPath,
         outputDir: fixture.outputDir,
+        declarationSourceDir,
         env: { ...process.env, HAPPIER_WORKSPACE_BUILD_MODE: 'qa-runtime', npm_lifecycle_event: 'prepack' },
       });
-      expect(readFileSync(join(fixture.stagingDir, 'index.d.cts'), 'utf8')).toContain('runtime: string');
+      for (const extension of ['cts', 'mts']) {
+        expect(readFileSync(join(fixture.stagingDir, `index.d.${extension}`), 'utf8'))
+          .toMatch(/runtime:\s*\{\s*value: string/);
+      }
       expect(existsSync(join(fixture.stagingDir, 'index.cjs'))).toBe(true);
       expect(existsSync(join(fixture.stagingDir, 'index.mjs'))).toBe(true);
     } finally {
@@ -147,6 +204,114 @@ describe('runPkgrollBuild', () => {
     }
   });
 
+  it('publishes strict native declarations through the real build owner and retains last green on a type error', async () => {
+    const fixture = writeIsolatedPkgrollRepo('happier-cli-checked-publication-');
+    const buildScript = fileURLToPath(new URL('../build.mjs', import.meta.url));
+    try {
+      writeFileSync(fixture.packageJsonPath, JSON.stringify({
+        name: '@happier-dev/pkgroll-fixture', version: '0.0.0', type: 'module',
+        main: './dist/index.cjs', module: './dist/index.mjs', types: './dist/index.d.cts',
+        exports: { '.': {
+          require: { types: './dist/index.d.cts', default: './dist/index.cjs' },
+          import: { types: './dist/index.d.mts', default: './dist/index.mjs' },
+        } },
+      }));
+      mkdirSync(join(fixture.packageRoot, 'src'));
+      mkdirSync(join(fixture.packageRoot, 'node_modules'));
+      symlinkSync(dirname(createRequire(import.meta.url).resolve('typescript/package.json')),
+        join(fixture.packageRoot, 'node_modules', 'typescript'), process.platform === 'win32' ? 'junction' : 'dir');
+      writeFileSync(join(fixture.packageRoot, 'tsconfig.json'), JSON.stringify({
+        compilerOptions: { strict: true, types: [], declaration: true, noEmit: true,
+          module: 'ESNext', moduleResolution: 'Bundler', incremental: true,
+          tsBuildInfoFile: './compiler.tsbuildinfo', paths: { '@/*': ['./src/*'] } },
+        include: ['src/index.ts'],
+      }));
+      writeFileSync(join(fixture.packageRoot, 'tsconfig.build.json'), JSON.stringify({
+        extends: './tsconfig.json', compilerOptions: { rootDir: 'src' },
+      }));
+      writeFileSync(join(fixture.packageRoot, 'src', 'index.ts'), 'export { runtime } from "@/value";\n');
+      const valuePath = join(fixture.packageRoot, 'src', 'value.ts');
+      writeFileSync(valuePath, 'export const runtime: { value: string } = { value: "public" };\n');
+      const build = () => execFileSync(process.execPath, [buildScript], {
+        cwd: fixture.packageRoot, encoding: 'utf8',
+        env: { ...process.env, HAPPIER_CLI_BUILD_OUTPUT_DIR: '', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+        stdio: 'pipe',
+      });
+      // A second unchanged build must also populate its fresh private emission
+      // directory rather than trusting an incremental no-emit result.
+      build();
+      build();
+      const publishedTypes = readFileSync(join(fixture.packageRoot, 'dist', 'index.d.cts'), 'utf8');
+      expect(publishedTypes).toMatch(/value: string/);
+      for (const extension of ['cts', 'mts']) {
+        const runtimeExtension = extension === 'cts' ? 'cjs' : 'mjs';
+        writeFileSync(join(fixture.packageRoot, `consumer.${extension}`),
+          `import { runtime } from "./dist/index.${runtimeExtension}";\nconst value: string = runtime.value;\n`);
+      }
+      writeFileSync(join(fixture.packageRoot, 'tsconfig.consumer.json'), JSON.stringify({
+        compilerOptions: { strict: true, noEmit: true, types: [], module: 'NodeNext', moduleResolution: 'NodeNext' },
+        include: ['consumer.cts', 'consumer.mts'],
+      }));
+      const compiler = resolveTypeScriptCliInvocation({ processExecPath: process.execPath });
+      execFileSync(compiler.command, [...compiler.argsPrefix, '-p', 'tsconfig.consumer.json', '--noEmit', '--singleThreaded'],
+        { cwd: fixture.packageRoot, stdio: 'pipe' });
+      for (const format of ['cjs', 'mjs']) {
+        const probe = format === 'cjs'
+          ? 'console.log(require("./dist/index.cjs").runtime.value)'
+          : 'import { runtime } from "./dist/index.mjs"; console.log(runtime.value)';
+        expect(execFileSync(process.execPath, [...(format === 'mjs' ? ['--input-type=module'] : []), '-e', probe],
+          { cwd: fixture.packageRoot, encoding: 'utf8' }).trim()).toBe('public');
+      }
+      writeFileSync(valuePath, 'export const runtime: number = "type error";\n');
+      let failure: unknown;
+      try { build(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure instanceof Error && 'stdout' in failure ? failure.stdout : ''))
+        .toContain('TS2322');
+      expect(readFileSync(join(fixture.packageRoot, 'dist', 'index.d.cts'), 'utf8')).toBe(publishedTypes);
+    } finally {
+      rmSync(fixture.repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses source-based declaration bundling when checked declaration inputs were not supplied', async () => {
+    const fixture = writeIsolatedPkgrollRepo('happier-cli-pkgroll-unchecked-public-types-');
+    try {
+      writeFileSync(fixture.packageJsonPath, JSON.stringify({ main: './dist/index.cjs', types: './dist/index.d.cts' }));
+      const spawn = vi.fn(() => ({ status: 0 }));
+      await expect(runPkgrollBuild({
+        packageJsonPath: fixture.packageJsonPath, outputDir: fixture.outputDir,
+        pkgrollCliPath: fixture.pkgrollCliPath, spawn,
+      })).rejects.toThrow(/native-checked declaration source directory/);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      rmSync(fixture.repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Artifact callers settle the canonical workspace publication before Pkgroll.
+  // The composed preparation recipe runs that expensive phase once outside this
+  // keeper's budget; raw linked source layouts are characterized separately.
+  it('preserves the artifact-prepared SDK package-private HTTP transport through the real ESM prebundle', async () => {
+    const result = await runRealPkgrollSource(`
+import { connect } from '@happier-dev/sdk';
+console.log(typeof connect);
+`);
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe('function');
+  });
+
+  it.each(['esm', 'cjs'] as const)('preserves the password sodium public CommonJS export through the real %s prebundle', async (format) => {
+    const sodiumBoundary = join(cliPackageRoot, 'src', 'auth', 'passwordSodium.cjs');
+    const result = await runRealPkgrollSource(`
+import sodium from ${JSON.stringify(sodiumBoundary)};
+void sodium.ready.then(() => console.log(typeof sodium.crypto_pwhash));
+`, format);
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe('function');
+  });
   it('converges a directory symlink or junction alias on the physical package stage', async () => {
     await runPhysicalPackageAlias('directory');
   }, 20_000);
@@ -589,12 +754,15 @@ await runPkgrollBuild({
     writeFileSync(pkgrollCliPath, '#!/usr/bin/env node\nconsole.log("pkgroll");\n', 'utf8');
 
     const spawn = vi.fn(() => ({ status: 0 }));
+    const declarationSourceDir = join(dir, 'checked-declarations');
+    mkdirSync(declarationSourceDir);
 
     await runPkgrollBuild({
       cwd: dir,
       outputDir: 'dist.staging.memory-boundaries',
       pkgrollCliPath,
       spawn,
+      declarationSourceDir,
     });
 
     expect(spawn).toHaveBeenCalledTimes(2);
@@ -613,7 +781,9 @@ await runPkgrollBuild({
       pkgrollCliPath,
       '--packagejson=false',
       '--srcdist',
-      '../src:.',
+      '../checked-declarations:.',
+      '--tsconfig',
+      join(declarationSourceDir, 'tsconfig.pkgroll.json'),
       '--input',
       'index.d.cts',
       '--input',

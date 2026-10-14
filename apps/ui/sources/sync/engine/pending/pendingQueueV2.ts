@@ -1031,14 +1031,13 @@ function coercePendingUserTextRecord(decrypted: unknown): { rawRecord: RawRecord
 
     const text = record.content.text;
     if (typeof text !== 'string') return null;
-    // A Pending row is Message ingress, and an attachment-only image/video turn is blank by
-    // design. Treating blank text alone as an unreadable row published the user's queued media
-    // message as a decrypt failure and dropped the rawRecord that still carried its selection.
-    if (
-        text.trim().length === 0
-        && (readIngressComposerAttachmentSelectionV1(record.meta) ?? []).length === 0
-    ) {
-        return null;
+    // Pending writes persist the finalized admission result. Read that durable
+    // selection, not the draft staged-media shape, for an attachment-only turn.
+    if (text.trim().length === 0) {
+        const admittedInput = readAdmittedHappierStructuredInputV1FromMeta(record.meta);
+        if (admittedInput.status !== 'admitted' || (admittedInput.structuredInput.composerAttachments?.length ?? 0) === 0) {
+            return null;
+        }
     }
 
     const displayTextRaw = record.meta?.displayText;

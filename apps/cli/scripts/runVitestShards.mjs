@@ -21,9 +21,13 @@ function parsePositiveInt(raw) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-export function resolveVitestShardCount(env) {
+export function resolveVitestShardCount(env, configPath) {
   const override = parsePositiveInt(env?.HAPPIER_CLI_VITEST_SHARDS);
-  return override ?? 8;
+  if (override !== null) return override;
+  if (path.basename(configPath ?? '') !== 'vitest.config.ts') return 8;
+  const part = parsePositiveInt(env?.HAPPIER_CLI_VITEST_PART);
+  const parts = parsePositiveInt(env?.HAPPIER_CLI_VITEST_PARTS);
+  return part !== null && parts !== null && part <= parts ? parts : 1;
 }
 
 export function resolveVitestShardRange(env, shardCount) {
@@ -51,7 +55,7 @@ export function resolveVitestForwardArgs(argv) {
   for (let index = 2; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--config') { index += 1; continue; }
-    if (arg.startsWith('--config=') || arg === '--unit-checks') continue;
+    if (arg.startsWith('--config=') || arg === '--unit-checks' || arg === '--unit-checks-only') continue;
     forwarded.push(arg);
   }
   if (forwarded[0] === '--') forwarded.shift();
@@ -59,18 +63,17 @@ export function resolveVitestForwardArgs(argv) {
 }
 
 /**
- * `--shard N/M` legitimately produces empty shards, so the shard runner asks
- * for `--passWithNoTests` here rather than the lane config setting it. Keeping
- * it out of the config means a directly invoked selected pattern that collects
- * nothing still fails instead of exiting green.
+ * Legacy and explicit diagnostic multi-shard runs tolerate an empty shard after
+ * checking whole-lane admission. Native unit partitions do not tolerate empties.
+ * Keeping this out of the config also preserves direct selected-pattern refusal.
  */
-export function buildVitestShardArgs({ configPath, shardSpec, vitestArgs }) {
+export function buildVitestShardArgs({ configPath, shardSpec, vitestArgs, allowEmptyShard = true }) {
   return [
     'run',
     '--config',
     configPath,
     ...(vitestArgs ?? []),
-    ...(shardSpec ? ['--passWithNoTests', '--shard', shardSpec] : []),
+    ...(shardSpec ? [...(allowEmptyShard ? ['--passWithNoTests'] : []), '--shard', shardSpec] : []),
   ];
 }
 
@@ -136,10 +139,10 @@ export async function resolveCliVitestLaneAdmission({
   };
 }
 
-function spawnVitestRun({ configPath, shardSpec, nodeOptions, vitestArgs }) {
+function spawnVitestRun({ configPath, shardSpec, nodeOptions, vitestArgs, allowEmptyShard }) {
   return runManagedChildCommand({
     command: 'vitest',
-    args: buildVitestShardArgs({ configPath, shardSpec, vitestArgs }),
+    args: buildVitestShardArgs({ configPath, shardSpec, vitestArgs, allowEmptyShard }),
     spawnOptions: {
       env: {
         ...process.env,
@@ -173,6 +176,10 @@ export async function runCliVitestShardRuns({ shardCount, startShard = 1, endSha
 }
 
 async function main(argv) {
+  if (argv.includes('--unit-checks-only')) {
+    await runCliUnitChecks();
+    return;
+  }
   const configPath = resolveVitestConfigPath(argv);
   if (!configPath) {
     // eslint-disable-next-line no-console
@@ -180,14 +187,14 @@ async function main(argv) {
     process.exit(1);
   }
 
-  const shardCount = resolveVitestShardCount(process.env);
+  const shardCount = resolveVitestShardCount(process.env, configPath);
   const shardRange = resolveVitestShardRange(process.env, shardCount);
   const sizeMb = resolveMaxOldSpaceSizeMb(process.env);
   const nodeOptions = upsertMaxOldSpaceSize(process.env.NODE_OPTIONS, sizeMb);
   const vitestArgs = resolveVitestForwardArgs(argv);
 
-  // Explicit caller scope runs once. Only the default whole-suite lane needs
-  // collection admission, CI partitioning and empty-shard tolerance.
+  // Explicit caller scope runs once. The whole-lane path below owns native unit
+  // partitions and the retained legacy/diagnostic multi-shard admission check.
   if (vitestArgs.length > 0) {
     const result = await spawnVitestRun({ configPath, nodeOptions, vitestArgs });
     if (!result.ok) throw result.error;
@@ -195,24 +202,36 @@ async function main(argv) {
     return;
   }
 
-  const admission = await resolveCliVitestLaneAdmission({ configPath, nodeOptions, vitestArgs });
-  if (!admission.admitted) {
-    // eslint-disable-next-line no-console
-    console.error('[vitest] no test files matched — refusing to report a sharded run as green');
-    process.exit(1);
-    return;
-  }
-
-  const outcomes = await runCliVitestShardRuns({
-    shardCount,
-    startShard: shardRange.start,
-    endShard: shardRange.end,
-    runShard: ({ shardSpec }) => {
+  const automaticUnitRun = path.basename(configPath) === 'vitest.config.ts'
+    && parsePositiveInt(process.env.HAPPIER_CLI_VITEST_SHARDS) === null;
+  let outcomes;
+  if (automaticUnitRun) {
+    // One Vite graph serves the whole unit lane or its assigned CI partition.
+    // Native Vitest collection fails empty selections without a second process.
+    const shardSpec = shardCount > 1 ? `${shardRange.start}/${shardCount}` : null;
+    const result = await spawnVitestRun({ configPath, shardSpec, nodeOptions, vitestArgs, allowEmptyShard: false });
+    if (!result.ok) throw result.error;
+    outcomes = [{ ...classifyVitestShardTermination(result), shardSpec: shardSpec ?? '1/1' }];
+  } else {
+    const admission = await resolveCliVitestLaneAdmission({ configPath, nodeOptions, vitestArgs });
+    if (!admission.admitted) {
       // eslint-disable-next-line no-console
-      console.log(`[vitest] shard ${shardSpec}`);
-      return spawnVitestRun({ configPath, shardSpec, nodeOptions, vitestArgs });
-    },
-  });
+      console.error('[vitest] no test files matched — refusing to report a sharded run as green');
+      process.exit(1);
+      return;
+    }
+
+    outcomes = await runCliVitestShardRuns({
+      shardCount,
+      startShard: shardRange.start,
+      endShard: shardRange.end,
+      runShard: ({ shardSpec }) => {
+        // eslint-disable-next-line no-console
+        console.log(`[vitest] shard ${shardSpec}`);
+        return spawnVitestRun({ configPath, shardSpec, nodeOptions, vitestArgs });
+      },
+    });
+  }
   const summary = summarizeVitestShardOutcomes({ shardCount, outcomes });
   for (const line of summary.lines) {
     // eslint-disable-next-line no-console
@@ -225,16 +244,20 @@ async function main(argv) {
   if (argv.includes('--unit-checks')) {
     // These are the existing unit lane's post-suite checks. Keeping them with
     // the runner lets Yarn append caller filters to one command on every OS.
-    for (const invocation of [
-      { command: process.execPath, args: ['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs'] },
-      resolveYarnCommandInvocation(['-s', 'test:import-cycles']),
-    ]) {
-      const { windowsVerbatimArguments, ...command } = invocation;
-      const result = await runManagedChildCommand({ ...command, spawnOptions: { stdio: 'inherit', windowsVerbatimArguments } });
-      if (!result.ok) throw result.error;
-      process.exitCode = classifyVitestShardTermination(result).exitCode;
-      if (process.exitCode !== 0) return;
-    }
+    await runCliUnitChecks();
+  }
+}
+
+export async function runCliUnitChecks() {
+  for (const invocation of [
+    { command: process.execPath, args: ['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs'] },
+    resolveYarnCommandInvocation(['-s', 'test:import-cycles']),
+  ]) {
+    const { windowsVerbatimArguments, ...command } = invocation;
+    const result = await runManagedChildCommand({ ...command, spawnOptions: { stdio: 'inherit', windowsVerbatimArguments } });
+    if (!result.ok) throw result.error;
+    process.exitCode = classifyVitestShardTermination(result).exitCode;
+    if (process.exitCode !== 0) return;
   }
 }
 

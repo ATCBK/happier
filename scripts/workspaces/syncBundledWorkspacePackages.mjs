@@ -16,6 +16,7 @@ import {
 import { basename, dirname, resolve } from 'node:path';
 
 import { vendorBundledPackageRuntimeDependenciesFallback } from './vendorBundledWorkspaceRuntimeDependenciesFallback.mjs';
+import { omitWorkspaceSourceCondition } from '../../packages/cli-common/workspaceRuntimeDependencies.mjs';
 
 const EXTENSIONS_WORKSPACE_PREFIX = 'plugins-';
 
@@ -63,8 +64,8 @@ function syncBundledWorkspaceReferencedFiles({ srcPackageDir, destPackageDir, pa
   collectPackageJsonRelativeFileTargets(packageJsonRaw?.main, relativeTargets);
   collectPackageJsonRelativeFileTargets(packageJsonRaw?.module, relativeTargets);
   collectPackageJsonRelativeFileTargets(packageJsonRaw?.types, relativeTargets);
-  collectPackageJsonRelativeFileTargets(packageJsonRaw?.exports, relativeTargets);
-  collectPackageJsonRelativeFileTargets(packageJsonRaw?.imports, relativeTargets);
+  collectPackageJsonRelativeFileTargets(omitWorkspaceSourceCondition(packageJsonRaw?.exports), relativeTargets);
+  collectPackageJsonRelativeFileTargets(omitWorkspaceSourceCondition(packageJsonRaw?.imports), relativeTargets);
 
   // Match the canonical publisher during bootstrap: source exports need their
   // private sibling modules, not only their directly exported leaf files.
@@ -166,7 +167,12 @@ try {
 }
 
 export function sanitizeBundledWorkspacePackageJson(raw) {
-  return sanitizeBundledPackageJsonImpl(raw);
+  const sanitized = sanitizeBundledPackageJsonImpl(raw);
+  return {
+    ...sanitized,
+    exports: omitWorkspaceSourceCondition(sanitized.exports),
+    ...(sanitized.imports === undefined ? {} : { imports: omitWorkspaceSourceCondition(sanitized.imports) }),
+  };
 }
 
 export { vendorBundledPackageRuntimeDependenciesFallback };

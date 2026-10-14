@@ -7,7 +7,8 @@ vi.mock('@/daemon/controlClient', () => ({
   requestDaemonPluginChange: vi.fn(),
 }));
 vi.mock('@/daemon/ensureDaemon', () => ({ ensureDaemonRunningForSessionCommand: vi.fn() }));
-vi.mock('@/terminal/prompts/promptConfirmYesNo', () => ({ promptConfirmYesNo: vi.fn() }));
+
+import * as promptInputModule from '@/terminal/prompts/promptInput';
 
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
 import type { PluginInstallationReview } from '@happier-dev/protocol/marketplace/internal';
@@ -35,16 +36,29 @@ describe('requestUserPluginChange', () => {
     const requestChange = vi.fn().mockResolvedValueOnce({
       kind: 'managedResourcesReviewRequired', pluginId: 'acme.example', resources: [resource],
     }).mockResolvedValueOnce(committed);
-    const confirm = vi.fn(async (_message: string) => true);
+    // Terminal input is the OS boundary; keep the confirmation parser and default real.
+    const terminalInput = vi.spyOn(promptInputModule, 'promptInput')
+      .mockResolvedValueOnce('').mockResolvedValueOnce('yes');
+    try {
+      await expect(requestUserPluginChange({ request: { kind: 'uninstall', pluginId: 'acme.example' }, approval: 'prompt' }, {
+        ensureDaemon: async () => undefined, requestChange,
+      })).resolves.toEqual({ kind: 'cancelled' });
+      expect(requestChange).toHaveBeenCalledTimes(1);
 
-    await expect(requestUserPluginChange({ request: { kind: 'uninstall', pluginId: 'acme.example' }, approval: 'prompt' }, {
-      ensureDaemon: async () => undefined, confirm, requestChange,
-    })).resolves.toEqual(committed);
-    expect(confirm.mock.calls[0]?.[0]).toContain('native-8');
-    expect(requestChange.mock.calls[1]?.[0]).toEqual({ kind: 'uninstall', pluginId: 'acme.example',
-      managedResourceDispositions: [{ managedId: 'managed-review', expectedIntentRevision: 8,
-        expectedAllocation: 'may-exist', expectedRecovery: resource.recovery, responsibility: 'manual' }],
-    });
+      requestChange.mockReset().mockResolvedValueOnce({
+        kind: 'managedResourcesReviewRequired', pluginId: 'acme.example', resources: [resource],
+      }).mockResolvedValueOnce(committed);
+      await expect(requestUserPluginChange({ request: { kind: 'uninstall', pluginId: 'acme.example' }, approval: 'prompt' }, {
+        ensureDaemon: async () => undefined, requestChange,
+      })).resolves.toEqual(committed);
+      expect(terminalInput.mock.calls[0]?.[0]).toContain('native-8');
+      expect(requestChange.mock.calls[1]?.[0]).toEqual({ kind: 'uninstall', pluginId: 'acme.example',
+        managedResourceDispositions: [{ managedId: 'managed-review', expectedIntentRevision: 8,
+          expectedAllocation: 'may-exist', expectedRecovery: resource.recovery, responsibility: 'manual' }],
+      });
+    } finally {
+      terminalInput.mockRestore();
+    }
   });
 
   it('rejoins a pending change by status only, without re-requesting or deciding it', async () => {

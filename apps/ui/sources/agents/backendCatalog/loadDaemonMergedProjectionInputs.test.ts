@@ -211,6 +211,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
         serverScopedRpcSocketPool.resetForTests();
         resetScopedMachineTransportCacheForTests();
+        await network.dispose();
     });
 
     it('publishes a background Home descriptor under its Account and retires only that Home when its request lifetime retires', async () => {

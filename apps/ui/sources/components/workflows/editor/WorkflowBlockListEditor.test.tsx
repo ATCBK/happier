@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { act } from 'react-test-renderer';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import type { SelectionListStep } from '@/components/ui/selectionList';
+import { SelectionList, type SelectionListStep } from '@/components/ui/selectionList';
 import type { ResolveSessionActionFieldOptions } from '@/components/sessions/actions/sessionActionFieldOptions';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
@@ -156,10 +156,10 @@ async function chooseBlockAction(
 /** Opens a scope's Add menu and returns the step the canonical popover was handed. */
 async function openAddMenu(screen: Awaited<ReturnType<typeof renderScreen>>, addTestID: string): Promise<AddStep> {
     await screen.pressByTestIdAsync(addTestID);
-    const { AgentInputSelectionListPopover } = await import('@/components/sessions/agentInput/components/AgentInputSelectionListPopover');
-    const popover = screen.findAllByType(AgentInputSelectionListPopover).at(-1);
-    if (!popover) throw new Error('Add menu did not open');
-    return popover.props.rootStep as AddStep;
+    const picker = screen.findAllByType(SelectionList).at(-1);
+    if (!picker) throw new Error('Add menu did not open');
+    const step: AddStep = picker.props.rootStep;
+    return step;
 }
 
 /** Chooses an Add option by id, walking into a pushed step when `path` names one. */
@@ -856,6 +856,7 @@ describe('workflow block list editor', () => {
         expect(insetStyle()?.opacity ?? 1).toBeGreaterThan(0);
         await act(async () => { inserter().props.onHoverOut(); });
         expect(insetStyle()?.opacity).toBe(0);
+        expect(inserter().props.role ?? inserter().props.accessibilityRole).toBe('button');
         await act(async () => { inserter().props.onFocus({ target: { matches: () => true } }); });
         expect(insetStyle()?.opacity ?? 1).toBeGreaterThan(0);
         await act(async () => { inserter().props.onBlur(); });

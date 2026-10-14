@@ -210,6 +210,7 @@ function readSessionModelTransitionSessionId(method: string): string | null {
 function createCurrentSessionPublisherTargetGuard(params: Readonly<{
     method: string;
     sessionId?: string;
+    machineId?: string;
     targetUserId: string;
     presence?: SessionPublisherPresenceForRpc;
 }>): RpcForwardTargetGuard | null {
@@ -222,7 +223,7 @@ function createCurrentSessionPublisherTargetGuard(params: Readonly<{
             const currentTargets: typeof targets = [];
             for (const target of targets) {
                 const projection = readSessionPublisherAuthorityProjection(target.data);
-                if (!projection) continue;
+                if (!projection || params.machineId && projection.machineId !== params.machineId) continue;
                 if (await params.presence.isCurrentPublisherProjection({
                     expectedAccountId: params.targetUserId,
                     expectedSessionId: sessionId,
@@ -236,16 +237,15 @@ function createCurrentSessionPublisherTargetGuard(params: Readonly<{
         runOperation: async ({ target, operation, readLatestTarget }) => {
             if (!params.presence) return { status: "unavailable" };
             const initialProjection = readSessionPublisherAuthorityProjection(target.data);
-            if (!initialProjection) return { status: "unavailable" };
+            if (!initialProjection || params.machineId && initialProjection.machineId !== params.machineId) return { status: "unavailable" };
             return await params.presence.runAsProjectedCurrentPublisher({
                 expectedAccountId: params.targetUserId,
                 expectedSessionId: sessionId,
                 initialProjection,
                 readLatestProjection: async () => {
                     const latestTarget = await readLatestTarget();
-                    return latestTarget
-                        ? readSessionPublisherAuthorityProjection(latestTarget.data)
-                        : null;
+                    const projection = latestTarget ? readSessionPublisherAuthorityProjection(latestTarget.data) : null;
+                    return projection && (!params.machineId || projection.machineId === params.machineId) ? projection : null;
                 },
                 operation: async () => await operation(),
             });
@@ -1110,7 +1110,6 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 });
                 return;
             }
-
             const rawTransferRouting = (data as { transferRouting?: unknown } | undefined)?.transferRouting;
             const reverseAutomationSeparator = method.indexOf(':');
             const reverseClientContinuation = reverseAutomationSeparator > 0
@@ -1293,7 +1292,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
             const requestAuthentication = verifiedExternalAction
                 ? {
                     env: process.env,
-                    authority: verifiedExternalAction.principal.authority,
+                    authority: verifiedExternalAction.effectiveAuthority,
                     authenticationEvidence: verifiedExternalAction.principal.authenticationEvidence,
                     ...('grant' in verifiedExternalAction.binding ? { callerInputConstraints: {
                         models: verifiedExternalAction.binding.grant.models,
@@ -1729,7 +1728,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                         || workspaceSyncRouting.accountServerId !== binding.serverIdentityId
                         || claimed.machineId !== binding.machineId || claimed.installationId !== binding.installationId
                         || claimed.actorAccountId !== binding.accountId || claimed.custodianAccountId !== binding.custodianAccountId
-                        || workspaceSyncContext.callerAuthority !== verifiedExternalAction.principal.authority
+                        || workspaceSyncContext.callerAuthority !== verifiedExternalAction.effectiveAuthority
                         || !isDeepStrictEqual(workspaceSyncContext.sessionActionOrigin, binding.sessionActionOrigin)
                         || ('grant' in binding && !isDeepStrictEqual(workspaceSyncContext.callerInputConstraints, {
                             models: binding.grant.models, permissionModes: binding.grant.permissionModes,
@@ -1842,6 +1841,9 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 }
             }
 
+            const isTransitionRoot = verifiedExternalAction?.binding.actionId === 'session.agent.transition';
+            const transitionSessionTarget = isTransitionRoot && methodSessionAuthorization?.routeToSessionOwnerDaemon
+                && verifiedExternalAction.target.kind === 'session' ? verifiedExternalAction.target : null;
             const targetSpecificGuard = explicitMachineStopRequest
                 ? createExactMachineRpcTargetGuard(explicitMachineStopRequest)
                 : sourceKeyPreparationTargetGuard
@@ -1859,6 +1861,8 @@ export function registerSocketRpcHandlers(params: Readonly<{
                             targetUserId,
                             presence: params.sessionPublisherPresence,
                             ...(callerInputViewer ? { sessionId: callerInputViewer.sessionId } : {}),
+                            ...(transitionSessionTarget ? { sessionId: transitionSessionTarget.sessionId,
+                                machineId: verifiedExternalAction!.binding.machineId } : {}),
                         });
             const finiteWakeCurrent = finiteWake && (finiteWake.kind === 'ready' || finiteWake.kind === 'not-needed')
                 ? finiteWake.isCurrent : undefined;
@@ -1919,15 +1923,15 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 ...(originalActionEnvelope ? { originalActionEnvelope } : {}),
                 ...(workspaceSyncContext ? {
                     callerAuthority: sessionActionOrigin ? 'account_automation' as const : workspaceSyncContext.callerAuthority,
-                } : isHandoffCurrent && verifiedExternalAction
-                    ? { callerAuthority: verifiedExternalAction.principal.authority } : {}),
+                } : (isHandoffCurrent || isTransitionRoot) && verifiedExternalAction
+                    ? { callerAuthority: verifiedExternalAction.effectiveAuthority } : {}),
                 ...(explicitMachineStopRequest
                     ? { transportResponseEnvelopeVersion: 1 as const }
                     : {}),
                 callerSocketId: params.socket.id,
                 callerSocket: params.socket,
                 ...(sessionActionOrigin ? { sessionActionOrigin } : {}),
-                ...((verifiedExternalAction?.binding.sessionActionOrigin || verifiedExternalAction?.binding.handoffAdmission || isProjectSource
+                ...((isTransitionRoot || verifiedExternalAction?.binding.sessionActionOrigin || verifiedExternalAction?.binding.handoffAdmission || isProjectSource
                     || retainedProjectSourceExecution || originalActionEnvelope)
                     && externalActionExecution?.success
                     ? { createCallerInputAuthorization: async () => externalActionExecution.data.authorization }

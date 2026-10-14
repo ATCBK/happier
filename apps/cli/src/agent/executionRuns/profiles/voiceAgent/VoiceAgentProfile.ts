@@ -2,7 +2,7 @@ import type { ExecutionRunReplaySeedRequest } from '@happier-dev/protocol';
 import type { ExecutionRunIntentProfile } from '../ExecutionRunIntentProfile';
 import { configuration } from '@/configuration';
 import { readStoredCredentials } from '@/persistence';
-import { resolveReplaySeedDraft, type ReplaySeedDraftResolution } from '@/session/replay/resolveReplaySeedDraft';
+import type { ReplaySeedDraftResolution } from '@/session/replay/resolveReplaySeedDraft';
 
 function isVoiceSessionReplay(value: unknown): value is ExecutionRunReplaySeedRequest {
   return Boolean(
@@ -28,6 +28,9 @@ export const VoiceAgentProfile: ExecutionRunIntentProfile = {
       return undefined;
     }
 
+    // Catalog registration remains cold; replay reaches Session runtime only
+    // when this profile prepares an authenticated continuation.
+    const { resolveReplaySeedDraft } = await import('@/session/replay/resolveReplaySeedDraft');
     const replayStrategy =
       replay.strategy === 'summary_plus_recent' ? 'summary_plus_recent' : 'recent_messages';
     const replaySeed = await resolveReplaySeedDraft({

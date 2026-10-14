@@ -115,6 +115,19 @@ describe('CLI declared Account settings', () => {
     } });
   });
 
+  it('resets only the declared Account preference through the current CAS writer', async () => {
+    content = { t: 'plain', v: { favoriteMachines: ['neighbor'], tabBarGitBadgeMode: 'off',
+      futurePreference: { preserved: true } } };
+    const anchor = 'appearance.tabBarGitBadge';
+    const value = accountSettingsParse({}).tabBarGitBadgeMode;
+    expect(await executor().execute('settings.reset', { anchor }, { ...user,
+      presentUserConfirmation: { actionId: 'settings.reset' } }))
+      .toEqual({ ok: true, result: { anchor, value } });
+    expect(version).toBe(2);
+    expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['neighbor'], tabBarGitBadgeMode: value,
+      futurePreference: { preserved: true } } });
+  });
+
   it('isolates provider state through the consent owner without requiring catalog evidence or replacing configuration', async () => {
     const sharing = accountSettingsParse({}).connectedServicesProviderStateSharingSettingsV1;
     content = { t: 'plain', v: { favoriteMachines: ['neighbor'], connectedServicesProviderStateSharingSettingsV1: {

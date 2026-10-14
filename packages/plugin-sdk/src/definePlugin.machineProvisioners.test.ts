@@ -15,7 +15,8 @@ describe('public machine provisioner authoring', () => {
       expect(machineProvisionerAuthorFixture.manifest.contributes.machineProvisioners?.[0]?.retention.finiteOnly).toBe(true);
       await expect(testkit.invokeAction('check', {})).resolves.toEqual({ available: true });
       const selected = options.choices[0]!;
-      if (selected.launch === undefined) throw new Error('Expected the selected choice to declare launch input');
+      expect(selected.launch).toBeDefined();
+      if (selected.launch === undefined) throw new Error('The native option must expose its launch configuration');
       await expect(testkit.invokeAction('acquire', { launch: selected.launch })).resolves.toEqual({
         kind: 'bound', resource: { contributionRef: { pluginId: machineProvisionerAuthorFixture.manifest.id, localId: 'guest' },
           schemaVersion: 1, value: selected.launch },

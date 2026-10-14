@@ -38,10 +38,8 @@ function readNonEmptyString(value: unknown): string | null {
  * Parsed through the shared usable preference-budget owner. The Replay builder
  * decides whether its actual frame and dispatch reservation can fit that total.
  */
-function readAccountReplayMaxSeedChars(): number | null {
-  const settings = getActiveAccountSettingsSnapshot()?.settings as
-    | { sessionReplayMaxSeedChars?: unknown }
-    | undefined;
+function readAccountReplayMaxSeedChars(accountSettings: Readonly<Record<string, unknown>> | null | undefined): number | null {
+  const settings = accountSettings === undefined ? getActiveAccountSettingsSnapshot()?.settings : accountSettings;
   const parsed = HappierReplayWritableMaxSeedCharsSchema.safeParse(settings?.sessionReplayMaxSeedChars);
   return parsed.success ? parsed.data : null;
 }
@@ -73,6 +71,9 @@ export type BuildSessionAgentTransitionActivationBrief = (
   input: Readonly<{
     credentials: StoredCredentials;
     sessionId: string;
+    /** Captured requester settings; explicit null must not use the daemon's active Account. */
+    accountSettings?: Readonly<Record<string, unknown>> | null;
+    resolveAuthorizationHeaders?: Parameters<typeof resolveReplaySeedDraft>[0]['resolveAuthorizationHeaders'];
     /**
      * The bound the pass runs to. For the transition this is head U captured
      * after the confirmed stop; for the read-only preview it is the cutoff the
@@ -193,6 +194,7 @@ export const buildBoundedActivationBrief: BuildSessionAgentTransitionActivationB
 
   const resolved = await resolveReplaySeedDraft({
     credentials: input.credentials,
+    ...(input.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: input.resolveAuthorizationHeaders } : {}),
     cwd,
     source: {
       // The Session is the same one; only the Agent running it changed. Asking
@@ -218,7 +220,7 @@ export const buildBoundedActivationBrief: BuildSessionAgentTransitionActivationB
     // The same precedence the fork path applies: caller-supplied budget →
     // daemon env → default. The Account preference IS the supplied value here,
     // because this path has no wire field to carry one.
-    maxSeedChars: readAccountReplayMaxSeedChars() ?? configuration.replaySeedMaxChars,
+    maxSeedChars: readAccountReplayMaxSeedChars(input.accountSettings) ?? configuration.replaySeedMaxChars,
     candidateLimit: configuration.replaySeedCandidateLimit,
     sourceAgentLabel,
     // Section 8's other half. The cutover projection clears `sessionWorkStateV1`

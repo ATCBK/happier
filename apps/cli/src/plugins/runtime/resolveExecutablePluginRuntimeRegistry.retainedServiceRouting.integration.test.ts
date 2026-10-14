@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -39,6 +39,7 @@ import {
 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import {
     RunnerDaemonPluginServiceResultV1Schema,
+    RunnerDaemonPluginServiceOperationV1Schema,
     decodeRunnerDaemonPluginServiceWireValueV1,
     type RunnerDaemonPluginServiceOperationV1,
 } from '@/agent/runtime/session/process/agentRuntimeDaemonPluginServicesProtocol';
@@ -1589,7 +1590,8 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                         sessionId: SESSION_ID,
                         runner,
                         retainedAgent: binding,
-                        operation,
+                        // Mirror the real daemon network admission before dispatch.
+                        operation: RunnerDaemonPluginServiceOperationV1Schema.parse(JSON.parse(JSON.stringify(operation))),
                         ...(options?.signal
                             ? { signal: options.signal }
                             : {}),
@@ -1640,6 +1642,7 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                         sessions: unavailable.sessions,
                         managedServices:
                             unavailable.managedServices,
+                        machineProvisioners: unavailable.machineProvisioners,
                         exec: unavailable.exec,
                         interactions: unavailable.interactions,
                         targetedContributions: unavailable.targetedContributions,
@@ -1964,6 +1967,7 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                         sessions: unavailable.sessions,
                         managedServices:
                             unavailable.managedServices,
+                        machineProvisioners: unavailable.machineProvisioners,
                         exec: unavailable.exec,
                         interactions: unavailable.interactions,
                         targetedContributions:
@@ -2240,9 +2244,10 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                     kind: 'managedDependency',
                     id: DEPENDENCY_ID,
                 },
+                cwd: pluginRoot,
                 args: [
                     '-e',
-                    'process.stdout.write(process.argv0)',
+                    'process.stdout.write(JSON.stringify({ tool: process.argv0, cwd: process.cwd() }))',
                 ],
             });
             const execStderr = new TextDecoder().decode(
@@ -2256,8 +2261,8 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                 exitCode: 0,
             });
             expect(execStderr).toBe('');
-            expect(new TextDecoder().decode(execResult.stdout))
-                .toBe(gToolPath);
+            expect(JSON.parse(new TextDecoder().decode(execResult.stdout)))
+                .toEqual({ tool: gToolPath, cwd: await realpath(pluginRoot) });
             expect(authorizedLaunchCommands).toEqual([gToolPath]);
             expect(authorizedLaunchCommands).not.toContain(hToolPath);
 

@@ -1,8 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
     ARTIFACT_PLAIN_DATA_KEY_MARKER,
-    CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
     buildApprovalRequestArtifactHeaderV1,
     decodePlainArtifactStoredContent,
     encodePlainArtifactStoredContent,
@@ -12,42 +11,18 @@ import {
 } from '@happier-dev/protocol';
 
 import type { ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import type { ServerFetch } from '@/sync/http/client';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-// Only the Account server's HTTP boundary (and its feature snapshot) is
+// Only the Account server's HTTP boundary is
 // replaced. The Home's Artifact routes are the testkit's stateful store with
 // the Home's versioned compare-and-set; the real Artifact API adapter and
 // codec, the real CAS writer (`updateArtifactWithHeaderViaApi`) and the real
 // Protocol approval subject/transition owner all run above it.
-const home = await vi.hoisted(async () => {
-    const { createArtifactStoreBoundary } = await import('@/dev/testkit/harness/artifactStoreBoundary');
-    return { artifacts: createArtifactStoreBoundary({ ownerAccountId: () => 'account-1', encryptionMode: 'plain' }) };
-});
-
-vi.mock('@/sync/http/client', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/http/client')>(),
-    serverFetch: async (path: string, init?: RequestInit) => await home.artifacts.handle(path, init)
-        ?? new Response(JSON.stringify({ error: 'not_found' }), { status: 404 }),
-}));
-
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
-    getServerFeaturesSnapshot: vi.fn(async () => ({
-        status: 'ready',
-        features: {
-            capabilities: {
-                accountStoredContentCompatibility: {
-                    v: 1,
-                    minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
-                    currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
-                    declarationTransport: 'http-header-and-socket-auth-v1',
-                },
-            },
-        },
-    })),
-}));
-
-vi.mock('@/sync/api/account/apiAccountEncryptionMode', () => ({
-    fetchAccountEncryptionMode: vi.fn(async () => ({ mode: 'plain', updatedAt: 0 })),
-}));
+const home = { artifacts: createArtifactStoreBoundary({ ownerAccountId: () => 'account-1', encryptionMode: 'plain' }) };
+const request: ServerFetch = async (path, init) => await home.artifacts.handle(path, init)
+    ?? Response.json({ error: 'not_found' }, { status: 404 });
 
 import { fetchArtifactWithBodyFromApi, updateArtifactWithHeaderViaApi } from '@/sync/engine/artifacts/syncArtifacts';
 import { writeApprovalRequestArtifact } from './approvalArtifactWriter';
@@ -104,7 +79,8 @@ function stored(): ApprovalRequestV2 {
     return JSON.parse(storedJson());
 }
 
-const params = { credentials: { token: 'synthetic' }, encryption: null, artifactDataKeys: new Map() } as const;
+const params = { credentials: { token: createAccountTokenForTests('account-1') }, request,
+    encryption: null, artifactDataKeys: new Map() } as const;
 
 /** One UI client: the real read and the real CAS writer against the validated read. */
 function uiWriter() {

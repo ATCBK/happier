@@ -6,7 +6,7 @@ import { resolveExistingManagedJavaScriptRuntimeCommand } from '@/packagedRuntim
 import { readRuntimeInstallableLastCheckAtMs } from '@/packagedRuntime/installables/updateState';
 import { fetchGitHubLatestRelease } from '@happier-dev/release-runtime/github';
 import { resolveHappyHomeDirFromEnvironment, selectManagedDependencyReleaseAsset } from '@happier-dev/cli-common/agents';
-import { readRuntimeInstallableDescriptor } from '@/packagedRuntime/installables/registry';
+import { readRuntimeInstallableDescriptor } from '@/packagedRuntime/installables/descriptors';
 import type { InstallableDependencyDescriptor } from '@happier-dev/protocol';
 
 type CodexAcpState = Readonly<{

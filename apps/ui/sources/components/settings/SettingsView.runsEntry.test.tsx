@@ -187,6 +187,7 @@ await import('./SettingsView');
 describe('SettingsView (runs entry)', () => {
     async function renderSettingsViewUnderTest() {
         const { SettingsView } = await import('./SettingsView');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
         return renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
     }
 

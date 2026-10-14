@@ -85,6 +85,7 @@ export type PrepareExternalActionRequesterAccountContext = (input: Readonly<{
   resolveEncryption: ResolveExternalActionEncryption;
   /** Target reads use the same privately admitted Account as the effect. */
   resolveTarget?: ResolveExternalActionTarget;
+  invocation?: import('@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1').ExternalActionRequesterInvocationV1;
   /** Host-only continuation of this exact finite wake, never a public executor ABI. */
   executeManagedFiniteWake?: (request: ManagedMachinePolicyRequest) => Promise<ActionExecuteResult>;
   dispose(): Promise<void>;
@@ -487,12 +488,24 @@ export async function executeExternalAction(input: Readonly<{
   if (envelope.data.pluginInvocation && !pluginCaller) return prepare({ v: 1, actionId: actionId.data,
     ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
     execution: { ok: false, errorCode: 'plugin_mounted_caller_unavailable', error: 'plugin_mounted_caller_unavailable' } });
+  const invocation = requesterContext?.invocation;
+  // This new same-Session mutation must retain its initiating cause. An Account
+  // credential on the destination is custody, never evidence of a human click.
+  if (actionId.data === 'session.agent.transition' && !sessionActionOrigin && !apiTokenPrincipal && !invocation) {
+    return prepare({ v: 1, actionId: actionId.data, ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
+      execution: { ok: false, errorCode: 'forbidden', error: 'forbidden' } });
+  }
   const context: ActionExecutorContext = {
     surface: pluginCaller ? 'plugin' : sessionActionOrigin ? 'agent' : apiTokenPrincipal
       ? 'api'
-      : input.surface ?? (accountPrincipal?.authentication.kind === 'terminal' ? 'cli' : 'ui'),
-    authority: input.principal.authority,
-    actionCaller: pluginCaller ?? sessionActionOrigin?.caller ?? { kind: 'host' },
+      : invocation?.surface ?? input.surface ?? (accountPrincipal?.authentication.kind === 'terminal' ? 'cli' : 'ui'),
+    authority: invocation && invocation.authority !== 'present_user' ? 'account_automation' : input.principal.authority,
+    actionCaller: pluginCaller ?? sessionActionOrigin?.caller ?? invocation?.caller ?? { kind: 'host' },
+    ...(invocation ? { callerPermissionMode: invocation.callerPermissionMode,
+      ...(invocation.callerInputConstraints ? { callerInputConstraints: invocation.callerInputConstraints } : {}),
+      ...(invocation.workspaceWrites ? { workspaceWrites: invocation.workspaceWrites } : {}),
+      ...(invocation.defaultSessionId ? { defaultSessionId: invocation.defaultSessionId } : {}),
+    } : {}),
     ...(sessionActionOrigin ? {
       defaultSessionId: sessionActionOrigin.caller.sessionId,
       callerPermissionMode: sessionActionOrigin.callerPermissionMode,

@@ -6,21 +6,22 @@ import {
     createEmptySessionReportsToTransactionModel,
 } from '@/app/api/testkit/txHarness';
 
-// This fixture replaces database initialization while using the real driver's
-// JSON sentinel. Activation, recipient resolution and lock logic stay real.
-vi.mock('@/storage/db', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/storage/db')>();
-    return { ...actual, getActivePrismaRuntime: () => actual.prismaRuntime };
-});
+import { Prisma } from '@prisma/client';
+import * as storageBoundary from '@/storage/prisma';
+import { installDbModuleMock } from '@/app/api/testkit/dbMocks';
 
-import {
+// Transaction delegates are fixtures; supply the real Prisma metadata without
+// opening a database connection or mocking activation policy.
+installDbModuleMock({ ...storageBoundary, getActivePrismaRuntime: () => Prisma });
+
+const {
     armPendingActivationAuthorizationInTx,
     clearPendingActivationAuthorizationForPublisherActivityData,
     mapPendingActivationAuthorization,
     mapPendingActivationFailureDetails,
     markPendingActivationAuthorizationFailedInTx,
     reconcilePendingActivationAuthorizationForRemovedRequestInTx,
-} from './pendingActivationAuthorization';
+} = await import('./pendingActivationAuthorization');
 
 function createTx(session: Record<string, unknown>, row?: Record<string, unknown>) {
     const publication = () => ({
@@ -113,6 +114,7 @@ describe('pending activation authorization owner', () => {
         };
         const result = await armPendingActivationAuthorizationInTx({
             tx: createTx(session),
+            currentAccess: { accountId: 'owner', sessionId: 's1', level: 'owner' },
             sessionId: 's1',
             requestId: 'p1',
             now: new Date(50),
@@ -137,6 +139,7 @@ describe('pending activation authorization owner', () => {
         };
         await armPendingActivationAuthorizationInTx({
             tx: createTx(session),
+            currentAccess: { accountId: 'owner', sessionId: 's1', level: 'owner' },
             sessionId: 's1',
             requestId: 'p1',
             now: new Date(90),
@@ -178,12 +181,14 @@ describe('pending activation authorization owner', () => {
             tx,
             sessionId: 's1',
             requestId: 'p1',
+            currentAccess: { accountId: 'owner', sessionId: 's1', level: 'owner' },
         })).resolves.toBeUndefined();
         await expect(armPendingActivationAuthorizationInTx({
             tx,
             sessionId: 's1',
             requestId: 'p1',
             resumeWhenAvailable: true,
+            currentAccess: { accountId: 'owner', sessionId: 's1', level: 'owner' },
         })).resolves.toEqual({ accountId: 'owner', requestId: 'p1' });
     });
 
@@ -215,6 +220,7 @@ describe('pending activation authorization owner', () => {
             tx,
             sessionId: 's1',
             requestId: 'p1',
+            currentAccess: { accountId: 'owner', sessionId: 's1', level: 'owner' },
         })).resolves.toBeUndefined();
         expect(tx.session.update).not.toHaveBeenCalled();
     });
@@ -254,6 +260,7 @@ describe('pending activation authorization owner', () => {
             tx,
             sessionId: 's1',
             requestId: 'p1',
+            currentAccess: { accountId: 'owner', sessionId: 's1', level: 'owner' },
         })).resolves.toBeUndefined();
         expect(tx.session.update).not.toHaveBeenCalled();
     });

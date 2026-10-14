@@ -2,6 +2,7 @@ import { defineSettingsPage, settingsHosts } from '@/components/settings/catalog
 import { LOCAL_SETTING_DEFINITIONS } from '@/sync/domains/settings/registry/local/localSettingDefinitions';
 import { AUTO_HIDE_DELAY_OPTIONS } from './desktopOverlayAutoHideDelayOptions';
 import { commitDesktopOverlayPlacement } from './desktopOverlayPlacement';
+import { desktopLoginStartBinding } from './desktopLoginStart';
 
 const placementSchema = LOCAL_SETTING_DEFINITIONS.desktopOverlayPlacementMode.schema;
 const anchorSchema = LOCAL_SETTING_DEFINITIONS.desktopOverlayAnchor.schema;
@@ -17,7 +18,7 @@ export const DESKTOP_SETTINGS = defineSettingsPage({
             titleKey: 'settingsDesktop.startupTitle',
             host: settingsHosts.desktop,
             settings: {
-                startOnLogin: {},
+                startOnLogin: { storage: desktopLoginStartBinding },
             },
         },
         overlay: {

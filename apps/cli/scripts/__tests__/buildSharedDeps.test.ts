@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createTempDirSync, removeTempDirSync } from '../../src/testkit/fs/tempDir';
 import { resolveBundledWorkspaceDependencyBuildOrder } from '../../../../scripts/workspaces/resolveWorkspaceDependencyBuildOrder.mjs';
 import { DEFAULT_WORKSPACE_BUNDLE_LOCK_TIMEOUT_MS } from '../../../../scripts/workspaces/workspaceBundleLock.mjs';
+import { syncBundledWorkspacePackages } from '../../../../scripts/workspaces/syncBundledWorkspacePackages.mjs';
 import {
   ensureWorkspacePackagesBuiltByName,
   readWorkspacePackageInputFingerprint,
@@ -3604,6 +3605,7 @@ describe('buildSharedDeps', () => {
       const sourcePath = resolve(sourcePackageDir, 'src', 'index.ts');
       const removedSourcePath = resolve(sourcePackageDir, 'src', 'removed.ts');
       const sourceDistPath = resolve(sourcePackageDir, 'dist', 'index.js');
+      const publishedRootRuntimePath = 'src/runtime.js';
 
       mkdirSync(resolve(sourcePackageDir, 'src'), { recursive: true });
       mkdirSync(resolve(sourcePackageDir, 'dist'), { recursive: true });
@@ -3614,23 +3616,23 @@ describe('buildSharedDeps', () => {
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(
         resolve(sourcePackageDir, 'package.json'),
-        '{"name":"@happier-dev/cli-common","exports":{".":"./dist/index.js"}}\n',
+        JSON.stringify({
+          name: '@happier-dev/cli-common',
+          exports: {
+            '.': { 'happier-source': './src/index.ts', default: './dist/index.js' },
+            './runtime': `./${publishedRootRuntimePath}`,
+          },
+          imports: {
+            '#implementation': { 'happier-source': './src/removed.ts', default: './dist/index.js' },
+          },
+        }),
         'utf8',
       );
       writeFileSync(resolve(sourcePackageDir, 'tsconfig.json'), '{}\n', 'utf8');
       writeFileSync(sourcePath, 'export const value = 1;\n', 'utf8');
       writeFileSync(removedSourcePath, 'export const removed = true;\n', 'utf8');
       writeFileSync(sourceDistPath, 'export const value = 1;\n', 'utf8');
-      writeFileSync(
-        resolve(bundledPackageDir, 'package.json'),
-        '{"name":"@happier-dev/cli-common","exports":{".":"./dist/index.js"}}\n',
-        'utf8',
-      );
-      writeFileSync(
-        resolve(bundledPackageDir, 'dist', 'index.js'),
-        'export const value = 1;\n',
-        'utf8',
-      );
+      writeFileSync(resolve(sourcePackageDir, publishedRootRuntimePath), 'export const runtime = true;\n', 'utf8');
       writeFileSync(
         resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'),
         '{"name":"tweetnacl"}\n',
@@ -3644,10 +3646,12 @@ describe('buildSharedDeps', () => {
       const outputTime = new Date('2030-01-01T00:00:00.000Z');
       utimesSync(sourceDistPath, outputTime, outputTime);
       markFixtureWorkspaceOutputsCurrent(sourcePackageDir);
-      writeFileSync(
-        resolve(bundledPackageDir, 'dist', '.happier-build-inputs.json'),
-        readFileSync(resolve(sourcePackageDir, 'dist', '.happier-build-inputs.json')),
-      );
+      syncBundledWorkspacePackages({ repoRoot, hostPackageDirs: [cliDir], packages: ['cli-common'] });
+      const installedManifest = JSON.parse(readFileSync(resolve(bundledPackageDir, 'package.json'), 'utf8'));
+      expect(installedManifest.exports['.']).toEqual({ default: './dist/index.js' });
+      expect(installedManifest.imports['#implementation']).toEqual({ default: './dist/index.js' });
+      expect(existsSync(resolve(bundledPackageDir, 'src', 'index.ts'))).toBe(false);
+      expect(existsSync(resolve(bundledPackageDir, publishedRootRuntimePath))).toBe(true);
 
       const module = await import('../buildSharedDeps.mjs') as unknown as Record<string, unknown>;
       const publishRuntimeClosure =
@@ -3670,6 +3674,12 @@ describe('buildSharedDeps', () => {
         repoRoot,
         workspaceNames: ['cli-common'],
       })).toEqual({ current: true, reason: 'current' });
+      writeFileSync(resolve(bundledPackageDir, publishedRootRuntimePath), 'export const runtime = false;\n', 'utf8');
+      expect(inspectSourceDevSharedDepsForSourceDev({
+        repoRoot,
+        workspaceNames: ['cli-common'],
+      })).toEqual({ current: false, reason: 'not-current' });
+      writeFileSync(resolve(bundledPackageDir, publishedRootRuntimePath), 'export const runtime = true;\n', 'utf8');
       writeFileSync(sourceDistPath, 'export const value = 2;\n', 'utf8');
       utimesSync(sourceDistPath, outputTime, outputTime);
       expect(inspectSourceDevSharedDepsForSourceDev({

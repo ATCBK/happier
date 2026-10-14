@@ -995,6 +995,20 @@ describe('managed acquisition durable custody', () => {
             .resolves.toEqual({ controller, provisioners: [] });
         expect(post).not.toHaveBeenCalled();
     });
+    it('omits unconfirmed provisioners and refuses their probe without native effects when occurrence custody is unavailable', async () => {
+        const post = vi.spyOn(axios, 'post');
+        const native = nativeFixture({ privateNative: true });
+        const probeDriver = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example',
+            homeId: 'home', controller, ...accountInputs,
+            runtimeRegistry: { ...native.runtimeRegistry, readPluginOccurrenceId: undefined } });
+        await expect(probeDriver.execute('machines.provisioners.list', { homeId: 'home' }, { requestId: 'discovery' }))
+            .resolves.toEqual({ controller, provisioners: [] });
+        await expect(probeDriver.execute('machines.provisioners.check', { homeId: 'home', controller,
+            contribution: input.selection.launch.provider }, { requestId: 'check' }))
+            .rejects.toMatchObject({ code: 'provider_unavailable' });
+        expect(native.effects()).toBe(0);
+        expect(post).not.toHaveBeenCalled();
+    });
     it('passes native options selectors in the declared Action grammar without fabricating a wrapper', async () => {
         const post = vi.spyOn(axios, 'post');
         const native = nativeFixture({ privateNative: true });
@@ -1745,6 +1759,8 @@ describe('managed acquisition durable custody', () => {
             if (new URL(path).pathname === PROFILE_TRANSFER_ROUTE_V1) return { status: 200, data: { status: 'absent' } };
             // SavedSecret promotion captures every canonical reference domain
             // before source CAS; these HTTP rows are authoritatively absent.
+            if (new URL(path).pathname === REMOTE_HOST_ROWS_ROUTE_V1) return { status: 200, data: RemoteHostCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) };
+            if (new URL(path).pathname === NOTIFICATION_CHANNELS_ROUTE_V1) return { status: 200, data: NotificationChannelCatalogReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === MCP_SERVER_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: McpServerCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === ACP_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) return { status: 200, data: ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'absent' }) };

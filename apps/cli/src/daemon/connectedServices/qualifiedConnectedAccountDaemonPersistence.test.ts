@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
@@ -1309,6 +1310,27 @@ describe('createQualifiedConnectedAccountDaemonPersistence', () => {
   );
 
   it('retains an unknown settlement outcome when the reread cannot prove the staged bytes', async () => {
+    const lostAcknowledgement = new Error('acknowledgement lost with no committed proof');
+    const legacySnapshot = QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+      ref: account,
+      authenticationModeId: 'oauth',
+      revisionSemantics: 'legacy_unfenced',
+      credentialRevision: null,
+      configurationRevision: null,
+      content: { t: 'plain', v: { v: 1, values: { accessToken: 'access-1' } } },
+      metadata: { displayName: 'Person', scopes: [] },
+    });
+    const publications: unknown[] = [];
+    // Axios is the Account HTTP boundary; keep the actual V4 codec and recovery owner.
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (_url, body: unknown) => {
+      expect(QualifiedConnectedAccountCredentialMutationV4Schema.parse(body)).toMatchObject({
+        ref: account,
+        authenticationModeId: 'oauth',
+        expectedCredentialRevision: null,
+      });
+      throw lostAcknowledgement;
+    });
+    const get = vi.spyOn(axios, 'get');
     const persistence = createQualifiedConnectedAccountDaemonPersistence({
       credentials: {
         token: 'token-1',
@@ -1319,12 +1341,7 @@ describe('createQualifiedConnectedAccountDaemonPersistence', () => {
         },
       },
       getAccountEncryptionMode: vi.fn(async (): Promise<'plain'> => 'plain'),
-      readCredential: vi.fn(async () => null),
-      readConfiguration: vi.fn(async () => null),
-      mutateCredential: vi.fn(async () => {
-        throw new Error('acknowledgement lost with no committed proof');
-      }),
-      mutateConfiguration: vi.fn(),
+      onAccountSettled: async (settled) => { publications.push(settled); },
       secrets: {
         admit: vi.fn(async () => undefined),
         has: vi.fn(async () => false),
@@ -1332,8 +1349,8 @@ describe('createQualifiedConnectedAccountDaemonPersistence', () => {
       },
     });
 
-    await expect(persistence.attempts.settlement.settle({
-      intent: 'connect',
+    const request = {
+      intent: 'connect' as const,
       service,
       accountId: account.accountId,
       authenticationModeId: 'oauth',
@@ -1344,7 +1361,19 @@ describe('createQualifiedConnectedAccountDaemonPersistence', () => {
       stagedCredentials: { accessToken: 'access-1' },
       displayName: 'Person',
       scopes: [],
-    })).rejects.toThrow('acknowledgement lost with no committed proof');
+    };
+    try {
+      for (const snapshot of [null, legacySnapshot]) {
+        get.mockResolvedValueOnce({ status: snapshot ? 200 : 404, data: snapshot });
+        await expect(persistence.attempts.settlement.settle(request)).rejects.toBe(lostAcknowledgement);
+        expect(publications).toEqual([]);
+      }
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(get).toHaveBeenCalledTimes(2);
+    } finally {
+      post.mockRestore();
+      get.mockRestore();
+    }
   });
 
   it('reads exact qualified account and account-configuration revisions', async () => {

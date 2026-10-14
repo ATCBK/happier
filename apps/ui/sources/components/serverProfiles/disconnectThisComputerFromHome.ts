@@ -5,6 +5,7 @@ import { buildLocalDaemonServiceSystemTaskSpec } from '@/components/systemTasks/
 import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntime';
 import { isSystemTaskBridgeUnavailableError } from '@/components/systemTasks/systemTaskStartError';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 /**
  * What removing a Home did to this computer (R15 c). `not_applicable`: this app has no local
@@ -27,18 +28,25 @@ export type ThisComputerHomeDisconnect =
 export async function disconnectThisComputerFromHome(
     home: Readonly<{ serverUrl: string; serverIdentityId?: string | null }>,
     runner: SystemTaskRunner = getSystemTasksRunner(),
+    context?: Readonly<{ signal?: AbortSignal }>,
 ): Promise<ThisComputerHomeDisconnect> {
     // Only the desktop's own bridge (and its deterministic dev bridge) runs local service tasks.
     if (runner.mode !== 'tauri' && runner.mode !== 'dev') return { kind: 'not_applicable' };
     let result;
+    let taskId: string | undefined;
     try {
-        const taskId = await runner.start(buildLocalDaemonServiceSystemTaskSpec('daemon.service.relay.disconnect.v1', {
+        throwIfAborted(context?.signal);
+        taskId = await runner.start(buildLocalDaemonServiceSystemTaskSpec('daemon.service.relay.disconnect.v1', {
             relayUrl: home.serverUrl,
             serverIdentityId: home.serverIdentityId ?? null,
         }));
-        result = await waitForSystemTaskResult(runner, taskId);
+        result = await waitForSystemTaskResult(runner, taskId, { signal: context?.signal });
         if (runner.getSnapshot(taskId)?.status === 'canceled') return { kind: 'canceled' };
     } catch (error) {
+        if (context?.signal?.aborted) {
+            if (taskId) await runner.cancel(taskId);
+            throw error;
+        }
         const message = error instanceof Error ? error.message : null;
         // No bridge to this computer's services: nothing was attempted. Any other failure may have
         // come after the uninstall started, so it blocks like a failed uninstall (never "Remove anyway").

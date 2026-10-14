@@ -25,7 +25,7 @@ await import('@/components/computer/openComputerTargetPickerForSession');
 
 describe('default Action Computer Account publication', () => {
     beforeEach(() => { network.resetRequests(); });
-    afterAll(() => network.dispose());
+    afterAll(async () => { await network.dispose(); });
 
     it('names the exact Home in the real picker when two Homes have the same Session id', async () => {
         const { storage } = await import('@/sync/domains/state/storageStore');

@@ -4,17 +4,26 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
-import { renderFeatureFlagReferenceMarkdown } from './generateFeatureFlagReference.mjs';
+import { FEATURE_CATALOG } from '../../../packages/protocol/dist/features/catalog.js';
+import { UI_FEATURE_REGISTRY } from '../../../packages/protocol/dist/actions/settings/featurePreferenceMutations.js';
+import { collectUiToggles, renderFeatureFlagReferenceMarkdown } from './generateFeatureFlagReference.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..');
 
-test('renders every canonical feature after the UI registry moves to protocol', async () => {
-  const { FEATURE_CATALOG } = await import('../../../packages/protocol/dist/features/catalog.js');
+test('reads and renders the complete canonical feature inventory without parsing the UI re-export', async () => {
   const markdown = await renderFeatureFlagReferenceMarkdown();
-  for (const id of Object.keys(FEATURE_CATALOG)) {
+  const ids = Object.keys(FEATURE_CATALOG).sort();
+  assert.deepEqual(Object.keys(collectUiToggles(UI_FEATURE_REGISTRY, ids)).sort(), ids);
+  for (const id of ids) {
     assert.ok(markdown.includes(`\`${id}\``), `missing feature ${id}`);
   }
+});
+
+test('refuses an incomplete canonical toggle inventory instead of guessing a hidden toggle', () => {
+  const { voice: omitted, ...incomplete } = UI_FEATURE_REGISTRY;
+  assert.ok(omitted);
+  assert.throws(() => collectUiToggles(incomplete, ['voice']), { name: 'Error' });
 });
 
 test('canonical feature-reference inputs omit the retired plugin UI dev-server tier', () => {

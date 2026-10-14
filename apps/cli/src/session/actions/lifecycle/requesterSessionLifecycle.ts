@@ -44,7 +44,7 @@ export async function runRequesterSessionLifecycle<T>(params: Readonly<{
         try {
             const result = await params.spawnSession({ ...options, requesterSessionBootstrap: prepared.admitted,
                 requesterWorkAttributionV1: prepared.admitted.attribution });
-            if (result.type !== 'success' && result.type !== 'pending') await prepared.cleanupOnFailure();
+            if (result.type !== 'success') await prepared.cleanupOnFailure();
             return result;
         } catch (error) { await prepared.cleanupOnFailure(); throw error; }
     };

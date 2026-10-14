@@ -32,8 +32,13 @@ export type SessionReportsToSetActionInputV1 = z.infer<typeof SessionReportsToSe
 export const SessionReportsToSetResultV1Schema = lazyZodSchema(() => z.union([
   z.object({
     ok: z.literal(true), sessionId: SessionIdV1Schema,
-    leadSessionId: SessionIdV1Schema.nullable(),
-    attachedAt: z.number().int().nonnegative().nullable(),
+    leadSessionId: SessionIdV1Schema,
+    attachedAt: z.number().int().nonnegative(),
+    sourceKeyPreparation: SessionFollowSourceKeyPreparationResultV1Schema.optional(),
+  }).strict(),
+  z.object({
+    ok: z.literal(true), sessionId: SessionIdV1Schema,
+    leadSessionId: z.null(), attachedAt: z.null(),
     sourceKeyPreparation: SessionFollowSourceKeyPreparationResultV1Schema.optional(),
   }).strict(),
   z.object({ ok: z.literal(false), error: z.literal('reports_to_cycle') }).strict(),

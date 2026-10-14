@@ -32,6 +32,7 @@ import type {
 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol/connect/accountSubscription';
 export type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol/connect/accountSubscription';
+export { resolveConnectedServiceQuotaMeterLabel } from '@happier-dev/protocol/connect/connectedServiceQuotaMeterLabel';
 export type {
     PluginConnectedAccountAuthenticationModeV2,
     PluginConnectedAccountAuthenticationV2,

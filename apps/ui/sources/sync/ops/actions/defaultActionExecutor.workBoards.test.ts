@@ -16,15 +16,16 @@ import { createWorkBoardAccountStore } from '@/components/boards/model/workBoard
 import { createWorkBoardUiActionPort } from '@/components/boards/model/workBoardEntityDrop';
 import { projectBoardMembership } from '@/components/boards/model/boardMembership';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit';
-import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 // Only HTTP, credentials and native UI modules are replaced; domain and encryption owners run.
 installApprovalCommonModuleMocks();
+installDisconnectedServerSocketBoundary();
 const initialState = getStorage().getState();
-let releaseWidgetScope: (() => void) | undefined;
-afterEach(() => {
-    releaseWidgetScope?.(); releaseWidgetScope = undefined;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+afterEach(async () => {
+    await connection?.dispose(); connection = null;
     retireActiveServerAccountScopeLifetime(); resetRuntimeFetch(); invalidateAccountEncryptionModeCache();
     resetServerFeaturesClientForTests(); getStorage().setState(initialState, true); vi.restoreAllMocks();
 });
@@ -39,17 +40,19 @@ describe('Board Actions through captured Home Artifacts', () => {
         const persistence = createArtifactStoreBoundary({ ownerAccountId: () => 'board-owner', encryptionMode: 'plain' });
         const currentBoard = () => WorkBoardV1Schema.parse(JSON.parse(persistence.readPlainBody('mine') ?? 'null'));
         const requests: string[] = [];
-        setRuntimeFetch(async (input, init) => {
+        const request: Parameters<typeof setRuntimeFetch>[0] = async (input, init) => {
             const url = new URL(String(input));
             expect(url.origin).toBe('https://board-target.test');
             expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
             const method = init?.method ?? 'GET';
+            if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return Response.json({});
             requests.push(`${method} ${url.pathname}`);
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { unrelated: 'x'.repeat(600_000) } }, version: 1 });
             return await persistence.handle(`${url.pathname}${url.search}`, init) ?? Response.json({ error: 'not_found' }, { status: 404 });
-        });
+        };
+        setRuntimeFetch(request);
         const executor = createDefaultActionExecutor();
         const context = { serverId: target.id, surface: 'ui', bypassApprovals: true } as const;
         expect(await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'mine', name: 'My Board' } } }, context))
@@ -82,10 +85,10 @@ describe('Board Actions through captured Home Artifacts', () => {
             .toMatchObject({ ok: true, result: { board: { positionsByItemRef: { [first]: { x: 72, y: 120 } } } } });
         expect(uiPersistence.acknowledged().boards[0]!.positionsByItemRef).toEqual({ [first]: { x: 72, y: 120 } });
         expect(board.positionsByItemRef[first]).toEqual({ x: 48, y: 96 });
-        // Widget input/catalog admission belongs to the mounted Account. The earlier
-        // Board edit proves captured-Home routing while a different Home is focused.
-        await upsertAndActivateServer({ serverUrl: 'https://board-target.test', scope: 'tab' });
-        releaseWidgetScope = (await activateStorageAccountScope({ serverId: target.id, accountId: 'board-owner' })).dispose;
+        // Widget catalog admission requires this Home's genuine mounted Account;
+        // the preceding Board writes still prove captured, non-focused Home routing.
+        connection = await restoreServerAccountForTest({ serverUrl: target.serverUrl, accountId: 'board-owner', credentials: { token }, request });
+        setRuntimeFetch(request);
         const surface = { serverId: target.id, accountId: 'board-owner', owner: { kind: 'workBoard', boardId: 'mine' } } as const;
         const instance = { v: 1, id: 'configured', definition: { kind: 'inline', definition: { v: 1, id: 'checks', name: 'Checks',
             sizeDeclaration: { sizes: ['medium', 'full'], defaultSize: 'medium' }, inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false },

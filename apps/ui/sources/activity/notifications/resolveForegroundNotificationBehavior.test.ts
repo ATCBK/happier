@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { PUSH_NOTIFICATION_CATEGORY_IDS } from '@happier-dev/protocol';
 
@@ -6,25 +6,30 @@ import { settingsParse } from '@/sync/domains/settings/settings';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
 import { saveAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
+import { installLocalStorageMock, installWebLockManagerMock, type LocalStorageMockHandle } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { consumeOtherLegActivityAlertPresentation, noteActivityAlertPresented, resetActivityAlertPresentationNotesForTests } from './remoteAlerts/activityAlertPresentationNotes';
 
-// Device secure-credential storage is the only mocked boundary: which Account
-// this device holds for a Home. The saved-Home profiles, the strict remote-alert
-// parser, the exact-Home settings read, the Account policy and the delivery plan
-// all stay real.
-const credentialScopes = new Map<string, ServerAccountScope>();
-vi.mock('@/sync/domains/scope/serverCredentialAccountScope', () => ({
-    resolveServerCredentialAccountScope: async (serverId: string) => {
-        const scope = credentialScopes.get(serverId);
-        return scope ? { kind: 'bound' as const, scope } : { kind: 'signed_out' as const };
-    },
-}));
+// Browser storage and locking are the device credential boundary. TokenStorage,
+// saved-Home normalization, Account binding and notification policy stay real.
+installTokenStorageWebPlatformMocks();
 
 const serverProfiles = await import('@/sync/domains/server/serverProfiles');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
 const { resolveForegroundNotificationBehavior } = await import('./resolveForegroundNotificationBehavior');
 
-type Home = Readonly<{ scope: ServerAccountScope; serverUrl: string; portableId: string }>;
+type Home = Readonly<{ scope: ServerAccountScope; serverUrl: string; portableId: string; profileId: string }>;
+const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
+
+async function writeHomeCredential(home: Pick<Home, 'scope' | 'serverUrl'>, accountId: string): Promise<void> {
+    const token = createAccountTokenForTests(accountId);
+    const write = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.scope.serverId }, { token });
+    if (!write) throw new Error('Home fixture credential write failed');
+    credentialWrites.push(write);
+}
 
 async function clearProfiles(): Promise<void> {
     for (const profile of serverProfiles.listServerProfiles()) {
@@ -37,10 +42,10 @@ async function enrollHome(name: string, settings: unknown): Promise<Home> {
     const profile = await serverProfiles.upsertServerProfile({ serverUrl, name });
     const portableId = `srv_${name}`;
     await serverProfiles.setServerProfileIdentityForUrl(profile.serverUrl, portableId);
-    const scope: ServerAccountScope = { serverId: profile.id, accountId: `account-${name}` };
-    credentialScopes.set(scope.serverId, scope);
+    const scope: ServerAccountScope = { serverId: serverProfiles.resolveServerProfileScopeIdForIdentifier(profile.id), accountId: `account-${name}` };
+    await writeHomeCredential({ scope, serverUrl: profile.serverUrl }, scope.accountId);
     saveAccountSettings(scope, settingsParse(settings), 1);
-    return { scope, serverUrl: profile.serverUrl, portableId };
+    return { scope, serverUrl: profile.serverUrl, portableId, profileId: profile.id };
 }
 
 function readyAlert(home: Home) {
@@ -65,16 +70,23 @@ const QUIET_HOURS_NIGHTLY_UTC = {
 } as const;
 
 describe('resolveForegroundNotificationBehavior', () => {
+    let localStorage: LocalStorageMockHandle | null = null;
+    let restoreWebLocks: (() => void) | null = null;
+    beforeAll(() => { restoreWebLocks = installWebLockManagerMock().restore; });
     beforeEach(async () => {
-        credentialScopes.clear();
+        localStorage = installLocalStorageMock();
         resetActivityAlertPresentationNotesForTests();
         await clearProfiles();
     });
 
     afterEach(async () => {
+        for (const write of credentialWrites.splice(0).reverse()) await write.rollback();
         await clearProfiles();
         resetActivityAlertPresentationNotesForTests();
+        localStorage?.restore();
+        localStorage = null;
     });
+    afterAll(() => { restoreWebLocks?.(); });
 
     it('answers with the incoming alert Home policy, not the other enrolled Home', async () => {
         const homeA = await enrollHome('alpha', { attentionDeliveryPolicyV1: { v: 1, foregroundBehavior: 'off' } });
@@ -177,6 +189,8 @@ describe('resolveForegroundNotificationBehavior', () => {
 
     it('presents only one simultaneous local and rich ready arrival after asynchronous policy resolution', async () => {
         const home = await enrollHome('simultaneous-ready', { attentionDeliveryPolicyV1: { v: 1, foregroundBehavior: 'full' } });
+        expect(home.profileId).not.toBe(home.scope.serverId);
+        await expect(resolveServerCredentialAccountScope(home.profileId)).resolves.toEqual({ kind: 'bound', scope: home.scope });
         const data = { sessionId: 'session-1', serverUrl: home.serverUrl, activityEventLocalId: 'local-1' };
         const arrivals = await Promise.all([
             resolveForegroundNotificationBehavior({ content: { data: { ...data, serverId: home.scope.serverId, activityEvent: { type: 'ready', sequenceDomain: 'session_transcript', messageSeq: 7 } } }, localSettings: null, now: NOON, isSessionVisible: nothingVisible }),
@@ -189,9 +203,9 @@ describe('resolveForegroundNotificationBehavior', () => {
         const home = await enrollHome('unavailable-policy', { attentionDeliveryPolicyV1: { v: 1, foregroundBehavior: 'full' } });
         const address = { serverId: home.scope.serverId, sessionId: 'session-1' };
         noteActivityAlertPresented({ address, accountId: home.scope.accountId, event: 'ready', identity: 'message-seq:session_transcript:7', source: 'local_notification' });
-        credentialScopes.delete(home.scope.serverId);
+        expect(await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.scope.serverId })).toBe(true);
         await expect(resolveForegroundNotificationBehavior({ content: { data: readyAlert(home) }, localSettings: null, now: NOON, isSessionVisible: nothingVisible })).resolves.toBe('off');
-        credentialScopes.set(home.scope.serverId, home.scope);
+        await writeHomeCredential(home, home.scope.accountId);
         await expect(resolveForegroundNotificationBehavior({ content: { data: readyAlert(home) }, localSettings: null, now: NOON, isSessionVisible: nothingVisible })).resolves.toBe('off');
     });
 
@@ -200,7 +214,7 @@ describe('resolveForegroundNotificationBehavior', () => {
         const localContent = { data: { serverId: home.scope.serverId, sessionId: 'session-1', activityEvent: { type: 'ready', sequenceDomain: 'session_transcript', messageSeq: 7 } } };
         await expect(resolveForegroundNotificationBehavior({ content: localContent, localSettings: null, now: NOON, isSessionVisible: nothingVisible })).resolves.toBe('full');
         const nextScope = { ...home.scope, accountId: 'replacement-account' };
-        credentialScopes.set(nextScope.serverId, nextScope);
+        await writeHomeCredential(home, nextScope.accountId);
         saveAccountSettings(nextScope, settingsParse({ attentionDeliveryPolicyV1: { v: 1, foregroundBehavior: 'full' } }), 1);
         await expect(resolveForegroundNotificationBehavior({ content: { data: { ...readyAlert(home), accountId: nextScope.accountId } }, localSettings: null, now: NOON, isSessionVisible: nothingVisible })).resolves.toBe('full');
     });
@@ -307,7 +321,7 @@ describe('resolveForegroundNotificationBehavior', () => {
 
     it('fails closed when this device cannot name the alert Home Account', async () => {
         const homeB = await enrollHome('bravo', { attentionDeliveryPolicyV1: { v: 1, foregroundBehavior: 'full' } });
-        credentialScopes.clear();
+        expect(await TokenStorage.removeCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.scope.serverId })).toBe(true);
 
         await expect(resolveForegroundNotificationBehavior({
             content: { data: readyAlert(homeB) },

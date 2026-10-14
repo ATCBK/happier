@@ -5036,6 +5036,7 @@ const enConnectedServices = {
     },
   },
   quota: {
+    refreshing: 'Refreshing usage…',
     loading: 'Loading…',
     error: ({ message }: { message: string }) => `Error: ${message}`,
     lastUpdated: ({ time }: { time: string }) => `Last updated: ${time}`,
@@ -16062,10 +16063,9 @@ const enSettingsVoice = {
     mediatorVerbosityShort: 'Short',
     mediatorVerbosityBalanced: 'Balanced',
     mediatorIdleTtl: 'Voice agent idle TTL',
-    mediatorIdleTtlSubtitle:
-      'Auto-stop voice agent after inactivity (60–21600s)',
-    mediatorIdleTtlDescription: 'Enter a number between 60 and 21600.',
-    mediatorIdleTtlInvalid: 'Please enter a number between 60 and 21600.',
+    mediatorIdleTtlSubtitle: 'Auto-stop voice agent after inactivity',
+    mediatorIdleTtlDescription: 'Enter a positive whole number of seconds.',
+    mediatorIdleTtlInvalid: 'Please enter a positive whole number of seconds.',
     mediatorChatModelSource: 'Voice agent chat model source',
     mediatorChatModelSourceSubtitle:
       'Use the session model, or a custom fast model',

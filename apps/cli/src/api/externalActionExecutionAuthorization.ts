@@ -274,6 +274,7 @@ export function createExternalActionMachineRpcExecution(input: Readonly<{
     installationId: input.installationId,
     machineSignature: signExternalActionMachineRpcRequestV1({
       authorizationToken: authorization.token,
+      requesterAccountContext: authorization.requesterAccountContext,
       effectActionId,
       target,
       installationId: input.installationId,
@@ -751,7 +752,7 @@ export function isOriginalLocalManagedSetupContext(input: Readonly<{
     && (context.surface === 'cli' || context.surface === 'ui') && context.actionCaller?.kind === 'host'
     && context.actionRequestId && context.serverIdentityId === input.homeId
     && (!context.runtimeAccountId || context.runtimeAccountId === accountId)
-    && !context.machineAdmission && !context.externalActionCredential && !context.externalActionExecutionAuthorization
+    && !('machineAdmission' in context && context.machineAdmission) && !context.externalActionCredential && !context.externalActionExecutionAuthorization
     && !context.rpcSessionAuthorization && !context.causalPermissionAuthority && !context.sessionInputSource
     && !context.runtimeRunId && !context.executionRunWorkflowRunId);
 }

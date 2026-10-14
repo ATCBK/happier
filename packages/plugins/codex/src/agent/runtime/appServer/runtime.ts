@@ -17,6 +17,7 @@ import type {
 import type { SessionAuthService } from '@happier-dev/plugin-sdk/sessions';
 import {
   AgentRuntimeJsonValueSchema,
+  canPublishSessionResumeIdentity,
   buildAgentAccountUsageRecordId,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
@@ -1014,7 +1015,7 @@ export function createCodexAppServerRuntime(
     text: string,
     mode: 'append' | 'override',
   ): void => {
-    if (text.trim().length === 0) return;
+    if (mode === 'append' && text.length === 0) return;
     const existing = bufferedTranscriptSegments.get(streamKey);
     bufferedTranscriptSegments.set(streamKey, {
       kind,
@@ -1026,6 +1027,29 @@ export function createCodexAppServerRuntime(
     });
   };
 
+  const publishBufferedTranscriptSegment = (
+    streamKey: string,
+    segment: BufferedTranscriptSegment,
+    interruptedReason?: string,
+  ): void => {
+    if (!segment.needsCommittedReconciliation) return;
+    publishRuntimeEvent({
+      kind: 'transcript-agent-message-committed',
+      agentId: 'codex',
+      localId: `codex:${streamKey}`,
+      ...(pendingTurn ? { turnId: pendingTurn.sessionTurnId } : {}),
+      body: segment.kind === 'assistant'
+        ? { type: 'message', message: segment.text }
+        : { type: 'reasoning', message: segment.text },
+      ...(segment.sidechainId ? { sidechainId: segment.sidechainId } : {}),
+      meta: {
+        source: 'codex-app-server-runtime',
+        streamKey,
+        ...(interruptedReason !== undefined ? { interruptedReason } : {}),
+      },
+    });
+  };
+
   const flushBufferedTranscriptSegments = (args: Readonly<{
     reason: 'turn-end' | 'abort' | 'tool-call-boundary';
     interruptedReason?: string;
@@ -1033,22 +1057,8 @@ export function createCodexAppServerRuntime(
     const segments = Array.from(bufferedTranscriptSegments.entries());
     bufferedTranscriptSegments.clear();
     for (const [streamKey, segment] of segments) {
-      if (segment.text.trim().length === 0) continue;
-      if (!segment.needsCommittedReconciliation) continue;
-      publishRuntimeEvent({
-        kind: 'transcript-agent-message-committed',
-        agentId: 'codex',
-        localId: `codex:${streamKey}`,
-        body: segment.kind === 'assistant'
-          ? { type: 'message', message: segment.text }
-          : { type: 'reasoning', message: segment.text },
-        ...(segment.sidechainId ? { sidechainId: segment.sidechainId } : {}),
-        meta: {
-          source: 'codex-app-server-runtime',
-          streamKey,
-          ...(args.reason === 'abort' ? { interruptedReason: args.interruptedReason ?? 'app-server-turn-interrupted' } : {}),
-        },
-      });
+      publishBufferedTranscriptSegment(streamKey, segment,
+        args.reason === 'abort' ? args.interruptedReason ?? 'app-server-turn-interrupted' : undefined);
     }
   };
 
@@ -1060,6 +1070,7 @@ export function createCodexAppServerRuntime(
         if (activeTurn) publishRuntimeEvent({
           kind: 'message-delta',
           turnId: activeTurn.sessionTurnId,
+          messageId: `codex:${streamKey}`,
           delta: { text: deltaText, thinking: false },
           ...(sidechainId ? { sidechainId } : {}),
         });
@@ -1070,12 +1081,18 @@ export function createCodexAppServerRuntime(
         if (activeTurn) publishRuntimeEvent({
           kind: 'message-delta',
           turnId: activeTurn.sessionTurnId,
+          messageId: `codex:${streamKey}`,
           delta: { text: deltaText, thinking: true },
           ...(sidechainId ? { sidechainId } : {}),
         });
       },
       overrideAssistantText({ text, streamKey, sidechainId }) {
         updateBufferedTranscriptSegment(streamKey, 'assistant', sidechainId, text, 'override');
+        const segment = bufferedTranscriptSegments.get(streamKey);
+        if (segment) {
+          bufferedTranscriptSegments.delete(streamKey);
+          publishBufferedTranscriptSegment(streamKey, segment);
+        }
       },
       overrideThinkingText({ text, streamKey, sidechainId }) {
         updateBufferedTranscriptSegment(streamKey, 'reasoning', sidechainId, text, 'override');
@@ -1429,10 +1446,14 @@ export function createCodexAppServerRuntime(
     };
   };
 
-  const publishThreadIdentity = (nextThreadId: string): void => {
+  const publishThreadIdentity = (nextThreadId: string, isExistingResume = false): void => {
     const exactThreadId = readExactCodexProviderSessionId(nextThreadId);
     if (!exactThreadId) return;
     threadId = exactThreadId;
+    if (!canPublishSessionResumeIdentity({
+      isExistingResume,
+      hasResumeEvidence: nativeReadyThreadId === exactThreadId,
+    })) return;
     if (publishedThreadId === exactThreadId) return;
     publishedThreadId = exactThreadId;
     publishRuntimeEvent({
@@ -1468,13 +1489,14 @@ export function createCodexAppServerRuntime(
   };
 
   const readProviderEventText = (notificationParams: unknown, keys: readonly string[]): string | null => {
+    const readText = (value: unknown): string | null => typeof value === 'string' ? value : null;
     const record = readRecord(notificationParams);
     const item = readProviderEventItemRecord(notificationParams);
     const sources = item === record ? [record] : [record, item];
     for (const source of sources) {
       if (!source) continue;
       for (const key of keys) {
-        const text = readNonEmptyStringValue(source[key]);
+        const text = readText(source[key]);
         if (text !== null) return text;
       }
     }
@@ -1483,9 +1505,9 @@ export function createCodexAppServerRuntime(
     const parts: string[] = [];
     for (const part of content) {
       const partRecord = readRecord(part);
-      const text = readNonEmptyStringValue(partRecord?.text)
-        ?? readNonEmptyStringValue(partRecord?.output_text)
-        ?? readNonEmptyStringValue(partRecord?.outputText);
+      const text = readText(partRecord?.text)
+        ?? readText(partRecord?.output_text)
+        ?? readText(partRecord?.outputText);
       if (text !== null) parts.push(text);
     }
     return parts.length > 0 ? parts.join('') : null;
@@ -1614,7 +1636,7 @@ export function createCodexAppServerRuntime(
     const itemType = readNormalizedProviderEventItemType(notificationParams);
     const itemRole = readProviderEventItemRole(notificationParams);
     const text = readProviderEventText(notificationParams, ['text', 'message', 'outputText', 'output_text']);
-    if (!text) return false;
+    if (text === null) return false;
     if (itemType?.includes('reasoning') || itemType?.includes('thinking')) {
       return projector.observeStreamUpdate({
         type: 'reasoning-final',
@@ -1739,7 +1761,7 @@ export function createCodexAppServerRuntime(
     turnCompletionSettling = false;
   };
 
-  const publishRollbackBoundaryForCompletedTurn = (
+  const publishRollbackBoundaryForSettledTurn = (
     activeTurn: PendingTurn,
     agentTurnId: string | null,
   ): void => {
@@ -1813,8 +1835,8 @@ export function createCodexAppServerRuntime(
         turnId: activeTurn.sessionTurnId,
         ...(agentTurnId ? { agentTurnId } : {}),
       });
-      publishRollbackBoundaryForCompletedTurn(activeTurn, agentTurnId ?? null);
     }
+    publishRollbackBoundaryForSettledTurn(activeTurn, agentTurnId ?? null);
     activeTurn.resolve();
   };
 
@@ -2416,7 +2438,7 @@ export function createCodexAppServerRuntime(
       ? requestedThreadId
       : null;
     if (requestedThreadId && !preserveRequestedThreadId && !strictRequestedThreadId) {
-      publishThreadIdentity(requestedThreadId);
+      publishThreadIdentity(requestedThreadId, true);
     }
     const policy = resolveCurrentPolicy();
     const policyKey = serializeCodexAppServerPolicy(policy);

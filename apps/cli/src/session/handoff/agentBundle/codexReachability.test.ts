@@ -135,6 +135,12 @@ describe('Codex session handoff production reachability', () => {
           directory: '/repo',
           agent: 'codex',
           resume: 'thread-reachable',
+          agentTarget: {
+            kind: 'agent',
+            identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+          },
+          transcriptStorage: 'direct',
+          approvedNewDirectoryCreation: true,
           environmentVariables: {
             CODEX_HOME: codexHome,
           },

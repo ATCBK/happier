@@ -150,7 +150,6 @@ describe('resolveBuiltInContributions', () => {
     expect(resolverSource).not.toMatch(/require\(['"]@happier-dev\/plugins-/);
     expect(resolverSource).not.toMatch(/@happier-dev\/extensions-/);
   });
-
   it('keeps generated bundled manifest locators data-only at daemon cold start', () => {
     const generatedSource = readGeneratedBundledPluginsSource();
 
@@ -1194,6 +1193,7 @@ describe('resolveBuiltInContributions', () => {
       antigravity: { loginStatusArgs: null, binaryNames: ['agy'], hasProbe: false },
       auggie: { loginStatusArgs: null, binaryNames: ['auggie'], hasProbe: false },
       claude: { loginStatusArgs: null, binaryNames: ['claude'], hasProbe: true },
+      codebuddy: { loginStatusArgs: null, binaryNames: ['codebuddy'], hasProbe: true },
       codex: { loginStatusArgs: null, binaryNames: ['codex'], hasProbe: true },
       coderabbit: { loginStatusArgs: null, binaryNames: ['coderabbit'], hasProbe: true },
       copilot: { loginStatusArgs: null, binaryNames: ['copilot'], hasProbe: true },
@@ -1202,6 +1202,7 @@ describe('resolveBuiltInContributions', () => {
         binaryNames: ['cursor-agent', 'agent'],
         hasProbe: true,
       },
+      'custom-acp': null,
       deepsec: { loginStatusArgs: null, binaryNames: ['deepsec'], hasProbe: true },
       devin: { loginStatusArgs: null, binaryNames: ['devin'], hasProbe: false },
       // Droid declares `FACTORY_API_KEY`, so the host-owned static credential

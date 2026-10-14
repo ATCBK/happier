@@ -21,7 +21,7 @@ import { readAccountSettingsV2Raw, replaceAccountSettingsV2RawForOwnerCutover } 
 import { normalizeCliAccountSettingsHistoryAfterTransfer } from '@/settings/accountSettings/accountSettingsHistoryNormalization';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
-import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
+import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/agentPurposeDeclarations';
 
 type CatalogWrite = Readonly<{ record: ConnectedAccountCatalogRecordV1; expectedRevision: number | 'absent';
   sourceSettingsVersion?: number; settingsMutation?: ConnectedAccountCatalogRowMutationV1['settingsMutation'] }>;

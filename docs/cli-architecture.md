@@ -121,6 +121,26 @@ current-target and materialization checks; the plugin does not reread a previous
 account's launch home after a switch. This proof carries no refresh token. These
 development-source contracts do not establish successful provider token rotation.
 
+### Exact Session creation targets (0.3 development)
+
+CLI Action Machine discovery reads the authenticated Account inventory through
+`listCurrentAccountMachines`; saved local server profiles remain the inventory
+for `servers.list`. Fresh Session creation, directory preparation and spawn-nonce
+observation address the selected Machine through `callExactMachineRpc`. A missing
+or unreachable target returns an error rather than spawning on its replacement
+or the caller's Machine. Historical Session control retains replacement-following
+RPC because those Sessions still refer to their predecessor Machine ids.
+
+After a submitted spawn loses its acknowledgement, the creator retains the nonce
+when the shared RPC disposition is `outcomeUnknown`. Retry observes that nonce on
+the same target without submitting another spawn. A disconnect before submission
+does not claim nonce custody.
+
+The common CLI argument partitioner consumes `--auto` as `--permission-mode auto`.
+The canonical permission policy allows reads and edits; other tools can still
+require approval. `--yolo` requests full access. This is current development
+behavior, not a claim of released or live OpenCode validation.
+
 ### Checkout directory mapping (0.3 development)
 
 `workspaces/activation/resolveDirectoryInCheckout.ts` owns mapping a selected
@@ -3272,7 +3292,11 @@ Publication presence shares authenticated control probing for PIDs hidden from t
 Transient control failures remain unverified. After observing a hidden owner through
 authenticated ping or accepted authenticated stop, stop confirmation requires release of its previously captured lifecycle-lock snapshot, because control closes
 before shutdown cleanup completes. Ordinary exited publications remain absent when no hidden
-owner was observed. Persistence owns lock parsing and inspection; control transport retains
+owner was observed. Stop asks persistence to reclaim their unchanged state and matching lock,
+using its exact-owner file primitive. Reclamation requires proven process absence and captured
+lock bytes, accepts structured and predecessor PID-only locks through the canonical parser, and
+preserves changed state/lock publications. Live, inaccessible, unverified and hidden owners are
+not reclaimed by the observer. Persistence owns lock parsing and inspection; control transport retains
 its canonical token headers. Initial startup-only locks with no observable PID or endpoint
 remain outside this namespace proof. Status output preserves unverified publication presence.
 `persistence.inspectDaemonLockOwner` classifies startup locks through the same lifecycle
@@ -3284,9 +3308,11 @@ including removed profiles and every release-ring filename. Stop-all opts into s
 lock discovery, while direct Action ingress retains its published-state-only inventory.
 Stop-all attempts siblings after failures, counts only confirmed stopped owners, and repeats
 that inventory after shutdown to reject live successors or startup locks before
-`auth logout --all` deletes the home. Publication cleanup remains owned by the lifecycle
-holder. Hidden successor uncertainty is scoped to the exact observed publication and lock
-path; unrelated stale release-ring siblings retain ordinary absence. An empty inventory reports `not_running`, and incomplete stop preserves the home.
+`auth logout --all` deletes the home. Normal publication cleanup remains owned by the lifecycle
+holder; persistence owns narrowly scoped departed-publication reclamation for both stop paths.
+Hidden successor uncertainty is scoped to the exact observed publication and lock
+path; unrelated proven-dead release-ring siblings can be reclaimed with the same owner checks.
+An empty inventory reports `not_running`, and incomplete stop preserves the home.
 
 ```mermaid
 graph TB
@@ -3354,9 +3380,13 @@ wrappers and exact Windows launches, preserving launcher identity until normal
 marker promotion. Webhook and accepted-spawn marker refreshes update the launcher's
 birth and command witnesses only from its own PID. A distinct runner's marker
 retains its own witness without replacing the launcher's Stop and exit custody.
-Heartbeat and visible-console observations delegate retirement
-to the canonical exit owner; the console poll does not independently settle
-startup. Missing process evidence keeps existing startup finalization or
+A distinct reported runner PID stays unproven while its OS generation read is
+pending; the dead wrapper cannot prove that runner absent, and pending startup
+custody cannot promote it before the paired identity arrives. An older
+asynchronous report or OS probe cannot replace or prove absence of a newer
+reported runner. Heartbeat, visible-console, and regular-child observations
+delegate retirement to the canonical exit owner; retained wrapper custody does
+not independently fail startup. Missing process evidence keeps existing startup finalization or
 cancellation authoritative, and a reused runner PID cannot be promoted. Stop and
 retirement retain their existing lifecycle checks. Startup failure and normal runner exit
 release the scope's locks; process-exit cleanup uses the same owner.

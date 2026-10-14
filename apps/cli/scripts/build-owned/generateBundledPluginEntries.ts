@@ -114,6 +114,7 @@ import {
 
 import {
   PLUGIN_PROMPT_ASSET_EXPORT_NAME,
+  bundledPluginManifestAssetRelativePath,
   renderCliBundledAgentRegistrationBindingsTs,
   renderCliBundledPluginEntriesTs,
   renderCliBundledPluginManifestEntriesTs,
@@ -1916,6 +1917,37 @@ async function synchronizeSerializedPluginManifest(params: Readonly<{
   writeFileAtomic(manifestPath, serializedManifest);
 }
 
+/**
+ * The staged UI compiler reads the installed manifest before package-artifact
+ * publication can consume its output. Prepare that input through this same
+ * writer, without publishing catalogs, executable runtimes or generated source.
+ */
+export async function prepareBundledPluginUiManifestForWorkspaceBuild(params: Readonly<{
+  repoRoot: string;
+  packageName: string;
+  heldLockValue?: string;
+  env?: NodeJS.ProcessEnv;
+}>): Promise<boolean> {
+  if (!readBundledPluginPackageNames(params.repoRoot).includes(params.packageName)) return false;
+  const pluginPackageId = pluginPackageNameToPackageId(params.packageName);
+  const packageRoot = resolve(params.repoRoot, 'packages/plugins', pluginPackageId);
+  const packageJson = readJson(resolve(packageRoot, 'package.json')) as { scripts?: Record<string, unknown> };
+  if (typeof packageJson.scripts?.['build:ui'] !== 'string' || !packageJson.scripts['build:ui'].trim()) return false;
+  await withWorkspaceBundleLock(async () => {
+    await withTypescriptModuleInspectionSession(async () => {
+      const dependencies = await loadGeneratorWorkspaceDependencies();
+      const manifest = await loadPluginManifest(params.repoRoot, pluginPackageId, dependencies);
+      await synchronizeSerializedPluginManifest({ packageRoot, manifest, mode: 'write', dependencies });
+    });
+  }, {
+    lockPath: resolveWorkspaceBundleLockPath(params.repoRoot),
+    heldLockValue: params.heldLockValue,
+    env: params.env,
+    errorLabel: 'bundled plugin manifest preparation',
+  });
+  return true;
+}
+
 function manifestDeclaresAgentRuntime(
   manifest: JsonValue,
   dependencies: GeneratorWorkspaceDependencies,
@@ -2810,10 +2842,6 @@ async function readBundledSourceAgentDefinitionProjection(
   // The tracked projection is the clean-checkout declaration authority. Packed
   // plugin.json files and executable manifests need not be usable before builds.
   // Static catalog facts survive optional executable-plugin failures.
-  const manifestProjection = await import(pathToFileURL(resolve(repoRoot,
-    'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts')).href) as Readonly<{
-      BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly Readonly<{ pluginId: string; manifestRelativePath: string; sourceSpec: { locator: string } }>[];
-  }>;
   return await withTypescriptModuleInspectionSession(async () => {
     const entries: Pick<BundledPluginPackage, 'agentId' | 'agentDefinition' | 'agentNativeHomeEnvironmentKeys'>[] = [];
     for (const packageName of readBundledPluginPackageNames(repoRoot)) {
@@ -2825,9 +2853,9 @@ async function readBundledSourceAgentDefinitionProjection(
       }
       const packageRoot = resolve(repoRoot, 'packages/plugins', pluginPackageId);
       const definitionPath = resolve(packageRoot, 'src/agent/definition.ts');
-      const locator = manifestProjection.BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((entry) => entry.sourceSpec.locator === packageName);
-      const manifest = prepared?.manifest ?? (locator
-        ? normalizePluginManifest(readFileSync(resolve(repoRoot, 'apps/cli', locator.manifestRelativePath)), `bundled:${locator.pluginId}`, parser)
+      const manifestPath = resolve(repoRoot, 'apps/cli', bundledPluginManifestAssetRelativePath(pluginPackageId));
+      const manifest = prepared?.manifest ?? (existsSync(manifestPath)
+        ? normalizePluginManifest(readFileSync(manifestPath), manifestPath, parser)
         : undefined);
       if (!existsSync(definitionPath)) {
         if (manifest && readManifestContributionArray(manifest, 'agents').length > 0) {

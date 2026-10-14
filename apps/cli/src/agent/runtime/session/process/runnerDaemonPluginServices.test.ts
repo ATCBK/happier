@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import type { PluginServices } from '@happier-dev/plugin-sdk';
+import { SessionListActionResultV1Schema } from '@happier-dev/protocol/sessions/awareness/action';
 import type { SubagentsService } from '@happier-dev/plugin-sdk/sessions/subagents';
 import {
     bindPluginSessionsSubagentObservation,
@@ -236,6 +237,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -277,6 +279,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -319,6 +322,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -454,6 +458,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -582,6 +587,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -717,6 +723,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -845,6 +852,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -950,6 +958,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -1058,6 +1067,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -1158,6 +1168,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -1248,6 +1259,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -1309,6 +1321,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -1424,6 +1437,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -1496,6 +1510,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -1634,6 +1649,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger,
                 sessions: canonicalSessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -1956,6 +1972,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2066,6 +2083,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2092,6 +2110,8 @@ describe('runner daemon PluginServices proxy', () => {
 
     it('returns the canonical parsed Action output after the daemon wire boundary', async () => {
         const unavailable = createUnavailablePluginServices();
+        const expectedOutput = SessionListActionResultV1Schema.parse({ sessions: [], nextCursor: null });
+        let wireOutput: unknown = expectedOutput;
         const services = await prepareRunnerDaemonPluginServices({
             invocationId: 'invocation-action-output',
             signal: new AbortController().signal,
@@ -2101,7 +2121,7 @@ describe('runner daemon PluginServices proxy', () => {
                     return preparedSnapshot();
                 }
                 if (operation.kind === 'plugin_actions.execute_v1') {
-                    return { owner: 'current-daemon' };
+                    return wireOutput;
                 }
                 throw new Error(`Unexpected ${operation.kind}`);
             },
@@ -2111,6 +2131,7 @@ describe('runner daemon PluginServices proxy', () => {
                 sessions: unavailable.sessions,
                 managedServices:
                     unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2123,8 +2144,11 @@ describe('runner daemon PluginServices proxy', () => {
             {},
         );
 
-        expect(output).toEqual({ owner: 'current-daemon' });
-        expect(Object.getPrototypeOf(output)).toBeNull();
+        expect(output).toEqual(expectedOutput);
+        wireOutput = { owner: 'current-daemon' };
+        await expect(services.actions.execute('session.list', {})).rejects.toMatchObject({
+            code: 'plugin_action_result_schema_invalid',
+        });
     });
 
     it('binds the exact managed Provider bootstrap and refreshes it without replaying an ambiguous child effect', async () => {
@@ -2221,6 +2245,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2321,6 +2346,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2392,6 +2418,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2463,6 +2490,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2479,6 +2507,7 @@ describe('runner daemon PluginServices proxy', () => {
             prepareRunnerDaemonPluginServices(input),
         ).resolves.toMatchObject({
             managedServices: unavailable.managedServices,
+            machineProvisioners: unavailable.machineProvisioners,
         });
         expect(initialStarts).toBe(1);
     });
@@ -2512,6 +2541,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2589,6 +2619,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2657,6 +2688,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2710,6 +2742,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2727,6 +2760,13 @@ describe('runner daemon PluginServices proxy', () => {
         })).rejects.toMatchObject({
             code: 'plugin_service_unavailable',
         });
+        expect(services.availability('machineProvisioners')).toEqual({
+            status: 'unavailable', code: 'plugin_service_unavailable',
+        });
+        expect(() => services.machineProvisioners.materializeBootstrapCredential({ kind: 'bytes' }))
+            .toThrowError(expect.objectContaining({ code: 'plugin_service_unavailable' }));
+        expect(() => services.machineProvisioners.withBootstrapCredentialFile({ relativePath: 'bootstrap/key' }, async () => undefined))
+            .toThrowError(expect.objectContaining({ code: 'plugin_service_unavailable' }));
     });
 
     it('keeps targeted contribution observation canonically unavailable in the isolated runner', async () => {
@@ -2748,6 +2788,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 targetedContributions: unavailable.targetedContributions,
@@ -2796,6 +2837,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2857,6 +2899,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2922,6 +2965,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2987,6 +3031,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3102,6 +3147,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3213,6 +3259,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3301,6 +3348,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3412,6 +3460,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3555,6 +3604,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3644,6 +3694,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3728,6 +3779,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3789,6 +3841,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3864,6 +3917,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -3941,6 +3995,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -4006,6 +4061,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -4062,6 +4118,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -4115,6 +4172,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -4177,6 +4235,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -4257,6 +4316,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,

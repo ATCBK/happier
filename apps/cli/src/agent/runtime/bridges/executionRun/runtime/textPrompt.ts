@@ -6,7 +6,6 @@ import type {
 } from '@happier-dev/protocol';
 
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
-import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 
 type ExecutionRunStartAction = (
   input: unknown,
@@ -67,6 +66,8 @@ async function createCanonicalStartAction(params: Readonly<{
   const credentials = params.credentials ?? await readStoredCredentials();
   if (!credentials) throw stableFailure('not_authenticated');
 
+  // Profile/catalog loading must not construct the enclosing Action runtime.
+  const { createCliActionExecutorFromCredentials } = await import('@/session/actions/createCliActionExecutorFromCredentials');
   const executor = createCliActionExecutorFromCredentials({ credentials });
   const bound = params.signal
     ? executor.bindInvocation(params.signal)

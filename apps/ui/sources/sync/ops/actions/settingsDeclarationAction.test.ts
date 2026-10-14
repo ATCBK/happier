@@ -86,6 +86,84 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExe
 import type { SettingsMutationServices } from '@/components/settings/catalog/settingDeclarations';
 import { createAtmosphereSettingServices } from './atmosphereSettingServices';
 import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import * as systemTaskRuntimeBoundary from '@/components/systemTasks/systemTasksRuntime';
+import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystemTaskRunner';
+import { publishLocalDaemonStatus, readLocalDaemonSharedState } from '@/components/settings/machines/localControl/localDaemonSharedState';
+import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
+
+describe('desktop login-start service-backed Settings declaration', () => {
+    const anchor = 'desktop.startOnLogin';
+    const status = (mode: 'at-login' | 'on-demand' | null): LocalDaemonStatusData => ({
+        serviceInstalled: true, daemonRunning: true, needsAuth: false, machineId: 'desktop-machine',
+        serviceAutostart: mode, managedServiceInstalled: true,
+    });
+
+    function desktopServiceBoundary(mode: 'at-login' | 'on-demand' | null) {
+        const manual = createManualSystemTaskRunner();
+        // Substitute the native runner acquisition boundary; task lifecycle and shared status stay real.
+        const runnerBoundary = vi.spyOn(systemTaskRuntimeBoundary, 'getSystemTasksRunner').mockReturnValue(manual.runner);
+        const desktopBoundary = vi.spyOn(desktopHostBoundary, 'isDesktopHost').mockReturnValue(true);
+        onTestFinished(() => { runnerBoundary.mockRestore(); desktopBoundary.mockRestore(); });
+        publishLocalDaemonStatus(manual.runner, status(mode));
+        return manual;
+    }
+
+    it.each([true, false])('reads the service fact and changes every managed service through its native owner: %s', async (enabled) => {
+        const manual = desktopServiceBoundary(enabled ? 'on-demand' : 'at-login');
+        const owner = createOwner({ os: 'web', desktop: true });
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor } })).toEqual({ anchor, value: !enabled });
+
+        const written = owner.action({ actionId: 'settings.set', input: { anchor, value: enabled } });
+        await vi.waitFor(() => expect(manual.bridge.start.mock.calls[0]?.[0].kind).toBe('daemon.service.autostart.set.v1'));
+        const autostartSpec = manual.bridge.start.mock.calls[0]?.[0];
+        expect(autostartSpec?.params).toMatchObject({ target: { kind: 'local' }, mode: 'user', autostart: enabled ? 'at-login' : 'on-demand' });
+        expect(autostartSpec?.params).not.toHaveProperty('relayUrl');
+        expect(autostartSpec?.params).not.toHaveProperty('serverIdentityId');
+        manual.emitResult('personal-home-task-1', { protocolVersion: 1, taskId: 'personal-home-task-1', ok: true, data: {} });
+        await vi.waitFor(() => expect(manual.bridge.start.mock.calls[1]?.[0].kind).toBe('daemon.service.status.v1'));
+        manual.emitResult('personal-home-task-2', { protocolVersion: 1, taskId: 'personal-home-task-2', ok: true, data: status(enabled ? 'at-login' : 'on-demand') });
+
+        expect(await written).toEqual({ anchor, value: enabled });
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor } })).toEqual({ anchor, value: enabled });
+        expect(readLocalDaemonSharedState<LocalDaemonStatusData>(manual.runner).status?.serviceAutostart).toBe(enabled ? 'at-login' : 'on-demand');
+        expect(owner.local()).toEqual(localSettingsDefaults);
+        expect(owner.account()).toEqual(settingsDefaults);
+    });
+
+    it('keeps a mixed service mode unavailable and refuses a write instead of inventing a preference', async () => {
+        const manual = desktopServiceBoundary(null);
+        const owner = createOwner({ os: 'web', desktop: true });
+        const executor = throughActionExecutor(owner.action);
+        const context = { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId: 'settings.set' } } as const;
+        expect(await executor.execute('settings.get', { anchor }, context)).toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
+        expect(await executor.execute('settings.set', { anchor, value: true }, context)).toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
+        expect(manual.bridge.start).not.toHaveBeenCalled();
+        expect(owner.local()).toEqual(localSettingsDefaults);
+    });
+
+    it('refuses a stale invocation before starting a native service change', async () => {
+        const manual = desktopServiceBoundary('on-demand');
+        const owner = createOwner({ os: 'web', desktop: true }, false, true, settingsDefaults,
+            undefined, undefined, undefined, { isCurrent: () => false });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, value: true } }))
+            .toMatchObject({ errorCode: 'setting_not_bound' });
+        expect(manual.bridge.start).not.toHaveBeenCalled();
+    });
+
+    it('cancels its admitted native change and does not refresh after invocation cancellation', async () => {
+        const manual = desktopServiceBoundary('on-demand');
+        const owner = createOwner({ os: 'web', desktop: true });
+        const controller = new AbortController();
+        const written = owner.action({ actionId: 'settings.set', input: { anchor, value: true }, context: { signal: controller.signal } });
+        void written.catch(() => undefined);
+        await vi.waitFor(() => expect(manual.bridge.start.mock.calls[0]?.[0].kind).toBe('daemon.service.autostart.set.v1'));
+        controller.abort();
+        await expect(written).rejects.toMatchObject({ name: 'AbortError' });
+        expect(manual.bridge.cancel).toHaveBeenCalledWith('personal-home-task-1');
+        expect(manual.bridge.start.mock.calls.map(([spec]) => spec.kind)).toEqual(['daemon.service.autostart.set.v1']);
+        expect(readLocalDaemonSharedState<LocalDaemonStatusData>(manual.runner).status?.serviceAutostart).toBe('on-demand');
+    });
+});
 
 describe('exact Account Settings history purge declaration', () => {
     it('requires incumbent approval and refuses execution without an Account history transport', async () => {
@@ -572,6 +650,19 @@ describe('Usage model-price Account Settings declaration parity', () => {
 });
 
 describe('notification Settings declaration parity', () => {
+    it('reads and toggles focus mute through the existing Account notification policy', async () => {
+        const owner = createOwner(undefined, true, true, settingsParse({ ...settingsDefaults,
+            attentionDeliveryPolicyV1: { ...settingsDefaults.attentionDeliveryPolicyV1, mutePhoneWhenComputerFocused: true },
+        }));
+        const anchor = 'notifications.mutePhoneWhenComputerFocused';
+        const before = owner.account().attentionDeliveryPolicyV1;
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor } }))
+            .toEqual({ anchor, value: before.mutePhoneWhenComputerFocused });
+        const value = !before.mutePhoneWhenComputerFocused;
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, value } }))
+            .toEqual({ anchor, value });
+        expect(owner.account().attentionDeliveryPolicyV1).toEqual({ ...before, mutePhoneWhenComputerFocused: value });
+    });
     it('rebases coupled push-event policy edits and preserves sibling Account policy', async () => {
         const owner = createOwner(undefined, true, true, settingsDefaults, undefined, (settings) => ({
             ...settings, attentionDeliveryPolicyV1: { ...settings.attentionDeliveryPolicyV1, mutePhoneWhenComputerFocused: true },
@@ -2050,6 +2141,11 @@ describe('declared settings owner', () => {
             for (const item of discovered.items.filter((item) => item.writable)) {
                 const current = await owner.action({ actionId: 'settings.get', input: { anchor: item.anchor } });
                 if ('errorCode' in current && current.errorCode === 'setting_key_required') continue;
+                // A native service fact is discoverable, but this scalar fixture has no service inventory.
+                if (item.anchor === 'desktop.startOnLogin' && 'errorCode' in current) {
+                    expect(current).toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
+                    continue;
+                }
                 if ('unset' in current) {
                     expect(current).toEqual({ anchor: item.anchor, unset: true });
                     continue;

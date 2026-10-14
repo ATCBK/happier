@@ -393,23 +393,21 @@ describe('ProjectGroupHeader menu items', () => {
         );
         const rootBeforeActivation = screen.findByType('Pressable');
 
-        await act(async () => {
-            screen.tree.update(
-                <CollapsibleSectionHeader
-                    title="Needs attention"
-                    collapsed={false}
-                    onPress={vi.fn()}
-                    rootMeasurement={{
-                        active: true,
-                        ref: measurementRef,
-                        onLayout,
-                        style: { zIndex: 1 },
-                    }}
-                />,
-            );
-        });
+        await screen.update(
+            <CollapsibleSectionHeader
+                title="Needs attention"
+                collapsed={false}
+                onPress={vi.fn()}
+                rootMeasurement={{
+                    active: true,
+                    ref: measurementRef,
+                    onLayout,
+                    style: { zIndex: 1 },
+                }}
+            />,
+        );
 
-        expect(screen.findByType('Pressable')).toBe(rootBeforeActivation);
+        expect(screen.findByType('Pressable') === rootBeforeActivation).toBe(true);
     });
 
     it('applies folder display from the shared View options owner', async () => {

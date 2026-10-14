@@ -434,6 +434,7 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'plugins.settings.secret.status',
   'plugin.webhook.endpoint.read',
   'plugin.webhook.endpoint.checkCorrespondence',
+  'plugin.webhook.endpoint.ensure',
   'plugins.sessionHooks.status.get',
   'session.log.tail',
   'transcript.page',
@@ -2868,7 +2869,9 @@ describe('Action Spec Registry', () => {
       const publicProjection = !isInternalActionId(id);
       const controlRpcMethod = Object.hasOwn(LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, id)
         ? LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS[id as keyof typeof LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS] : undefined;
-      const answeringClient = id === 'localServices.actions.copyUrl' || id === 'localServices.actions.openPreview';
+      const answeringClient = id === 'localServices.actions.copyUrl' || id === 'localServices.actions.openPreview'
+        || id === 'localServices.launcher.openPreview' || id === 'localServices.publicPreview.copyUrl';
+      const domainRpc = resolveLocalServiceDomainActionRpcBinding(id as RuntimeActionIdV1);
       const serviceFrontDoor = id === 'localServices.launcher.start' || controlRpcMethod !== undefined;
       const domainRpc = resolveLocalServiceDomainActionRpcBinding(id as RuntimeActionIdV1);
       expect(spec.surfaces, id).toEqual({
@@ -3903,7 +3906,7 @@ describe('Action Spec Registry', () => {
     ).toThrow();
   });
 
-  it('admits canonical agents.models.list input and rejects undeclared fields', () => {
+  it('admits canonical agents.models.list selection and refuses unknown input fields', () => {
     const spec = getActionSpec('agents.models.list');
     const input = {
       backendTargetKey: 'backend:codex',
@@ -4991,7 +4994,8 @@ describe('Action Spec Registry', () => {
     }
   });
 
-  it.each(listActionSpecs().filter((spec) => spec.surfaces.voice))('uses concrete schema-shaped voice args examples for $id', (spec) => {
+  // Public discovery permits absent examples; validate authored examples without inventing invocation facts.
+  it.each(listActionSpecs().filter((spec) => spec.surfaces.voice && spec.examples?.voice?.argsExample !== undefined))('uses concrete schema-shaped authored voice args examples for $id', (spec) => {
     const placeholderFragments = ['...optional...', '"..."', 'allow|deny', '...|null'];
 
     const argsExample = spec.examples?.voice?.argsExample;

@@ -1114,6 +1114,7 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                 !committed
                 || !sameQualifiedConnectedAccountRef(committed.ref, account)
                 || committed.authenticationModeId !== request.authenticationModeId
+                || committed.revisionSemantics !== 'revisioned'
               ) {
                 throw error;
               }

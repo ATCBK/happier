@@ -8,6 +8,7 @@ import { createSessionFixture, installBrowserStorageLockBoundary, invokeTestInst
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit/render/renderWithAppProviders';
 
 const route = vi.hoisted(() => ({ pathname: '/session/named/info', params: { id: 'named' } as Record<string, string>, platform: 'web' as 'web' | 'ios' }));
 // Expo supplies a local module and local params for each retained native scene.
@@ -210,8 +211,8 @@ describe('workspace tabs production composition', () => {
                 </geometryModule.WorkspaceBarGeometryContext.Provider>;
             }}</WorkspaceProvider>
         </AppPaneProvider></KeyboardShortcutProvider>;
-        const renderOptions = {
-            createNodeMock: (element: React.ReactElement<Record<string, unknown>>) => element.props.testID === 'workspace-title-bar'
+        const renderOptions: RenderWithAppProvidersOptions = {
+            createNodeMock: element => element.props.testID === 'workspace-title-bar'
                 ? { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 1440, 800) } : null,
         };
         // Cold broken composition: retained last-known titles must not mask a missing publisher.

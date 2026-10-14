@@ -70,6 +70,7 @@ import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../connectedServices/accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
 import { resolveConnectedServiceRefreshSessionIds } from './connectedServiceRefreshSessionNotifications';
+import type { startDaemonSessionControlRuntime } from './startDaemonSessionControlRuntime';
 import type { StopSessionResult } from '../sessions/stopSessionContract';
 import { resolveConnectedServicesMaterializationBaseDir } from '../connectedServices/materialize/resolveConnectedServicesMaterializationBaseDir';
 import type { ProviderAccountUsageStore } from '../connectedServices/accountUsage/store';
@@ -81,7 +82,7 @@ import {
   type DaemonServerWorkScheduler,
 } from '../serverWork';
 import { parseBooleanEnv } from '@happier-dev/protocol/env/parseBooleanEnv';
-import { buildQualifiedPluginContributionKey, type BuiltInLegacyConnectedAccountOperation, type ConnectedServiceExecutionAuthorityV1, type ConnectedServiceId, type QualifiedConnectedAccountProfileV4, type QualifiedConnectedAccountRef } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey, type BuiltInLegacyConnectedAccountOperation, type QualifiedConnectedAccountProfileV4, type QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import type {
   AgentSpawnQualifiedPurposeBindingSnapshot,
 } from '../connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
@@ -147,7 +148,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
   qualifiedConnectedAccountEstablishedRuntimeOwner?: Pick<
     QualifiedConnectedAccountEstablishedRuntimeOwner,
-    'invokeWithReceipt'
+    'invokeWithReceipt' | 'readQuotaSourceSnapshot'
   >;
   resolveQualifiedConnectedAccountV4Support?: () =>
     QualifiedConnectedAccountV4Support;
@@ -180,37 +181,9 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
    * Wired into the quotas coordinator so proactive usage-limit switches hot-apply in place
    * when eligible (+ X4) or gate a deferred restart-resume, instead of a raw mid-turn SIGTERM.
    */
-  connectedServiceAuthGroupPreTurnSwitchCoordinator: Readonly<{
-    switchBeforeTurn: (input: Readonly<{
-      sessionId?: string;
-      serviceId: string;
-      groupId: string;
-      reason: 'usage_limit' | 'soft_threshold' | 'same_provider_account_exhausted' | 'auth_expired' | 'account_changed' | 'refresh_failed';
-    }>) => Promise<unknown>;
-    applyCommittedGeneration: (input: Readonly<{
-      sessionId: string;
-      serviceId: string;
-      groupId: string;
-      activeProfileId: string;
-      generation: number;
-      reason: string;
-    }>) => Promise<Readonly<{
-      status: string;
-      activeProfileId?: string | null;
-      generation: number;
-      errorCode?: string;
-    }>>;
-    applyCredentialUpdate: (input: Readonly<{
-      sessionId: string;
-      serviceId: ConnectedServiceId;
-      profileId: string;
-      reason: 'account_changed' | 'auth_expired';
-      executionAuthority: ConnectedServiceExecutionAuthorityV1;
-    }>) => Promise<Readonly<{
-      status: 'hot_applied' | 'restart_requested' | 'unchanged' | 'failed';
-      errorCode?: string;
-    }>>;
-  }>;
+  connectedServiceAuthGroupPreTurnSwitchCoordinator: Awaited<
+    ReturnType<typeof startDaemonSessionControlRuntime>
+  >['connectedServiceAuthGroupPreTurnSwitchCoordinator'];
   consumeCommittedAuthGroupGeneration?: ConsumeCommittedAuthGroupGeneration;
   connectedServicePredictiveSwitchGuard?: ConstructorParameters<typeof ConnectedServiceQuotasCoordinator>[0]['predictiveSwitchGuard'];
   /**

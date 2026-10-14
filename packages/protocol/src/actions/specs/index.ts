@@ -148,6 +148,7 @@ function createRuntimeActionSpecFor<
       ...(domainRpc ? { cli: true, voice: true } : {}),
       ...(actionId === 'projects.service.relocate' && executorReal ? { cli: true } : {}),
       ...(actionId === 'localServices.launcher.start' || domainRpc || (controlRpcMethod && !requiresAnsweringClient) ? { mcp: true } : {}),
+      ...(actionId === 'projects.service.relocate' && executorReal ? { cli: true } : {}),
     },
     sideEffectClass,
     outputSchema: params.outputSchema,

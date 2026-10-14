@@ -634,12 +634,14 @@ describe("qualified Connected Account V4 route family (integration)", () => {
                             configurationRevision: primary.json().configurationRevision,
                         },
                         overrideRuntimeCooldown: true,
+                        switchReason: "usage_limit",
                     } : {}),
                 },
             });
             expect(switched.statusCode, switched.body).toBe(200);
             group = switched.json().group;
             expect(group.activeConnectedAccountId).toBe(backup.accountId);
+            expect(group.state.lastSwitchReason).toBe(selection === "automatic" ? "usage_limit" : "manual");
             expect(group.state.activeSince?.accountId).toBe(backup.accountId);
             expect(group.state.lastSwitchAt).toBe(group.state.activeSince?.atMs);
             expect(group.state.lastSwitchAt).toBeGreaterThanOrEqual(beforeSwitchMs);
@@ -659,6 +661,7 @@ describe("qualified Connected Account V4 route family (integration)", () => {
             group = patched.json().group;
             expect(group.runtimeStateRevision).toBe(selectedRevision + 1);
             expect(group.state.lastSwitchAt).toBe(selectedAt);
+            expect(group.state.lastSwitchReason).toBe(selection === "automatic" ? "usage_limit" : "manual");
             expect(group.state.activeSince).toEqual({ accountId: backup.accountId, atMs: selectedAt });
             const repeated = await app.inject({
                 method: "POST", url: "/v4/connect/qualified/group/active-account", headers,
@@ -669,6 +672,7 @@ describe("qualified Connected Account V4 route family (integration)", () => {
                 },
             });
             expect(repeated.statusCode, repeated.body).toBe(200);
+            expect(repeated.json().group.state.lastSwitchReason).toBe("manual");
             expect(repeated.json().group.state.lastSwitchAt).toBe(selectedAt);
         });
     });

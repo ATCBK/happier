@@ -8,7 +8,8 @@ import { readQualifiedConnectedAccountCredentialMaterial } from '@/daemon/connec
 import { resolveFirstPartyQualifiedConnectedAccountServiceForLegacyServiceId } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
 import type { StoredCredentials } from '@/persistence';
 import { resolveConnectedServiceAccountMode, type ConnectedServiceAccountMode } from './resolveConnectedServiceAccountMode';
-import { ConnectedServiceCredentialResolutionError, type ConnectedServiceCredentialSourceResolution } from './resolveConnectedServiceCredentials';
+import { ConnectedServiceCredentialResolutionError } from './connectedServiceCredentialResolutionErrors';
+import type { ConnectedServiceCredentialSourceResolution } from './resolveConnectedServiceCredentials';
 
 type Input = Readonly<{
   credentials: StoredCredentials;

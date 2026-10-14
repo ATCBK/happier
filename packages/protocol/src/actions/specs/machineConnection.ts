@@ -61,6 +61,8 @@ export const MACHINE_PAGE_ACTION_OUTPUT_SCHEMAS = {
   'machines.replacement.clear': MachineReplacementOutputSchema,
 } as const;
 export type MachinePageActionInput = z.infer<(typeof MACHINE_PAGE_ACTION_INPUT_SCHEMAS)[MachinePageActionId]>;
+export const HomeReconnectInputSchema = lazyZodSchema(() => z.object({ serverId: id }).strict());
+export const HomeReconnectOutputSchema = HomeReconnectInputSchema;
 export const HomeConnectInputSchema = lazyZodSchema(() => z.object({
   address: id,
   displayName: id.optional(),
@@ -229,7 +231,14 @@ export const MACHINE_CONNECTION_ACTION_SPECS = [
     inputHints: { fields: [{ path: 'taskId', title: 'Task ID', widget: 'text' }] },
   },
   {
-    id: 'homes.connect', approval: {result: 'required'}, title: 'Connect a Home by address',
+    id: 'homes.reconnect', approval: { result: 'required' }, title: 'Retry the focused Home connection',
+    description: 'Retry the current Home through its existing connection recovery owner. This does not switch device focus to another Home.',
+    safety: 'safe', sideEffectClass: 'write', executionPlacement: 'client', placements: [], surfaces: clientSurfaces,
+    bindings: { mcpToolName: 'homes_reconnect' }, inputSchema: HomeReconnectInputSchema, outputSchema: HomeReconnectOutputSchema,
+    inputHints: { fields: [{ path: 'serverId', title: 'Focused Home ID', widget: 'text', required: true }] },
+  },
+  {
+    id: 'homes.connect', approval: { result: 'required' }, title: 'Connect a Home by address',
     description: 'Check and save a Home address, returning the canonical connection outcome. Device focus stays with the current Home.',
     safety: 'safe', sideEffectClass: 'write', executionPlacement: 'client', placements: [], surfaces: clientSurfaces,
     bindings: { mcpToolName: 'homes_connect' }, inputSchema: HomeConnectInputSchema, outputSchema: HomeConnectOutputSchema,

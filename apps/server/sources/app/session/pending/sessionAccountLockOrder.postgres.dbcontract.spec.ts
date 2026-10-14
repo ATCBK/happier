@@ -121,7 +121,8 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
             // callback overload, which this transport adapter preserves.
             db.$transaction = execute as typeof db.$transaction;
             const pending = targetSource === "standalone"
-                ? inTx(tx => armPendingActivationAuthorizationInTx({ tx, sessionId: session.id, requestId }))
+                ? inTx(tx => armPendingActivationAuthorizationInTx({ tx, sessionId: session.id, requestId,
+                    currentAccess: { accountId: requester.id, sessionId: session.id, level: "owner" } }))
                 : enqueuePendingMessage({ actorUserId: requester.id, sessionId: session.id, localId: requestId,
                     content: { t: "plain", v: { role: "user", content: "race" } }, requestedAction: { v: 1, kind: "send_now" },
                     authentication: { env: process.env, authority: "present_user", authenticationEvidence: [] } });
@@ -249,7 +250,8 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
             await controllerHasAccount;
             let pendingFinished = false;
             const arm = (tx: Tx) =>
-                armPendingActivationAuthorizationInTx({ tx, sessionId: session.id, requestId });
+                armPendingActivationAuthorizationInTx({ tx, sessionId: session.id, requestId,
+                    currentAccess: { accountId: requester.id, sessionId: session.id, level: "owner" } });
             const pending = targetSource === "standalone"
                 ? inTx(arm)
                 : inPendingQueuePositionTx(session.id, arm, targetSource.startsWith("explicit") ? guest.id : undefined);

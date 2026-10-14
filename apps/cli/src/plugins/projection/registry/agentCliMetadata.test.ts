@@ -1,4 +1,4 @@
-import type { PluginAgentCliMetadata } from '@happier-dev/protocol';
+import { PluginAgentContributionV2Schema, type PluginAgentCliMetadata } from '@happier-dev/protocol';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -55,6 +55,23 @@ describe('native Agent CLI auth metadata', () => {
     expect(resolveAgentSkillsCapability('fixture', { catalogEntriesById: {} })).toEqual({
       delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
     });
+  });
+  it('projects an external Agent command policy and leaves an undeclared policy absent', () => {
+    const cli = metadata({});
+    const declaration = {
+      id: 'assistant', title: 'Assistant', runtime: { kind: 'custom' }, primary: 'sessions',
+      capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+    };
+    const withPolicy = PluginAgentContributionV2Schema.parse({
+      ...declaration, cli: { ...cli, commandPolicy: { daemonAutostartDefault: 'preferLocalTui' } },
+    });
+    const withoutPolicy = PluginAgentContributionV2Schema.parse({ ...declaration, cli });
+    const project = (definition: typeof withPolicy) => createManifestAgentCatalogEntry({
+      agentId: 'acme.assistant/assistant', pluginId: 'acme.assistant', definition,
+      cli: definition.cli ?? null, provenance: 'external',
+    });
+    expect(project(withPolicy)?.cliCommandPolicy).toEqual({ daemonAutostartDefault: 'preferLocalTui' });
+    expect(project(withoutPolicy)?.cliCommandPolicy).toBeUndefined();
   });
   it('reads credentials only from the supplied environment and home', async () => {
     const ambientHome = createTempDirSync('happier-auth-ambient-');

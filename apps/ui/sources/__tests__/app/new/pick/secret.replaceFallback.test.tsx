@@ -2,14 +2,31 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import type { SecretsListProps } from '@/components/secrets/SecretsList';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import type { BackendTargetRefV2 } from '@happier-dev/protocol';
+import { SavedSecretSchema } from '@/sync/domains/settings/savedSecretTypes';
+import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { getSavedSecretCatalogSnapshot } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
+import { refreshAcpCatalog } from '@/sync/engine/settings/acpCatalogEngine';
+import { getAcpCatalogSnapshot } from '@/sync/store/settings/acpCatalogSnapshot';
+import { readCachedDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import {
     BUNDLED_AGENT_ROUTE_PARAMS,
     createConfiguredAcpBackendCatalogSettings,
     createConfiguredBackendRouteParams,
+    createConfiguredAgentRouteParams,
     createDiscoveredPluginBackendDescribeResult,
     createNavigationMock,
     createProjectionDescribeMock,
@@ -18,20 +35,18 @@ import {
     installPickerCommonModuleMocks,
     parseJsonRouteParam,
 } from './testHarness';
-import { createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
 
 enableReactActEnvironment();
 
 const routerMock = createRouterMock();
 const navigationMock = createNavigationMock();
-const secretsListPropsRef = { current: null as SecretsListProps | null };
 const routeParamsState = {
     current: {
         agentType: 'claude',
         ...createConfiguredBackendRouteParams('claude-sonnet'),
         dataId: 'draft-1',
         machineId: 'machine-2',
-        spawnServerId: 'server-2',
+        spawnServerId: 'srv_picker_2',
     } as Record<string, string>,
 };
 const settingsState = {
@@ -39,16 +54,16 @@ const settingsState = {
         lastUsedAgent: 'claude',
         lastUsedBackendTarget: null as BackendTargetRefV2 | null,
         backendEnabledByTargetKey: null as Record<string, boolean> | null,
-        acpCatalogSettingsV1: null as unknown,
     },
 };
 const machineContributionRegistryProjectionDescribe = createProjectionDescribeMock();
+let selectableSecret: ReturnType<typeof SavedSecretSchema.parse>;
+const selectedSecretRef = formatSharedSavedSecretRefV1('secret-picked');
+let acpDefinitions: Array<ReturnType<typeof AcpBackendDefinitionV1Schema.parse>> = [];
 
-installPickerCommonModuleMocks({
+const picker = installPickerCommonModuleMocks({
     reactNative: async () =>
-        (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
-            Platform: { OS: 'ios' },
-        }),
+        (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }),
     reactNavigationNative: async () => ({
         ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
         CommonActions: {
@@ -72,49 +87,28 @@ installPickerCommonModuleMocks({
             }).module,
             useNavigation: () => navigationMock,
         }),
-    storage: async (importOriginal) =>
-        (await import('@/dev/testkit/mocks/storage')).createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSettingMutable: createUseSettingMutableMockFromReader(() => [[], vi.fn()]),
-                useSettings: () => ({
-                    ...settingsDefaults,
-                    lastUsedAgent: settingsState.current.lastUsedAgent,
-                    lastUsedBackendTarget: settingsState.current.lastUsedBackendTarget,
-                    backendEnabledByTargetKey:
-                        settingsState.current.backendEnabledByTargetKey as unknown as typeof settingsDefaults.backendEnabledByTargetKey,
-                    acpCatalogSettingsV1:
-                        settingsState.current.acpCatalogSettingsV1 as unknown as typeof settingsDefaults.acpCatalogSettingsV1,
-                }),
-            },
-        }),
     projectionSeam: { describe: machineContributionRegistryProjectionDescribe },
 });
 
-vi.mock('@/components/secrets/SecretsList', () => ({
-    SecretsList: (props: SecretsListProps) => {
-        secretsListPropsRef.current = props;
-        return null;
-    },
-}));
-
 describe('SecretPickerScreen replace fallback', () => {
     beforeEach(() => {
-        vi.resetModules();
+        // The current resource catalog opens plain Account material in memory;
+        // this fixture never writes a plaintext SecretString to device Settings.
+        selectableSecret = SavedSecretSchema.parse({ id: selectedSecretRef, name: 'Picker fixture',
+            encryptedValue: { _isSecretValue: true, value: 'test-only-secret' }, createdAt: 0, updatedAt: 3 });
+        acpDefinitions = [];
         routeParamsState.current = {
             agentType: 'claude',
             ...createConfiguredBackendRouteParams('claude-sonnet'),
             dataId: 'draft-1',
             machineId: 'machine-2',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
         settingsState.current = {
             lastUsedAgent: 'claude',
             lastUsedBackendTarget: null,
             backendEnabledByTargetKey: null,
-            acpCatalogSettingsV1: null,
         };
-        secretsListPropsRef.current = null;
         routerMock.push.mockClear();
         routerMock.back.mockClear();
         routerMock.replace.mockClear();
@@ -140,26 +134,57 @@ describe('SecretPickerScreen replace fallback', () => {
         standardCleanup();
     });
 
-    it('preserves the new-session context when the secret picker has to replace back to /new', async () => {
+    async function renderSecretPicker() {
+        const scope = picker.accountScope;
+        picker.homeBoundary.answer(scope.serverId, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 3, content: { t: 'plain', v: { v: 1, definitions: acpDefinitions } },
+        }) });
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applySettingsLocal(settingsParse(settingsState.current));
+        picker.homeBoundary.answer(scope.serverId, '/v1/account/saved-secrets/resources/materials', {
+            body: SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [{
+                resourceId: 'secret-picked', encryptionMode: 'plain', recipientEnvelope: null,
+                entry: { ref: selectedSecretRef, source: 'shared_resource', relationship: 'owner',
+                    name: selectableSecret.name, kind: selectableSecret.kind, encryptionMode: 'plain',
+                    ownerAccountId: scope.accountId, revision: 3, materialStatus: 'ready',
+                    capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
+                storedContent: { t: 'plain', v: { v: 1, name: selectableSecret.name, kind: selectableSecret.kind, value: 'test-only-secret' } },
+            }] }),
+        });
         const SecretPickerScreen = (await import('@/app/(app)/new/pick/secret')).default;
+        const screen = await renderScreen(React.createElement(SecretPickerScreen));
+        await act(async () => { await refreshAcpCatalog(scope); await refreshSavedSecretCatalog(scope); });
+        await waitForHomeGovernance(() => {
+            expect(getAcpCatalogSnapshot(scope)).toMatchObject({ scope, stale: false, catalog: { status: 'ready', revision: 3 } });
+            expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ scope, stale: false, status: 'ready',
+                data: [expect.objectContaining({ ref: selectedSecretRef, relationship: 'owner', materialStatus: 'ready' })] });
+        });
+        return screen;
+    }
 
-        await renderScreen(React.createElement(SecretPickerScreen));
+    it('preserves the new-session context when the secret picker has to replace back to /new', async () => {
+        const screen = await renderSecretPicker();
 
-        const props = secretsListPropsRef.current;
+        const { SecretsList } = await import('@/components/secrets/SecretsList');
+        const props = screen.findByType(SecretsList).props;
+        expect(props.sharedEntries).toEqual([expect.objectContaining({ ref: selectedSecretRef,
+            name: selectableSecret.name, relationship: 'owner', revision: 3, materialStatus: 'ready' })]);
+        expect(props.resolveSharedReference(selectedSecretRef)).toMatchObject({ status: 'ready', secret: selectableSecret });
         expect(typeof props?.onSelectId).toBe('function');
 
         await act(async () => {
-            await props?.onSelectId?.('secret-picked');
+            await screen.pressByTestIdAsync(`saved-secret:${selectedSecretRef}`);
         });
 
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                ...createConfiguredBackendRouteParams('claude-sonnet'),
+                ...createConfiguredAgentRouteParams('claude-sonnet'),
+                agentType: 'claude',
                 dataId: 'draft-1',
                 machineId: 'machine-2',
-                secretId: 'secret-picked',
-                spawnServerId: 'server-2',
+                secretId: selectedSecretRef,
+                spawnServerId: 'srv_picker_2',
             },
         });
         expect(routerMock.setParams).not.toHaveBeenCalled();
@@ -171,80 +196,87 @@ describe('SecretPickerScreen replace fallback', () => {
             agentType: 'customAcp',
             dataId: 'draft-1',
             machineId: 'machine-2',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
         settingsState.current = {
             lastUsedAgent: 'customAcp',
             lastUsedBackendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' },
             backendEnabledByTargetKey: null,
-            acpCatalogSettingsV1: null,
         };
-        const SecretPickerScreen = (await import('@/app/(app)/new/pick/secret')).default;
+        const screen = await renderSecretPicker();
 
-        await renderScreen(React.createElement(SecretPickerScreen));
-
-        const props = secretsListPropsRef.current;
+        const { SecretsList } = await import('@/components/secrets/SecretsList');
+        const props = screen.findByType(SecretsList).props;
+        expect(props.sharedEntries).toEqual([expect.objectContaining({ ref: selectedSecretRef,
+            name: selectableSecret.name, relationship: 'owner', revision: 3, materialStatus: 'ready' })]);
+        expect(props.resolveSharedReference(selectedSecretRef)).toMatchObject({ status: 'ready', secret: selectableSecret });
         expect(typeof props?.onSelectId).toBe('function');
 
         await act(async () => {
-            await props?.onSelectId?.('secret-picked');
+            await screen.pressByTestIdAsync(`saved-secret:${selectedSecretRef}`);
         });
 
         expect(routerMock.replace).toHaveBeenCalledTimes(1);
         const [call] = routerMock.replace.mock.calls;
-        const args = call?.[0] as any;
+        const args = call?.[0];
 
         expect(args).toEqual(expect.objectContaining({
             pathname: '/new',
             params: expect.objectContaining({
-                backendTargetKey: 'backend:review-bot:configured:review-bot',
+                backendTargetKey: createConfiguredAgentRouteParams('review-bot').backendTargetKey,
                 dataId: 'draft-1',
                 machineId: 'machine-2',
-                secretId: 'secret-picked',
-                spawnServerId: 'server-2',
+                secretId: selectedSecretRef,
+                spawnServerId: 'srv_picker_2',
             }),
         }));
 
-        const backendTarget = parseJsonRouteParam(args?.params?.backendTarget) as any;
-        expect(backendTarget).toMatchObject({
-            kind: 'backend',
-            backendId: 'review-bot',
-            configuredBackendId: 'review-bot',
+        if (!args || typeof args !== 'object' || !('params' in args)) throw new Error('Expected returned route params');
+        const returnedParams = args.params;
+        if (!returnedParams || typeof returnedParams !== 'object' || !('backendTarget' in returnedParams)) {
+            throw new Error('Expected returned Agent target');
+        }
+        const backendTarget = AgentExecutionTargetV1Schema.parse(parseJsonRouteParam(returnedParams.backendTarget));
+        expect(backendTarget).toEqual({
+            kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+            definitionId: 'review-bot',
         });
     });
 
-    it('falls back to the preferred built-in target when the stored configured backend is stale', async () => {
+    it('retains explicit configured intent for repair when its definition is missing', async () => {
         routeParamsState.current = {
             agentType: 'customAcp',
             dataId: 'draft-1',
             machineId: 'machine-2',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
         settingsState.current = {
             lastUsedAgent: 'codex',
             lastUsedBackendTarget: { kind: 'backend', backendId: 'stale-review-bot', configuredBackendId: 'stale-review-bot', sourceKind: 'configured' },
             backendEnabledByTargetKey: { 'agent:codex': true },
-            acpCatalogSettingsV1: createConfiguredAcpBackendCatalogSettings('review-bot'),
         };
-        const SecretPickerScreen = (await import('@/app/(app)/new/pick/secret')).default;
+        acpDefinitions = createConfiguredAcpBackendCatalogSettings('review-bot').backends.map(definition => AcpBackendDefinitionV1Schema.parse(definition));
+        const screen = await renderSecretPicker();
 
-        await renderScreen(React.createElement(SecretPickerScreen));
-
-        const props = secretsListPropsRef.current;
+        const { SecretsList } = await import('@/components/secrets/SecretsList');
+        const props = screen.findByType(SecretsList).props;
+        expect(props.sharedEntries).toEqual([expect.objectContaining({ ref: selectedSecretRef,
+            name: selectableSecret.name, relationship: 'owner', revision: 3, materialStatus: 'ready' })]);
+        expect(props.resolveSharedReference(selectedSecretRef)).toMatchObject({ status: 'ready', secret: selectableSecret });
         expect(typeof props?.onSelectId).toBe('function');
 
         await act(async () => {
-            await props?.onSelectId?.('secret-picked');
+            await screen.pressByTestIdAsync(`saved-secret:${selectedSecretRef}`);
         });
 
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                ...BUNDLED_AGENT_ROUTE_PARAMS.codex,
+                ...createConfiguredAgentRouteParams('stale-review-bot'),
                 dataId: 'draft-1',
                 machineId: 'machine-2',
-                secretId: 'secret-picked',
-                spawnServerId: 'server-2',
+                secretId: selectedSecretRef,
+                spawnServerId: 'srv_picker_2',
             },
         });
     });
@@ -254,31 +286,35 @@ describe('SecretPickerScreen replace fallback', () => {
             agentType: 'customAcp',
             dataId: 'draft-1',
             machineId: 'machine-2',
-            spawnServerId: 'server-2',
+            spawnServerId: 'srv_picker_2',
         };
         settingsState.current = {
             lastUsedAgent: 'customAcp',
             lastUsedBackendTarget: null,
             backendEnabledByTargetKey: null,
-            acpCatalogSettingsV1: null,
         };
         machineContributionRegistryProjectionDescribe.mockResolvedValue(createDiscoveredPluginBackendDescribeResult());
-        const SecretPickerScreen = (await import('@/app/(app)/new/pick/secret')).default;
+        const screen = await renderSecretPicker();
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readCachedDaemonMergedProjectionCacheEntry({ machineId: 'machine-2', serverId: 'srv_picker_2' }))
+                .toMatchObject({ kind: 'ready' });
+        });
 
-        await renderScreen(React.createElement(SecretPickerScreen));
-
-        await flushHookEffects({ cycles: 1, turns: 2 });
-
-        const props = secretsListPropsRef.current;
+        const { SecretsList } = await import('@/components/secrets/SecretsList');
+        const props = screen.findByType(SecretsList).props;
+        expect(props.sharedEntries).toEqual([expect.objectContaining({ ref: selectedSecretRef,
+            name: selectableSecret.name, relationship: 'owner', revision: 3, materialStatus: 'ready' })]);
+        expect(props.resolveSharedReference(selectedSecretRef)).toMatchObject({ status: 'ready', secret: selectableSecret });
         expect(typeof props?.onSelectId).toBe('function');
 
         await act(async () => {
-            await props?.onSelectId?.('secret-picked');
+            await screen.pressByTestIdAsync(`saved-secret:${selectedSecretRef}`);
         });
 
         expect(machineContributionRegistryProjectionDescribe).toHaveBeenCalledWith('machine-2', expect.objectContaining({
-            serverId: 'server-2',
-            timeoutMs: 10_000,
+            serverId: 'srv_picker_2',
+            accountId: 'account:srv_picker_2',
         }));
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
@@ -286,8 +322,8 @@ describe('SecretPickerScreen replace fallback', () => {
                 ...BUNDLED_AGENT_ROUTE_PARAMS.claude,
                 dataId: 'draft-1',
                 machineId: 'machine-2',
-                secretId: 'secret-picked',
-                spawnServerId: 'server-2',
+                secretId: selectedSecretRef,
+                spawnServerId: 'srv_picker_2',
             },
         });
     });

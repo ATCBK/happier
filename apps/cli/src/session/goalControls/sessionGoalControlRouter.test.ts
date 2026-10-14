@@ -3,9 +3,11 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Credentials, StoredCredentials } from '@/persistence';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { buildTestCodexRuntimeDescriptorV1 as buildCodexAgentRuntimeDescriptor } from '@/testkit/runtimeDescriptorFixtures';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const mocks = vi.hoisted(() => ({
   fetchAccountMachineReplacements: vi.fn(),
+  callMachineRpc: vi.fn(),
   updateSessionMetadataWithRetry: vi.fn(async (params: {
     updater: (metadata: Record<string, unknown>) => Record<string, unknown>;
   }) => ({
@@ -13,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     metadata: params.updater({ concurrent: 'preserved' }),
   })),
 }));
+
+vi.mock('@/session/transport/rpc/machineRpc', () => ({ callMachineRpc: mocks.callMachineRpc }));
 
 vi.mock('@/api/machine/fetchAccountMachineReplacements', () => ({
   fetchAccountMachineReplacements: mocks.fetchAccountMachineReplacements,
@@ -74,12 +78,58 @@ describe('routeSessionGoalControl', () => {
   beforeEach(() => {
     mocks.updateSessionMetadataWithRetry.mockClear();
     mocks.fetchAccountMachineReplacements.mockReset();
+    mocks.callMachineRpc.mockReset();
     // The Account genuinely knows both machines and neither replaced the other,
     // so a refusal below is the guard deciding, not an empty chain.
     mocks.fetchAccountMachineReplacements.mockResolvedValue([
       { id: 'machine-local' },
       { id: 'machine-remote' },
     ]);
+  });
+
+  it('wakes an inactive goal through the existing resume owner with the exact initial goal', async () => {
+    mocks.callMachineRpc.mockResolvedValue({ type: 'success', sessionId: 'sess_1' });
+    const result = await routeSessionGoalControl({
+      token: 'token', credentials: createTokenOnlyCredentials(), sessionId: 'sess_1',
+      rawSession: createRawSession({ seq: 17 }), metadata: createMetadata({ path: '/repo' }),
+      currentMachineId: 'machine-local', ctx: null, mode: 'plain', operation: 'set',
+      request: { objective: 'Ship the goal', tokenBudget: null }, callLiveSessionRpc: vi.fn(),
+      resumeInactiveWithInitialGoal: true,
+    });
+    expect(result).toEqual({ ok: true });
+    expect(mocks.callMachineRpc.mock.calls[0]?.[0]).toMatchObject({ machineId: 'machine-local',
+      method: RPC_METHODS.SPAWN_HAPPY_SESSION, request: { type: 'resume-session', sessionId: 'sess_1',
+        initialGoal: { objective: 'Ship the goal', tokenBudget: null }, initialTranscriptAfterSeq: 17 } });
+  });
+
+  it('routes an inactive remote goal to its target daemon without opening local native state', async () => {
+    const callMachineGoalRpc = vi.fn(async () => ({ workState: null }));
+    const result = await routeSessionGoalControl({
+      token: 'token', credentials: createTokenOnlyCredentials(), sessionId: 'sess_1',
+      rawSession: createRawSession({ machineId: 'machine-remote' }),
+      metadata: createMetadata({ machineId: 'machine-remote' }), currentMachineId: 'machine-local',
+      ctx: null, mode: 'plain', operation: 'set', request: { status: 'paused' },
+      callLiveSessionRpc: vi.fn(), callMachineGoalRpc,
+    });
+    expect(result).toEqual({ workState: null });
+    expect(callMachineGoalRpc).toHaveBeenCalledWith({ machineId: 'machine-remote', operation: 'set',
+      request: { status: 'paused' }, resumeInactiveWithInitialGoal: false });
+  });
+
+  it('refuses conflicting target identities and cancellation before any goal or wake effect', async () => {
+    const callMachineGoalRpc = vi.fn();
+    const base = { token: 'token', credentials: createTokenOnlyCredentials(), sessionId: 'sess_1',
+      rawSession: createRawSession(), metadata: createMetadata({ machineId: 'machine-remote' }),
+      currentMachineId: 'machine-local', ctx: null, mode: 'plain' as const, operation: 'set' as const,
+      request: { objective: 'Finish' }, resumeInactiveWithInitialGoal: true, callLiveSessionRpc: vi.fn(), callMachineGoalRpc };
+    await expect(routeSessionGoalControl(base)).resolves.toMatchObject({ ok: false,
+      errorCode: 'session_goal_control_target_machine_mismatch' });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(routeSessionGoalControl({ ...base, metadata: createMetadata(), signal: controller.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(mocks.callMachineRpc).not.toHaveBeenCalled();
+    expect(callMachineGoalRpc).not.toHaveBeenCalled();
   });
 
   it('delegates inactive local set mutations and durably stages the work-state field', async () => {

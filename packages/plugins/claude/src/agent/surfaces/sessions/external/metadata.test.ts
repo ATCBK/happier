@@ -97,6 +97,7 @@ describe('Claude external-session metadata', () => {
                 jsonlLine({ type: 'ai-title', sessionId: 'session-one', aiTitle: 'AI generated title' }),
                 jsonlLine({ type: 'custom-title', sessionId: 'other-session', customTitle: 'Wrong session title' }),
                 jsonlLine({ type: 'custom-title', sessionId: 'session-one', customTitle: 'Renamed Claude session' }),
+                jsonlLine({ type: 'ai-title', sessionId: 'session-one', aiTitle: 'Later AI title' }),
                 jsonlLine({ type: 'summary', summary: 'Mutable summary title' }),
             ].join(''),
             'utf8',
@@ -165,8 +166,37 @@ describe('Claude external-session metadata', () => {
 
         await appendFile(
             filePath,
+            jsonlLine({ type: 'custom-title', sessionId: 'session-one', customTitle: 'Manual title' }),
+            'utf8',
+        );
+        const withCustom = await readClaudeJsonlSessionTitleWithIndex({
+            filePath,
+            remoteSessionId: 'session-one',
+            previousState: withAi.indexState,
+        });
+        expect(withCustom.title).toBe('Manual title');
+
+        await appendFile(
+            filePath,
+            jsonlLine({ type: 'ai-title', sessionId: 'session-one', aiTitle: 'Later AI title' }),
+            'utf8',
+        );
+        const withLaterAi = await readClaudeJsonlSessionTitleWithIndex({
+            filePath,
+            remoteSessionId: 'session-one',
+            previousState: withCustom.indexState,
+        });
+        expect(withLaterAi).toMatchObject({
+            title: 'Manual title',
+            indexState: { customTitle: 'Manual title', aiTitle: 'Later AI title' },
+        });
+        expect(withLaterAi.indexState.verifiedThroughBytes).toBeGreaterThan(
+            withCustom.indexState.verifiedThroughBytes,
+        );
+
+        await appendFile(
+            filePath,
             [
-                jsonlLine({ type: 'custom-title', sessionId: 'session-one', customTitle: 'Manual title' }),
                 jsonlLine({ type: 'custom-title', sessionId: 'session-one', customTitle: '   ' }),
             ].join(''),
             'utf8',
@@ -174,12 +204,12 @@ describe('Claude external-session metadata', () => {
         await expect(readClaudeJsonlSessionTitleWithIndex({
             filePath,
             remoteSessionId: 'session-one',
-            previousState: withAi.indexState,
+            previousState: withLaterAi.indexState,
         })).resolves.toMatchObject({
-            title: 'Latest AI title',
+            title: 'Later AI title',
             indexState: {
                 customTitle: null,
-                aiTitle: 'Latest AI title',
+                aiTitle: 'Later AI title',
                 fallbackTitle: 'First meaningful user text',
             },
         });

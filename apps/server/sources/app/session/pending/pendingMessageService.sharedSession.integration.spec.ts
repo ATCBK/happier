@@ -5650,8 +5650,11 @@ describe("pendingMessageService (shared sessions)", () => {
 
         const list = await listPendingMessages({ actorUserId: viewer.id, sessionId: session.id, includeDiscarded: true });
         expect(list.ok).toBe(true);
-        const before = await db.session.findUniqueOrThrow({ where: { id: session.id },
-            select: { pendingCount: true, pendingBlockedCount: true, pendingVersion: true } });
+        if (!list.ok) throw new Error("expected viewer listing");
+        expect(list.pending.map(row => row.localId)).toEqual([localId]);
+        const pendingBefore = await db.sessionPendingMessage.findMany({ where: { sessionId: session.id } });
+        const stateBefore = await db.session.findUniqueOrThrow({ where: { id: session.id },
+            select: { pendingCount: true, pendingBlockedCount: true, pendingVersion: true, pendingActivationRequestId: true } });
 
         const enqueueViewer = await enqueuePendingMessage({
             actorUserId: viewer.id,
@@ -5659,9 +5662,9 @@ describe("pendingMessageService (shared sessions)", () => {
             localId: `v-${randomUUID()}`,
             ciphertext: "cipher-view",
         });
-        expect(enqueueViewer.ok).toBe(false);
-        if (enqueueViewer.ok) throw new Error("expected forbidden");
-        expect(enqueueViewer.error).toBe("session-not-found");
+        // Capability-qualified absence and denial share the canonical Pending
+        // privacy projection; a readable Session does not grant input mutation.
+        expect(enqueueViewer).toEqual({ ok: false, error: "session-not-found" });
 
         const edit = await updatePendingMessage({
             actorUserId: viewer.id,
@@ -5669,31 +5672,22 @@ describe("pendingMessageService (shared sessions)", () => {
             localId,
             ciphertext: "cipher-a-2",
         });
-        expect(edit.ok).toBe(false);
-        if (edit.ok) throw new Error("expected forbidden");
-        expect(edit.error).toBe("session-not-found");
+        expect(edit).toEqual({ ok: false, error: "session-not-found" });
 
         const reorder = await reorderPendingMessages({ actorUserId: viewer.id, sessionId: session.id, orderedLocalIds: [localId] });
-        expect(reorder.ok).toBe(false);
-        if (reorder.ok) throw new Error("expected forbidden");
-        expect(reorder.error).toBe("session-not-found");
+        expect(reorder).toEqual({ ok: false, error: "session-not-found" });
 
         const discard = await discardPendingMessage({ actorUserId: viewer.id, sessionId: session.id, localId, reason: "test" });
-        expect(discard.ok).toBe(false);
-        if (discard.ok) throw new Error("expected forbidden");
-        expect(discard.error).toBe("session-not-found");
+        expect(discard).toEqual({ ok: false, error: "session-not-found" });
 
         const restore = await restorePendingMessage({ actorUserId: viewer.id, sessionId: session.id, localId });
-        expect(restore.ok).toBe(false);
-        if (restore.ok) throw new Error("expected forbidden");
-        expect(restore.error).toBe("session-not-found");
+        expect(restore).toEqual({ ok: false, error: "session-not-found" });
 
         const del = await deletePendingMessage({ actorUserId: viewer.id, sessionId: session.id, localId });
-        expect(del.ok).toBe(false);
-        if (del.ok) throw new Error("expected forbidden");
-        expect(del.error).toBe("session-not-found");
+        expect(del).toEqual({ ok: false, error: "session-not-found" });
+        expect(await db.sessionPendingMessage.findMany({ where: { sessionId: session.id } })).toEqual(pendingBefore);
         expect(await db.session.findUniqueOrThrow({ where: { id: session.id },
-            select: { pendingCount: true, pendingBlockedCount: true, pendingVersion: true } })).toEqual(before);
+            select: { pendingCount: true, pendingBlockedCount: true, pendingVersion: true, pendingActivationRequestId: true } })).toEqual(stateBefore);
         expect(await listPendingMessages({ actorUserId: owner.id, sessionId: session.id, includeDiscarded: true }))
             .toMatchObject({ ok: true, pending: [{ localId, status: "queued", content: { t: "encrypted", c: "cipher-a-1" } }] });
         expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id } })).toBe(1);

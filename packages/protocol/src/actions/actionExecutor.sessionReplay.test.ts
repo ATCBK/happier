@@ -46,6 +46,39 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor (session.continue_with_replay)', () => {
+  it('preserves canonical same-Session transition effects and exact rich input', async () => {
+    const request = { sessionId: 'same-session', expectedCurrentAgentId: 'claude',
+      selection: { v: 1, agentId: 'codex' }, input: { text: 'exact attachment prompt', localId: 'first-input',
+        meta: { displayText: 'Attachment', reasoningEffort: 'high' } } };
+    const result = { type: 'rejected', code: 'unsupported_operation', sourceEffect: 'none' };
+    const sessionAgentTransition = vi.fn(async () => result);
+    const executor = createActionExecutor(createDeps({ sessionAgentTransition }));
+    expect(await executor.execute('session.agent.transition', request, {
+      surface: 'ui', authority: 'present_user', bypassApprovals: true,
+    })).toEqual({ ok: true, result });
+    expect(sessionAgentTransition).toHaveBeenCalledWith(expect.objectContaining({ request: { v: 1, ...request } }));
+  });
+
+  it('rejects Agent permission escalation before stopping and retains the causal witness for an unmodified input', async () => {
+    const sessionAgentTransition = vi.fn(async () => ({ type: 'accepted', localId: 'first-input' }));
+    const executor = createActionExecutor(createDeps({ sessionAgentTransition }));
+    const request = { sessionId: 'same-session', expectedCurrentAgentId: 'claude',
+      selection: { v: 1, agentId: 'codex' }, input: { text: 'exact prompt', localId: 'first-input', meta: {} } };
+    const context = { surface: 'agent' as const, authority: 'account_automation' as const, bypassApprovals: true,
+      defaultSessionId: 'source-session', callerPermissionMode: 'yolo',
+      actionCaller: { kind: 'session' as const, sessionId: 'source-session', starterDepth: 0, turnDepth: 0 },
+      sessionInputSource: { sourceSessionId: 'source-session', sourceTurnId: 'turn-1', via: 'action' },
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' } };
+    expect(await executor.execute('session.agent.transition', { ...request,
+      input: { ...request.input, meta: { permissionMode: 'yolo' } } }, context)).toMatchObject({ ok: false });
+    expect(sessionAgentTransition).not.toHaveBeenCalled();
+    expect(await executor.execute('session.agent.transition', request, context)).toMatchObject({ ok: true });
+    expect(sessionAgentTransition).toHaveBeenCalledWith(expect.objectContaining({
+      request: { v: 1, ...request }, sessionInputSource: expect.objectContaining({
+        sourceSessionId: 'source-session', causalPermissionAuthority: context.causalPermissionAuthority,
+      }),
+    }));
+  });
   it('delegates replay continuation input to the replay dependency', async () => {
     const sessionContinueWithReplay = vi.fn(async () => ({ type: 'success', sessionId: 'sess_child' }));
     const deps = createDeps({

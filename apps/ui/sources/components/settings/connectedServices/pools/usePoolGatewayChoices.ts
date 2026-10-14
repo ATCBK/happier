@@ -21,19 +21,21 @@ const FIRST_GATEWAY_KEY = 'gateway:pool:first';
 export function usePoolGatewayChoices(input: Readonly<{
     target: Extract<QualifiedConnectedAccountPurposeBindingTargetV1, { kind: 'group' }>;
     enabled: boolean;
+    accountServerId: string | null;
+    accountAddressAvailable: boolean;
     resolveTarget: () => Readonly<{ machineId: string; serverId: string }> | null;
 }>) {
     const scope = useAccountSettingsScope();
-    const target = input.resolveTarget();
-    const accountMatchesTarget = Boolean(scope && (!target || areServerProfileIdentifiersEquivalent(scope.serverId, target.serverId)));
+    const accountMatchesTarget = Boolean(scope && input.accountAddressAvailable && input.accountServerId
+        && areServerProfileIdentifiersEquivalent(scope.serverId, input.accountServerId));
     const catalog = useProviderCatalog(input.enabled ? scope : null);
-    const choices = React.useMemo(() => catalog?.data
+    const choices = React.useMemo(() => accountMatchesTarget && catalog?.data
         ? buildPoolGatewayChoices({ connections: catalog.data.connections, target: input.target })
-        : NO_CHOICES, [catalog?.data, input.target]);
+        : NO_CHOICES, [accountMatchesTarget, catalog?.data, input.target]);
     // No gateway yet (D19): the switch stays, and turning it on creates the first one with this pool.
     const firstGateway = React.useMemo(() => {
         const contribution = readProviderGatewayContribution(readAccountProviderDeclarations());
-        if (!contribution || !catalog?.data) return null;
+        if (!accountMatchesTarget || !contribution || !catalog?.data) return null;
         const saved = { connections: catalog.data.connections };
         if (!areProviderGatewayDeclarationsKnown(saved) || buildProviderGatewayCollection(saved).length > 0) return null;
         const serviceKey = buildQualifiedPluginContributionKey(input.target.service);
@@ -44,8 +46,8 @@ export function usePoolGatewayChoices(input: Readonly<{
     const refresh = React.useCallback(async () => {
         if (scope) await refreshProviderCatalog(scope);
     }, [scope]);
-    const mutation = useProviderConnectionMutation({ resolveTarget: input.resolveTarget, serverId: scope?.serverId ?? null,
-        refresh });
+    const mutation = useProviderConnectionMutation({ resolveTarget: input.resolveTarget, serverId: input.accountServerId,
+        initiatingLifetime: accountMatchesTarget ? undefined : null, refresh });
     const setEnabled = React.useCallback(async (connectionId: string, enabled: boolean): Promise<boolean> => {
         const choice = choices.find(candidate => candidate.connectionId === connectionId);
         if (!input.enabled || !accountMatchesTarget || catalog?.status !== 'ready' || catalog.stale || !choice) {

@@ -263,7 +263,7 @@ export async function seedForkVisualsBestEffort(params: Readonly<{
             cutoffSeqInclusive: typeof fork.parentCutoffSeqInclusive === 'number' ? fork.parentCutoffSeqInclusive : params.cutoffSeqInclusive });
         await updateSessionMetadataWithRetry({ token: params.credentials.token, credentials: params.credentials, sessionId: params.childSessionId,
             rawSession: childRaw, accountEncryptionCurrentness: currentness, updater: current => {
-                const existingFork = current.forkV1;
+                const existingFork = record(current.forkV1);
                 if (!existingFork || existingFork.parentSessionId !== params.sourceSessionId || Array.isArray(existingFork.visualCopies)) return current;
                 return { ...current, forkV1: { ...existingFork, visualCopies: [...copies] } };
             } });

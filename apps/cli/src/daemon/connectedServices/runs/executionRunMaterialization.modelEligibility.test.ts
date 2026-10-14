@@ -14,6 +14,8 @@ import {
     ConnectedServiceCredentialRecordV1Schema,
     ConnectedServiceBindingsV2Schema,
     type QualifiedConnectedAccountCredentialMetadataV4,
+    QualifiedConnectedAccountRefSchema,
+    sameQualifiedConnectedAccountRef,
 } from '@happier-dev/protocol';
 import type { AgentExecutionRunOpenRequest, AgentRuntime, AgentSessionOpenRequest, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
@@ -159,7 +161,7 @@ async function createScenario() {
             scope: null, tokenType: null, providerAccountId: `test-account-${profileId}`, providerEmail: null },
     })]));
     const initialRecords = new Map(records);
-    const credentialReads: string[] = [];
+    const credentialReads: QualifiedConnectedAccountRef[] = [];
     const credentialRevisions = new Map(memberIds.map((profileId) => [profileId, revision]));
     const credentialMetadata = new Map<string, QualifiedConnectedAccountCredentialMetadataV4>(
         memberIds.map((profileId) => [profileId, { scopes: [] }]));
@@ -174,7 +176,7 @@ async function createScenario() {
         },
     } as unknown as ApiClient;
     const readCredential = async ({ ref }: { ref: QualifiedConnectedAccountRef }) => {
-        credentialReads.push(ref.accountId);
+        credentialReads.push(QualifiedConnectedAccountRefSchema.parse(ref));
         return QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
             ref, authenticationModeId: 'oauth', revisionSemantics: 'revisioned',
             credentialRevision: credentialRevisions.get(ref.accountId), configurationRevision: null,
@@ -807,9 +809,13 @@ describe('composed finite Run model recovery', () => {
             }
             const expectedMembers = rejectCount === 0 ? ['first'] : memberIds;
             expect(openedMembers).toEqual(expectedMembers);
-            // Currentness checks may reread a credential between native effects.
-            // The finite admitted members and their first-use order remain the contract.
-            expect([...new Set(scenario.credentialReads)]).toEqual(expectedMembers);
+            // Currentness checks may repeat an exact member read. Preserve the
+            // transition order and service identity, including a wrong revisit.
+            const credentialReadTargets = scenario.credentialReads.filter((ref, index, refs) => {
+                const previousRef = refs[index - 1];
+                return !previousRef || !sameQualifiedConnectedAccountRef(previousRef, ref);
+            });
+            expect(credentialReadTargets).toEqual(expectedMembers.map((accountId) => ({ service, accountId })));
             expect(scenario.commits).toEqual(rejectCount === 0 ? [] : ['second', 'third']);
             expect(processBoundaries.map((boundary) => boundary.rpcRequests.filter((request) => request.method === 'thread/start').length))
                 .toEqual(expectedMembers.map(() => 1));

@@ -48,14 +48,15 @@ export function createDaemonAccountConnectionManagedConsumerOpen(input: Readonly
       }, admitConsumer);
       if (!opened) return null;
       if (!await admitConsumer()) { await opened.cleanup(); return null; }
+      const cleanup = async () => { await opened.cleanup(); };
       return {
         access: opened.access,
         revalidate: async () => {
           if (!await admitConsumer()) return false;
           try { await opened.readHttpBinding(); return await isCurrent(); } catch { return false; }
         },
-        cleanup: opened.cleanup,
-        retire: opened.cleanup,
+        cleanup,
+        retire: cleanup,
       };
     }
     return await createAccountConnectionManagedConsumerSourceOpen({

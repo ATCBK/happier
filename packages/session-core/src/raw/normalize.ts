@@ -512,13 +512,17 @@ function normalizeRawMessageFromRaw(
         };
 
 			        if (raw.content.type === 'output') {
-            const outputData = raw.content.data as Record<string, unknown>;
-            const outputOrigin = outputData.origin;
-            const nativeTaskNotification = outputOrigin && typeof outputOrigin === 'object'
-                && (outputOrigin as Record<string, unknown>).kind === 'task-notification';
+            const outputData: unknown = raw.content.data;
+            const outputOrigin = isPlainRecord(outputData) ? outputData.origin : null;
+            const nativeTaskNotification = isPlainRecord(outputOrigin) && outputOrigin.kind === 'task-notification';
+            // cli-v0.2.13 persisted settled native task results with isMeta. Only that
+            // single correlated result is compatibility data, not arbitrary metadata.
             const nativeTaskResult = nativeTaskNotification
-                && isOutputUserData(outputData) && Array.isArray(outputData.message.content)
-                && outputData.message.content.some(block => block && typeof block === 'object' && block.type === 'tool_result');
+                && isOutputUserData(raw.content.data) && Array.isArray(raw.content.data.message.content)
+                && raw.content.data.message.content.length === 1
+                && raw.content.data.message.content.every(block => isPlainRecord(block)
+                    && block.type === 'tool_result' && typeof block.tool_use_id === 'string'
+                    && typeof outputOrigin.toolUseId === 'string' && outputOrigin.toolUseId === block.tool_use_id);
             if (raw.content.data.isMeta && !nativeTaskResult) {
                 return null;
             }
@@ -699,7 +703,8 @@ function normalizeRawMessageFromRaw(
 		                                ...c,  // WOLOG: Preserve all fields including unknown ones
 	                                type: 'tool-result',
 	                                content: toolResultContentToText(rawResultContent),
-	                                is_error: c.is_error || false,
+                                is_error: c.is_error || Boolean(raw.content.data.isMeta && nativeTaskResult
+                                    && (outputOrigin.status === 'failed' || outputOrigin.status === 'stopped')),
 		                                uuid: outputUuid,
 		                                parentUUID: raw.content.data.parentUuid ?? null,
 		                                permissions: normalizeToolResultPermissions(c.permissions),

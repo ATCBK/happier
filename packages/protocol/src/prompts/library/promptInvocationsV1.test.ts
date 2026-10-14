@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { PromptInvocationEntryV1Schema, PromptInvocationsV1Schema, normalizePromptInvocationTokenV1 } from './promptInvocationsV1.js';
 import { validatePromptInvocationTokenV1 } from './promptInvocationsV1.js';
+import { readRetainedPromptLibraryRecordV1 } from './promptLibraryCatalogV1.js';
 
 describe('PromptInvocationsV1Schema', () => {
   it('preserves additive fields on invocation payloads', () => {
@@ -12,7 +13,7 @@ describe('PromptInvocationsV1Schema', () => {
           id: 'i1',
           token: '/foo',
           title: 'Foo',
-          target: { kind: 'doc', artifactId: 'a1', futureTargetField: 'keep-me' },
+          target: { kind: 'doc', artifactId: 'a1', serverId: 'addressed-home' },
           behavior: 'insert',
           allowArgs: true,
           availableIn: 'global',
@@ -24,11 +25,32 @@ describe('PromptInvocationsV1Schema', () => {
       },
     });
 
-    expect((parsed as any).futureInvocationsEnvelope).toEqual({
+    expect(parsed.futureInvocationsEnvelope).toEqual({
       kind: 'prompt_invocations.v2',
     });
-    expect((parsed.entries[0] as any)?.futureEntryField).toBe(true);
-    expect((parsed.entries[0].target as any)?.futureTargetField).toBe('keep-me');
+    expect(parsed.entries[0]?.futureEntryField).toBe(true);
+    expect(parsed.entries[0]?.target).toEqual({ kind: 'doc', artifactId: 'a1', serverId: 'addressed-home' });
+  });
+
+  it('keeps new target declarations closed while recovering retained invocation payloads', () => {
+    const entry = {
+      id: 'i1', token: '/foo', title: 'Foo',
+      target: { kind: 'doc', artifactId: 'a1', serverId: 'addressed-home', futureTargetField: 'retained' },
+      behavior: 'insert', allowArgs: true, availableIn: 'global', futureEntryField: true,
+    };
+    expect(PromptInvocationEntryV1Schema.safeParse(entry).success).toBe(false);
+    expect(readRetainedPromptLibraryRecordV1({ promptInvocationsV1: {
+      v: 1, entries: [entry], futureInvocationsEnvelope: { kind: 'prompt_invocations.v2' },
+    } }, 'invocations')).toEqual({ status: 'ready', record: {
+      key: 'invocations', value: { v: 1, entries: [{
+        id: 'i1', token: '/foo', title: 'Foo',
+        target: { kind: 'doc', artifactId: 'a1', serverId: 'addressed-home' },
+        behavior: 'insert', allowArgs: true, availableIn: 'global',
+      }] },
+    } });
+    expect(readRetainedPromptLibraryRecordV1({ promptInvocationsV1: {
+      v: 1, entries: [{ ...entry, target: { ...entry.target, artifactId: '' } }],
+    } }, 'invocations')).toEqual({ status: 'unavailable', reason: 'invalid-stored-content' });
   });
 
   it('defaults to an empty list', () => {

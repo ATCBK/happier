@@ -21,7 +21,7 @@ describe('Action public projection', () => {
     const spec = getActionSpec('usage.recap.export');
     expect(spec.executionPlacement).toBe('client');
     expect(spec.pluginCallerPolicy).toEqual({ kind: 'caller' });
-    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, plugin: true });
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, plugin: true });
     expect(spec.inputSchema.safeParse({ query: { period: { startMs: 100, endMs: 200 } }, selectedFields: ['tokens'] }).success).toBe(true);
     expect(spec.inputSchema.safeParse({ query: { accountId: 'forged' }, node: {} }).success).toBe(false);
     const compose = { kind: 'composed', v: 1, style: 'sigil', format: 'story', selectedFields: ['tokens'], unavailableFields: [],

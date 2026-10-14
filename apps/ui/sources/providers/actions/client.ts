@@ -20,6 +20,8 @@ export type ProviderActionApprovalOptions = Readonly<{
     scope: ServerAccountScope;
     signal: AbortSignal;
     onApprovalPending: (registration: ActionApprovalRegistration) => void;
+    /** Retains only this mounted invocation, without changing Action approval policy. */
+    retainInvocationSignal?: AbortSignal;
 }>;
 type ProviderActionMethod<Name extends keyof IncumbentClient> = IncumbentClient[Name] extends (input: infer Input) => Promise<infer Output>
     ? (input: Input, approval?: ProviderActionApprovalOptions) => Promise<Output> : never;
@@ -39,12 +41,22 @@ async function invoke<TSchema extends z.ZodType>(actionId: ActionId, input: unkn
         || scope.accountId && scope.accountId !== approvalOptions.scope.accountId)) {
         throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
     }
-    const merged = mergeAbortSignals([scope.signal, approvalOptions?.signal]);
+    const merged = mergeAbortSignals([scope.signal, approvalOptions?.signal, approvalOptions?.retainInvocationSignal]);
     const signal = merged.signal;
     try {
         // The dispatch owner preserves acknowledged mutations after Account retirement.
         // Only the deferred Artifact follower may race the caller's local interest.
-        const result = await createDefaultActionExecutor({ onProviderRpcDispatched: scope.onDispatched }).execute(actionId, input, {
+        const result = await createDefaultActionExecutor({ onProviderRpcDispatched: scope.onDispatched,
+            ...(approvalOptions?.retainInvocationSignal && signal ? {
+                hostActionApprovalLifetime: { actionId, signal, surface: 'ui' as const },
+                // The blocking executor owns the result; this registration only
+                // presents its Artifact and retires with the mounted invocation.
+                onBlockingApprovalPending: pending => approvalOptions.onApprovalPending({
+                    ...pending, scope: approvalOptions.scope, refreshAfterExecution: false,
+                    onExecuted: async () => 'consumed',
+                }),
+            } : {}),
+        }).execute(actionId, input, {
             surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
             ...(scope.serverId || approvalOptions?.scope.serverId ? { serverId: scope.serverId ?? approvalOptions?.scope.serverId } : {}),
             ...(scope.accountId || approvalOptions?.scope.accountId ? { expectedAccountId: scope.accountId ?? approvalOptions?.scope.accountId } : {}),

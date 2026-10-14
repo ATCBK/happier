@@ -2,7 +2,9 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
-import { DaemonContributionRegistryProjectionDescribeResponseSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, DaemonContributionRegistryProjectionDescribeResponseSchema, PluginProjectionV2Schema, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
+import { encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
+import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -10,6 +12,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createWorkflowDefinitionFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { buildWorkflowEditorDraftFromDefinition } from '@/sync/domains/workflows/workflowAuthoring';
+import { getWorkflowDefinition } from '@/sync/domains/workflows/workflowDefinitionActions';
 import { useWorkflowEditorHistory } from './useWorkflowEditorHistory';
 
 // Only native RPC, HTTP, credentials and platform rendering leave the process.
@@ -17,6 +20,9 @@ import { useWorkflowEditorHistory } from './useWorkflowEditorHistory';
 const machineRpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key: string) => key }));
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
@@ -45,7 +51,10 @@ let serverId: string;
 
 function childProjection(localId = 'child') {
     return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
-        projection: { v: 2, generation: 1, familiesById: { workflows: { family: 'workflows', entriesById: {
+        projection: { v: 2, generation: 1,
+            installedPackagesById: { 'example.tools': { id: 'example.tools', displayName: 'Example tools', version: '1.0.0',
+                enabled: true, source: { kind: 'path', locator: '/plugins/example.tools' } } },
+            familiesById: { workflows: { family: 'workflows', entriesById: {
             [`example.tools/${localId}`]: { id: `example.tools/${localId}`, pluginId: 'example.tools',
                 pluginVersion: '1.0.0', definition: { id: localId, title: 'Plugin child', definition: child } },
         } } }, actionsById: {} } });
@@ -208,12 +217,23 @@ describe('workflow editor declared bindings', () => {
         let failing = failPage;
         const successor = createDeferred<void>();
         machineRpc.mockResolvedValue(childProjection('later-child'));
-        // The real first page is Account Artifacts; the canonical continuation
-        // then discovers plugins. Refuse the second Account admission at HTTP.
-        const baseEncryption = { mode: 'plain', updatedAt: 0 };
-        home.answer(serverId, '/v1/account/encryption', { select: () => {
-            const artifactPageRead = home.requests.some(request => request.path.startsWith('/v1/artifacts?'));
-            return failing && artifactPageRead ? { status: 503, body: { error: 'storage_unavailable' } } : { body: baseEncryption };
+        // The real Artifact reader derives its next cursor from a full page.
+        // Non-workflow documents keep this about late child-schema disclosure.
+        const cursors: (string | null)[] = [];
+        const firstPage = Array.from({ length: 500 }, (_, index) => ({
+            id: `document-${index}`, ownerAccountId: 'account-a', access: 'view', encryptionMode: 'plain',
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, header: encodePlainArtifactStoredContent({ kind: 'note.v1' }),
+            body: encodePlainArtifactStoredContent({ body: '' }), headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+        } satisfies Artifact));
+        const lastRow = firstPage.at(-1)!;
+        const laterCursor = encodeArtifactListCursor({ artifactId: lastRow.id, updatedAt: lastRow.updatedAt });
+        home.answer(serverId, '/v1/artifacts', { select: () => {
+            const request = home.requests.at(-1)!;
+            const cursor = new URL(request.path, request.serverUrl).searchParams.get('cursor');
+            cursors.push(cursor);
+            if (getStorage().getState().profileScope?.accountId === 'account-b') return { body: [], respondAfter: successor.promise };
+            if (!cursor) return { body: firstPage };
+            return failing ? { status: 403, body: { error: 'run_access_denied' } } : { body: [] };
         } });
         const block = { kind: 'workflow' as const, id: 'later', workflowRef: 'plugin:example.tools/later-child',
             input: { oldField: { kind: 'literal' as const, value: 'Keep me' } } };
@@ -223,15 +243,16 @@ describe('workflow editor declared bindings', () => {
         const screen = await renderScreen(<harness.WorkflowNestedWorkflowBlockEditor block={block} draft={draft}
             ordinal={1} total={1} actions={[]} onSelect={() => {}} onChangeBlock={changed} testIDPrefix="editor" />);
         if (failPage) {
-            expect(home.requests.some(request => request.path.startsWith('/v1/artifacts?'))).toBe(true);
+            await vi.waitFor(() => expect(cursors).toContain(laterCursor));
             expect(screen.findByTestId('editor-workflow-later-input-topic')).toBeNull();
             expect(screen.findByTestId('editor-workflow-later-input-oldField')).not.toBeNull();
             failing = false;
             await screen.pressByTestIdAsync('editor-workflow-later-retry');
         }
-        expect(screen.findByTestId('editor-workflow-later-input-topic')).not.toBeNull();
+        await vi.waitFor(() => expect(screen.findByTestId('editor-workflow-later-input-topic')).not.toBeNull());
         expect(screen.findByTestId('editor-workflow-later-input-oldField')).not.toBeNull();
         // Source discovery is produced only by the plugin-phase continuation.
+        expect(cursors).toContain(laterCursor);
         expect(machineRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toBe(true);
         expect(changed).not.toHaveBeenCalled();
         if (!failPage) {
@@ -291,19 +312,19 @@ describe('workflow editor declared bindings', () => {
         const changed = vi.fn();
         const screen = await renderScreen(<harness.WorkflowNestedWorkflowBlockEditor block={block} draft={draft}
             ordinal={1} total={1} actions={[]} onSelect={() => {}} onChangeBlock={changed} testIDPrefix="editor" />);
-        expect(screen.findByTestId('editor-workflow-shared-input-topic')).not.toBeNull();
-        await act(async () => switchAccount('account-b'));
+        await vi.waitFor(() => expect(screen.findByTestId('editor-workflow-shared-input-topic')).not.toBeNull());
+        await act(async () => { await switchAccount('account-b'); });
         expect(screen.findByTestId('editor-workflow-shared-input-topic')).toBeNull();
         expect(screen.findByTestId('editor-workflow-shared-input-oldField')).not.toBeNull();
         await act(async () => successor.resolve());
-        expect(screen.findByTestId('editor-workflow-shared-input-topic')).not.toBeNull();
+        await vi.waitFor(() => expect(screen.findByTestId('editor-workflow-shared-input-topic')).not.toBeNull());
         deny = true;
-        await act(async () => switchAccount('account-a'));
+        await act(async () => { await switchAccount('account-a'); });
         expect(screen.findByTestId('editor-workflow-shared-input-topic')).toBeNull();
-        expect(screen.findByTestId('editor-workflow-shared-retry')).not.toBeNull();
+        await vi.waitFor(() => expect(screen.findByTestId('editor-workflow-shared-retry')).not.toBeNull());
         deny = false;
         await screen.pressByTestIdAsync('editor-workflow-shared-retry');
-        expect(screen.findByTestId('editor-workflow-shared-input-topic')).not.toBeNull();
+        await vi.waitFor(() => expect(screen.findByTestId('editor-workflow-shared-input-topic')).not.toBeNull());
         expect(changed).not.toHaveBeenCalled();
     });
 

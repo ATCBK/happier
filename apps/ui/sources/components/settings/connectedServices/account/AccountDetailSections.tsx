@@ -103,6 +103,9 @@ export const AccountDetailUsageSectionView = React.memo(function AccountDetailUs
                     />
                 </SectionContentRow>
             ) : null}
+            {facts.refreshing ? (
+                <SurfaceStateCard testID={`${testID}:refresh-status`} size="line" kind="loading" title={t('connectedServices.quota.refreshing')} />
+            ) : null}
             {facts.meters.length > 0 ? (
                 <SectionContentRow testID={`${testID}:meters`}>
                     <UsageMeterStack>
@@ -143,7 +146,7 @@ export const AccountDetailUsageSectionView = React.memo(function AccountDetailUs
                         })}
                     </UsageMeterStack>
                 </SectionContentRow>
-            ) : facts.loading ? (
+            ) : facts.refreshing ? null : facts.loading ? (
                 <SurfaceStateCard testID={`${testID}:loading`} size="line" kind="loading" title={t('common.loading')} />
             ) : facts.error ? null : (
                 <SurfaceStateCard

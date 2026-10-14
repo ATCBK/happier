@@ -84,7 +84,6 @@ import type { WorkspaceSyncTargetPhaseDescriptor } from '@/workspaces/sync/works
 import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers';
 import { registerAutomationReplyHandoffRpcHandler } from '@/rpc/handlers/automationReplyHandoff';
 import { createWorkflowRunStorageClient } from '@/daemon/workflows/workflowRunStorageClient';
-import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import {
     resolveExternalSessionOperationAccountScope,
     type ExternalSessionOperationAccountScope,
@@ -1562,6 +1561,7 @@ export class ApiMachineClient {
                     }
                     : {}),
                 actionOperations: {
+                    runner: this.actionOperationRuntime.runner,
                     attachOwner: this.actionOperationRuntime.attachOwner,
                     handlers: this.actionOperationRuntime.handlers,
                     observeExecution: this.actionOperationRuntime.observeExecution,
@@ -1761,7 +1761,7 @@ export class ApiMachineClient {
                 || (request.actionId === 'daemon.filesystem.copy' && request.input && typeof request.input === 'object'
                     && 'kind' in request.input && request.input.kind === 'prepared_transfer')) {
                 if (!transfer) return { ok: false, errorCode: 'machine_carrier_unavailable', error: 'Prepared filesystem transfer owner is unavailable' };
-                const result = await transfer({ ...request, assertCurrentAuthority });
+                const result = await transfer({ ...request, actionId: request.actionId, assertCurrentAuthority });
                 return result.success ? result : projectPreparedFilesystemActionResult(result);
             }
             // Reuse the incumbent effects without re-entering full Action admission.
@@ -3075,6 +3075,7 @@ export class ApiMachineClient {
             installationId: installation.installationId,
             machineSignature: signExternalActionMachineRpcRequestV1({
                 authorizationToken: authorization.token, effectActionId: 'session.message.send',
+                requesterAccountContext: authorization.requesterAccountContext,
                 target, installationId: installation.installationId, event, method: event,
                 requestId: authorization.binding.requestId, params: unsignedPayload,
                 privateKey: installation.privateKey,
@@ -3296,10 +3297,10 @@ export class ApiMachineClient {
     }
 
     private async synchronizeIrohMachineEndpointAuthority(
-        state: DaemonState,
+        state: DaemonState | null,
         withdrewPersistedEndpoint = false,
     ): Promise<void> {
-        const nextEndpoint = state.peerMediation?.iroh?.endpoint ?? null;
+        const nextEndpoint = state?.peerMediation?.iroh?.endpoint ?? null;
         if (isDeepStrictEqual(nextEndpoint, this.currentIrohMachineEndpoint)
             && !((withdrewPersistedEndpoint || this.pendingPersistedIrohEndpointWithdrawal)
                 && nextEndpoint === null)) return;
@@ -4048,7 +4049,8 @@ export class ApiMachineClient {
 
                 if (update.daemonState && update.daemonState.version > this.machine.daemonStateVersion) {
                     logger.debug('[API MACHINE] Received external daemon state update');
-                    this.machine.daemonState = StoredMachinePublishedDaemonStateV1Schema.parse(this.machineContentCodec.decodeStored(update.daemonState.value));
+                    this.machine.daemonState = update.daemonState.value === null ? null
+                        : StoredMachinePublishedDaemonStateV1Schema.parse(this.machineContentCodec.decodeStored(update.daemonState.value));
                     this.machine.daemonStateVersion = update.daemonState.version;
                     if (this.machine.keyBasis) this.machine.keyBasis = { ...this.machine.keyBasis, daemonStateVersion: update.daemonState.version };
                 }

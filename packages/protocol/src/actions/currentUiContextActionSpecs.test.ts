@@ -103,7 +103,7 @@ describe('current UI context host ActionSpecs', () => {
     ] as const) {
       const spec = getActionSpec(id as never);
       expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
       expect(spec.inputSchema.safeParse(input).success).toBe(true);
       expect(spec.inputSchema.safeParse({ ...input, files: [{ name: 'invented', bytes: 'fake' }] }).success).toBe(false);
       expect(await executor.execute(id as never, input, { surface: 'agent', authority: 'account_automation' })).toEqual({ ok: true, result: { status: 'unavailable' } });
@@ -115,7 +115,7 @@ describe('current UI context host ActionSpecs', () => {
     const input = { scope: { serverId: 'home-a', accountId: 'account-a' }, draftId: 'draft-a', stepId: 'step-a',
       address: { serverId: 'home-a', sessionId: 'session-a' } };
     expect(spec.executionPlacement).toBe('client');
-    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
     expect(spec.inputSchema.safeParse(input).success).toBe(true);
     expect(spec.inputSchema.safeParse({ ...input, prompt: 'do not submit' }).success).toBe(false);
     expect(spec.inputSchema.safeParse({ ...input, address: { ...input.address, machineId: 'caller-chosen' } }).success).toBe(false);
@@ -141,7 +141,7 @@ describe('current UI context host ActionSpecs', () => {
       const spec = getActionSpec(actionId);
       expect(ActionIdSchema.safeParse(actionId).success).toBe(true);
       expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
       expect(spec.outputSchema?.safeParse({ status: 'unavailable' }).success).toBe(true);
     }
     const open = getActionSpec('session.canvas.tabs.open');
@@ -158,7 +158,7 @@ describe('current UI context host ActionSpecs', () => {
       const common = { scope: { serverId: 'home-a', accountId: 'account-a' }, sourceId: 'source', position: { anchorId: 'anchor', placement: 'before' } };
       const input = actionId === 'session.pending.reorder' ? { ...common, sessionId: 'session-a', recipient: null } : common;
       expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
       expect(spec.inputSchema.safeParse(input).success).toBe(true);
       expect(spec.inputSchema.safeParse({ ...input, orderedIds: ['source'] }).success).toBe(false);
       expect(spec.inputSchema.safeParse({ ...input, position: { anchorId: 'anchor', placement: 'before', index: 1 } }).success).toBe(false);
@@ -174,7 +174,7 @@ describe('current UI context host ActionSpecs', () => {
   it('exposes semantic Session organization movement on the answering client', () => {
     const spec = getActionSpec('session.organization.move');
     expect(spec.executionPlacement).toBe('client');
-    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
     expect(spec.inputSchema.safeParse({ scope: { serverId: 'home-a', accountId: 'account-a' },
       sourceRowId: 'row-a', sourceKind: 'leaf', instructionKind: 'reorder-before',
       targetRowId: 'row-b', containerId: 'root', parentRowId: null, depth: 0, edge: 'top' }).success).toBe(true);

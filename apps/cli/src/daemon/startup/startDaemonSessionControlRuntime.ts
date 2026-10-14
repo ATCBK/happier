@@ -59,7 +59,7 @@ import type {
   RequesterSessionRuntimeContext,
   ResolveRequesterSessionRuntimeContext,
 } from '../sessionEncryption/requesterSessionCredentials';
-import { isOriginalOwnAccountActionCustody, prepareRequesterAccountActionContext, readRequesterAccountActionContext, type RequesterAccountActionContext } from '../sessionEncryption/requesterAccountActionProjection';
+import { isOriginalOwnAccountActionCustody, prepareInstalledRequesterAccountActionContext, readRequesterAccountActionContext, type RequesterAccountActionContext } from '../sessionEncryption/requesterAccountActionProjection';
 import { createProjectFiniteAction } from '@/workspaces/projectSetup/projectFiniteAction';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
@@ -2697,7 +2697,7 @@ export async function startDaemonSessionControlRuntime(
       applyCredentialUpdate: (
         input: Readonly<{
           sessionId: string;
-          serviceId: ConnectedServiceId;
+          serviceId: Parameters<typeof readConnectedServiceCredentialApplicationState>[0]['serviceId'];
           profileId: string;
           reason: 'account_changed' | 'auth_expired';
           executionAuthority: ConnectedServiceExecutionAuthorityV1;
@@ -7150,7 +7150,7 @@ export async function startDaemonSessionControlRuntime(
     applyCredentialUpdate: async (
       input: Readonly<{
         sessionId: string;
-        serviceId: ConnectedServiceId;
+        serviceId: Parameters<typeof readConnectedServiceCredentialApplicationState>[0]['serviceId'];
         profileId: string;
         reason: 'account_changed' | 'auth_expired';
         executionAuthority: ConnectedServiceExecutionAuthorityV1;
@@ -7292,6 +7292,7 @@ export async function startDaemonSessionControlRuntime(
   let foregroundAgentRuntimeHttpPort: number | null = null;
   const foregroundAgentRuntimeAdmission =
     createForegroundAgentRuntimeAdmissionOwner({
+      connectedServiceRuntimeRegistry,
       prepare: async (request) => {
         let context: RequesterSessionRuntimeContext | null = null;
         const releaseUnadoptedContext = async () => {
@@ -11896,7 +11897,7 @@ export async function startDaemonSessionControlRuntime(
     actionRoutes: localServicesRuntime.actionRoutes,
     publicPreviewRoutes: createLocalServicePublicPreviewServerRoutes({
       token: params.credentials.token,
-      accountId: readPreviewAccountIdFromToken(params.credentials.token),
+      accountId: readPreviewAccountIdFromToken(params.credentials.token) ?? undefined,
       serverBaseUrl: params.serverBaseUrl,
     }),
     relocateService: createProjectServiceRelocationRoute({
@@ -12264,6 +12265,8 @@ export async function startDaemonSessionControlRuntime(
               context.target.sessionId,
               requesterContext,
             );
+          const expectedCredentialRevision = request.expectedCredentialRevision;
+          const refreshAttemptId = request.refreshAttemptId;
           return await withSessionAccountHome(requesterContext, async () => {
             const result =
               await refreshCoordinator.refreshConnectedServiceCredentialForRuntimeAuthBridge(
@@ -12277,9 +12280,8 @@ export async function startDaemonSessionControlRuntime(
                     selection.kind === 'profile'
                       ? selection.profileId
                       : selection.activeProfileId,
-                  expectedCredentialRevision:
-                    request.expectedCredentialRevision,
-                  refreshAttemptId: request.refreshAttemptId,
+                  expectedCredentialRevision,
+                  refreshAttemptId,
                   authority: request.runId
                     ? context.authority
                     : (params.pidToTrackedSession.get(context.target.pid) ??
@@ -12470,6 +12472,7 @@ export async function startDaemonSessionControlRuntime(
           });
         if (!coordinator || !isCurrent())
           return { status: 'stale_context', generation: selection.generation };
+        const credentialRevision = selection.credentialRevision;
         // Pool truth changes here; this Run's host releases and rematerializes its own
         // activation. The request-auth coordinator's applyGeneration does no Session work.
         await assertSessionAccountCurrent(parentSessionId, context);
@@ -12486,7 +12489,7 @@ export async function startDaemonSessionControlRuntime(
             expectedFailureSource: {
               profileId: selection.activeProfileId,
               groupGeneration: selection.generation,
-              credentialRevision: selection.credentialRevision,
+              credentialRevision,
               isCurrent,
             },
           }),
@@ -14709,7 +14712,11 @@ export async function startDaemonSessionControlRuntime(
           ...(context?.callerInputConstraints ? { callerInputConstraints: context.callerInputConstraints } : {}),
           ...(context?.authority ? { callerAuthority: context.authority } : {}),
           ...(context?.sessionActionOrigin ? { sessionActionOrigin: context.sessionActionOrigin } : {}),
-          ...(context ? { localActionContext: context } : {}),
+          ...(context ? { localActionContext: {
+            ...context,
+            executionRunTargetMachineId: context.executionRunTargetMachineId ?? undefined,
+            executionRunWorkflowRunId: context.executionRunWorkflowRunId ?? undefined,
+          } } : {}),
         } : undefined;
       };
       const fallbackProjectAction = params.resolveProjectAction?.();
@@ -15214,28 +15221,15 @@ export async function startDaemonSessionControlRuntime(
           currentServerHttpBaseUrl: params.serverBaseUrl,
           prepareRequesterAccountContext: async ({ authorization, purpose, signal }) => {
             const privatePurpose = purpose ?? { kind: 'external_action' as const };
-            const installation = readInstallationIdentityIfExistsSync();
-            const origin = await params.resolveCurrentMachineExecutionOriginContext?.(signal);
-            if (!installation || !origin || origin.machineId !== params.machineId) return null;
             let executeManagedFiniteWake: ((request: ManagedMachinePolicyRequest) => Promise<ActionExecuteResult>) | undefined;
             let requesterTargetResolver: ReturnType<typeof createDaemonExternalActionTargetResolver> | undefined;
-            const prepared = await prepareRequesterAccountActionContext({ authorization, purpose: privatePurpose,
-              machineId: params.machineId, installationId: installation.installationId, serverIdentityId: origin.serverIdentityId,
-              installationPrivateKey: decodeBase64(installation.privateKey, 'base64url'),
+            const prepared = await prepareInstalledRequesterAccountActionContext({ authorization, purpose: privatePurpose,
+              machineId: params.machineId,
               serverId: params.serverId, serverHttpBaseUrl: params.serverBaseUrl,
               ownCredentials: params.credentials,
-              isCurrent: async () => {
-                const next = readInstallationIdentityIfExistsSync();
-                const current = await params.resolveCurrentMachineExecutionOriginContext?.(signal);
-                if (next?.installationId !== installation.installationId || next.privateKey !== installation.privateKey
-                  || current?.machineId !== params.machineId || current.serverIdentityId !== origin.serverIdentityId) return false;
-                return await verifyExternalActionExecutionAuthorizationCurrent({ authorization,
-                  effectActionId: authorization.binding.actionId, target: authorization.binding.target,
-                  installationId: installation.installationId, privateKey: installation.privateKey,
-                  serverHttpBaseUrl: params.serverBaseUrl,
-                  ...(privatePurpose.kind === 'managed_finite_wake' ? { managedFiniteWakeTarget: privatePurpose.target } : {}),
-                  ...(signal ? { signal } : {}) });
-              }, createExecutor: admitted => {
+              resolveCurrentMachineExecutionOriginContext: signal => params.resolveCurrentMachineExecutionOriginContext?.(signal)
+                ?? Promise.resolve(null),
+              createExecutor: (admitted, installation) => {
                 requesterTargetResolver = createDaemonExternalActionTargetResolver({
                   credentials: admitted.credentials, serverApiUrl: admitted.serverHttpBaseUrl,
                   ...(params.resolveServerFeaturesSnapshot ? { resolveServerFeaturesSnapshot: params.resolveServerFeaturesSnapshot } : {}),
@@ -18442,7 +18436,7 @@ export async function startDaemonSessionControlRuntime(
           await assertSessionAccountCurrent(input.sessionId, accountContext);
           recordPhase(phase);
           if (params.pidToTrackedSession.get(input.runnerPid) !== tracked) return { status: 'unavailable' };
-          return await withSessionAccountHome(accountContext, () => {
+          return await withSessionAccountHome(accountContext, async () => {
             // The runner invokes this only once, after its accepted open proves
             // there are no applied CS accounts or selection environment. Later
             // reads never recreate a target invalidated by a partial hot apply.

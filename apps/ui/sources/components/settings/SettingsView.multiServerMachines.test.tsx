@@ -150,13 +150,15 @@ afterEach(() => {
     routerPushSpy.mockClear();
 });
 
-const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
-await import('@/sync/syncEngine');
-await import('./SettingsView');
+beforeEach(async () => {
+    const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+    await loadSyncSingletonForTests();
+});
 
 describe('SettingsView (multi-server machines)', () => {
     it('replaces the inline machines list with a dedicated machines settings entry', async () => {
         const { SettingsView } = await import('./SettingsView');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;

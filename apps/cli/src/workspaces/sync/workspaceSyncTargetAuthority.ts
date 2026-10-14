@@ -30,7 +30,7 @@ import { WorkspaceSyncTargetRoutingV1Schema, WorkspaceSyncSourceWriterTargetRout
   type WorkspaceSyncTargetRoutingV1, type WorkspaceSyncSourceWriterTargetRoutingV1 } from '@happier-dev/protocol/socketRpc';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import type { MachineInstallationPublicIdentityV1 } from '@happier-dev/protocol/machines/identity/installationIdentity';
-import { assertWorkspaceSyncRequesterBootstrapSupported } from './workspaceSyncPreparation';
+import { assertWorkspaceSyncRequesterBootstrapSupported } from './workspaceSyncBootstrapAdmission';
 import { lstat, readdir, realpath, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, normalize, resolve } from 'node:path';
 import { createServer, type Server, type Socket } from 'node:net';

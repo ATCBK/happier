@@ -1,13 +1,13 @@
 import {
-    decodeDaemonDatabaseWorkerLineFrames,
-    decodeDaemonDatabaseWorkerValue,
-    encodeDaemonDatabaseWorkerLine,
-    encodeDaemonDatabaseWorkerRow,
-    encodeDaemonDatabaseWorkerValue,
+    decodeLineFrames as decodeDaemonDatabaseWorkerLineFrames,
+    decodeDatabaseValue as decodeDaemonDatabaseWorkerValue,
+    encodeLine as encodeDaemonDatabaseWorkerLine,
+    encodeDatabaseRow as encodeDaemonDatabaseWorkerRow,
+    encodeDatabaseValue as encodeDaemonDatabaseWorkerValue,
     type DaemonDatabaseWorkerResultLimits,
-    type DaemonDatabaseWorkerRequest,
-    type DaemonDatabaseWorkerResponse,
-} from './daemonDatabaseWorker';
+    type WorkerRequest as DaemonDatabaseWorkerRequest,
+    type WorkerResponse as DaemonDatabaseWorkerResponse,
+} from './daemonDatabaseWorkerProtocol';
 import { openSqliteDatabaseSync, type SqliteDatabaseSync } from '@/daemon/persistence/sqliteSync';
 import { PluginContextServiceError } from './errors';
 

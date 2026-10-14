@@ -5,9 +5,11 @@ import {
   mkdtempSync,
   readdirSync,
   realpathSync,
+  writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { exitWithCommandResult, runCommand } from '../../stack/scripts/utils/proc/proc.mjs';
 import { resolveWorkspaceBuildMode } from '../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 import { resolveWorkspaceTypeScriptCompilerArgs } from '../../../packages/cli-common/workspaceChildBuildEnv.mjs';
@@ -119,6 +121,28 @@ function createImmutableBuildSource({ packageRoot, outputDir, reuseCompilerCache
       if (!existsSync(sourcePath)) continue;
       cpSync(sourcePath, join(snapshotRoot, relativePath), { recursive: true });
     }
+    const snapshotConfigPath = join(snapshotRoot, 'tsconfig.json');
+    if (existsSync(snapshotConfigPath)) {
+      // Parse the captured bytes with the retained compiler API. Compilation
+      // still belongs to the native TypeScript invocation below.
+      const parsed = ts.readConfigFile(snapshotConfigPath, ts.sys.readFile);
+      if (parsed.error) throw new Error(ts.flattenDiagnosticMessageText(parsed.error.messageText, '\n'));
+      const options = parsed.config.compilerOptions;
+      if (options?.paths) {
+        const pathsBase = resolve(packageRoot, options.baseUrl ?? '.');
+        options.paths = Object.fromEntries(Object.entries(options.paths).map(([name, targets]) => [name,
+          targets.map(target => {
+            const originalTarget = resolve(pathsBase, target);
+            const localTarget = relative(packageRoot, originalTarget);
+            // Internal aliases use admitted snapshot bytes; external declaration
+            // aliases keep the prepared dependency identity they originally named.
+            return localTarget === '..' || localTarget.startsWith(`..${sep}`) || isAbsolute(localTarget)
+              ? originalTarget : resolve(snapshotRoot, localTarget);
+          }),
+        ]));
+        writeFileSync(snapshotConfigPath, `${JSON.stringify(parsed.config, null, 2)}\n`);
+      }
+    }
   } catch (error) {
     try {
       cleanup();
@@ -134,6 +158,48 @@ function createImmutableBuildSource({ packageRoot, outputDir, reuseCompilerCache
   };
 }
 
+function copyPreparedCliDeclarations(packageRoot, declarationSourceDir) {
+  // This explicit consumer is entered only after the same job's current-source
+  // compiler succeeded. Project references own the complete declaration graph;
+  // ordinary builds and publication still run their independent strict checker.
+  const visited = new Set();
+  let copied = 0;
+  const sourceRoot = resolve(packageRoot, 'src');
+  const copyProject = (configPath) => {
+    if (visited.has(configPath)) return;
+    visited.add(configPath);
+    const project = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+      ...ts.sys,
+      onUnRecoverableConfigFileDiagnostic(diagnostic) {
+        throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+      },
+    });
+    if (project.errors.length) throw new Error(project.errors.map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')).join('\n'));
+    for (const reference of project.projectReferences ?? []) {
+      copyProject(ts.resolveProjectReferencePath(reference));
+    }
+    for (const source of project.fileNames) {
+      const localPath = relative(sourceRoot, source);
+      if (localPath === '..' || localPath.startsWith(`..${sep}`) || isAbsolute(localPath)
+        || !/\.[cm]?tsx?$/u.test(source) || /\.d\.[cm]?ts$/u.test(source)) continue;
+      const declarationPath = ts.getOutputFileNames(project, source, !ts.sys.useCaseSensitiveFileNames)
+        .find((path) => /\.d\.[cm]?ts$/u.test(path));
+      if (!declarationPath || !existsSync(declarationPath)) {
+        throw new Error(`missing prepared CLI declaration ${declarationPath ?? source} from ${configPath}; run the current source compiler before this consumer`);
+      }
+      const target = join(declarationSourceDir, localPath.replace(/\.([cm]?)tsx?$/u, '.d.$1ts'));
+      mkdirSync(dirname(target), { recursive: true });
+      cpSync(declarationPath, target);
+      copied += 1;
+    }
+  };
+  // The public source compiler derives current membership into this project.
+  // Consume its exact references and file set, rather than the authored seed.
+  copyProject(join(packageRoot, 'node_modules/.cache/tsc/tsconfig.source.json'));
+  if (!copied) throw new Error('missing prepared CLI declaration graph; run the current source compiler before this consumer');
+}
+
 export async function buildCliDist(options = {}) {
   const lexicalPackageRoot = resolve(String(options.packageRoot ?? process.cwd()));
   const packageJsonPath = realpathSync.native(join(lexicalPackageRoot, 'package.json'));
@@ -142,7 +208,7 @@ export async function buildCliDist(options = {}) {
   const lockPath = resolve(String(options.lockPath ?? resolveWorkspaceBundleLockPath(repoRoot)));
   let env = { ...process.env, ...(options.env ?? {}) };
   const effectiveCompilerArgs = resolveWorkspaceTypeScriptCompilerArgs({
-    compilerArgs: ['-p', 'tsconfig.build.json', '--noEmit', '--singleThreaded'], env,
+    compilerArgs: ['-p', 'tsconfig.build.json', '--noEmit', 'false', '--emitDeclarationOnly', '--singleThreaded'], env,
   });
   const admissionClass = resolveRemoteCommandPolicy(
     [process.execPath, fileURLToPath(import.meta.url), ...effectiveCompilerArgs],
@@ -156,7 +222,7 @@ export async function buildCliDist(options = {}) {
     env = { ...env, HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue };
   } else if (options.skipLock !== true && !String(env.HAPPIER_CLI_BUILD_OUTPUT_DIR ?? '').trim()
     && !Object.entries(options).some(([key, value]) => key.endsWith('Impl') && value !== undefined)) {
-    const workerOptions = { packageRoot, repoRoot, lockPath,
+    const workerOptions = { packageRoot, repoRoot, lockPath, preparedDeclarations: options.preparedDeclarations,
       lockTimeoutMs: options.lockTimeoutMs, lockPollIntervalMs: options.lockPollIntervalMs,
       lockStaleAfterMs: options.lockStaleAfterMs };
     const result = await runWorkspaceBuildAdmission({
@@ -243,6 +309,7 @@ async function buildCliDistUnlocked(options = {}) {
         reuseCompilerCache: options.skipLock !== true,
       });
 
+  let declarationSourceDir;
   try {
     await (options.rmDistImpl ?? rmDist)(['node', 'rmDist.mjs', outputDir], {
       env,
@@ -263,22 +330,32 @@ async function buildCliDistUnlocked(options = {}) {
       packageJsonPath: immutableSource.packageJsonPath,
       outputDir,
       env,
+      declarationSourceDir,
     }));
     // Executable preparation does not consume a semantic check. Strict npm
     // publication retains checking, including lifecycle-forced strict mode.
     if (buildMode === 'strict') {
-      const typeScriptInvocation = (options.resolveTypeScriptCliInvocationImpl ?? resolveTypeScriptCliInvocation)({
-        processExecPath: process.execPath,
-        env,
-        args: options.effectiveCompilerArgs,
-        workspaceDir: packageRoot,
-        admissionClass: options.admissionClass,
-      });
-      await measure('typecheck', () => (options.runTypecheckImpl ?? runNodeScript)(typeScriptInvocation.argsPrefix[0], [...typeScriptInvocation.argsPrefix.slice(1), ...options.effectiveCompilerArgs], {
-        command: typeScriptInvocation.command,
-        cwd: immutableSource.packageRoot,
-        env,
-      }));
+      declarationSourceDir = mkdtempSync(join(immutableSource.packageRoot, '.tmp.hstack-cli-declarations.'));
+      // Only the named Gate build consumer accepts this same-job input.
+      // Other callers retain the shared lifecycle policy's strict source check.
+      if (options.preparedDeclarations === true && env.npm_lifecycle_event === 'build:prepared') {
+        await measure('prepared-declarations', () => copyPreparedCliDeclarations(packageRoot, declarationSourceDir));
+      } else {
+        const typeScriptInvocation = (options.resolveTypeScriptCliInvocationImpl ?? resolveTypeScriptCliInvocation)({
+          processExecPath: process.execPath,
+          env,
+          args: options.effectiveCompilerArgs,
+          workspaceDir: packageRoot,
+          admissionClass: options.admissionClass,
+        });
+        // Emit checked declarations with the canonical native compiler once.
+        // Pkgroll bundles those public types without another source program.
+        await measure('typecheck', () => (options.runTypecheckImpl ?? runNodeScript)(typeScriptInvocation.argsPrefix[0], [...typeScriptInvocation.argsPrefix.slice(1), ...options.effectiveCompilerArgs, '--outDir', declarationSourceDir], {
+          command: typeScriptInvocation.command,
+          cwd: immutableSource.packageRoot,
+          env,
+        }));
+      }
     }
     await bundle();
     const finalWorkspaceRuntimeIdentity = readWorkspaceRuntimeIdentity({
@@ -305,6 +382,13 @@ async function buildCliDistUnlocked(options = {}) {
         : {}),
     });
   } finally {
+    if (declarationSourceDir) {
+      try {
+        rmDirSafeSync(declarationSourceDir);
+      } catch {
+        // Best effort: preserve the build result if declaration cleanup fails.
+      }
+    }
     try {
       immutableSource.cleanup();
     } catch {
@@ -328,7 +412,8 @@ const invokedAsMain = (() => {
 
 if (invokedAsMain) {
   try {
-    const options = process.argv[2] === CLI_DIST_WORKER_FLAG ? JSON.parse(process.argv[3] ?? '{}') : {};
+    const options = process.argv[2] === CLI_DIST_WORKER_FLAG ? JSON.parse(process.argv[3] ?? '{}')
+      : { preparedDeclarations: process.argv.includes('--prepared-declarations') };
     await buildCliDist(options);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

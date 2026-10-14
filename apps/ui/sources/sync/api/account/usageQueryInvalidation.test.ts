@@ -6,6 +6,31 @@ import { getUsageQueryMachineInvalidationKey, observeUsageProjection, subscribeU
 
 afterEach(() => { vi.restoreAllMocks(); });
 
+it('observes a completed initial read without repeating it and still reads on invalidation and expiry', async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    let deadline = Date.now() + 30_000;
+    const observation = observeUsageProjection({
+        serverId: 'completed-usage-read.test', initialReadCompleted: true, busy: () => false,
+        read: async () => { reads++; deadline = Number.POSITIVE_INFINITY; },
+        nextReadAtMs: () => deadline,
+    });
+    try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reads).toBe(0);
+        observation.invalidate();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reads).toBe(1);
+        deadline = Date.now() + 30_000;
+        observation.reconcile();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(reads).toBe(2);
+    } finally {
+        observation.dispose();
+        vi.useRealTimers();
+    }
+});
+
 it.each(['presentation', 'read'] as const)('preserves a long %s deadline through the native timer boundary', async kind => {
     vi.useFakeTimers();
     const nativeMaximum = 2_147_483_647;

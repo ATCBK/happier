@@ -1,791 +1,381 @@
-import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MMKV } from 'react-native-mmkv';
+import * as Notifications from 'expo-notifications';
+import * as SecureStore from 'expo-secure-store';
+import { PUSH_NOTIFICATION_ACTION_IDS, RPC_METHODS } from '@happier-dev/protocol';
+import { PluginAvailabilityActionHttpPathsV1 } from '@happier-dev/protocol/plugins/availability';
+import { createRootLayoutFeaturesResponse, createSessionFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createPlainV2SessionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { storage } from '@/sync/domains/state/storage';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { setActiveServerAndSwitch } from '@/sync/domains/server/activeServerSwitch';
+import { clearPendingTerminalConnect, getPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { getActiveServerSnapshot, getDeviceDefaultServerId, listServerProfiles, saveHomeViewState, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
+import { restoreConnectionToActiveServer, disconnectActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
+import { clearPendingNotificationAction, getPendingNotificationAction, setPendingNotificationAction } from '@/sync/domains/pending/pendingNotificationAction';
+import { getPendingNotificationNav } from '@/sync/domains/pending/pendingNotificationNav';
+import { pendingServerScopedKey } from '@/sync/domains/pending/pendingServerScopedKeys';
+import { setPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
+import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
+import { initializeRootLayoutRuntimeForTests, installRootLayoutRouteCommonModuleMocks, renderRootLayoutRoute } from './rootLayoutRouteTestHelpers';
 
-import {
-    createRootLayoutFeaturesResponse,
-    createStorageStoreMock,
-    flushHookEffects,
-    renderScreen,
-} from '@/dev/testkit';
-import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol';
-import { installRootLayoutRouteCommonModuleMocks } from './rootLayoutRouteTestHelpers';
-
-type ReactActEnvironmentGlobal = typeof globalThis & {
-    IS_REACT_ACT_ENVIRONMENT?: boolean;
-};
-(globalThis as ReactActEnvironmentGlobal).IS_REACT_ACT_ENVIRONMENT = true;
-
-const mockState = await vi.hoisted(async () => {
-    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-    return {
-        activeServerUrl: 'https://api.happier.dev',
-        activeServerId: 'server-1',
-        applySettingsSpy: vi.fn(),
-        clearPendingNotificationActionSpy: vi.fn(),
-        clearPendingNotificationNavSpy: vi.fn(),
-        clearPendingTerminalConnectSpy: vi.fn(),
-        lastUnmount: null as null | (() => Promise<void>),
-        mockSettings: {
-            ...settingsDefaults,
-            voice: {
-                ...settingsDefaults.voice,
-                providerId: 'off' as const,
-            },
-        },
-        pendingNotificationActionValue: null as { serverUrl: string; serverId?: string; sessionId: string; requestId: string; action: 'allow' | 'deny' } | null,
-        pendingNotificationNavValue: null as { serverUrl: string; serverId?: string; route: string } | null,
-        pendingTerminalConnectValue: null as { publicKeyB64Url: string; serverUrl: string; serverIdentityId: string } | null,
-        pushSpy: vi.fn(),
-        replaceSpy: vi.fn(),
-        serverProfilesValue: [] as { id: string; serverUrl: string }[],
-        sessionAllowSpy: vi.fn((..._args: unknown[]) => Promise.resolve()),
-        sessionDenySpy: vi.fn((..._args: unknown[]) => Promise.resolve()),
-        setPendingNotificationNavSpy: vi.fn(),
-        setActiveServerAndSwitchSpy: vi.fn(async (_params: { serverId: string; scope: string; refreshAuth: unknown }) => true),
-        upsertActivateAndSwitchServerSpy: vi.fn(async (_params: { serverUrl: string; source: string; scope: string; refreshAuth: unknown }) => true),
-    };
+const nativeNotifications = vi.hoisted(() => ({ response: null as Notifications.NotificationResponse | null }));
+const routerBoundary = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), setParams: vi.fn() }));
+// Static transport consumers must see the genuine Socket.IO boundary before import.
+vi.mock('socket.io-client', async (importOriginal) => {
+    const { createSocketIoClientBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    return createSocketIoClientBoundary(importOriginal);
 });
-
-vi.mock('expo-notifications', () => ({
+vi.mock('expo-notifications', async () => ({
+    ...await import('@/dev/expoNotificationsStub'),
     DEFAULT_ACTION_IDENTIFIER: 'expo.modules.notifications.actions.DEFAULT',
-    getLastNotificationResponseAsync: vi.fn(),
+    getLastNotificationResponseAsync: vi.fn(async () => nativeNotifications.response),
     clearLastNotificationResponseAsync: vi.fn(async () => {}),
-    addNotificationResponseReceivedListener: vi.fn(() => ({ remove: () => {} })),
+    addNotificationResponseReceivedListener: vi.fn(() => ({ remove: vi.fn() })),
     setBadgeCountAsync: vi.fn(async () => {}),
 }));
-
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
-}));
-
 installRootLayoutRouteCommonModuleMocks({
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({
-            pathname: '/',
-            segments: ['(app)'],
-            router: {
-                push: mockState.pushSpy,
-                replace: mockState.replaceSpy,
-                back: vi.fn(),
-                setParams: vi.fn(),
-            },
-        }).module;
-    },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                storage: createStorageStoreMock({ settings: mockState.mockSettings as any }),
-                // This route only reads a small subset of the profile/local settings storage contract.
-                useProfile: () => ({ linkedProviders: [], username: 'u' } as any),
-                useAllSessions: () => [],
-                useFriendRequests: () => [],
-                useLocalSettings: () => ({ activityBadgesEnabled: false } as any),
-                useSettings: () => mockState.mockSettings as any,
-                useSetting: ((key: keyof typeof mockState.mockSettings) => mockState.mockSettings[key]) as any,
-                useActiveServerAccountScope: () => ({ serverId: mockState.activeServerId, accountId: 'account-1' }),
-            },
-        });
-    },
+    router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+        pathname: '/', segments: ['(app)'], router: routerBoundary,
+    }).module,
 });
 
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ isAuthenticated: true, refreshFromActiveServer: vi.fn(async () => {}) }),
-}));
-
-vi.mock('@/auth/routing/authRouting', () => ({
-    isPublicRouteForUnauthenticated: () => true,
-}));
-
-vi.mock('@/utils/platform/platform', () => ({
-    isRunningOnMac: () => false,
-}));
-
-vi.mock('@/components/navigation/Header', () => ({
-    createHeader: () => null,
-}));
-
-vi.mock('@/desktop/tray/DesktopTrayRuntime', () => ({
-    DesktopTrayRuntime: () => null,
-}));
-
-vi.mock('@/onboarding/showcase/OnboardingShowcaseAutoShowMount', () => ({
-    OnboardingShowcaseAutoShowMount: () => null,
-}));
-
-vi.mock('@/hooks/server/useFriendsAllowUsernameSupport', () => ({
-    useFriendsAllowUsernameSupport: () => false,
-}));
-
-vi.mock('@/sync/domains/state/storageStore', () => {
-    const storage = createStorageStoreMock({
-        profile: { linkedProviders: [], username: 'u' } as any,
+type RpcObservation = Readonly<{ origin: string; event: string; payload: unknown }>;
+const rpcObservations: RpcObservation[] = [];
+installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+    const origin = new URL(serverUrl ?? 'https://api.happier.dev').origin;
+    vi.spyOn(socket, 'connect').mockImplementation(() => {
+        socket.connected = true;
+        queueMicrotask(() => { for (const listener of socket.listeners('connect')) listener(); });
+        return socket;
     });
-    return { storage, getStorage: () => storage };
-});
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        applySettings: (...args: unknown[]) => mockState.applySettingsSpy(...args),
-    },
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-    return createPartialServerProfilesModuleMock(importOriginal, {
-        listServerProfiles: () => mockState.serverProfilesValue,
-        overrides: {
-            getActiveServerUrl: () => mockState.activeServerUrl,
-            getServerProfileById: (serverId: string) => {
-                const profile = mockState.serverProfilesValue.find((candidate) => candidate.id === serverId);
-                return profile ? {
-                    name: profile.id,
-                    createdAt: 0,
-                    updatedAt: 0,
-                    lastUsedAt: 0,
-                    ...profile,
-                } : null;
-            },
-            areServerProfileIdentifiersEquivalent: (left: string | null | undefined, right: string | null | undefined) => (
-                String(left ?? '').trim() !== '' && String(left ?? '').trim() === String(right ?? '').trim()
-            ),
-            getServerProfilesGeneration: () => 0,
-            subscribeServerProfiles: () => () => {},
-            getActiveServerSnapshot: () => ({
-                serverId: mockState.activeServerId,
-                serverUrl: mockState.activeServerUrl,
-                kind: 'custom',
-                generation: 1,
-            }),
-            subscribeActiveServer: () => () => {},
-        },
+    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: unknown) => {
+        rpcObservations.push({ origin, event, payload });
+        return { ok: true, result: undefined };
     });
 });
+await initializeRootLayoutRuntimeForTests();
+const RootLayout = (await import('@/app/(app)/_layout')).default;
+const credentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature' };
+const activeUrl = 'https://api.happier.dev';
+let profiles: ServerProfile[] = [];
+const sessionRows = new Map<string, ReturnType<typeof createPlainV2SessionRecordFixture>>();
+const httpObservations: Array<{ origin: string; pathname: string; method: string; body?: string }> = [];
+const terminalKeyDisclosures: Array<{ origin: string; pathname: string }> = [];
+const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
 
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-    normalizeServerUrl: (value: string) => String(value ?? '').trim().replace(/\/+$/, ''),
-    upsertActivateAndSwitchServer: mockState.upsertActivateAndSwitchServerSpy,
-    setActiveServerAndSwitch: mockState.setActiveServerAndSwitchSpy,
-}));
-
-vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
-    getPendingTerminalConnect: () => mockState.pendingTerminalConnectValue,
-    clearPendingTerminalConnect: () => mockState.clearPendingTerminalConnectSpy(),
-    setPendingTerminalConnect: vi.fn(),
-}));
-
-vi.mock('@/sync/domains/pending/pendingNotificationNav', () => ({
-    getPendingNotificationNav: () => mockState.pendingNotificationNavValue,
-    setPendingNotificationNav: (next: { serverUrl: string; serverId?: string; route: string }) => {
-        mockState.setPendingNotificationNavSpy(next);
-        mockState.pendingNotificationNavValue = next;
-    },
-    clearPendingNotificationNav: () => {
-        mockState.clearPendingNotificationNavSpy();
-        mockState.pendingNotificationNavValue = null;
-    },
-}));
-
-vi.mock('@/sync/domains/pending/pendingNotificationAction', () => ({
-    getPendingNotificationAction: () => mockState.pendingNotificationActionValue,
-    setPendingNotificationAction: (next: { serverUrl: string; serverId?: string; sessionId: string; requestId: string; action: 'allow' | 'deny' }) => {
-        mockState.pendingNotificationActionValue = next;
-    },
-    clearPendingNotificationAction: () => {
-        mockState.clearPendingNotificationActionSpy();
-        mockState.pendingNotificationActionValue = null;
-    },
-}));
-
-vi.mock('@/sync/ops', () => ({
-    sessionAllow: (...args: unknown[]) => mockState.sessionAllowSpy(...args),
-    sessionDeny: (...args: unknown[]) => mockState.sessionDenySpy(...args),
-}));
-
-vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
-    getReadyServerFeatures: async () =>
-        createRootLayoutFeaturesResponse({
-            features: { voice: { enabled: false, happierVoice: { enabled: false } } },
-            capabilities: { voice: { configured: false, provider: null, requested: false, disabledByBuildPolicy: false } },
-        }),
-}));
-
-afterEach(async () => {
-    mockState.activeServerUrl = 'https://api.happier.dev';
-    mockState.activeServerId = 'server-1';
-    mockState.serverProfilesValue = [];
-    mockState.pendingTerminalConnectValue = null;
-    mockState.pendingNotificationNavValue = null;
-    mockState.pendingNotificationActionValue = null;
-    await mockState.lastUnmount?.();
-    mockState.lastUnmount = null;
-    mockState.pushSpy.mockClear();
-    mockState.upsertActivateAndSwitchServerSpy.mockReset();
-    mockState.setActiveServerAndSwitchSpy.mockReset();
-    mockState.clearPendingTerminalConnectSpy.mockClear();
-    mockState.clearPendingNotificationNavSpy.mockClear();
-    mockState.clearPendingNotificationActionSpy.mockClear();
-    mockState.replaceSpy.mockClear();
-    mockState.sessionAllowSpy.mockClear();
-    mockState.sessionDenySpy.mockClear();
-    mockState.setPendingNotificationNavSpy.mockClear();
-    vi.restoreAllMocks();
-    vi.resetModules();
-});
-
-async function renderRootLayout() {
-    const RootLayout = (await import('@/app/(app)/_layout')).default;
-    await mockState.lastUnmount?.();
-    mockState.lastUnmount = (await renderScreen(React.createElement(RootLayout))).unmount;
+function profile(id: string, serverUrl: string): ServerProfile {
+    return { id, serverIdentityId: id, serverUrl, canonicalServerUrl: serverUrl, name: id, createdAt: 1, updatedAt: 1, lastUsedAt: 1, source: 'manual' };
+}
+async function arrangeHomes(saved = [profile('srv_server_1', activeUrl)], activeId = 'srv_server_1') {
+    profiles = saved;
+    sessionRows.clear();
+    await seedPersistedHomeProfilesForTests({ activeServerId: activeId, profiles: saved });
+    if (saved.length > 0) await saveHomeViewState({ version: 1, groups: [], activeTargetKind: 'server', activeTargetId: activeId });
+    resetServerFeaturesClientForTests();
+    setRuntimeFetch(async (input, init) => {
+        const url = new URL(String(input));
+        httpObservations.push({ origin: url.origin, pathname: url.pathname, method: init?.method ?? 'GET',
+            ...(typeof init?.body === 'string' ? { body: init.body } : {}) });
+        if (url.href.includes('abc123') || String(init?.body ?? '').includes('abc123')) {
+            terminalKeyDisclosures.push({ origin: url.origin, pathname: url.pathname });
+        }
+        if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return Response.json({ ok: true });
+        if (url.pathname === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+        if (url.pathname === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'account-1' });
+        if (url.pathname === '/v1/kv/bulk') return Response.json({ values: [] });
+        if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        if (url.pathname.startsWith('/v2/sessions/')) {
+            const row = sessionRows.get(url.origin + url.pathname);
+            if (row) return Response.json({ session: row });
+        }
+        return new Response('{}', { status: 404 });
+    });
+    for (const home of saved) {
+        const write = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.serverIdentityId ?? home.id }, credentials);
+        expect(write).toBeTruthy();
+        if (write) credentialWrites.push(write);
+    }
+    if (saved.length > 0) {
+        await restoreConnectionToActiveServer(credentials);
+        await vi.waitFor(() => expect(getActiveServerAccountScope()).toEqual({ serverId: activeId, accountId: 'account-1' }));
+    }
+    storage.setState({ settings: { ...settingsDefaults, voice: { ...settingsDefaults.voice, providerId: 'off' } },
+        localSettings: { ...localSettingsDefaults, activityBadgesEnabled: false } });
+    rpcObservations.length = 0;
+    httpObservations.length = 0;
+    terminalKeyDisclosures.length = 0;
+}
+function response(data: Record<string, unknown>, actionIdentifier = Notifications.DEFAULT_ACTION_IDENTIFIER): Notifications.NotificationResponse {
+    return { actionIdentifier, notification: { date: 1, request: { identifier: 'notification-1', trigger: null, content: {
+        title: null, subtitle: null, body: null, categoryIdentifier: null, sound: null, data,
+    } } } };
+}
+async function renderNotification(data: Record<string, unknown>, actionIdentifier = Notifications.DEFAULT_ACTION_IDENTIFIER) {
+    nativeNotifications.response = response(data, actionIdentifier);
+    await renderRootLayoutRoute(RootLayout, credentials);
+    await vi.waitFor(() => expect(routerBoundary.push).toHaveBeenCalled());
     await flushHookEffects();
 }
+function permissionRequests() {
+    return rpcObservations.filter(observation => typeof observation.payload === 'object' && observation.payload !== null
+        && 'method' in observation.payload && typeof observation.payload.method === 'string'
+        && observation.payload.method.endsWith(':' + RPC_METHODS.SESSION_PERMISSION_RESPOND));
+}
+function arrangeSession(id: string, homeId = getActiveServerSnapshot().serverId) {
+    storage.getState().applySessions([createSessionFixture({ id, serverId: homeId, active: true })]);
+    const home = profiles.find(profile => profile.id === homeId);
+    if (!home) throw new Error(`Missing fixture Home ${homeId}`);
+    sessionRows.set(new URL(home.serverUrl).origin + '/v2/sessions/' + encodeURIComponent(id), createPlainV2SessionRecordFixture({ id, active: true }));
+}
+function expectNoTargetMutation() {
+    expect(permissionRequests()).toHaveLength(0);
+    expect(getActiveServerSnapshot().serverId).toBe('srv_server_1');
+    expect(listServerProfiles()).toHaveLength(1);
+    expect(httpObservations.filter(request => request.origin !== activeUrl)).toEqual([]);
+}
+function expectPendingNavigation(serverUrl: string, route: string) {
+    const persistence = new MMKV({ id: scopedStorageId('pending-notification-nav', readStorageScopeFromEnv()) });
+    const raw = persistence.getString(pendingServerScopedKey('record:server:v1', serverUrl));
+    expect(raw).toBeDefined();
+    expect(JSON.parse(raw!)).toEqual({ serverUrl, route });
+}
+async function captureSavedHomeInventoryBaseline(foreignOrigin: string) {
+    const screen = await renderRootLayoutRoute(RootLayout, credentials);
+    await vi.waitFor(() => expect(httpObservations).toContainEqual({ origin: foreignOrigin, pathname: '/v2/session-organization', method: 'GET' }));
+    await flushHookEffects();
+    await screen.unmount();
+    await flushHookEffects();
+    // The reminder reads authenticated saved Homes without selecting them.
+    // Active-Home KV bulk reads legitimately use POST, so isolate foreign reads.
+    expect(httpObservations.filter(request => request.origin !== activeUrl).every(request => request.method === 'GET')).toBe(true);
+    const baseline = new Set(httpObservations.map(request => JSON.stringify(request)));
+    httpObservations.length = 0;
+    rpcObservations.length = 0;
+    terminalKeyDisclosures.length = 0;
+    routerBoundary.push.mockClear();
+    routerBoundary.replace.mockClear();
+    return baseline;
+}
+afterEach(async () => {
+    try {
+        await standardCleanup();
+        clearPendingTerminalConnect();
+        clearPendingNotificationAction();
+        await disconnectActiveServerConnection();
+    } finally {
+        for (const write of credentialWrites.splice(0).reverse()) await write.rollback();
+        nativeNotifications.response = null;
+        rpcObservations.length = 0;
+        httpObservations.length = 0;
+        terminalKeyDisclosures.length = 0;
+        routerBoundary.push.mockClear();
+        routerBoundary.replace.mockClear();
+        vi.restoreAllMocks();
+    }
+});
 
 describe('App RootLayout notifications', () => {
     it('routes to pending terminal connect after authentication', async () => {
-        mockState.pendingTerminalConnectValue = {
-            publicKeyB64Url: 'abc123',
-            serverUrl: 'https://api.happier.dev',
-            serverIdentityId: 'home-api',
-        };
-
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue(null);
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.replaceSpy).toHaveBeenCalledWith('/terminal/connect#key=abc123&server=https%3A%2F%2Fapi.happier.dev');
-        expect(mockState.pushSpy).not.toHaveBeenCalled();
-        expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
+        await arrangeHomes();
+        setPendingTerminalConnect({ publicKeyB64Url: 'abc123', serverUrl: activeUrl, serverIdentityId: 'srv_server_1' });
+        expect(getPendingTerminalConnect()).toEqual({ publicKeyB64Url: 'abc123', serverUrl: activeUrl, serverIdentityId: 'srv_server_1' });
+        await renderRootLayoutRoute(RootLayout, credentials);
+        expect(getActiveServerAccountScope()).toEqual({ serverId: 'srv_server_1', accountId: 'account-1' });
+        await vi.waitFor(() => expect(routerBoundary.replace).toHaveBeenCalledWith('/terminal/connect#key=abc123&server=https%3A%2F%2Fapi.happier.dev'));
     });
-
-    it('switches server and continues without reloading when pending terminal connect targets another server', async () => {
-        mockState.pendingTerminalConnectValue = {
-            publicKeyB64Url: 'abc123',
-            serverUrl: 'https://company.example.test',
-            serverIdentityId: 'home-company',
-        };
-        mockState.activeServerUrl = 'https://api.happier.dev';
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue(null);
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.upsertActivateAndSwitchServerSpy).toHaveBeenCalledWith({
-            serverUrl: 'https://company.example.test',
-            source: 'url',
-            scope: 'device',
-            refreshAuth: expect.any(Function),
-        });
-        expect(mockState.replaceSpy).toHaveBeenCalledWith('/terminal/connect#key=abc123&server=https%3A%2F%2Fcompany.example.test');
-        expect(mockState.pushSpy).not.toHaveBeenCalled();
+    it('keeps a saved pending terminal key private until its Home Account is active, then resumes without reloading', async () => {
+        await arrangeHomes([profile('srv_server_1', activeUrl), profile('srv_server_2', 'https://company.example.test')]);
+        // The real reminder clock reads every authenticated saved Home, even offscreen.
+        // Capture that read-only baseline before admitting any pending terminal intent.
+        const baselineReads = await captureSavedHomeInventoryBaseline('https://company.example.test');
+        const savedProfiles = listServerProfiles();
+        const credentialSet = vi.spyOn(SecureStore, 'setItemAsync');
+        const credentialDelete = vi.spyOn(SecureStore, 'deleteItemAsync');
+        httpObservations.length = 0;
+        routerBoundary.replace.mockClear();
+        setPendingTerminalConnect({ publicKeyB64Url: 'abc123', serverUrl: 'https://company.example.test', serverIdentityId: 'srv_server_2' });
+        await renderRootLayoutRoute(RootLayout, credentials);
+        await flushHookEffects();
+        expect(getActiveServerSnapshot().serverId).toBe('srv_server_1');
+        expect(getDeviceDefaultServerId()).toBe('srv_server_1');
+        expect(routerBoundary.replace).not.toHaveBeenCalled();
+        expect(httpObservations.filter(request => request.origin !== activeUrl && !baselineReads.has(JSON.stringify(request)))).toEqual([]);
+        expect(httpObservations.filter(request => request.origin !== activeUrl).every(request => request.method === 'GET')).toBe(true);
+        // These active-Account projection reads can settle after the baseline mount.
+        // Their protocol uses POST with an empty query, not a write operation.
+        const activeProjectionReadPaths: readonly string[] = [
+            PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read'],
+            PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'],
+        ];
+        expect(httpObservations.filter(request => request.method !== 'GET'
+            && !baselineReads.has(JSON.stringify(request))
+            && !(request.origin === activeUrl && request.method === 'POST' && request.body === '{}'
+                && activeProjectionReadPaths.includes(request.pathname)))).toEqual([]);
+        expect(permissionRequests()).toHaveLength(0);
+        expect(listServerProfiles()).toEqual(savedProfiles);
+        expect(terminalKeyDisclosures).toEqual([]);
+        expect(rpcObservations).toEqual([]);
+        expect(credentialSet.mock.calls.filter(([key]) => key.includes('auth_credentials'))).toEqual([]);
+        expect(credentialDelete.mock.calls.filter(([key]) => key.includes('auth_credentials'))).toEqual([]);
+        expect(await TokenStorage.getCredentialsForServerUrl('https://company.example.test', { serverId: 'srv_server_2' })).toEqual(credentials);
+        expect(getPendingTerminalConnect()).toBeNull();
+        await setActiveServerAndSwitch({ serverId: 'srv_server_2', scope: 'device', refreshAuth: async () => {} });
+        await vi.waitFor(() => expect(routerBoundary.replace).toHaveBeenCalledWith('/terminal/connect#key=abc123&server=https%3A%2F%2Fcompany.example.test'));
+        expect(getDeviceDefaultServerId()).toBe('srv_server_2');
     });
-
     it('navigates to the session when a notification contains sessionId', async () => {
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: Notifications.DEFAULT_ACTION_IDENTIFIER,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n1',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_123' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_123');
+        await arrangeHomes();
+        await renderNotification({ sessionId: 's_123' });
+        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_123');
     });
-
     it('dedupes notification responses across cold start and response listener', async () => {
-        const Notifications = await import('expo-notifications');
-        const response = {
-            actionIdentifier: Notifications.DEFAULT_ACTION_IDENTIFIER,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n1',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_123' },
-                    },
-                },
-            },
-        };
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue(response as any);
-        vi.spyOn(Notifications, 'clearLastNotificationResponseAsync').mockResolvedValue(undefined as any);
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation((listener: any) => {
-            listener(response);
-            return { remove: () => {} };
-        });
-
-        await renderRootLayout();
-
-        expect(mockState.pushSpy).toHaveBeenCalledTimes(1);
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_123');
-        expect(Notifications.clearLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
+        await arrangeHomes();
+        vi.mocked(Notifications.clearLastNotificationResponseAsync).mockClear();
+        nativeNotifications.response = response({ sessionId: 's_123' });
+        let listener: ((response: Notifications.NotificationResponse) => void) | undefined;
+        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(callback => { listener = callback; return { remove: vi.fn() }; });
+        await renderRootLayoutRoute(RootLayout, credentials);
+        await vi.waitFor(() => expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_123'));
+        await vi.waitFor(() => expect(Notifications.clearLastNotificationResponseAsync).toHaveBeenCalledOnce());
+        listener?.(nativeNotifications.response);
+        await flushHookEffects();
+        expect(routerBoundary.push.mock.calls.filter(([route]) => route === '/session/s_123')).toHaveLength(1);
+        expect(Notifications.clearLastNotificationResponseAsync).toHaveBeenCalledOnce();
     });
-
-    it('switches server and navigates when a notification includes serverUrl', async () => {
-        mockState.serverProfilesValue = [
-            { id: 'server-1', serverUrl: 'https://api.happier.dev' },
-            { id: 'server-2', serverUrl: 'https://company.example.test' },
-        ];
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: Notifications.DEFAULT_ACTION_IDENTIFIER,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n2',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_456', serverUrl: 'https://company.example.test' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.setActiveServerAndSwitchSpy).toHaveBeenCalledWith({
-            serverId: 'server-2',
-            scope: 'device',
-            refreshAuth: expect.any(Function),
-        });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_456');
+    it('switches the device Home and navigates when a notification includes a saved serverUrl', async () => {
+        await arrangeHomes([profile('srv_server_1', activeUrl), profile('srv_server_2', 'https://company.example.test')]);
+        await renderNotification({ sessionId: 's_456', serverUrl: 'https://company.example.test' });
+        expect(getActiveServerSnapshot().serverId).toBe('srv_server_2');
+        expect(getDeviceDefaultServerId()).toBe('srv_server_2');
+        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_456?serverId=srv_server_2');
     });
-
     it('uses the exact notification server id when saved profiles share a URL', async () => {
-        mockState.serverProfilesValue = [
-            { id: 'server-1', serverUrl: 'https://api.happier.dev' },
-            { id: 'server-2', serverUrl: 'https://shared.example.test' },
-            { id: 'server-3', serverUrl: 'https://shared.example.test' },
-        ];
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: Notifications.DEFAULT_ACTION_IDENTIFIER,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n2-exact',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: {
-                            sessionId: 's_shared',
-                            serverId: 'server-3',
-                            serverUrl: 'https://shared.example.test',
-                        },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.setActiveServerAndSwitchSpy).toHaveBeenCalledWith(expect.objectContaining({
-            serverId: 'server-3',
-            refreshAuth: expect.any(Function),
-        }));
-        expect(mockState.setPendingNotificationNavSpy).toHaveBeenCalledWith({
-            serverUrl: 'https://shared.example.test',
-            serverId: 'server-3',
-            route: '/session/s_shared?serverId=server-3',
-        });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_shared?serverId=server-3');
+        await arrangeHomes([profile('srv_server_1', activeUrl), profile('srv_server_2', 'https://shared.example.test'), profile('srv_server_3', 'https://shared.example.test')]);
+        await renderNotification({ sessionId: 's_shared', serverId: 'srv_server_3', serverUrl: 'https://shared.example.test' });
+        expect(getActiveServerSnapshot().serverId).toBe('srv_server_3');
+        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_shared?serverId=srv_server_3');
     });
-
     it('replays a pending permission action only for its exact active server id', async () => {
-        mockState.activeServerId = 'server-3';
-        mockState.activeServerUrl = 'https://shared.example.test';
-        mockState.serverProfilesValue = [
-            { id: 'server-2', serverUrl: 'https://shared.example.test' },
-            { id: 'server-3', serverUrl: 'https://shared.example.test' },
-        ];
-        mockState.pendingNotificationActionValue = {
-            serverUrl: 'https://shared.example.test',
-            serverId: 'server-3',
-            sessionId: 's_pending',
-            requestId: 'r_pending',
-            action: 'allow',
-        };
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue(null);
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.sessionAllowSpy).toHaveBeenCalledWith(
-            's_pending',
-            'r_pending',
-            undefined,
-            undefined,
-            'approved',
-            undefined,
-            undefined,
-        );
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_pending?serverId=server-3');
+        await arrangeHomes([profile('srv_server_2', 'https://shared.example.test'), profile('srv_server_3', 'https://shared.example.test')], 'srv_server_3');
+        arrangeSession('s_pending', 'srv_server_3');
+        setPendingNotificationAction({ serverUrl: 'https://shared.example.test', serverId: 'srv_server_3', sessionId: 's_pending', requestId: 'r_pending', action: 'allow' });
+        await renderRootLayoutRoute(RootLayout, credentials);
+        await vi.waitFor(() => expect(permissionRequests()).toHaveLength(1));
+        expect(permissionRequests()[0]).toMatchObject({ origin: 'https://shared.example.test', payload: {
+            method: 's_pending:' + RPC_METHODS.SESSION_PERMISSION_RESPOND, params: { id: 'r_pending', approved: true },
+        } });
+        expect(getPendingNotificationAction()).toBeNull();
+        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_pending?serverId=srv_server_3');
     });
-
-    it('does not choose the first saved profile for a legacy URL-only notification when the URL is ambiguous', async () => {
-        mockState.serverProfilesValue = [
-            { id: 'server-1', serverUrl: 'https://api.happier.dev' },
-            { id: 'server-2', serverUrl: 'https://shared.example.test' },
-            { id: 'server-3', serverUrl: 'https://shared.example.test' },
-        ];
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: Notifications.DEFAULT_ACTION_IDENTIFIER,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n2-legacy-ambiguous',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_shared', serverUrl: 'https://shared.example.test' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
-        expect(mockState.pendingNotificationNavValue).toEqual({
-            serverUrl: 'https://shared.example.test',
-            route: '/session/s_shared',
-        });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/server?url=https%3A%2F%2Fshared.example.test&source=notification');
+    it('retains a pending permission action for another exact Home sharing the active URL', async () => {
+        await arrangeHomes([profile('srv_server_2', 'https://shared.example.test'), profile('srv_server_3', 'https://shared.example.test')], 'srv_server_3');
+        const pending = { serverUrl: 'https://shared.example.test', serverId: 'srv_server_2', sessionId: 's_pending', requestId: 'r_pending', action: 'allow' } as const;
+        setPendingNotificationAction(pending);
+        await renderRootLayoutRoute(RootLayout, credentials);
+        await flushHookEffects();
+        expect(permissionRequests()).toHaveLength(0);
+        expect(getPendingNotificationAction()).toEqual(pending);
+        expect(routerBoundary.push).not.toHaveBeenCalled();
     });
-
+    it('does not choose the first saved profile for an ambiguous legacy URL-only notification', async () => {
+        await arrangeHomes([profile('srv_server_1', activeUrl), profile('srv_server_2', 'https://shared.example.test'), profile('srv_server_3', 'https://shared.example.test')]);
+        const baselineReads = await captureSavedHomeInventoryBaseline('https://shared.example.test');
+        const savedProfiles = listServerProfiles();
+        const credentialSet = vi.spyOn(SecureStore, 'setItemAsync');
+        const credentialDelete = vi.spyOn(SecureStore, 'deleteItemAsync');
+        await renderNotification({ sessionId: 's_shared', serverUrl: 'https://shared.example.test' });
+        expect(getActiveServerSnapshot().serverId).toBe('srv_server_1');
+        expect(getDeviceDefaultServerId()).toBe('srv_server_1');
+        expect(routerBoundary.push).toHaveBeenCalledWith('/settings/server/add?address=https%3A%2F%2Fshared.example.test&source=notification');
+        expect(httpObservations.filter(request => request.origin !== activeUrl && !baselineReads.has(JSON.stringify(request)))).toEqual([]);
+        expect(httpObservations.filter(request => request.origin !== activeUrl).every(request => request.method === 'GET')).toBe(true);
+        expect(listServerProfiles()).toEqual(savedProfiles);
+        expect(credentialSet.mock.calls.filter(([key]) => key.includes('auth_credentials'))).toEqual([]);
+        expect(credentialDelete.mock.calls.filter(([key]) => key.includes('auth_credentials'))).toEqual([]);
+        expect(permissionRequests()).toHaveLength(0);
+        expectPendingNavigation('https://shared.example.test', '/session/s_shared');
+    });
     it('does not auto-switch to loopback serverUrl from notifications', async () => {
-        mockState.serverProfilesValue = [
-            { id: 'server-1', serverUrl: 'https://api.happier.dev' },
-        ];
-        mockState.activeServerUrl = 'https://api.happier.dev';
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: Notifications.DEFAULT_ACTION_IDENTIFIER,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n3',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_789', serverUrl: 'http://localhost:3005' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
-        expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_789');
+        await arrangeHomes();
+        await renderNotification({ sessionId: 's_789', serverUrl: 'http://localhost:3005' });
+        expectNoTargetMutation();
+        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_789');
     });
-
-    it('sends a permission allow response and navigates when notification action is pressed', async () => {
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n4',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_allow', requestId: 'p_allow', serverUrl: 'https://api.happier.dev' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.sessionAllowSpy).toHaveBeenCalledWith('s_allow', 'p_allow', undefined, undefined, 'approved', undefined, undefined);
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_allow');
+    it.each([
+        [PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1, true, 'approved'],
+        [PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1, false, 'denied'],
+    ] as const)('sends the %s permission response to its admitted Home and navigates', async (actionIdentifier, approved, decision) => {
+        await arrangeHomes();
+        arrangeSession('s_permission');
+        await renderNotification({ sessionId: 's_permission', requestId: 'p_permission', serverUrl: activeUrl }, actionIdentifier);
+        await vi.waitFor(() => expect(permissionRequests()).toHaveLength(1));
+        expect(permissionRequests()[0]).toMatchObject({ origin: activeUrl, payload: {
+            method: 's_permission:' + RPC_METHODS.SESSION_PERMISSION_RESPOND, params: { id: 'p_permission', approved, decision },
+        } });
+        if (!approved) {
+            expect(permissionRequests()[0]).toMatchObject({ payload: { params: {
+                reason: expect.stringMatching(/\S/),
+            } } });
+        }
+        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_permission');
     });
-
-    it('switches to a saved inactive server and performs permission allow when notification action is pressed', async () => {
-        mockState.serverProfilesValue = [
-            { id: 'server-1', serverUrl: 'https://api.happier.dev' },
-            { id: 'server-2', serverUrl: 'https://company.example.test' },
-        ];
-        mockState.activeServerUrl = 'https://api.happier.dev';
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n4b',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_allow_2', requestId: 'p_allow_2', serverUrl: 'https://company.example.test' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.setActiveServerAndSwitchSpy).toHaveBeenCalledWith({
-            serverId: 'server-2',
-            scope: 'device',
-            refreshAuth: expect.any(Function),
-        });
-        expect(mockState.sessionAllowSpy).toHaveBeenCalledWith('s_allow_2', 'p_allow_2', undefined, undefined, 'approved', undefined, undefined);
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_allow_2');
+    it('switches to a saved inactive Home before performing permission allow', async () => {
+        await arrangeHomes([profile('srv_server_1', activeUrl), profile('srv_server_2', 'https://company.example.test')]);
+        arrangeSession('s_allow_2', 'srv_server_2');
+        await renderNotification({ sessionId: 's_allow_2', requestId: 'p_allow_2', serverUrl: 'https://company.example.test' }, PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1);
+        expect(getDeviceDefaultServerId()).toBe('srv_server_2');
+        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_allow_2?serverId=srv_server_2');
+        await vi.waitFor(() => expect(permissionRequests()).toHaveLength(1));
+        expect(permissionRequests()[0]).toMatchObject({ origin: 'https://company.example.test', payload: { params: { id: 'p_allow_2', approved: true } } });
     });
-
-    it('does not perform permission allow when notification action is pressed without serverUrl', async () => {
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n4c',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_allow_3', requestId: 'p_allow_3' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_allow_3');
+    it('does not perform permission allow without serverUrl', async () => {
+        await arrangeHomes();
+        await renderNotification({ sessionId: 's_allow_3', requestId: 'p_allow_3' }, PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1);
+        expect(permissionRequests()).toHaveLength(0);
+        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_allow_3');
     });
-
-    it('does not perform permission allow when notification action targets an unsaved server', async () => {
-        mockState.serverProfilesValue = [
-            { id: 'server-1', serverUrl: 'https://api.happier.dev' },
-        ];
-        mockState.activeServerUrl = 'https://api.happier.dev';
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n4d',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_allow_4', requestId: 'p_allow_4', serverUrl: 'https://unknown.example.test' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
-        expect(mockState.setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
-        expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
-        expect(mockState.pendingNotificationNavValue).toEqual({ serverUrl: 'https://unknown.example.test', route: '/session/s_allow_4' });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/server?url=https%3A%2F%2Funknown.example.test&source=notification');
+    it('does not perform permission allow or send a request to an unsaved Home', async () => {
+        await arrangeHomes();
+        await renderNotification({ sessionId: 's_allow_4', requestId: 'p_allow_4', serverUrl: 'https://unknown.example.test' }, PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1);
+        expectNoTargetMutation();
+        expect(routerBoundary.push).toHaveBeenCalledWith('/settings/server/add?address=https%3A%2F%2Funknown.example.test&source=notification');
+        expectPendingNavigation('https://unknown.example.test', '/session/s_allow_4');
     });
-
-    it('ignores unknown notification action identifiers (does not auto-add or navigate)', async () => {
-        mockState.serverProfilesValue = [
-            { id: 'server-1', serverUrl: 'https://api.happier.dev' },
-        ];
-        mockState.activeServerUrl = 'https://api.happier.dev';
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: 'UNKNOWN_ACTION',
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n_unknown',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_unknown', serverUrl: 'https://unknown.example.test' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
-        expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
-        expect(mockState.pendingNotificationNavValue).toBe(null);
-        expect(mockState.pushSpy).not.toHaveBeenCalled();
+    it('ignores unknown actions without adding a Home, writing a pending action, or navigating', async () => {
+        await arrangeHomes();
+        nativeNotifications.response = response({ sessionId: 's_unknown', serverUrl: 'https://unknown.example.test' }, 'UNKNOWN_ACTION');
+        const profilesBefore = listServerProfiles();
+        await renderRootLayoutRoute(RootLayout, credentials);
+        await flushHookEffects();
+        expect(listServerProfiles()).toEqual(profilesBefore);
+        expect(getPendingNotificationAction()).toBeNull();
+        expect(getPendingNotificationNav()).toBeNull();
+        expectNoTargetMutation();
+        expect(routerBoundary.push).not.toHaveBeenCalled();
     });
-
-    it('auto-adds and switches server when zero servers exist and a permission action targets an unsaved server (but does not perform the action)', async () => {
-        mockState.serverProfilesValue = [];
-        mockState.activeServerUrl = 'https://api.happier.dev';
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n4e',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_allow_5', requestId: 'p_allow_5', serverUrl: 'https://new.example.test' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
-        expect(mockState.upsertActivateAndSwitchServerSpy).toHaveBeenCalledWith({
-            serverUrl: 'https://new.example.test',
-            source: 'notification',
-            scope: 'device',
-            refreshAuth: expect.any(Function),
-        });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_allow_5');
+    it('connects an unsaved Home when no profiles exist but never performs its permission action', async () => {
+        await arrangeHomes([]);
+        await renderNotification({ sessionId: 's_allow_5', requestId: 'p_allow_5', serverUrl: 'https://new.example.test' }, PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1);
+        expect(permissionRequests()).toHaveLength(0);
+        expect(getActiveServerSnapshot().serverUrl).toBe('https://new.example.test');
+        expect(listServerProfiles().map(home => home.serverUrl)).toContain('https://new.example.test');
+        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_allow_5?serverId=' + getActiveServerSnapshot().serverId);
     });
-
-    it('routes to server settings with a prefilled url when a notification targets an unsaved server and servers already exist', async () => {
-        mockState.serverProfilesValue = [
-            { id: 'server-1', serverUrl: 'https://api.happier.dev' },
-        ];
-        mockState.activeServerUrl = 'https://api.happier.dev';
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: Notifications.DEFAULT_ACTION_IDENTIFIER,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n6',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_999', serverUrl: 'https://unknown2.example.test' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.pendingNotificationNavValue).toEqual({ serverUrl: 'https://unknown2.example.test', route: '/session/s_999' });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/server?url=https%3A%2F%2Funknown2.example.test&source=notification');
-        expect(mockState.setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
-        expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
-    });
-
-    it('sends a permission deny response and navigates when notification action is pressed', async () => {
-        const Notifications = await import('expo-notifications');
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
-            actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1,
-            notification: {
-                date: Date.parse('2026-02-09T00:00:00.000Z'),
-                request: {
-                    identifier: 'n5',
-                    trigger: null,
-                    content: {
-                        title: null,
-                        subtitle: null,
-                        body: null,
-                        categoryIdentifier: null,
-                        sound: null,
-                        data: { sessionId: 's_deny', requestId: 'p_deny', serverUrl: 'https://api.happier.dev' },
-                    },
-                },
-            },
-        });
-        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
-
-        await renderRootLayout();
-
-        expect(mockState.sessionDenySpy).toHaveBeenCalledWith('s_deny', 'p_deny', undefined, undefined, 'denied', 'Denied from notification', undefined);
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_deny');
+    it('routes to Home settings with a prefilled address when profiles already exist', async () => {
+        await arrangeHomes();
+        await renderNotification({ sessionId: 's_999', serverUrl: 'https://unknown2.example.test' });
+        expectNoTargetMutation();
+        expect(routerBoundary.push).toHaveBeenCalledWith('/settings/server/add?address=https%3A%2F%2Funknown2.example.test&source=notification');
+        expectPendingNavigation('https://unknown2.example.test', '/session/s_999');
     });
 });

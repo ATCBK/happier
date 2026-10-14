@@ -1,5 +1,5 @@
 import type { ActionExecutorDeps, ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
-import { PROJECT_DEFINITION_ACTION_IDS, PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS, type ProjectDefinitionWorkspace, type ProjectSetupReadinessV1 } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
+import { PROJECT_DEFINITION_ACTION_IDS, PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS, type ProjectDefinitionActionId, type ProjectDefinitionWorkspace, type ProjectSetupReadinessV1 } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import type { ProjectDefinitionDetectionV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { inspectProjectDefinitions, inspectProjectDefinitionExecutionFacts } from '@/workspaces/projectSetup/projectDefinitionInspection';
@@ -115,8 +115,8 @@ export function createProjectDefinitionAction(params: Readonly<{
 }
 
 export function registerProjectDefinitionHandlers(params: Readonly<{
-  rpcHandlerManager: ActionSpecRpcRegistrar; machineId: string; actionExecutor: RpcActionExecutor;
+  rpcHandlerManager: ActionSpecRpcRegistrar; machineId: string; actionExecutor: RpcActionExecutor<ProjectDefinitionActionId>;
 }>): void {
-  registerActionSpecRpcHandlers({ rpcHandlerManager: params.rpcHandlerManager, actionExecutor: params.actionExecutor,
+  registerActionSpecRpcHandlers<ProjectDefinitionActionId>({ rpcHandlerManager: params.rpcHandlerManager, actionExecutor: params.actionExecutor,
     actionIds: PROJECT_DEFINITION_ACTION_IDS, targetMachineId: params.machineId, defaultMachineTarget: true });
 }

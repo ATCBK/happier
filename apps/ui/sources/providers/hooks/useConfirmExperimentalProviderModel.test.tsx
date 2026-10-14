@@ -5,14 +5,13 @@ import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createProviderSettingsAccountHarness, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const confirmSpy = vi.hoisted(() => vi.fn());
 const alertSpy = vi.hoisted(() => vi.fn());
-const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
 const commitSelectionSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('@/modal', async () => {
@@ -20,7 +19,8 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock({ spies: { confirm: confirmSpy, alert: alertSpy } }).module;
 });
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope }));
+const rpc = createProviderSettingsHarness({ machines: [] });
+installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
 let otherServerId = '';
@@ -70,7 +70,7 @@ describe('useConfirmExperimentalProviderModel', () => {
     beforeEach(async () => {
         confirmSpy.mockReset();
         alertSpy.mockReset();
-        machineRpcWithServerScope.mockReset();
+        rpc.reset();
         commitSelectionSpy.mockReset();
         serverId = (await account.restore({ catalog, waivedActions: ['providers.models.experimental.confirm'] })).serverId;
         installRow();
@@ -112,7 +112,7 @@ describe('useConfirmExperimentalProviderModel', () => {
         expect(refresh).toHaveBeenCalledOnce();
         expect(hook.getCurrent().pending).toBe(false);
         expect(row.writes).toBe(1);
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
     });
 
     it('commits the acknowledged selection while presentation refresh is pending', async () => {
@@ -169,7 +169,7 @@ describe('useConfirmExperimentalProviderModel', () => {
         expect(alertSpy).not.toHaveBeenCalled();
         expect(commitSelectionSpy).not.toHaveBeenCalled();
         expect(row.writes).toBe(1);
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
     });
 
     it('exposes an exact typed Account revision failure to the picker instead of flattening it into a modal', async () => {
@@ -219,7 +219,7 @@ describe('useConfirmExperimentalProviderModel', () => {
         expect(confirmSpy).not.toHaveBeenCalled();
         expect(row.writes).toBe(1);
         expect(row.catalog.experimentalBindingConfirmations).toHaveLength(1);
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
         expect(refresh).toHaveBeenCalledOnce();
         expect(commitSelectionSpy).not.toHaveBeenCalled();
         expect(hook.getCurrent().error?.action).toBe('review_current_state');
@@ -244,7 +244,7 @@ describe('useConfirmExperimentalProviderModel', () => {
         });
 
         expect(row.writes).toBe(1);
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
         expect(refresh).toHaveBeenCalledOnce();
         expect(commitSelectionSpy).toHaveBeenCalledOnce();
         expect(hook.getCurrent().error).toBeNull();
@@ -276,7 +276,7 @@ describe('useConfirmExperimentalProviderModel', () => {
         });
 
         expect(row.writes).toBe(0);
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
     });
 
     it('clears a previous failure when a new admitted confirmation succeeds', async () => {
@@ -296,6 +296,44 @@ describe('useConfirmExperimentalProviderModel', () => {
         expect(hook.getCurrent().error).toBeNull();
         expect(hook.getCurrent().retry).toBeNull();
         expect(row.writes).toBe(1);
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
     });
+    it.each(['Agent target', 'Providers feature', 'nothing'] as const)(
+        'keeps the confirmation bound to its original intent when %s retires during canonical approval',
+        async retiredInput => {
+            await account.home.requireUiApproval(serverId, 'providers.models.experimental.confirm');
+            const refresh = vi.fn(async () => undefined);
+            const { useProviderActionClient } = await import('@/providers/actions/useProviderActionClient');
+            const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
+            const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+            const hook = await renderHook((props: { enabled: boolean; agentTargetKey: string }) => ({
+                confirmation: useConfirmExperimentalProviderModel({
+                    ...props, machineId: 'machine-a', serverId, refresh,
+                }),
+                ready: useProviderActionClient(serverId).ready,
+            }), { initialProps: { enabled: true, agentTargetKey: confirmation.agentTargetKey as string } });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+            let execution!: Promise<boolean>;
+            await act(async () => {
+                execution = hook.getCurrent().confirmation.confirm(confirmation, commitSelectionSpy);
+            });
+            await waitForHomeGovernance(() => expect(account.home.artifacts(serverId).list()).toHaveLength(1));
+            const artifactId = account.home.artifacts(serverId).list()[0]!.id;
+            expect(JSON.parse(account.home.artifacts(serverId).readPlainBody(artifactId)!)).toMatchObject({ approval: { flow: 'blocking' } });
+            expect(row.writes).toBe(0);
+            await hook.rerender({
+                enabled: retiredInput !== 'Providers feature',
+                agentTargetKey: retiredInput === 'Agent target' ? 'agent:happier.agent.claude/claude' : confirmation.agentTargetKey,
+            });
+            await decideApprovalAsInbox(serverId, artifactId, 'approve');
+            const remainsCurrent = retiredInput === 'nothing';
+            await act(async () => { await expect(execution).resolves.toBe(remainsCurrent); });
+            expect(row.writes).toBe(remainsCurrent ? 1 : 0);
+            expect(row.catalog.experimentalBindingConfirmations).toHaveLength(remainsCurrent ? 1 : 0);
+            expect(refresh).toHaveBeenCalledTimes(remainsCurrent ? 1 : 0);
+            expect(commitSelectionSpy).toHaveBeenCalledTimes(remainsCurrent ? 1 : 0);
+            expect(rpc.state.requests).toEqual([]);
+        },
+    );
+
 });

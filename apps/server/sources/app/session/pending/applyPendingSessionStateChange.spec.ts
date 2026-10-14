@@ -122,6 +122,7 @@ function createConcurrentDecrementTx() {
         sessionTeamGrant: { findMany: vi.fn(async () => []) },
         sessionGroupGrant: { findMany: vi.fn(async () => []) },
         sessionFollowEdge: { findMany: vi.fn(async () => []) },
+        sessionReportsTo: { findUnique: vi.fn(async () => null) },
         account: {
             update: vi.fn(async () => {
                 state.accountSeq += 1;
@@ -225,6 +226,7 @@ function createConcurrentEnqueueAfterFailedDecrementTx() {
         sessionTeamGrant: { findMany: vi.fn(async () => []) },
         sessionGroupGrant: { findMany: vi.fn(async () => []) },
         sessionFollowEdge: { findMany: vi.fn(async () => []) },
+        sessionReportsTo: { findUnique: vi.fn(async () => null) },
         account: {
             update: vi.fn(async () => {
                 state.accountSeq += 1;

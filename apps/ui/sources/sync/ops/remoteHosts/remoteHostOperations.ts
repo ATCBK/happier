@@ -13,12 +13,13 @@ import { readSavedSecretReferenceInContext } from '@/sync/api/account/apiSavedSe
 import { resolveRemoteHostEffectiveSshConfig } from '@/sync/domains/remoteHosts/resolveRemoteHostEffectiveSshConfig';
 import { getRemoteHostLocalOverrides } from '@/sync/domains/remoteHosts/remoteHostLocalOverrides';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
-import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { resolveRuntimeFeatureDecisionFromSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
 import { getFeatureBuildPolicyDecision } from '@/sync/domains/features/featureBuildPolicy';
 import { resolveSetupSurfacePolicy } from '@/sync/domains/server/setup/setupSurfacePolicy';
-import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { captureLazyActionAccountContext, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import type { RelayAccessTaskTarget } from '@happier-dev/cli-common/systemTasks';
 import { getRemoteHostTrustedHostKeyStore } from '@/sync/domains/remoteHosts/hostKeys/trustedHostKeyStore';
 import { getNativeSshTunnelRuntime } from '@/sync/runtime/nativeSshTunnels/runtime';
 import { buildSshTunnelStopSystemTaskSpec } from '@/components/systemTasks/specs/localControl/buildSshTunnelSystemTaskSpec';
@@ -64,14 +65,11 @@ export async function withRemoteHostSshConfig<T>(account: LazyActionAccountConte
     account.assertCurrent();
     if (!areServerAccountScopesEqual(getActiveServerAccountScope(), account.accountLifetime.scope)) throw new RemoteHostOperationError('active_home_required');
     const host = await requireAdmittedHost(account, input, signal);
-    const [settings, snapshot] = await Promise.all([account.readSettings(), getServerFeaturesSnapshot({ serverId: account.serverId })]);
-    const enabled = (featureId: 'remoteHosts.management' | 'remoteHosts.secretMaterial') => resolveRuntimeFeatureDecisionFromSnapshot({
-        featureId, settings, snapshot, scope: { scopeKind: 'spawn', serverId: account.serverId },
-    })?.state === 'enabled';
-    if (!enabled('remoteHosts.management')) throw new RemoteHostOperationError('remote_host_management_unavailable');
+    const features = await readRemoteHostFeatureDecisions(account);
+    if (!features.managementEnabled) throw new RemoteHostOperationError('remote_host_management_unavailable');
     const assertCurrent = () => { signal?.throwIfAborted(); account.assertCurrent(); };
     const config = await resolveRemoteHostEffectiveSshConfig({ remoteHost: host,
-        localOverrides: getRemoteHostLocalOverrides(host.id), secretMaterialAllowed: enabled('remoteHosts.secretMaterial'),
+        localOverrides: getRemoteHostLocalOverrides(host.id), secretMaterialAllowed: features.secretMaterialEnabled,
         readSavedSecretValue: reference => readSavedSecretReferenceInContext(account, reference, signal) });
     assertCurrent();
     if (!config.ok) throw new RemoteHostOperationError(config.error.code);
@@ -82,6 +80,33 @@ export async function withRemoteHostSshConfig<T>(account: LazyActionAccountConte
     return operation({ host, config, assertCurrent });
 }
 
+export async function readRemoteHostFeatureDecisions(account: LazyActionAccountContext): Promise<Readonly<{
+    managementEnabled: boolean; secretMaterialEnabled: boolean;
+}>> {
+    const [settings, snapshot] = await Promise.all([account.readSettings(), getServerFeaturesSnapshot({ serverId: account.serverId })]);
+    account.assertCurrent();
+    const enabled = (featureId: 'remoteHosts.management' | 'remoteHosts.secretMaterial') => resolveRuntimeFeatureDecisionFromSnapshot({
+        featureId, settings, snapshot, scope: { scopeKind: 'spawn', serverId: account.serverId },
+    })?.state === 'enabled';
+    return { managementEnabled: enabled('remoteHosts.management'), secretMaterialEnabled: enabled('remoteHosts.secretMaterial') };
+}
+
+/** The current relay dialog borrows credentials only until its admitted runner accepts the task. */
+export async function runRemoteHostRelayAccessTask<T>(input: Readonly<{
+    scope: ServerAccountScope; hostId: string; expectedRevision: number | 'absent'; signal?: AbortSignal;
+    run(target: RelayAccessTaskTarget, upstreamUrl: string | null, assertCurrent: () => void): Promise<T>;
+}>): Promise<T> {
+    const account = await captureLazyActionAccountContext(input.scope.serverId, input.signal);
+    try {
+        if (!areServerAccountScopesEqual(account.accountLifetime.scope, input.scope)) throw new RemoteHostOperationError('action_account_scope_changed');
+        return await withRemoteHostSshConfig(account, input, async ({ config, assertCurrent }) => {
+            const relay = resolveRemoteHostRelayAccess({ config: config.value, homeTarget: await account.resolveHomeTarget() });
+            if (relay.status !== 'relay_ready') throw new RemoteHostOperationError(relay.reason);
+            assertCurrent();
+            return input.run(relay.target, relay.upstreamUrl, assertCurrent);
+        }, input.signal);
+    } finally { account.dispose(); }
+}
 /** Typed automation and menus consume the same catalog and existing admitted SSH task owner. */
 export function createUiRemoteHostActionExecuteV1(account: LazyActionAccountContext,
     openRoute: (route: string) => void | Promise<void> = route => router.push(route as never)): NonNullable<ActionExecutorDeps['remoteHostActionExecute']> {

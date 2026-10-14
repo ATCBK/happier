@@ -19,9 +19,9 @@ type ReactActEnvironmentGlobal = typeof globalThis & {
 
 const reactNativeRuntime = vi.hoisted(() => ({
     platformOs: 'ios' as 'web' | 'ios' | 'android',
+    isDesktopHost: false,
 }));
 
-let isDesktopHostValue = false;
 let visibleSessionIdsValue: string[] = [];
 let visibleSessionAddressesValue: string[] = [];
 let localSettingsValue: Record<string, unknown> = {
@@ -135,7 +135,7 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
 
 
 vi.mock('@/utils/platform/desktopHost', () => ({
-    isDesktopHost: () => isDesktopHostValue,
+    isDesktopHost: () => reactNativeRuntime.isDesktopHost,
 }));
 
 vi.mock('../channels/sendExpoLocalNotification', () => ({
@@ -169,7 +169,7 @@ describe('ActivityLocalNotificationRuntime', () => {
         for (const id of savedProfileIds) await removeServerProfile(id);
         savedProfileIds = [];
         reactNativeRuntime.platformOs = 'ios';
-        isDesktopHostValue = false;
+        reactNativeRuntime.isDesktopHost = false;
         visibleSessionIdsValue = [];
         visibleSessionAddressesValue = [];
         localSettingsValue = {
@@ -308,12 +308,13 @@ describe('ActivityLocalNotificationRuntime', () => {
             target: { eventIdentity: 'message-seq:session_transcript:7' },
         });
         if (remoteFirst.kind !== 'present') throw new Error('Expected routable V2 ready alert');
-        noteActivityAlertPresented({ accountId: 'account-a',
-            address: remoteFirst.target.address,
-            event: remoteFirst.target.event,
-            identity: remoteFirst.target.eventIdentity!,
-            source: 'home_remote_alert',
-        });
+        const { resolveForegroundNotificationBehavior } = await import('../resolveForegroundNotificationBehavior');
+        await expect(resolveForegroundNotificationBehavior({
+            content: { data: remoteReady(7) },
+            localSettings: localSettingsParse(localSettingsValue),
+            now: new Date('2026-09-26T12:00:00Z'),
+            isSessionVisible: () => false,
+        })).resolves.toBe('full');
         const { ActivityLocalNotificationRuntime } = await import('./ActivityLocalNotificationRuntime');
         const { notifyActivityReady } = await import('./activityLocalNotificationBus');
         const screen = await renderScreen(<ActivityLocalNotificationRuntime />);
@@ -330,7 +331,6 @@ describe('ActivityLocalNotificationRuntime', () => {
             });
         });
         expect(sendExpoLocalNotification).toHaveBeenCalledTimes(1);
-        const { resolveForegroundNotificationBehavior } = await import('../resolveForegroundNotificationBehavior');
         await expect(resolveForegroundNotificationBehavior({
             content: sendExpoLocalNotification.mock.calls[0]![0],
             localSettings: localSettingsParse(localSettingsValue),
@@ -445,7 +445,7 @@ describe('ActivityLocalNotificationRuntime', () => {
 
     it('does not record presentation when the desktop platform declines the notification', async () => {
         reactNativeRuntime.platformOs = 'web';
-        isDesktopHostValue = true;
+        reactNativeRuntime.isDesktopHost = true;
         sendTauriLocalNotification.mockResolvedValueOnce(false);
         const { consumeOtherLegActivityAlertPresentation } =
             await import('../remoteAlerts/activityAlertPresentationNotes');
@@ -783,9 +783,12 @@ describe('ActivityLocalNotificationRuntime', () => {
         });
 
         expect(sendExpoLocalNotification).toHaveBeenCalledWith(expect.objectContaining({
-            title: 'Ready session · Home A',
             body: 'Turn finished. Open the session to continue.',
         }));
+        const notification = sendExpoLocalNotification.mock.calls[0]?.[0];
+        expect(notification?.title).toContain('Home A');
+        expect(notification?.title).not.toContain('Ready session');
+        expect(notification?.body).not.toContain('Everything is ready.');
 
         await act(async () => {
             tree?.unmount();
@@ -821,7 +824,7 @@ describe('ActivityLocalNotificationRuntime', () => {
             hasFocus: () => false,
         };
         reactNativeRuntime.platformOs = 'web';
-        isDesktopHostValue = true;
+        reactNativeRuntime.isDesktopHost = true;
         visibleSessionIdsValue = ['session-1'];
 
         try {
@@ -913,7 +916,7 @@ describe('ActivityLocalNotificationRuntime', () => {
 
     it('respects per-topic device-local toggles and routes tauri events to the desktop channel', async () => {
         reactNativeRuntime.platformOs = 'web';
-        isDesktopHostValue = true;
+        reactNativeRuntime.isDesktopHost = true;
         localSettingsValue = {
             ...localSettingsValue,
             localNotificationsShowReady: false,

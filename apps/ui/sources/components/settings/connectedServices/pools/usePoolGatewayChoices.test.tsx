@@ -3,29 +3,29 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { createProviderSettingsAccountHarness, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { t } from '@/text';
 
-const machineRpc = vi.hoisted(() => vi.fn());
-// Machine transport is the boundary; catalog admission, Action policy and mutation lifecycle stay real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
+const rpc = createProviderSettingsHarness({ machines: [] });
+installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 const { usePoolGatewayChoices } = await import('./usePoolGatewayChoices');
+const { useProviderSettingsTarget } = await import('@/providers/hooks/targetMachine');
 const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
 const target = { kind: 'group' as const, service, groupId: 'pool-a' };
 
-afterEach(async () => { standardCleanup(); await account.reset(); machineRpc.mockReset(); });
+afterEach(async () => { standardCleanup(); await account.reset(); rpc.reset(); });
 
 describe('pool gateway Action wiring', () => {
     it('continues an approved first-gateway creation and slot removal through the real Account Action family exactly once', async () => {
         const { serverId } = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [] });
         const stored = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
         const resolveTarget = () => null;
-        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, resolveTarget }));
+        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, accountServerId: account.serverId, accountAddressAvailable: true, resolveTarget }));
         await waitForHomeGovernance(() => expect(hook.getCurrent().firstGateway).toEqual({ purpose: 'openai-upstream' }));
         let creating: Promise<boolean> | undefined;
         await act(async () => { creating = hook.getCurrent().createFirstGateway(); });
@@ -60,7 +60,7 @@ describe('pool gateway Action wiring', () => {
         expect(stored.writes).toBe(2);
         expect(stored.catalog.connections).toEqual([expect.objectContaining({ id: created.id, purposeBindingDefaults: {} })]);
         expect(hook.getCurrent().pending).toBe(false);
-        expect(machineRpc).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
     });
     it.each(['none', 'offline'] as const)('writes the Account slot with %s machine availability despite an unrelated unavailable declaration', async availability => {
         const gateway = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
@@ -89,7 +89,7 @@ describe('pool gateway Action wiring', () => {
             },
         });
         const resolveTarget = () => null;
-        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, resolveTarget }));
+        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, accountServerId: account.serverId, accountAddressAvailable: true, resolveTarget }));
         await vi.waitFor(() => expect(hook.getCurrent().choices).toHaveLength(1));
         expect(hook.getCurrent().ready).toBe(true);
         await act(async () => { expect(await hook.getCurrent().setEnabled(gateway.id, true)).toBe(true); });
@@ -98,7 +98,7 @@ describe('pool gateway Action wiring', () => {
         expect(catalog.connections[1]).toEqual(unavailable);
         await act(async () => { expect(await hook.getCurrent().setEnabled(gateway.id, false)).toBe(true); });
         expect(catalog.connections[0]?.purposeBindingDefaults).toEqual({});
-        expect(machineRpc).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
     });
     it.each([false, true])('creates Main gateway with this pool in its slot; repairs interrupted creation=%s', async interrupted => {
         const half = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_half', source: { kind: 'contribution',
@@ -122,7 +122,7 @@ describe('pool gateway Action wiring', () => {
             },
         });
         const resolveTarget = () => null;
-        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, resolveTarget }));
+        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, accountServerId: account.serverId, accountAddressAvailable: true, resolveTarget }));
         await vi.waitFor(() => expect(hook.getCurrent().firstGateway).toEqual({ purpose: 'openai-upstream' }));
         expect(hook.getCurrent().choices).toEqual([]);
         await act(async () => { expect(await hook.getCurrent().createFirstGateway()).toBe(true); });
@@ -139,7 +139,7 @@ describe('pool gateway Action wiring', () => {
         expect(hook.getCurrent().firstGateway).toBeNull();
         await act(async () => { expect(await hook.getCurrent().setEnabled(created.id, false)).toBe(true); });
         expect(catalog.connections).toEqual([expect.objectContaining({ id: created.id, purposeBindingDefaults: {} })]);
-        expect(machineRpc).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
     });
     it('does not offer slots from an unavailable Gateway declaration', async () => {
         const saved = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
@@ -149,12 +149,46 @@ describe('pool gateway Action wiring', () => {
         await account.restore({ catalog: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [saved] },
             waivedActions: ['providers.connections.update'] });
         const resolveTarget = () => null;
-        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, resolveTarget }));
+        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, accountServerId: account.serverId, accountAddressAvailable: true, resolveTarget }));
         await vi.waitFor(() => expect(hook.getCurrent().loading).toBe(false));
         expect(hook.getCurrent().choices).toEqual([]);
         // An existing gateway the app cannot read is not "no gateway": nothing is created beside it.
         expect(hook.getCurrent().firstGateway).toBeNull();
         await expect(hook.getCurrent().setEnabled(saved.id, true)).rejects.toMatchObject({ code: 'provider_authorization_changed' });
-        expect(machineRpc).not.toHaveBeenCalled();
+        expect(rpc.state.requests).toEqual([]);
     });
+    it('refuses active Account slot writes and a captured callback when the selected Home becomes foreign or removed', async () => {
+        const gateway = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
+            source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' },
+            role: 'named', displayName: 'Subscriptions', displayNameMode: 'custom', deployment: { kind: 'managedLocal' },
+            purposeBindingDefaults: { 'openai-upstream': { ...target, groupId: 'pool-b' } }, revision: 3, createdAt: 1, updatedAt: 1 });
+        const catalog = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [gateway] };
+        await account.restore({ catalog, serverIdentityId: 'srv_pool_active', machines: [],
+            waivedActions: ['providers.connections.update'] });
+        const hook = await renderHook(() => {
+            const providerTarget = useProviderSettingsTarget();
+            return usePoolGatewayChoices({ target, enabled: true, resolveTarget: providerTarget.resolveCurrentTarget,
+                accountServerId: providerTarget.accountServerId, accountAddressAvailable: providerTarget.accountAddressAvailable });
+        });
+        await vi.waitFor(() => expect(hook.getCurrent().ready).toBe(true));
+        const capturedSetEnabled = hook.getCurrent().setEnabled;
+        const peerServerId = await account.addHome({ name: 'Foreign pool Home', serverUrl: 'https://foreign-pool.test',
+            serverIdentityId: 'srv_pool_foreign', accountId: 'peer-account', active: false });
+        await act(async () => { await account.selectMachine(peerServerId, 'missing-peer-machine'); });
+        await hook.rerender();
+        expect(hook.getCurrent().ready).toBe(false);
+        expect(hook.getCurrent().choices).toEqual([]);
+        await act(async () => { expect(await capturedSetEnabled(gateway.id, true)).toBe(false); });
+        await expect(hook.getCurrent().setEnabled(gateway.id, true)).rejects.toMatchObject({ code: 'provider_authorization_changed' });
+        const profiles = await import('@/sync/domains/server/serverProfiles');
+        await act(async () => { await profiles.removeServerProfile(profiles.getServerProfileById(peerServerId)!.id); });
+        await hook.rerender();
+        expect(hook.getCurrent().ready).toBe(false);
+        expect(hook.getCurrent().choices).toEqual([]);
+        await expect(hook.getCurrent().setEnabled(gateway.id, true)).rejects.toMatchObject({ code: 'provider_authorization_changed' });
+        expect(account.catalogMutations).toEqual([]);
+        expect(account.readCatalogRow()).toMatchObject({ revision: 1, content: { t: 'plain', v: catalog } });
+        expect(rpc.state.requests).toEqual([]);
+    });
+
 });

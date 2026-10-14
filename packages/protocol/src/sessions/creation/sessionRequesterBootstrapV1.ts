@@ -12,6 +12,13 @@ import { computeCanonicalDomainSeparatedDigest } from '../../crypto/canonicalDig
 import { ManagedWakeTargetV1Schema, type ManagedWakeTargetV1 } from '../../machines/managed/managedIntentV1.js';
 import type { AccessibleMachineAccessV1 } from '../../machines/machineAccessV1.js';
 import { SessionRequesterInstallationSealedBootstrapV1Schema } from './sessionRequesterBootstrapSchemasV1.js';
+import { PluginIdSchema } from '../../plugins/pluginId.js';
+import { PluginContributionLocalIdSchema } from '../../plugins/contributionIdentity.js';
+import { PluginSourceCustodyV1Schema } from '../../plugins/runtime/sourceCustody.js';
+import { PluginMachineMaterializationRefV1Schema } from '../../plugins/availability/materializationRefV1.js';
+import { CallerInputConstraintsV1Schema } from '../../auth/callerInputConstraintsV1.js';
+import { AgentPermissionIntentV1Schema } from '../../runtime/permissionIntentV1.js';
+import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 export { SessionRequesterInstallationSealedBootstrapV1Schema } from './sessionRequesterBootstrapSchemasV1.js';
 
 /** Same serialized fields as the credential custodian's access.key owner, on a private carrier only. */
@@ -68,11 +75,31 @@ const RequesterAccountContextPurposeV1Schema = lazyZodSchema(() => z.union([
   z.object({ kind: z.literal('managed_finite_wake'), target: ManagedWakeTargetV1Schema }).strict()
     .refine(value => value.target.origin.kind === 'finite-command'),
 ]));
+/** Host-stamped facts inside the existing private box, never a public Action field. */
+export const ExternalActionRequesterInvocationV1Schema = lazyZodSchema(() => z.object({
+  caller: z.union([
+    z.object({ kind: z.literal('host') }).strict(),
+    z.object({ kind: z.literal('plugin'), pluginId: asProtocolZod(PluginIdSchema),
+      contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema), occurrenceId: z.string().min(1).optional(),
+      sourceCustody: PluginSourceCustodyV1Schema.optional(), materialization: PluginMachineMaterializationRefV1Schema.optional(),
+    }).strict(),
+  ]),
+  surface: z.enum(['ui', 'voice', 'agent', 'mcp', 'cli', 'rpc', 'api', 'plugin']),
+  authority: z.enum(['present_user', 'account_automation']),
+  callerPermissionMode: asProtocolZod(AgentPermissionIntentV1Schema).nullable().optional(),
+  callerInputConstraints: CallerInputConstraintsV1Schema.optional(),
+  workspaceWrites: z.enum(['allow', 'deny']).optional(),
+  defaultSessionId: z.string().trim().min(1).optional(),
+}).strict().refine(value => value.caller.kind !== 'plugin' || value.authority === 'account_automation', {
+  message: 'A Plugin invocation cannot carry present-user authority.',
+}));
+export type ExternalActionRequesterInvocationV1 = z.infer<typeof ExternalActionRequesterInvocationV1Schema>;
 const RequesterAccountContextPlaintextV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1), authorization: ExternalActionExecutionAuthorizationV1Schema.transform(value => ({
     v: value.v, token: value.token, binding: value.binding,
   })),
   purpose: RequesterAccountContextPurposeV1Schema, credentials: SessionRequesterBootstrapCredentialsV1Schema,
+  invocation: ExternalActionRequesterInvocationV1Schema.optional(),
 }).strict());
 
 function projectRequesterAccountContextPurpose(input: ExternalActionRequesterAccountContextPurposeV1, machineId: string) {
@@ -93,6 +120,7 @@ function projectRequesterAccountContextPurpose(input: ExternalActionRequesterAcc
 export function sealExternalActionRequesterAccountContextV1(input: Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
   credentials: z.infer<typeof SessionRequesterBootstrapCredentialsV1Schema>;
+  invocation?: ExternalActionRequesterInvocationV1;
   purpose: ExternalActionRequesterAccountContextPurposeV1;
   installationPublicKey: Uint8Array;
   randomBytes(length: number): Uint8Array;
@@ -107,7 +135,8 @@ export function sealExternalActionRequesterAccountContextV1(input: Readonly<{
   }
   const plaintext = RequesterAccountContextPlaintextV1Schema.parse({ v: 1,
     authorization: { v: authorization.v, token: authorization.token, binding: authorization.binding },
-    purpose: projectRequesterAccountContextPurpose(input.purpose, authorization.binding.machineId), credentials: input.credentials });
+    purpose: projectRequesterAccountContextPurpose(input.purpose, authorization.binding.machineId), credentials: input.credentials,
+    ...(input.invocation ? { invocation: input.invocation } : {}) });
   const mode = authorization.binding.accountEncryptionMode;
   if (mode === 'plain' && (plaintext.credentials.secret || plaintext.credentials.encryption)
     || mode === 'e2ee' && !plaintext.credentials.secret && !plaintext.credentials.encryption
@@ -122,14 +151,18 @@ export function sealExternalActionRequesterAccountContextV1(input: Readonly<{
 }
 
 /** Authority is verified by ingress first; opening can only recover this exact root's private custody. */
-export function openExternalActionRequesterAccountContextV1(input: Readonly<{
+type OpenRequesterAccountContextInput = Readonly<{
   authorization: unknown;
   purpose: ExternalActionRequesterAccountContextPurposeV1;
   machineId: string;
   installationId: string;
   serverIdentityId: string;
   installationPrivateKey: Uint8Array;
-}>): z.infer<typeof SessionRequesterBootstrapCredentialsV1Schema> | null {
+}>;
+export function openExternalActionRequesterAccountContextV1(input: OpenRequesterAccountContextInput & Readonly<{ includeInvocation: true }>):
+  Readonly<{ credentials: z.infer<typeof SessionRequesterBootstrapCredentialsV1Schema>; invocation?: ExternalActionRequesterInvocationV1 }> | null;
+export function openExternalActionRequesterAccountContextV1(input: OpenRequesterAccountContextInput): z.infer<typeof SessionRequesterBootstrapCredentialsV1Schema> | null;
+export function openExternalActionRequesterAccountContextV1(input: OpenRequesterAccountContextInput & Readonly<{ includeInvocation?: boolean }>) {
   try {
     const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
     if (!parsed.success) return null;
@@ -153,7 +186,8 @@ export function openExternalActionRequesterAccountContextV1(input: Readonly<{
         v: authorization.v, token: authorization.token, binding: authorization.binding,
       })
       || createCanonicalJsonSigningInput(plaintext.data.purpose) !== createCanonicalJsonSigningInput(projectRequesterAccountContextPurpose(input.purpose, authorization.binding.machineId))) return null;
-    return plaintext.data.credentials;
+    return input.includeInvocation ? { credentials: plaintext.data.credentials,
+      ...(plaintext.data.invocation ? { invocation: plaintext.data.invocation } : {}) } : plaintext.data.credentials;
   } catch { return null; }
 }
 export const SessionRequesterBootstrapRpcRequestV1Schema = lazyZodSchema(() => z.object({

@@ -61,6 +61,7 @@ export default defineConfig({
   plugins: [createWorkspacePackageSourcesPlugin(workspacePackages)],
   test: {
     ...resolveVitestWorkers(),
+    testTimeout: 15000,
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     exclude: ['node_modules/**', 'dist/**'],

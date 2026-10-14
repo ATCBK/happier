@@ -1147,7 +1147,7 @@ export type ScmRepositoryCloneInput = {
         cloneUrl?: string;
         sshUrl?: string;
         defaultBranch?: string | null;
-        visibility: ScmHostingRepositoryVisibility;
+        visibility?: ScmHostingRepositoryVisibility;
     };
     destinationParentPath: string;
     destinationDirectoryName: string;

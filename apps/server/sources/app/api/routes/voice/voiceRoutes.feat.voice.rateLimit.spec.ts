@@ -1,19 +1,26 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
-import { createDbMocks, installDbModuleMock, installPrismaModuleMock } from "../../testkit/dbMocks";
+import { createDbMocks, createDbTransactionMock, installDbModuleMock, installPrismaModuleMock } from "../../testkit/dbMocks";
 import { createEnvReset } from "../../testkit/env";
 import { createFakeRouteApp, getRouteEntry } from "../../testkit/routeHarness";
 
 vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
 const dbMocks = createDbMocks({
     account: ["findUnique"],
+    homeSettings: ["findUnique"],
+    homeGovernancePolicy: ["findUnique"],
     voiceSessionLease: ["deleteMany", "create", "findMany", "delete"],
 } as const);
+const dbTransaction = createDbTransactionMock(() => dbMocks.db);
 installDbModuleMock(() => ({
     db: dbMocks.db,
 }));
 // Registration uses the database fixture, so loading generated Prisma metadata is unnecessary.
-installPrismaModuleMock({ getDbProviderFromEnv: () => "sqlite", isPrismaErrorCode: () => false });
+installPrismaModuleMock({
+    getDbProviderFromEnv: () => "sqlite",
+    isPrismaErrorCode: () => false,
+    withSqliteReadSnapshot: dbTransaction.readSnapshot,
+});
 
 // Rate-limit options read current env when each app registers the shared routes.
 const { voiceRoutes } = await import("./voiceRoutes");
@@ -26,6 +33,8 @@ describe("voiceRoutes (rate limit)", () => {
     beforeEach(async () => {
         dbMocks.reset();
         dbMocks.db.account.findUnique.mockResolvedValue({ tokenEpoch: 0, status: "active" });
+        dbMocks.db.homeSettings.findUnique.mockResolvedValue(null);
+        dbMocks.db.homeGovernancePolicy.findUnique.mockResolvedValue(null);
         resetVoiceEnv({
             HANDY_MASTER_SECRET: "voice-rate-limit-spec-secret",
             NODE_ENV: "production",

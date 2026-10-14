@@ -63,9 +63,9 @@ export function createSessionRoleContext(params: Readonly<{
     if (!beforeRoles?.roleId) {
       // Notes and worker boundaries do not consume the available Role inventory.
       roles = {};
-    } else if (inherited) {
+    } else if (beforeRoles && inherited) {
       roles = {};
-      for (const roleId of Object.keys(beforeRoles!.sessionRoles)) {
+      for (const roleId of Object.keys(beforeRoles.sessionRoles)) {
         const resolved = resolveRoleSelectionV1({ roleId, sessionRoles: beforeRoles, defaultEngine: params.readDefaultEngine?.() });
         if (resolved.ok) roles[roleId] = resolved.selection;
       }

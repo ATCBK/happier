@@ -2,7 +2,8 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { startPairingForHome } from '@/auth/pairing/startPairingForHome';
 import { buildMachineAddCommand, resolveWebDesktopSetupHandoffTarget } from '@/components/machines/add/machineAddCommand';
 import { createDefaultSshCredentialsDraft } from '@/components/ssh/sshCredentialsDraft';
-import { areServerProfileIdentifiersEquivalent, buildHomeConnectionDescriptorForProfile, getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, buildHomeConnectionDescriptorForProfile, getServerProfileById, getActiveServerSnapshot } from '@/sync/domains/server/serverProfiles';
+import { retryActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
 import { resolveSetupSurfacePolicy } from '@/sync/domains/server/setup/setupSurfacePolicy';
 import { connectHomeAtAddress } from '@/sync/ops/home/connectHomeAtAddress';
 import { machineTerminalEnsure, machineTerminalList, machineTerminalStreamReadBytes, machineTerminalStreamSendInput, machineTerminalClose, machineTerminalRestart, trackPendingMachineTerminalCreation } from '@/sync/ops/machineTerminal';
@@ -13,6 +14,7 @@ import { canUsePrivateProjectAccountAction } from '@/sync/api/projects/projectAc
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
 import { createMachineAddSshTaskAction } from '@/components/machines/add/machineAddSshTaskAction';
+import { createLocalDaemonServiceAction } from './localDaemonServiceAction';
 import { MachineCapabilityInstallInputSchema, MachineMetadataUpdateInputSchema, MachineReplacementSetInputSchema } from '@happier-dev/protocol/actions/specs/machineConnection';
 import { machineCapabilitiesInvoke } from '@/sync/ops/capabilities';
 import { readCurrentMachineUpdateItem } from '@/updates/updatesActionRuntime';
@@ -23,7 +25,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 
-export function createMachineConnectionActionDeps(options: Readonly<{ runner?: SystemTaskRunner; account?: LazyActionAccountContext }> = {}): Pick<ActionExecutorDeps, 'homeConnect' | 'machineAddCommand' | 'machinePairingCreate' | 'machineTerminalAction' | 'machineAddSshTaskAction' | 'machinePageAction'> {
+export function createMachineConnectionActionDeps(options: Readonly<{ runner?: SystemTaskRunner; account?: LazyActionAccountContext }> = {}): Pick<ActionExecutorDeps, 'homeConnect' | 'homeReconnect' | 'localDaemonServiceAction' | 'machineAddCommand' | 'machinePairingCreate' | 'machineTerminalAction' | 'machineAddSshTaskAction' | 'machinePageAction'> {
     return {
         machinePageAction: async ({ actionId, input, context }) => {
             const serverId = input.serverId ?? context.serverId ?? getActiveServerId();
@@ -85,6 +87,25 @@ export function createMachineConnectionActionDeps(options: Readonly<{ runner?: S
             return { version: result.version };
         },
         machineAddSshTaskAction: createMachineAddSshTaskAction(options.runner),
+        localDaemonServiceAction: createLocalDaemonServiceAction(options),
+        homeReconnect: async (input, context) => {
+            context.signal?.throwIfAborted();
+            if (context.serverId && !areServerProfileIdentifiersEquivalent(context.serverId, input.serverId)) {
+                return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+            }
+            const target = getActiveServerSnapshot();
+            if (!areServerProfileIdentifiersEquivalent(target.serverId, input.serverId)) {
+                return { ok: false, errorCode: 'home_not_focused', error: 'home_not_focused' };
+            }
+            options.account?.assertCurrent();
+            await retryActiveServerConnection();
+            context.signal?.throwIfAborted();
+            const current = getActiveServerSnapshot();
+            if (current.generation !== target.generation || !areServerProfileIdentifiersEquivalent(current.serverId, input.serverId)) {
+                return { ok: false, errorCode: 'home_not_focused', error: 'home_not_focused' };
+            }
+            return { serverId: input.serverId };
+        },
         homeConnect: async (input, context) => {
             const outcome = await connectHomeAtAddress({ serverUrl: input.address, displayName: input.displayName,
                 signal: context.signal, confirmInsecureHttp: async () => input.acceptInsecureHttp,

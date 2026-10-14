@@ -8,18 +8,29 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from './
 import { createProviderSettingsHarness, installProviderSettingsRpcBoundary } from './providerSettingsHarness';
 
 describe('transport boundary import order', () => {
-    it('rejects HTTP installation after a static consumer has captured the real transport', () => {
+    it('routes a statically imported HTTP client through the current external transport', async () => {
         expect(typeof createServerFetchAtEndpoint).toBe('function');
         expect(typeof renderScreen).toBe('function');
-        expect(() => installHomeGovernanceBoundaries(createHomeGovernanceHarness())).toThrowError(
-            /installHomeGovernanceBoundaries.*@\/sync\/http\/client.*before.*dynamic import/s,
-        );
+        const home = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(home);
+        const serverUrl = 'https://static-client-home.test';
+        const serverId = await home.addHome({ name: 'Static client Home', serverUrl });
+        home.answer(serverId, '/v1/fixture', { body: { source: 'current-boundary' } });
+        try {
+            const token = home.findByServerUrl(serverUrl)?.token;
+            if (!token) throw new Error('Fixture Home has no credential');
+            const request = createServerFetchAtEndpoint({ endpointUrl: serverUrl, serverId, credentials: { token } });
+            expect(await (await request('/v1/fixture')).json()).toEqual({ source: 'current-boundary' });
+            expect(home.requestsFor('/v1/fixture')).toHaveLength(1);
+        } finally {
+            await home.reset();
+        }
     });
 
     it('rejects RPC installation after a static consumer has captured the disconnected transport', () => {
         expect(typeof machineRpcWithServerScope).toBe('function');
         expect(() => installProviderSettingsRpcBoundary(createProviderSettingsHarness())).toThrowError(
-            /installProviderSettingsRpcBoundary.*serverScopedMachineRpc.*before.*dynamic import/s,
+            /installDisconnectedServerSocketBoundary.*socket\.io-client.*before.*dynamic import/s,
         );
     });
 });

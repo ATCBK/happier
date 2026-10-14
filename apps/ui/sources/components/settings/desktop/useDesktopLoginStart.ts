@@ -5,12 +5,11 @@ import {
     subscribeLocalDaemonSharedState,
 } from '@/components/settings/machines/localControl/localDaemonSharedState';
 import {
-    refreshLocalDaemonStatus,
     type DesktopServiceAutostartMode,
     type LocalDaemonStatusData,
 } from '@/components/settings/machines/localControl/useLocalDaemonControl';
-import { getDefaultSystemTaskRunner, waitForSystemTaskResult } from '@/components/systemTasks';
-import { buildLocalDaemonServiceSystemTaskSpec } from '@/components/systemTasks/specs/localControl/buildLocalDaemonServiceSystemTaskSpec';
+import { getDefaultSystemTaskRunner } from '@/components/systemTasks';
+import { setDesktopLoginStartMode } from './desktopLoginStart';
 import { t } from '@/text';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 
@@ -49,11 +48,7 @@ export function useDesktopLoginStart(): DesktopLoginStartState {
         setWriting(true);
         setError(null);
         try {
-            const taskId = await runner.start(buildLocalDaemonServiceSystemTaskSpec('daemon.service.autostart.set.v1', {}, { autostart: mode }));
-            const result = await waitForSystemTaskResult(runner, taskId);
-            if (!result.ok) setError(result.error.message || t('settings.systemTaskStartFailed'));
-            // Whatever the outcome, show the mode the services actually have now.
-            await refreshLocalDaemonStatus(runner);
+            await setDesktopLoginStartMode(runner, mode);
         } catch (nextError) {
             setError(nextError instanceof Error && nextError.message ? nextError.message : t('settings.systemTaskStartFailed'));
         } finally {

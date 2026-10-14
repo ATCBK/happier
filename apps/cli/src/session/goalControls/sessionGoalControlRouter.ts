@@ -1,6 +1,7 @@
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { randomUUID } from 'node:crypto';
 import { SessionWorkStateV1Schema as SessionStateWorkStateValueSchema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
-import type { SessionGoalSetRequestV1 } from '@happier-dev/protocol';
+import { SessionInitialGoalRequestV1Schema, type ActionExecutorContext, type SessionGoalSetRequestV1 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 import { resolveInactiveSessionGoalControls } from '@/agent/catalog/sessionControlAdapters';
@@ -14,6 +15,7 @@ import { splitDurableRegisteredSessionStateMetadata } from '@/agent/runtime/regi
 import type { DaemonWorkStateFieldMutation } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
 import type { SessionStoredContentCryptoContext } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
 import type {
   ResolveSessionGoalControlAdapter,
   SessionGoalControlAdapterParams,
@@ -31,6 +33,17 @@ type RouteSessionGoalControlParams = Readonly<{
   currentMachineHomeDir?: string | null;
   operation: SessionGoalControlOperation;
   request?: SessionGoalSetRequestV1;
+  resumeInactiveWithInitialGoal?: boolean;
+  signal?: AbortSignal;
+  actionRequestId?: string;
+  executionAuthority?: ActionExecutorContext['authority'];
+  callMachineGoalRpc?: (input: Readonly<{
+    machineId: string;
+    operation: SessionGoalControlOperation;
+    request?: SessionGoalSetRequestV1;
+    resumeInactiveWithInitialGoal: boolean;
+  }>) => Promise<unknown>;
+  machineResumeTransport?: Parameters<typeof requestInactiveSessionResume>[0]['machineRpcTransport'];
   callLiveSessionRpc: () => Promise<unknown>;
   resolveAdapter?: ResolveSessionGoalControlAdapter;
   stageWorkStateMutation?: (mutation: DaemonWorkStateFieldMutation) => Promise<void>;
@@ -143,6 +156,7 @@ async function persistAdapterMetadataResult(
 }
 
 export async function routeSessionGoalControl(params: RouteSessionGoalControlParams): Promise<unknown> {
+  params.signal?.throwIfAborted();
   if (params.rawSession.active === true) {
     const liveResult = await params.callLiveSessionRpc();
     if (!shouldFallbackFromLiveSessionGoalRpc(liveResult)) {
@@ -160,10 +174,18 @@ export async function routeSessionGoalControl(params: RouteSessionGoalControlPar
     return stableError('session_goal_control_current_machine_unknown');
   }
 
-  const sessionMachineId = readString(metadata.machineId) ?? resolveRawSessionString(params.rawSession, 'machineId');
+  const metadataMachineId = readString(metadata.machineId);
+  const rawMachineId = resolveRawSessionString(params.rawSession, 'machineId');
+  if (metadataMachineId && rawMachineId && metadataMachineId !== rawMachineId) {
+    return stableError('session_goal_control_target_machine_mismatch');
+  }
+  const sessionMachineId = metadataMachineId ?? rawMachineId;
   if (!sessionMachineId) {
     return stableError('session_goal_control_session_machine_unknown');
   }
+  const initialGoal = params.operation === 'set' && params.resumeInactiveWithInitialGoal === true
+    && params.rawSession.active === false ? SessionInitialGoalRequestV1Schema.safeParse(params.request) : null;
+  if (initialGoal && !initialGoal.success) return stableError('invalid_parameters');
   if (
     !await resolveMachineControlLocalityProof({
       sessionMachineId,
@@ -175,11 +197,29 @@ export async function routeSessionGoalControl(params: RouteSessionGoalControlPar
       credentials: { token: params.token },
     })
   ) {
+    params.signal?.throwIfAborted();
+    if (params.callMachineGoalRpc) {
+      return await params.callMachineGoalRpc({ machineId: sessionMachineId, operation: params.operation,
+        ...(params.request ? { request: params.request } : {}), resumeInactiveWithInitialGoal: initialGoal?.success === true });
+    }
     return stableError('session_goal_control_remote_unavailable');
+  }
+
+  params.signal?.throwIfAborted();
+  if (initialGoal?.success) {
+    if (!params.credentials) return stableError('not_authenticated');
+    const resumed = await requestInactiveSessionResume({ credentials: params.credentials,
+      sessionId: params.sessionId, rawSession: params.rawSession, metadata,
+      requestId: params.actionRequestId ?? randomUUID(),
+      initialGoal: initialGoal.data, executionAuthority: params.executionAuthority,
+      ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.machineResumeTransport ? { machineRpcTransport: params.machineResumeTransport } : {}) });
+    return resumed.ok ? { ok: true } : { ok: false, errorCode: resumed.code, error: resumed.message };
   }
 
   const resolveAdapter = params.resolveAdapter ?? resolveInactiveSessionGoalControls;
   const adapter = await resolveAdapter(resolveAgentId(metadata));
+  params.signal?.throwIfAborted();
   if (!adapter) {
     return stableError('session_goal_control_unsupported');
   }

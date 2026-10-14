@@ -15,6 +15,7 @@ import { requireManagedMachineAccessInTx } from './managedRead';
 import {
     ManagedMachineError, readManagedMachineInTx, projectManagedMachineInTx,
     invalidateManagedMachineInTx, type StoredManagedMachine,
+    readManagedJsonEqualityOperand,
 } from './managedRows';
 
 const setupReadSchema = createStoredReadSchema(ManagedMachineEnvironmentSetupV1Schema);
@@ -108,7 +109,7 @@ export async function reportMachineEnvironment(params: Readonly<{
             operation: input.operation, ...(input.errorCode ? { errorCode: input.errorCode } : {}) });
         const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision,
             creationState: 'active', archivedAt: null, allocation: 'bound', desired: { not: 'delete' },
-            enrolledMachineId: input.machineId, environmentSetup: { equals: row.environmentSetup } }, data: { environmentSetup: next } });
+            enrolledMachineId: input.machineId, environmentSetup: { equals: readManagedJsonEqualityOperand(row.environmentSetup) } }, data: { environmentSetup: next } });
         if (changed.count !== 1) throw new ManagedMachineError('intent_changed');
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, current);
@@ -133,7 +134,7 @@ export async function skipManagedMachineSetup(params: Readonly<{
         if (setup.state === 'skipped') return projectManagedMachineInTx(tx, row);
         if (setup.state === 'succeeded' || setup.state === 'running') throw new ManagedMachineError('intent_changed');
         const changed = await tx.managedMachine.updateMany({ where: { id: row.id, intentRevision: row.intentRevision,
-            creationState: 'active', archivedAt: null, desired: { not: 'delete' }, environmentSetup: { equals: row.environmentSetup } },
+            creationState: 'active', archivedAt: null, desired: { not: 'delete' }, environmentSetup: { equals: readManagedJsonEqualityOperand(row.environmentSetup) } },
             data: { environmentSetup: { environment: setup.environment, state: 'skipped', ...(setup.operation ? { operation: setup.operation } : {}) } } });
         if (changed.count !== 1) throw new ManagedMachineError('intent_changed');
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });

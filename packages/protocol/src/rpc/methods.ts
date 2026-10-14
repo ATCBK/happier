@@ -362,6 +362,7 @@ export const RPC_METHODS = {
   DAEMON_PROJECT_WORKER_DEPENDENCIES: 'daemon.projectWorker.dependencies.v1',
   DAEMON_SESSION_GOAL_GET: 'daemon.sessionGoal.get',
   DAEMON_SESSION_GOAL_SET: 'daemon.sessionGoal.set',
+  DAEMON_SESSION_GOAL_SET_V2: 'daemon.sessionGoal.set.v2',
   DAEMON_SESSION_GOAL_CLEAR: 'daemon.sessionGoal.clear',
   DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE: 'daemon.sessionUsageLimit.waitResume.enable',
   DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL: 'daemon.sessionUsageLimit.waitResume.cancel',

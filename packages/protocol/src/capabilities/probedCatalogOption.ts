@@ -34,7 +34,7 @@ const ProbeDescriptionSchema = z.string();
 export const ProbedCatalogOptionValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
 /** Native probe output, after the single plugin-ingress normalizer below. */
-export const ProbedCatalogOptionSchema = z.object({
+export const ProbedCatalogOptionSchema: z.ZodType<ProbedCatalogOption> = z.object({
   id: ProbeNonEmptyStringSchema,
   name: ProbeNonEmptyStringSchema,
   description: ProbeDescriptionSchema.optional(),

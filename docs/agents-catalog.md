@@ -634,6 +634,14 @@ arguments, credential environment keys or JSON credential paths, and whether a
 status command is noninteractive. These fields never select an Agent parser or
 transfer process, environment, filesystem, or credential custody to plugin code.
 
+In 0.3 development source, `cli.commandPolicy` also carries the closed
+`daemonAutostartDefault: 'preferLocalTui'` declaration. The same manifest
+projector supplies the command descriptor consumed by CLI dispatch for bundled
+and installed Agents. Codex declares its existing direct-terminal default here:
+an unset daemon-autostart preference stays disabled in a TTY, while an explicit
+preference, a daemon-started invocation, or malformed start-origin arguments keep
+their existing admission behavior.
+
 In the development daemon inventory, `installed` means the Agent's own resolved
 CLI executed successfully; a version string alone or an installed server dependency
 does not establish that fact. Required setup dependencies come from the selected
@@ -857,6 +865,20 @@ The resume identity is `AgentNativeResumeIdentityV1 = { v, vendorResumeId }` —
 conversation id and nothing else. There is no continuity proof (`AM-24`): resuming is what answers
 whether a recorded id is usable, and both Agents that support native resume fail loudly rather than
 silently starting fresh. The released bare-string form is accepted as the same identity.
+
+Fresh native identity publication in development source uses the shared
+`canPublishSessionResumeIdentity` policy in
+`packages/plugin-sdk/src/agentRuntime/sessionIdentity.ts`, exposed through the existing
+`agents/runtime` SDK seam. A Claude `SessionStart` or Codex thread allocation can identify a
+live runner before it has a resumable conversation. That provisional id remains runner-local
+for hook and event correlation; it is not yet written as the Session's native resume identity.
+Claude publishes after matching native transcript evidence (the SDK resumability path also
+requires its submitted-prompt acceptance evidence); Codex publishes after accepted-turn or
+native-attachment materialization evidence. Already requested resume identities remain intact.
+This initial-publication rule adds no persisted continuity proof or new identity shape and
+does not weaken strict native resume: an established id whose native state is unavailable still
+fails closed without silently starting fresh or consuming its queued prompt. Loaded-runtime
+release validation is separate from these development-source contracts.
 
 ### Where the id lives, for an Agent with no flat vendor key
 

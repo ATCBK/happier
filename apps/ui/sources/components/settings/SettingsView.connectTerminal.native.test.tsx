@@ -213,6 +213,7 @@ beforeEach(() => {
 describe('SettingsView (native connect terminal)', () => {
     it('shows terminal connect actions on native platforms', async () => {
         const { SettingsView } = await import('./SettingsView');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 
         let tree!: ReactTestRenderer;
         tree = (await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;
@@ -237,6 +238,7 @@ describe('SettingsView (native connect terminal)', () => {
         settingsViewScanProcessAuthUrlSpy.mockResolvedValueOnce(true);
 
         const { SettingsView } = await import('./SettingsView');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
         const tree = (await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;
 
         const manualItem = findPressableByTestId(tree, 'settings-connect-terminal-enter-url');
@@ -258,6 +260,7 @@ describe('SettingsView (native connect terminal)', () => {
         });
 
         const { SettingsView } = await import('./SettingsView');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 
         vi.useFakeTimers();
         try {
@@ -281,6 +284,7 @@ describe('SettingsView (native connect terminal)', () => {
 
     it('defers below-fold settings sections until after interactions settle', async () => {
         const { SettingsView } = await import('./SettingsView');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 
         vi.useFakeTimers();
         try {

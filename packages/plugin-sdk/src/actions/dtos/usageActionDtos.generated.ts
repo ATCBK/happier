@@ -2474,6 +2474,17 @@ export type UsageActionResultById = {
                             strategy: 'manual' | 'priority' | 'expiry_first' | 'least_limited';
                             atMs: number;
                         } | undefined;
+                        activeAccountRef?: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        } | null | undefined;
+                        activeSince?: {
+                            accountId: string;
+                            atMs: number;
+                        } | null | undefined;
                     } | {
                         status: 'unavailable';
                         code: 'unsupported' | 'connected_account_daemon_owner_unavailable' | 'connected_account_daemon_runtime_unavailable' | 'connected_account_daemon_response_invalid';

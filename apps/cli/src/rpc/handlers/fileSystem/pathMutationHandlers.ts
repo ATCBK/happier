@@ -3,6 +3,7 @@ import { copyFile, lstat, mkdir, mkdtemp, open, rename, rm, stat, writeFile } fr
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import type { ZodType } from 'zod';
 
 import { HARD_OPENABLE_CONTENT_MAX_BYTES_V1 } from '@happier-dev/protocol/plugins/openableContent';
 import type { WorkspaceStatFileRequestV1 } from '@happier-dev/protocol';
@@ -18,6 +19,10 @@ import {
   FilesystemCopyInputSchema,
   FilesystemLocalCopyInputSchema,
   type FilesystemMutationActionId,
+  type FilesystemCreateDirectoryInput,
+  type FilesystemRenameInput,
+  type FilesystemDeleteInput,
+  type FilesystemLocalCopyInput,
   type FilesystemMutationOutput,
   type FilesystemCopyOutput,
 } from '@happier-dev/protocol/actions/filesystemActionFamily';
@@ -53,7 +58,7 @@ export type FilesystemMutationDeps = Readonly<{
 export type FilesystemMutationActionIngress = Readonly<{
   actionExecutor?: RpcActionExecutor;
   /** Late binding to the daemon's current full Action admission owner. */
-  resolveMutationActionExecutor?: () => RpcActionExecutor | null;
+  resolveMutationActionExecutor?: () => RpcActionExecutor<FilesystemMutationActionId> | null;
   mutationMachineId?: string;
 }>;
 
@@ -133,7 +138,14 @@ function pathsOverlap(from: string, to: string): boolean {
   return contains(source, destination) || contains(destination, source);
 }
 
-function mutationSchema(actionId: FilesystemMutationActionId, incumbentPolicyScope = false) {
+type FilesystemLocalMutationInput = Readonly<{ rootPath?: string }> & (
+  Omit<FilesystemCreateDirectoryInput, 'rootPath'>
+  | Omit<FilesystemRenameInput, 'rootPath'>
+  | Omit<FilesystemDeleteInput, 'rootPath'>
+  | Omit<FilesystemLocalCopyInput, 'rootPath'>
+);
+
+function mutationSchema(actionId: FilesystemMutationActionId, incumbentPolicyScope = false): ZodType<FilesystemLocalMutationInput> {
   switch (actionId) {
     case 'daemon.filesystem.createDirectory': return incumbentPolicyScope ? FilesystemCreateDirectoryInputSchema.omit({ rootPath: true }) : FilesystemCreateDirectoryInputSchema;
     case 'daemon.filesystem.rename': return incumbentPolicyScope ? FilesystemRenameInputSchema.omit({ rootPath: true }) : FilesystemRenameInputSchema;
@@ -311,7 +323,7 @@ export function registerFilesystemMutationActionHandlers(
       return { ok: true, result: await executeFilesystemMutationAction({ ...deps, actionId: mutationId, input, incumbentPolicyScope: true }) };
     },
   };
-  registerActionSpecRpcHandlers({
+  registerActionSpecRpcHandlers<FilesystemMutationActionId>({
     rpcHandlerManager, actionIds,
     ...(deps.mutationMachineId ? { targetMachineId: deps.mutationMachineId, defaultMachineTarget: true } : {}),
     resolveActionExecutor: request => resolveFilesystemMutationActionExecutor(deps, request, incumbentExecutor),

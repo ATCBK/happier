@@ -76,12 +76,11 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         resetScopedMachineTransportCacheForTests();
         resetServerFeaturesClientForTests();
         resetRunnerCreatorMachineContentKeyTrustProjectionForTests();
-        home = await boundary.addHome('https://server-a.example.test', 'account-a');
-        // Credential storage is the genuine device boundary; context, custody,
-        // Machine transport resolution and Encryption construction remain real.
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue({
-            token: home.token,
-            secret: Buffer.from(secret).toString('base64url'),
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        home = await boundary.addHome('https://server-a.example.test', 'account-a', {
+            encryptionMode: 'e2ee', credentials: {
+                token: createAccountTokenForTests('account-a'), secret: Buffer.from(secret).toString('base64url'),
+            },
         });
         boundary.setHttpResponder(async (input) => {
             const url = new URL(String(input));
