@@ -457,6 +457,8 @@ export const managedMachines: ManagedMachinesTranslations = {
         eraseReview: "Prüfe diese Ressourcen, bevor du das Konto löschst. Das Löschen der Happier-Daten löscht sie nicht beim Anbieter.",
     },
     machineRequester: {
+        signInPurposes: ({ purposes }: { purposes: string }) => `Sie können auch die für diese Sitzung verwendeten Anmeldungen lesen: ${purposes}, sowie den Happier-Zugriff dieser Sitzung.`,
+        nativeSignInPurpose: ({ service }: { service: string }) => `${service} (native Anmeldung)`,
         runsOn: ({ owner, machine }: { owner: string; machine: string }) => `Läuft auf ${machine} von ${owner}`,
         scopedSignIn: ({ machine }: { machine: string }) => `Happier gibt ${machine} eine Anmeldung, die nur für diese Sitzung gilt.`,
         fullSignIn: ({ machine }: { machine: string }) => `Deine Happier-Anmeldung wird auf ${machine} gespeichert, solange diese Sitzung läuft. Personen mit Terminal- oder Agent-Zugriff dort können damit auf dein Happier-Konto zugreifen.`,

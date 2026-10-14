@@ -95,6 +95,9 @@ export type SessionBoardTranslation = Readonly<{
         rendererUnavailable: SessionBoardStateTranslation;
         provenance: Readonly<{
             note: string;
+            /** An agent visual whose root is a declarative chart or table. */
+            chart: string;
+            table: string;
             interactiveView: string;
             /** The plugin is absent from this device's projection; its id beats "a plugin". */
             pluginMissing: (params: Readonly<{ pluginId: string }>) => string;
@@ -365,6 +368,8 @@ export const sessionBoardTranslationsEnglish = { en: {
             },
             provenance: {
                 note: 'Note',
+                chart: 'Chart',
+                table: 'Table',
                 interactiveView: 'Interactive view',
                 pluginMissing: ({ pluginId }) => `From ${pluginId} · not installed`,
                 pluginSurface: ({ plugin, surface }) => `${surface} · ${plugin}`,

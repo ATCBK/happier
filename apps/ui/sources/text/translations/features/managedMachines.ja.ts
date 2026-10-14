@@ -457,6 +457,8 @@ export const managedMachines: ManagedMachinesTranslations = {
         eraseReview: "アカウントを消去する前に、これらのリソースを確認してください。Happier のデータを消去しても、プロバイダー側のリソースは削除されません。",
     },
     machineRequester: {
+        signInPurposes: ({ purposes }: { purposes: string }) => `このセッションで使用するログイン情報（${purposes}）と、このセッションのHappierへのアクセス情報も読み取れます。`,
+        nativeSignInPurpose: ({ service }: { service: string }) => `${service}（ネイティブログイン）`,
         runsOn: ({ owner, machine }: { owner: string; machine: string }) => `${owner} さんの ${machine} で実行`,
         scopedSignIn: ({ machine }: { machine: string }) => `Happier は ${machine} に、このセッションでのみ有効なサインインを付与します。`,
         fullSignIn: ({ machine }: { machine: string }) => `このセッションの実行中、Happier のサインイン情報は ${machine} に保存されます。そこでターミナルやエージェントにアクセスできる人が、あなたの Happier アカウントにアクセスするためにそれを使用する可能性があります。`,

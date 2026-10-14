@@ -122,6 +122,9 @@ export type McpConfigTranslation = Readonly<{
   different: string;
   differentNone: string;
   differentOne: (params: Readonly<{ machine: string }>) => string;
+  differentOn: (params: Readonly<{ machine: string }>) => string;
+  addDifference: string;
+  addAnother: string;
   differentCount: (params: Readonly<{ count: number }>) => string;
   differsFolder: (params: Readonly<{ path: string }>) => string;
   differsCommand: string;
@@ -161,6 +164,9 @@ const configEn: McpConfigTranslation = {
   different: 'Different on a machine…',
   differentNone: 'Every machine uses these values',
   differentOne: ({ machine }) => `${machine} is different`,
+  differentOn: ({ machine }) => `Different on ${machine}`,
+  addDifference: 'Add a machine difference',
+  addAnother: 'Another machine',
   differentCount: ({ count }) => `${count} machines are different`,
   differsFolder: ({ path }) => `Working folder ${path}`,
   differsCommand: 'Command',
@@ -205,6 +211,9 @@ const configCa: McpConfigTranslation = {
   different: 'Diferent en una màquina…',
   differentNone: 'Totes les màquines fan servir aquests valors',
   differentOne: ({ machine }) => `${machine} és diferent`,
+  differentOn: ({ machine }) => `Diferent a ${machine}`,
+  addDifference: 'Afegeix una diferència de màquina',
+  addAnother: 'Una altra màquina',
   differentCount: ({ count }) => `${count} ${count === 1 ? 'màquina és diferent' : 'màquines són diferents'}`,
   differsFolder: ({ path }) => `Carpeta de treball ${path}`,
   differsCommand: 'Ordre',
@@ -242,6 +251,9 @@ const configDe: McpConfigTranslation = {
   different: 'Auf einer Maschine anders…',
   differentNone: 'Jede Maschine verwendet diese Werte',
   differentOne: ({ machine }) => `${machine} weicht ab`,
+  differentOn: ({ machine }) => `Abweichend auf ${machine}`,
+  addDifference: 'Maschinenabweichung hinzufügen',
+  addAnother: 'Weitere Maschine',
   differentCount: ({ count }) => `${count} ${count === 1 ? 'Maschine weicht' : 'Maschinen weichen'} ab`,
   differsFolder: ({ path }) => `Arbeitsordner ${path}`,
   differsCommand: 'Befehl',
@@ -279,6 +291,9 @@ const configEs: McpConfigTranslation = {
   different: 'Distinto en una máquina…',
   differentNone: 'Todas las máquinas usan estos valores',
   differentOne: ({ machine }) => `${machine} es distinta`,
+  differentOn: ({ machine }) => `Distinto en ${machine}`,
+  addDifference: 'Añadir una diferencia de máquina',
+  addAnother: 'Otra máquina',
   differentCount: ({ count }) => `${count} ${count === 1 ? 'máquina es distinta' : 'máquinas son distintas'}`,
   differsFolder: ({ path }) => `Carpeta de trabajo ${path}`,
   differsCommand: 'Comando',
@@ -316,6 +331,9 @@ const configFr: McpConfigTranslation = {
   different: 'Différent sur une machine…',
   differentNone: 'Chaque machine utilise ces valeurs',
   differentOne: ({ machine }) => `${machine} diffère`,
+  differentOn: ({ machine }) => `Différent sur ${machine}`,
+  addDifference: 'Ajouter une différence de machine',
+  addAnother: 'Autre machine',
   differentCount: ({ count }) => `${count} machine${count < 2 ? ' diffère' : 's diffèrent'}`,
   differsFolder: ({ path }) => `Dossier de travail ${path}`,
   differsCommand: 'Commande',
@@ -353,6 +371,9 @@ const configIt: McpConfigTranslation = {
   different: 'Diverso su una macchina…',
   differentNone: 'Ogni macchina usa questi valori',
   differentOne: ({ machine }) => `${machine} è diversa`,
+  differentOn: ({ machine }) => `Diverso su ${machine}`,
+  addDifference: 'Aggiungi una differenza per macchina',
+  addAnother: 'Un’altra macchina',
   differentCount: ({ count }) => `${count} ${count === 1 ? 'macchina è diversa' : 'macchine sono diverse'}`,
   differsFolder: ({ path }) => `Cartella di lavoro ${path}`,
   differsCommand: 'Comando',
@@ -390,6 +411,9 @@ const configJa: McpConfigTranslation = {
   different: 'マシンごとに異なる…',
   differentNone: 'すべてのマシンでこの値を使用',
   differentOne: ({ machine }) => `${machine} は異なります`,
+  differentOn: ({ machine }) => `${machine} では異なります`,
+  addDifference: 'マシンごとの違いを追加',
+  addAnother: '別のマシン',
   differentCount: ({ count }) => `${count} 台のマシンで異なります`,
   differsFolder: ({ path }) => `作業フォルダ ${path}`,
   differsCommand: 'コマンド',
@@ -427,6 +451,9 @@ const configPl: McpConfigTranslation = {
   different: 'Inaczej na maszynie…',
   differentNone: 'Każda maszyna używa tych wartości',
   differentOne: ({ machine }) => `${machine} ma inne wartości`,
+  differentOn: ({ machine }) => `Inaczej na ${machine}`,
+  addDifference: 'Dodaj różnicę dla maszyny',
+  addAnother: 'Kolejna maszyna',
   differentCount: ({ count }) => `${plMachinesHave(count)} inne wartości`,
   differsFolder: ({ path }) => `Folder roboczy ${path}`,
   differsCommand: 'Polecenie',
@@ -464,6 +491,9 @@ const configPt: McpConfigTranslation = {
   different: 'Diferente em uma máquina…',
   differentNone: 'Todas as máquinas usam esses valores',
   differentOne: ({ machine }) => `${machine} é diferente`,
+  differentOn: ({ machine }) => `Diferente em ${machine}`,
+  addDifference: 'Adicionar uma diferença de máquina',
+  addAnother: 'Outra máquina',
   differentCount: ({ count }) => `${count} ${count < 2 ? 'máquina é diferente' : 'máquinas são diferentes'}`,
   differsFolder: ({ path }) => `Pasta de trabalho ${path}`,
   differsCommand: 'Comando',
@@ -501,6 +531,9 @@ const configRu: McpConfigTranslation = {
   different: 'Иначе на одной из машин…',
   differentNone: 'На всех машинах одни и те же значения',
   differentOne: ({ machine }) => `${machine}: значения отличаются`,
+  differentOn: ({ machine }) => `Отличается на ${machine}`,
+  addDifference: 'Добавить отличие для машины',
+  addAnother: 'Ещё одна машина',
   differentCount: ({ count }) => `Отличается на ${count} ${ruPlural(count, 'машине', 'машинах', 'машинах')}`,
   differsFolder: ({ path }) => `Рабочая папка ${path}`,
   differsCommand: 'Команда',
@@ -538,6 +571,9 @@ const configZhHans: McpConfigTranslation = {
   different: '某台机器上不同…',
   differentNone: '所有机器使用相同的值',
   differentOne: ({ machine }) => `${machine} 不同`,
+  differentOn: ({ machine }) => `在 ${machine} 上不同`,
+  addDifference: '添加机器差异',
+  addAnother: '另一台机器',
   differentCount: ({ count }) => `${count} 台机器不同`,
   differsFolder: ({ path }) => `工作文件夹 ${path}`,
   differsCommand: '命令',
@@ -575,6 +611,9 @@ const configZhHant: McpConfigTranslation = {
   different: '某台機器上不同…',
   differentNone: '所有機器使用相同的值',
   differentOne: ({ machine }) => `${machine} 不同`,
+  differentOn: ({ machine }) => `在 ${machine} 上不同`,
+  addDifference: '新增機器差異',
+  addAnother: '另一台機器',
   differentCount: ({ count }) => `${count} 台機器不同`,
   differsFolder: ({ path }) => `工作資料夾 ${path}`,
   differsCommand: '指令',
@@ -644,12 +683,17 @@ const en: McpPageBase = {
     checked: ({ time }) => `checked ${time}`,
     notChecked: 'not checked yet',
     lastKnown: ({ time }) => `last known ${time}`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `Ready on ${ready}` : null,
-      problems > 0 ? `${problems} need${problems === 1 ? 's' : ''} a look` : null,
-      offline > 0 ? `offline ${offline}` : null,
-      unchecked > 0 ? `${unchecked} not checked` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `Ready on all ${total}`;
+      if (total > 1 && offline === total) return `All ${total} offline`;
+      return [
+        ready > 0 ? `Ready on ${ready}` : null,
+        problems > 0 ? `${problems} need${problems === 1 ? 's' : ''} a look` : null,
+        unchecked > 0 ? `${unchecked} to test` : null,
+        offline > 0 ? `${offline} offline` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: 'Details',
     versionLine: ({ version, protocol }) => protocol ? `Version ${version} · protocol ${protocol}` : `Version ${version}`,
     serverInstructions: 'Server instructions',
@@ -739,12 +783,17 @@ const ca: McpPageBase = {
     checked: ({ time }) => `comprovat ${time}`,
     notChecked: 'encara no comprovat',
     lastKnown: ({ time }) => `darrer estat conegut ${time}`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `Llest a ${ready}` : null,
-      problems > 0 ? `${problems} ${problems === 1 ? 'necessita' : 'necessiten'} atenció` : null,
-      offline > 0 ? `fora de línia ${offline}` : null,
-      unchecked > 0 ? `${unchecked} sense comprovar` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `Llest a tots ${total}`;
+      if (total > 1 && offline === total) return `Tots ${total} fora de línia`;
+      return [
+        ready > 0 ? `Llest a ${ready}` : null,
+        problems > 0 ? `${problems} ${problems === 1 ? 'necessita' : 'necessiten'} atenció` : null,
+        unchecked > 0 ? `${unchecked} per provar` : null,
+        offline > 0 ? `${offline} fora de línia` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: 'Detalls',
     versionLine: ({ version, protocol }) => protocol ? `Versió ${version} · protocol ${protocol}` : `Versió ${version}`,
     serverInstructions: 'Instruccions del servidor',
@@ -834,12 +883,17 @@ const de: McpPageBase = {
     checked: ({ time }) => `geprüft ${time}`,
     notChecked: 'noch nicht geprüft',
     lastKnown: ({ time }) => `zuletzt bekannt ${time}`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `Bereit auf ${ready}` : null,
-      problems > 0 ? `${problems} ${problems === 1 ? 'braucht' : 'brauchen'} einen Blick` : null,
-      offline > 0 ? `offline ${offline}` : null,
-      unchecked > 0 ? `${unchecked} nicht geprüft` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `Bereit auf allen ${total}`;
+      if (total > 1 && offline === total) return `Alle ${total} offline`;
+      return [
+        ready > 0 ? `Bereit auf ${ready}` : null,
+        problems > 0 ? `${problems} ${problems === 1 ? 'braucht' : 'brauchen'} einen Blick` : null,
+        unchecked > 0 ? `${unchecked} zu testen` : null,
+        offline > 0 ? `${offline} offline` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: 'Details',
     versionLine: ({ version, protocol }) => protocol ? `Version ${version} · Protokoll ${protocol}` : `Version ${version}`,
     serverInstructions: 'Server-Anweisungen',
@@ -929,12 +983,17 @@ const es: McpPageBase = {
     checked: ({ time }) => `comprobado ${time}`,
     notChecked: 'aún sin comprobar',
     lastKnown: ({ time }) => `último estado conocido ${time}`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `Listo en ${ready}` : null,
-      problems > 0 ? `${problems} ${problems === 1 ? 'necesita' : 'necesitan'} atención` : null,
-      offline > 0 ? `sin conexión ${offline}` : null,
-      unchecked > 0 ? `${unchecked} sin comprobar` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `Listo en las ${total}`;
+      if (total > 1 && offline === total) return `Las ${total} sin conexión`;
+      return [
+        ready > 0 ? `Listo en ${ready}` : null,
+        problems > 0 ? `${problems} ${problems === 1 ? 'necesita' : 'necesitan'} atención` : null,
+        unchecked > 0 ? `${unchecked} por probar` : null,
+        offline > 0 ? `${offline} sin conexión` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: 'Detalles',
     versionLine: ({ version, protocol }) => protocol ? `Versión ${version} · protocolo ${protocol}` : `Versión ${version}`,
     serverInstructions: 'Instrucciones del servidor',
@@ -1024,12 +1083,17 @@ const fr: McpPageBase = {
     checked: ({ time }) => `vérifié ${time}`,
     notChecked: 'pas encore vérifié',
     lastKnown: ({ time }) => `dernier état connu ${time}`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `Prêt sur ${ready}` : null,
-      problems > 0 ? `${problems} ${problems === 1 ? 'demande' : 'demandent'} un coup d’œil` : null,
-      offline > 0 ? `hors ligne ${offline}` : null,
-      unchecked > 0 ? `${unchecked} non vérifié${unchecked === 1 ? '' : 's'}` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `Prêt sur les ${total}`;
+      if (total > 1 && offline === total) return `Les ${total} hors ligne`;
+      return [
+        ready > 0 ? `Prêt sur ${ready}` : null,
+        problems > 0 ? `${problems} ${problems === 1 ? 'demande' : 'demandent'} un coup d’œil` : null,
+        unchecked > 0 ? `${unchecked} à tester` : null,
+        offline > 0 ? `${offline} hors ligne` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: 'Détails',
     versionLine: ({ version, protocol }) => protocol ? `Version ${version} · protocole ${protocol}` : `Version ${version}`,
     serverInstructions: 'Instructions du serveur',
@@ -1119,12 +1183,17 @@ const it: McpPageBase = {
     checked: ({ time }) => `controllato ${time}`,
     notChecked: 'non ancora controllato',
     lastKnown: ({ time }) => `ultimo stato noto ${time}`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `Pronto su ${ready}` : null,
-      problems > 0 ? `${problems} ${problems === 1 ? 'richiede' : 'richiedono'} attenzione` : null,
-      offline > 0 ? `offline ${offline}` : null,
-      unchecked > 0 ? `${unchecked} non controllat${unchecked === 1 ? 'o' : 'i'}` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `Pronto su tutte e ${total}`;
+      if (total > 1 && offline === total) return `Tutte e ${total} offline`;
+      return [
+        ready > 0 ? `Pronto su ${ready}` : null,
+        problems > 0 ? `${problems} ${problems === 1 ? 'richiede' : 'richiedono'} attenzione` : null,
+        unchecked > 0 ? `${unchecked} da provare` : null,
+        offline > 0 ? `${offline} offline` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: 'Dettagli',
     versionLine: ({ version, protocol }) => protocol ? `Versione ${version} · protocollo ${protocol}` : `Versione ${version}`,
     serverInstructions: 'Istruzioni del server',
@@ -1214,12 +1283,17 @@ const ja: McpPageBase = {
     checked: ({ time }) => `${time}に確認`,
     notChecked: '未確認',
     lastKnown: ({ time }) => `${time}時点の状態`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `${ready} 台で準備完了` : null,
-      problems > 0 ? `${problems} 台は要確認` : null,
-      offline > 0 ? `オフライン ${offline} 台` : null,
-      unchecked > 0 ? `${unchecked} 台は未確認` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `${total} 台すべてで準備完了`;
+      if (total > 1 && offline === total) return `${total} 台すべてオフライン`;
+      return [
+        ready > 0 ? `${ready} 台で準備完了` : null,
+        problems > 0 ? `${problems} 台は要確認` : null,
+        unchecked > 0 ? `${unchecked} 台はテスト待ち` : null,
+        offline > 0 ? `${offline} 台はオフライン` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: '詳細',
     versionLine: ({ version, protocol }) => protocol ? `バージョン ${version} · プロトコル ${protocol}` : `バージョン ${version}`,
     serverInstructions: 'サーバーの指示',
@@ -1312,12 +1386,17 @@ const pl: McpPageBase = {
     checked: ({ time }) => `sprawdzono ${time}`,
     notChecked: 'jeszcze nie sprawdzono',
     lastKnown: ({ time }) => `ostatni znany stan ${time}`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `Gotowe: ${ready}` : null,
-      problems > 0 ? `Do sprawdzenia: ${problems}` : null,
-      offline > 0 ? `offline: ${offline}` : null,
-      unchecked > 0 ? `niesprawdzone: ${unchecked}` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `Gotowe na wszystkich (${total})`;
+      if (total > 1 && offline === total) return `Wszystkie (${total}) offline`;
+      return [
+        ready > 0 ? `Gotowe: ${ready}` : null,
+        problems > 0 ? `Do sprawdzenia: ${problems}` : null,
+        unchecked > 0 ? `Do przetestowania: ${unchecked}` : null,
+        offline > 0 ? `offline: ${offline}` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: 'Szczegóły',
     versionLine: ({ version, protocol }) => protocol ? `Wersja ${version} · protokół ${protocol}` : `Wersja ${version}`,
     serverInstructions: 'Instrukcje serwera',
@@ -1407,12 +1486,17 @@ const pt: McpPageBase = {
     checked: ({ time }) => `verificado ${time}`,
     notChecked: 'ainda não verificado',
     lastKnown: ({ time }) => `último estado conhecido ${time}`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `Pronto em ${ready}` : null,
-      problems > 0 ? `${problems} ${problems === 1 ? 'precisa' : 'precisam'} de atenção` : null,
-      offline > 0 ? `offline ${offline}` : null,
-      unchecked > 0 ? `${unchecked} não verificada${unchecked === 1 ? '' : 's'}` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `Pronto em todas as ${total}`;
+      if (total > 1 && offline === total) return `Todas as ${total} offline`;
+      return [
+        ready > 0 ? `Pronto em ${ready}` : null,
+        problems > 0 ? `${problems} ${problems === 1 ? 'precisa' : 'precisam'} de atenção` : null,
+        unchecked > 0 ? `${unchecked} para testar` : null,
+        offline > 0 ? `${offline} offline` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: 'Detalhes',
     versionLine: ({ version, protocol }) => protocol ? `Versão ${version} · protocolo ${protocol}` : `Versão ${version}`,
     serverInstructions: 'Instruções do servidor',
@@ -1509,12 +1593,17 @@ const ru: McpPageBase = {
     checked: ({ time }) => `проверено ${time}`,
     notChecked: 'ещё не проверено',
     lastKnown: ({ time }) => `последнее известное состояние ${time}`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `Готово: ${ready}` : null,
-      problems > 0 ? `Требуют внимания: ${problems}` : null,
-      offline > 0 ? `не в сети: ${offline}` : null,
-      unchecked > 0 ? `не проверено: ${unchecked}` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `Готово на всех (${total})`;
+      if (total > 1 && offline === total) return `Все (${total}) не в сети`;
+      return [
+        ready > 0 ? `Готово: ${ready}` : null,
+        problems > 0 ? `Требуют внимания: ${problems}` : null,
+        unchecked > 0 ? `Проверить: ${unchecked}` : null,
+        offline > 0 ? `не в сети: ${offline}` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: 'Подробности',
     versionLine: ({ version, protocol }) => protocol ? `Версия ${version} · протокол ${protocol}` : `Версия ${version}`,
     serverInstructions: 'Инструкции сервера',
@@ -1604,12 +1693,17 @@ const zhHans: McpPageBase = {
     checked: ({ time }) => `${time}检查`,
     notChecked: '尚未检查',
     lastKnown: ({ time }) => `${time}的已知状态`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `${ready} 台就绪` : null,
-      problems > 0 ? `${problems} 台需要查看` : null,
-      offline > 0 ? `${offline} 台离线` : null,
-      unchecked > 0 ? `${unchecked} 台未检查` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `全部 ${total} 台就绪`;
+      if (total > 1 && offline === total) return `全部 ${total} 台离线`;
+      return [
+        ready > 0 ? `${ready} 台就绪` : null,
+        problems > 0 ? `${problems} 台需要查看` : null,
+        unchecked > 0 ? `${unchecked} 台待测试` : null,
+        offline > 0 ? `${offline} 台离线` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: '详情',
     versionLine: ({ version, protocol }) => protocol ? `版本 ${version} · 协议 ${protocol}` : `版本 ${version}`,
     serverInstructions: '服务器说明',
@@ -1699,12 +1793,17 @@ const zhHant: McpPageBase = {
     checked: ({ time }) => `${time}檢查`,
     notChecked: '尚未檢查',
     lastKnown: ({ time }) => `${time}的已知狀態`,
-    summary: ({ ready, problems, offline, unchecked }) => [
-      ready > 0 ? `${ready} 台就緒` : null,
-      problems > 0 ? `${problems} 台需要查看` : null,
-      offline > 0 ? `${offline} 台離線` : null,
-      unchecked > 0 ? `${unchecked} 台未檢查` : null,
-    ].filter(Boolean).join(' · '),
+    summary: ({ ready, problems, offline, unchecked }) => {
+      const total = ready + problems + offline + unchecked;
+      if (total > 1 && ready === total) return `全部 ${total} 台就緒`;
+      if (total > 1 && offline === total) return `全部 ${total} 台離線`;
+      return [
+        ready > 0 ? `${ready} 台就緒` : null,
+        problems > 0 ? `${problems} 台需要查看` : null,
+        unchecked > 0 ? `${unchecked} 台待測試` : null,
+        offline > 0 ? `${offline} 台離線` : null,
+      ].filter(Boolean).join(' · ');
+    },
     detailsTitle: '詳細資料',
     versionLine: ({ version, protocol }) => protocol ? `版本 ${version} · 通訊協定 ${protocol}` : `版本 ${version}`,
     serverInstructions: '伺服器說明',

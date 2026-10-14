@@ -19,6 +19,7 @@ const en = {
             lastReport: machinePhrase('Explain the last resource report from ', ''),
             lastStorageReport: machinePhrase('Review the last storage report from ', ''),
             notifyWhenBack: machinePhrase('Tell me when ', ' is back'),
+            notifyWhenBackConsent: machinePhrase('I agree to enable ongoing Machine offline alerts and recovery updates for ', '.'),
         },
         reasons: {
             memory: 'Memory pressure needs a look',
@@ -66,6 +67,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('Explica l’últim informe de recursos de ', ''),
                 lastStorageReport: machinePhrase('Revisa l’últim informe d’emmagatzematge de ', ''),
                 notifyWhenBack: machinePhrase('Avisa’m quan ', ' torni a estar disponible'),
+                notifyWhenBackConsent: machinePhrase('Accepto activar les alertes continuades de màquina fora de línia i les actualitzacions de recuperació per a ', '.'),
             },
             reasons: {
                 memory: 'Cal revisar la pressió de memòria', disk: amountPhrase('', ' lliures en aquest volum'),
@@ -106,6 +108,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('Erkläre den letzten Ressourcenbericht von ', ''),
                 lastStorageReport: machinePhrase('Prüfe den letzten Speicherbericht von ', ''),
                 notifyWhenBack: machinePhrase('Sag mir, wenn ', ' wieder erreichbar ist'),
+                notifyWhenBackConsent: machinePhrase('Ich stimme zu, fortlaufende Offline-Warnungen und Wiederherstellungsaktualisierungen für ', ' zu aktivieren.'),
             },
             reasons: {
                 memory: 'Speicherdruck braucht Aufmerksamkeit', disk: amountPhrase('', ' auf diesem Volume frei'),
@@ -146,6 +149,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('Explica el último informe de recursos de ', ''),
                 lastStorageReport: machinePhrase('Revisa el último informe de almacenamiento de ', ''),
                 notifyWhenBack: machinePhrase('Avísame cuando ', ' vuelva a estar disponible'),
+                notifyWhenBackConsent: machinePhrase('Acepto activar las alertas continuas de máquina sin conexión y las actualizaciones de recuperación para ', '.'),
             },
             reasons: {
                 memory: 'La presión de memoria necesita atención', disk: amountPhrase('', ' libres en este volumen'),
@@ -186,6 +190,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('Explique le dernier rapport de ressources de ', ''),
                 lastStorageReport: machinePhrase('Examine le dernier rapport de stockage de ', ''),
                 notifyWhenBack: machinePhrase('Préviens-moi quand ', ' sera de retour'),
+                notifyWhenBackConsent: machinePhrase('J’accepte d’activer les alertes continues de machine hors ligne et les mises à jour de rétablissement pour ', '.'),
             },
             reasons: {
                 memory: 'La pression mémoire mérite attention', disk: amountPhrase('', ' libres sur ce volume'),
@@ -226,6 +231,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('Spiega l’ultimo rapporto sulle risorse di ', ''),
                 lastStorageReport: machinePhrase('Rivedi l’ultimo rapporto sull’archiviazione di ', ''),
                 notifyWhenBack: machinePhrase('Avvisami quando ', ' torna disponibile'),
+                notifyWhenBackConsent: machinePhrase('Acconsento ad attivare gli avvisi continuativi di macchina offline e gli aggiornamenti di ripristino per ', '.'),
             },
             reasons: {
                 memory: 'La pressione sulla memoria richiede attenzione', disk: amountPhrase('', ' liberi su questo volume'),
@@ -266,6 +272,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('', ' の最新リソースレポートを説明して'),
                 lastStorageReport: machinePhrase('', ' の最新ストレージレポートを確認して'),
                 notifyWhenBack: machinePhrase('', ' が再接続されたら知らせて'),
+                notifyWhenBackConsent: machinePhrase('', ' の継続的なオフライン通知と復旧の更新を有効にすることに同意します。'),
             },
             reasons: {
                 memory: 'メモリの逼迫を確認する必要があります', disk: amountPhrase('このボリュームの空き容量は ', ''),
@@ -306,6 +313,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('Wyjaśnij ostatni raport zasobów z ', ''),
                 lastStorageReport: machinePhrase('Sprawdź ostatni raport pamięci masowej z ', ''),
                 notifyWhenBack: machinePhrase('Powiadom mnie, gdy ', ' znów będzie dostępna'),
+                notifyWhenBackConsent: machinePhrase('Zgadzam się włączyć stałe alerty o trybie offline i aktualizacje przywrócenia połączenia dla ', '.'),
             },
             reasons: {
                 memory: 'Presja pamięci wymaga uwagi', disk: amountPhrase('', ' wolnego na tym woluminie'),
@@ -346,6 +354,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('Explica o último relatório de recursos de ', ''),
                 lastStorageReport: machinePhrase('Revê o último relatório de armazenamento de ', ''),
                 notifyWhenBack: machinePhrase('Avisa-me quando ', ' voltar'),
+                notifyWhenBackConsent: machinePhrase('Concordo em ativar alertas contínuos de máquina offline e atualizações de recuperação para ', '.'),
             },
             reasons: {
                 memory: 'A pressão de memória precisa de atenção', disk: amountPhrase('', ' livres neste volume'),
@@ -386,6 +395,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('Объясни последний отчёт о ресурсах с ', ''),
                 lastStorageReport: machinePhrase('Проверь последний отчёт о хранилище с ', ''),
                 notifyWhenBack: machinePhrase('Сообщи, когда ', ' снова появится в сети'),
+                notifyWhenBackConsent: machinePhrase('Я согласен включить постоянные оповещения об отключении и обновления о восстановлении связи для ', '.'),
             },
             reasons: {
                 memory: 'Нехватка памяти требует внимания', disk: amountPhrase('', ' свободно на этом томе'),
@@ -426,6 +436,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('解释 ', ' 的最新资源报告'),
                 lastStorageReport: machinePhrase('检查 ', ' 的最新存储报告'),
                 notifyWhenBack: machinePhrase('', ' 恢复在线时告诉我'),
+                notifyWhenBackConsent: machinePhrase('我同意为 ', ' 启用持续的机器离线提醒和恢复更新。'),
             },
             reasons: {
                 memory: '内存压力需要关注', disk: amountPhrase('此卷剩余 ', ''),
@@ -466,6 +477,7 @@ export const machineResourceUiTranslations = {
                 lastReport: machinePhrase('解釋 ', ' 的最新資源報告'),
                 lastStorageReport: machinePhrase('檢查 ', ' 的最新儲存報告'),
                 notifyWhenBack: machinePhrase('', ' 恢復連線時告訴我'),
+                notifyWhenBackConsent: machinePhrase('我同意為 ', ' 啟用持續的機器離線提醒和恢復更新。'),
             },
             reasons: {
                 memory: '記憶體壓力需要留意', disk: amountPhrase('此磁碟區剩餘 ', ''),

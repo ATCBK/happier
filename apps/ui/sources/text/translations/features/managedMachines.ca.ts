@@ -457,6 +457,8 @@ export const managedMachines: ManagedMachinesTranslations = {
         eraseReview: "Revisa aquests recursos abans d’esborrar el compte. Esborrar les dades de Happier no els eliminarà del proveïdor.",
     },
     machineRequester: {
+        signInPurposes: ({ purposes }: { purposes: string }) => `També poden llegir els inicis de sessió utilitzats per aquesta sessió: ${purposes}, i l’accés de Happier d’aquesta sessió.`,
+        nativeSignInPurpose: ({ service }: { service: string }) => `${service} (inici de sessió natiu)`,
         runsOn: ({ owner, machine }: { owner: string; machine: string }) => `S’executa a ${machine} de ${owner}`,
         scopedSignIn: ({ machine }: { machine: string }) => `Happier dona a ${machine} un inici de sessió que només funciona per a aquesta sessió.`,
         fullSignIn: ({ machine }: { machine: string }) => `El teu inici de sessió de Happier es desa a ${machine} mentre s’executa aquesta sessió. Les persones amb accés al terminal o a l’agent d’allà poden fer-lo servir per accedir al teu compte de Happier.`,

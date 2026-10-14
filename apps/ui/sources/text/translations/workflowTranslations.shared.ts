@@ -691,6 +691,8 @@ export const en = {
         waitingTitle: 'Not possible yet',
         subtreeDenied: 'An agent can only start work in its own session or in sessions it leads.',
         roleTargetUnavailable: 'This role cannot be used here.',
+        accountRolesUnavailableTitle: 'Account roles unavailable',
+        accountRolesUnavailable: 'Happier could not read your Account role settings. Try again.',
         roleRunsAsMismatch: 'This role runs in a way this step cannot use. Choose another role or change how the step runs.',
         policyDeniedField: 'Your agent settings do not allow the requested setting for work an agent starts.',
         permissionExceedsCeiling: 'This needs more permission than the agent that started it has.',
@@ -711,6 +713,9 @@ export const en = {
         interactionCapacity: 'This conversation has too much waiting on it to accept more right now.',
         conversationUnavailable: 'That conversation cannot be continued.',
         conversationChecks: {
+            allowedTools: "The requested tool policy does not match this conversation.",
+            unlistedTools: "The requested policy for unlisted tools does not match this conversation.",
+            capabilitySelection: "The requested capabilities do not match this conversation.",
             work_depth_unavailable: "This conversation has no saved delegation depth.",
             workspace_unavailable: "This conversation has no available working folder.",
             agentTarget: "The requested Agent does not match this conversation.",

@@ -22,7 +22,6 @@ vi.mock('@/constants/Typography', async (importOriginal) => {
       ...actual.Typography,
       default: () => ({}),
       mono: () => ({}),
-      rowMeta: () => ({}),
     },
   };
 });

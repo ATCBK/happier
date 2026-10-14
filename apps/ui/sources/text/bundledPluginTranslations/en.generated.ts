@@ -2645,6 +2645,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.surface.session.deliveryFailed": "The session opened, but this action’s prompt could not be placed in it.",
   "plugins.triage.surface.session.deliveryUnknown": "The session opened, but Happier could not confirm whether this action’s prompt was sent. Pressing again resends the same one rather than a second.",
   "plugins.triage.surface.session.dispatchFailed": "Nothing was started: this screen could not reach the session it asked for.",
+  "plugins.triage.surface.session.explainPr": "Explain this PR in chat",
   "plugins.triage.surface.session.fix": "Fix",
   "plugins.triage.surface.session.instructionMissing": "This action needs an instruction before it can start work. Choose a Prompt Library entry in Configure actions.",
   "plugins.triage.surface.session.linkedNotOpened": "The session was created and linked, but it was not opened.",

@@ -5,6 +5,7 @@
  */
 export const projectWorkersEn = {
   projectWorkers: {
+    offlineMachines: ({ count }: { count: number }) => `${count} machines offline`,
     draftKept: 'Your change isn’t saved yet.',
     draftRetry: 'Try saving again',
     draftDiscard: 'Discard change',

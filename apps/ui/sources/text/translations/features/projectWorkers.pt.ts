@@ -2,6 +2,7 @@ import type { ProjectWorkersTranslations } from '../projectWorkersTranslations.s
 
 export const projectWorkers: ProjectWorkersTranslations = {
   projectWorkers: {
+    offlineMachines: ({ count }: { count: number }) => `${count} máquinas offline`,
     draftKept: 'Sua alteração ainda não foi salva.',
     draftRetry: 'Tentar salvar de novo',
     draftDiscard: 'Descartar alteração',
