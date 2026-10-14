@@ -72,6 +72,7 @@ export function isHumanSecretApiExcludedActionId(
  */
 export const PLUGIN_SURFACE_EXCLUSION_REASONS = Object.freeze({
   ...INTERNAL_ACTION_REASONS,
+  'session.view.toolCalls.set': 'Plan 60 §6 reserves transcript visibility for the human reading the conversation.',
   'plugin.webhook.delivery.movePending': 'Host-requestable delivery control through UI/CLI/Agent/MCP; direct plugin admission stays withheld.',
   'sessions.external.candidates.list': 'Machine/source-scoped discovery seam; authors use SessionsService.external.list, which delegates to this same candidate-query owner.',
   'sessions.external.candidate.delete': 'Host-synthesized destructive control over an Agent-owned session record; the External Sessions contribution deliberately owns discovery and transcripts only, never Agent session lifecycle.',

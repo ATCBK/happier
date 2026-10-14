@@ -12189,6 +12189,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL: readonly (
 // list/revoke are user administration and are exposed to Agent and MCP.
 export const AGENT_ACTION_EXCLUSION_REASONS = Object.freeze({
   'plugins.permissions.grants.request': 'Permission requests originate from host-stamped plugin provenance, not a user UI operation.',
+  'session.view.toolCalls.set': 'Plan 60 §6 reserves transcript visibility for human UI, user Voice and genuine CLI callers.',
 } as const satisfies Readonly<Partial<Record<ActionId, string>>>);
 
 /**
@@ -12579,6 +12580,7 @@ function normalizeActionPublicExposure(spec: PreNormalizedActionSpec): Normalize
   const canExposeCli = executionPlacement !== 'client' || spec.cli !== undefined;
   // Automation proposes human-owned effects through the ordinary approval owner.
   const presentUserRequestable = !isInternal
+    && !Object.hasOwn(AGENT_ACTION_EXCLUSION_REASONS, spec.id)
     && canRequestPresentUserApprovalForActionInputV1({
       id: spec.id, requiredAuthority, approvalInputCustody: spec.approvalInputCustody,
     });

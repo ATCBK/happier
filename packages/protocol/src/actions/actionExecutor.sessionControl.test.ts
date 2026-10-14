@@ -174,7 +174,7 @@ describe('createActionExecutor (session control)', () => {
     const sessionStateFieldSet = vi.fn(async () => ({ ok: true }));
     const executor = createExecutor({ isActionApprovalRequired: undefined, sessionStateFieldSet });
     expect(getActionSpec('session.view.toolCalls.set').surfaces).toMatchObject({
-      ui: true, voice: true, cli: true, agent: false, mcp: false,
+      ui: true, voice: true, cli: true, agent: false, mcp: false, api: false, plugin: false,
     });
     for (const surface of ['agent', 'mcp'] as const) {
       const result = await executor.execute('session.view.toolCalls.set', { sessionId: 's1', showToolCalls: true },
