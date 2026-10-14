@@ -170,13 +170,22 @@ describe('Trash with the real filesystem and native measurement', () => {
     it('reconciles a prepared payload and a crash after the empty commit point without inventing freed bytes', async () => {
         const f = await fixture('crash'); const prepared = await f.prepare();
         const restarted = createTrashStore(f.deps);
+        let changes = 0;
+        const release = restarted.subscribe(() => { changes++; });
         await rename(f.source, prepared.payloadPath); await restarted.reconcile();
         expect((await restarted.list())[0]?.size.allocatedBytes).toBeGreaterThan(0);
+        expect(changes).toBe(1);
+        await restarted.reconcile();
+        expect(changes, 'reconciled retained bytes must not invalidate their observers again').toBe(1);
         const path = join(prepared.payloadPath, '..', 'entry.json'); const manifest = JSON.parse(await readFile(path, 'utf8'));
         manifest.phase = 'emptying'; await writeProtectedLocalStateFileAtomic(path, JSON.stringify(manifest));
         await rm(prepared.payloadPath, { recursive: true }); await restarted.reconcile();
         expect(await restarted.list()).toEqual([]);
         expect((await f.activityLog.list({ range: 'today' })).entries.filter(row => row.kind === 'trash_emptied')).toHaveLength(1);
+        expect(changes).toBe(2);
+        await restarted.reconcile();
+        expect(changes, 'an empty Trash reconciliation must also remain silent').toBe(2);
+        release();
     });
     it('rejects an identity swap, but a growing item moves with the grown receipt size', async () => {
         const f = await fixture('identity'); const prepared = await f.prepare();
