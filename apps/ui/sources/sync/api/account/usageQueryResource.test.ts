@@ -126,11 +126,20 @@ describe('usage query captured Resource adapter', () => {
     });
     let holdHistory = false;
     let failHistory = false;
-    const historyGate = createDeferred<void>();
+    let historyGate = createDeferred<void>();
     let historyHeld = 0;
     const captured = await context(async request => {
       if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
       if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v4/connect/qualified/quotas') {
+        const ref = refs[2]!, record = records[2]!;
+        return Response.json(QualifiedConnectedAccountQuotaResponseV4Schema.parse({ ref,
+          sourceResolution: { source: sources[2], recordId: record.recordId, providerAccountId: ref.accountId,
+            fetchedAt: 0, staleAfterMs: 600_000 },
+          content: { t: 'plain', v: { v: 1, ref, activeAccountId: ref.accountId, fetchedAt: 0,
+            staleAfterMs: 600_000, planLabel: null, accountLabel: null, meters: [] } },
+          metadata: { fetchedAt: 0, staleAfterMs: 600_000, status: 'unavailable' } }));
+      }
       if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') {
         const raw = JSON.parse(request.url.searchParams.get('source')!);
         const index = refs.findIndex(ref => ref.accountId === raw.ref.accountId);
@@ -192,7 +201,53 @@ describe('usage query captured Resource adapter', () => {
       gates[1]!.resolve();
       await expect.poll(() => projectionOf(homeEntry).accounts[1]?.observedAtMs).toBe(now);
       expect(readPendingPlanAccountCount(projectionOf(homeEntry).accounts)).toBe(1);
+      // Live L22: current facts arrive before history; a Home rebind aborts
+      // that read, then opens an unhydrated-cache revision before new HTTP
+      // current/history pages. The unanswered Email source must not disappear
+      // and briefly fabricate a settled headline between those revisions.
+      holdHistory = true;
       gates[2]!.resolve(); // The host answers with an addressable placeholder; the vendor never observed this account.
+      await expect.poll(() => historyHeld).toBe(1);
+      await expect.poll(() => sliceOf(homeEntry).quota?.length).toBe(3);
+      expect(projectionOf(homeEntry).tightest).toBeNull();
+      releaseHome();
+      const resumedProjections: ReturnType<typeof projectionOf>[] = [];
+      const releaseResumedHome = homeEntry.subscribe(() => {
+        if (homeEntry.getSnapshot().value) resumedProjections.push(projectionOf(homeEntry));
+      }, false);
+      await expect.poll(() => historyHeld).toBeGreaterThan(1);
+      expect(resumedProjections.length).toBeGreaterThan(0);
+      for (const revision of resumedProjections) {
+        expect.soft(revision.tightest, 'an unanswered source cannot vanish during a Home rebind').toBeNull();
+        expect.soft(readPendingPlanAccountCount(revision.accounts)).toBe(1);
+      }
+      releaseResumedHome();
+      // Usage can hydrate the same cache with an addressable but unobserved
+      // Email placeholder. That is still no replacement for its pending read.
+      const basis = getActiveServerSnapshot();
+      const credentialsKey = resolveAuthCredentialsScopeKey(captured.credentials);
+      const quotaContext = { credentials: captured.credentials, ref: refs[2]!,
+        serverBasis: { serverId: basis.serverId, generation: basis.generation },
+        credentialScope: [basis.serverId, String(basis.generation), credentialsKey].join('\u0000') };
+      const quotaKey = buildQualifiedQuotaSnapshotScopeKey(quotaContext);
+      loadQualifiedQuotaSnapshotOnce(quotaKey, quotaContext);
+      await expect.poll(() => getQualifiedQuotaSnapshotEntry(quotaKey).usageRecordId).toBe(records[2]!.recordId);
+      const providerScope = buildProviderAccountUsageScopeKey({ serverId: basis.serverId,
+        generation: basis.generation, credentialScope: credentialsKey });
+      updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [records[2]!.recordId]: {
+        snapshot: records[2]!, loading: false, hadError: false, nextFetchAtMs: now + 600_000, consecutiveErrors: 0 } }));
+      const placeholderProjections: typeof resumedProjections = [];
+      const releasePlaceholderHome = homeEntry.subscribe(() => {
+        if (homeEntry.getSnapshot().value) placeholderProjections.push(projectionOf(homeEntry));
+      }, false);
+      const heldBeforePlaceholder = historyHeld;
+      await expect.poll(() => historyHeld).toBeGreaterThan(heldBeforePlaceholder);
+      expect(placeholderProjections.length).toBeGreaterThan(0);
+      for (const revision of placeholderProjections) {
+        expect.soft(revision.tightest, 'an unobserved cache row cannot settle a pending Action read').toBeNull();
+        expect.soft(readPendingPlanAccountCount(revision.accounts)).toBe(1);
+      }
+      holdHistory = false; historyGate.resolve();
       await expect.poll(() => homeEntry.getSnapshot().pending).toBe('idle');
       const settled = projectionOf(homeEntry);
       expect.soft(settled.tightest?.window.remainingFraction).toBe(0.5);
@@ -211,9 +266,10 @@ describe('usage query captured Resource adapter', () => {
       expect.soft((await renderBody(homeEntry)).findHostByTestId('timeline.state')).not.toBeNull();
       const paces = settled.accounts.map(account => account.windows.map(window => window.pace));
       expect(paces[0]?.[0]).not.toBeNull();
-      releaseHome();
+      releasePlaceholderHome();
       // Usage's batch has different accounting demand, but exactly the same Account allowance sources.
       holdHistory = true;
+      historyGate = createDeferred<void>();
       const usage = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query, { ...query, machines: ['other'] }] }) });
       const releaseUsage = usage.subscribe(() => {}, false);
       try {

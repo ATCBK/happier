@@ -77,8 +77,8 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
     const rows = getProviderAccountUsageCacheState().entriesByCredentialScope[scope.providerScope] ?? {};
     const retainedBySource = new Map(previous?.results.flatMap(slice => slice.quota ?? [])
         .map(value => [createCanonicalJsonSigningInput(value.source), value]));
-    const settledBySource = new Map(previous?.results.flatMap(slice => slice.sources)
-        .filter(state => state.source.startsWith('quota:') && state.status !== 'pending' && state.status !== 'not_loaded')
+    const previousBySource = new Map(previous?.results.flatMap(slice => slice.sources)
+        .filter(state => state.source.startsWith('quota:'))
         .map(state => [state.source, state]));
     const value: ConnectedServiceQuotaGetResultV1[] = [];
     const sources: UsageQuerySourceState[] = [];
@@ -91,7 +91,8 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
         const row = admitted.supported === true && admitted.usageRecordId ? rows[admitted.usageRecordId] : undefined;
         const sourceKey = `quota:${createCanonicalJsonSigningInput(source)}`;
         const retained = retainedBySource.get(createCanonicalJsonSigningInput(source));
-        const settled = settledBySource.get(sourceKey);
+        const previousState = previousBySource.get(sourceKey);
+        const settled = previousState && previousState.status !== 'pending' && previousState.status !== 'not_loaded' ? previousState : undefined;
         // The initial cache observation is a revision of the same Resource too.
         // A vendor reread cannot replace its settled history or qualified state
         // with a current-only projection before the admitted history read answers.
@@ -108,7 +109,15 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
         pending ||= (admitted.loading || row?.loading === true) && (!row?.snapshot || !wasConnectedServiceQuotaObserved(row.snapshot));
         if (!row?.snapshot || row.snapshot.recordId !== admitted.usageRecordId) {
             unavailable = true;
-            if (retained) { value.push(retained); stale = true; }
+            if (retained) {
+                value.push(retained);
+                // The Action may already have current facts while its history
+                // is still pending and the independent cache is unhydrated.
+                // Retaining those facts must retain their source state too:
+                // omitting it fabricates a settled headline until the next page.
+                if (previousState) sources.push(previousState);
+                stale = true;
+            }
             continue;
         }
         const rowStale = admitted.error !== null || row.hadError || nowMs >= row.snapshot.fetchedAtMs + row.snapshot.staleAfterMs;
@@ -117,6 +126,7 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
         // but this Account-scoped cache has already witnessed the allowance.
         if (wasConnectedServiceQuotaObserved(row.snapshot)) sources.push({ source: sourceKey,
             status: rowStale ? 'stale' : 'available', asOfMs: row.snapshot.fetchedAtMs });
+        else sources.push(previousState ?? { source: sourceKey, status: 'not_loaded' });
         value.push(projectProviderAccountUsageQuotaReadV1({ input: { source }, current: row.snapshot, nowMs,
             targets: areServerAccountScopesEqual(scope.state.settingsScope, context.accountLifetime.scope)
                 ? scope.state.settings.usagePacingTargetsV1 : undefined,
