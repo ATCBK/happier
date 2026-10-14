@@ -20,13 +20,17 @@ import { createSessionProviderInputOutcomeNormalizer } from '../../../../../cli/
 import { writeAcpTestAgentScript } from '../../../../../cli/src/agent/acp/testkit/subprocessHarness';
 import { waitForCondition } from '../../../../../cli/src/testkit/async/waitFor';
 import { SessionMessageAcceptedDeliveryFactsV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import { MessageQueue2 } from '../../../../../cli/src/agent/runtime/modeMessageQueue';
+import { createSessionProviderInputConsumer } from '../../../../../cli/src/agent/runtime/session/input/sessionProviderInputConsumer';
+import { createWorkflowOriginContextInputPort } from '../../../../../cli/src/agent/runtime/session/contextOnly/workflowOriginInput';
+import { publishSessionFollowWakeInvalidation } from '../../../../../cli/src/agent/runtime/session/follow/sessionFollowWakeSignal';
 
 describe('consumed ACP input → host turn → Pending', () => {
     let harness: LightSqliteHarness;
     beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-consumed-input-', initAuth: true }); }, 120_000);
     afterAll(async () => { await harness.close(); });
 
-    it.each(['failed', 'lost', 'blocked', 'historical', 'recovered', 'recovery-lost'] as const)('settles only witnessed consumption (%s)', async scenario => {
+    it.each(['failed', 'lost', 'blocked', 'historical', 'recovered', 'recovery-lost', 'rejected'] as const)('settles only witnessed consumption (%s)', async scenario => {
         harness.resetEnv();
         const authentication = createPresentUserSessionAccessAuthentication();
         const owner = await db.account.create({ data: createSignedAccountContentBinding() });
@@ -96,7 +100,7 @@ describe('consumed ACP input → host turn → Pending', () => {
                         }, 10);
                         continue;
                     }
-                    send({ method: 'session/update', params: { sessionId: request.params.sessionId,
+                    if (${JSON.stringify(scenario)} !== 'rejected') send({ method: 'session/update', params: { sessionId: request.params.sessionId,
                         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial provider reply' } } } });
                     send({ id: request.id, error: { code: -32603, message: 'Cannot connect to API after output' } });
                 }
@@ -136,6 +140,8 @@ describe('consumed ACP input → host turn → Pending', () => {
                     }));
                 } else if (outcome.kind === 'effect_may_have_occurred') {
                     writes.push(blockPendingDelivery({ ...request, localId: outcome.localId, reason: 'delivery_outcome_uncertain' }));
+                } else if (outcome.kind === 'rejected_before_effect') {
+                    writes.push(blockPendingDelivery({ ...request, localId: outcome.localId, reason: outcome.reason }));
                 }
             },
         }) });
@@ -147,16 +153,73 @@ describe('consumed ACP input → host turn → Pending', () => {
                 delivery: event.delivery, acceptedAtMs: event.emittedAtMs });
             else if (event.kind === 'input-custody-unknown') observe({ type: event.kind, localId: event.inputIds[0],
                 userMessageSeq: null, issue: event.issue });
+            else if (event.kind === 'input-rejected') observe({ type: event.kind, localId: event.inputIds[0],
+                userMessageSeq: null, diagnostic: event.diagnostic, retryable: event.retryable });
             turn.observeRuntimeEvent(event);
         });
         try {
             await runtime.send({ inputIds: [localId], input: { text: 'reply' }, delivery: { kind: 'newTurn', turnId: `turn-${localId}` } });
-            await waitForCondition(() => events.some(event => event.kind === (scenario === 'lost' ? 'runtime-ended' : 'turn-failed')),
+            await waitForCondition(() => events.some(event => event.kind === (scenario === 'lost' ? 'runtime-ended' : scenario === 'rejected' ? 'input-rejected' : 'turn-failed')),
                 { timeoutMs: 5_000, intervalMs: 10, label: `ACP ${scenario}` });
             await Promise.all(writes);
             await turn.drainAcceptedLifecycle();
             const stored = await db.session.findUniqueOrThrow({ where: { id: session.id } });
-            if (scenario === 'lost') {
+            if (scenario === 'rejected') {
+                expect(stored).toMatchObject({ latestTurnId: null, pendingCount: 1, pendingBlockedCount: 1 });
+                expect(events.some(event => event.kind === 'input-accepted' || event.kind === 'turn-start')).toBe(false);
+                const source = createWorkflowOriginContextInputPort({
+                    accountId: owner.id, originSessionId: session.id, machineId: machine.id,
+                    storage: { execute: async () => ({ runs: [] }) },
+                    resolveEncryption: async () => { throw new Error('No workflow rows'); },
+                    readDispatchFact: async () => 'not_dispatched', onDispatchedInput() {},
+                    onError: error => { throw error; },
+                });
+                publishSessionFollowWakeInvalidation();
+                const queue = new MessageQueue2<string>(value => value);
+                const waiting = new AbortController();
+                let sourceReads = 0;
+                const consumer = createSessionProviderInputConsumer({
+                    messageQueue: queue,
+                    session: {
+                        hasPendingProviderInput: () => true,
+                        waitForMetadataUpdate: signal => new Promise<boolean>(resolve => {
+                            if (signal?.aborted) resolve(false);
+                            else signal?.addEventListener('abort', () => resolve(false), { once: true });
+                        }),
+                    },
+                    beforePendingMaterialize: () => false,
+                    waitForContextOnlyInputChange: signal => { sourceReads += 1; return source.waitForChange(signal); },
+                    takeContextOnlyInput: async signal => { await source.take(signal); return null; },
+                });
+                const successor = consumer.waitForNextInput({ abortSignal: waiting.signal });
+                try {
+                    for (let step = 0; step < 100; step += 1) await Promise.resolve();
+                    expect(sourceReads).toBe(0);
+                    expect(await deletePendingMessage({ ...request, withdraw: true })).toMatchObject({ outcome: 'removed', pendingCount: 0 });
+                    expect(await enqueuePendingMessage({ ...request, localId: retryLocalId, ciphertext: 'new-user-retry',
+                        requestedAction: { v: 1, kind: 'send_now' } })).toMatchObject({ ok: true, pendingCount: 1, pendingBlockedCount: 0 });
+                    expect(await materializeNextPendingMessage({ ...request, localId: retryLocalId, publisherAuthority, deliveryState: 'provider',
+                        deliveryTiming: 'after_foreground_ready', foregroundState: 'ready',
+                        expectedRuntimeActivityRevision: registered.activity.projection.runtimeActivityRevision })).toMatchObject({ ok: true });
+                    queue.pushImmediate(retryLocalId, 'mode');
+                    const input = await successor;
+                    expect(input?.message).toBe(retryLocalId);
+                    await runtime.send({ inputIds: [input!.message], input: { text: 'resend' },
+                        delivery: { kind: 'newTurn', turnId: `turn-${retryLocalId}` } });
+                    await waitForCondition(() => events.some(event => event.kind === 'message-delta' && event.turnId === `turn-${retryLocalId}`),
+                        { timeoutMs: 5_000, intervalMs: 10, label: 'rejected input successor reply' });
+                    await Promise.all(writes);
+                    expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ pendingCount: 0, pendingBlockedCount: 0 });
+                    await writeFile(responseReleasePath, 'release');
+                    await waitForCondition(() => events.some(event => event.kind === 'turn-complete' && event.turnId === `turn-${retryLocalId}`),
+                        { timeoutMs: 5_000, intervalMs: 10, label: 'rejected input successor completion' });
+                    await turn.drainAcceptedLifecycle();
+                    expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ latestTurnStatus: 'completed', pendingCount: 0, pendingBlockedCount: 0 });
+                } finally {
+                    waiting.abort();
+                    await successor;
+                }
+            } else if (scenario === 'lost') {
                 expect(stored).toMatchObject({ pendingCount: 1, pendingBlockedCount: 1 });
                 expect(events.some(event => event.kind === 'input-accepted' || event.kind === 'turn-start')).toBe(false);
                 expect(await deletePendingMessage({ ...request, withdraw: true })).toMatchObject({ outcome: 'delivery_unknown' });
