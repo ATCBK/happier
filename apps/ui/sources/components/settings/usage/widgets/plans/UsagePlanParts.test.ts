@@ -75,6 +75,8 @@ describe('readPlanAccountsStatement', () => {
     ], nameOf);
     expect(statement).toMatchObject({ kind: 'partial', asOf: now - 2000, accounts: 3 });
     expect(statement?.reason).not.toMatch(/\ba\b.*\bb\b/);
+    // One quiet clause ("Partial history"), never a paragraph of sources.
+    expect(statement?.reason).toBe('Partial history');
   });
 
   it('names only the affected accounts and lets a failure lead', () => {

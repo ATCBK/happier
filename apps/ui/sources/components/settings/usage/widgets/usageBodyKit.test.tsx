@@ -14,7 +14,7 @@ import { UsageRhythmWidget } from './UsageRhythmWidget';
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { usageSourceAgentId } from '@/sync/domains/usage/usageLabels';
-import { describeUsagePagePendingSources, readUsageCoverageGaps, UsageCoverageLine, usageCoverageLineMode, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle } from './usageBodyKit';
+import { describeUsagePagePendingSources, readUsageCoverageGaps, UsageCoverageLine, usageCoverageDescription, usageCoverageSummary, usageCoverageLineMode, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -87,6 +87,19 @@ describe('shared Usage identity and dependent coverage', () => {
         // Off the page (Home, Project, Session hosts) nothing else says it, so the detail stays.
         expect(usageCoverageLineMode([gap('partial')], false)).toBe('detail');
         expect(usageCoverageLineMode([], false)).toBe('hidden');
+    });
+
+    it('a body\'s own line says an incomplete read in one quiet clause; the full wording stays for the Sources chooser', () => {
+        const slice = (status: 'partial' | 'pending' | 'error') => ({ sources: [
+            { source: 'claude-assistant-usage', status }, { source: 'claude-sdk-result', status }, { source: 'quota', status },
+        ] }) as unknown as UsageQueryResultSlice;
+        const partial = slice('partial');
+        expect(usageCoverageSummary(partial, ['quota', 'claude-assistant-usage', 'claude-sdk-result'])).toBe('Partial history');
+        expect(usageCoverageDescription(partial, ['quota', 'claude-assistant-usage', 'claude-sdk-result'])).toContain(usageSourceTitle('quota'));
+        // A read still going, or failed, keeps naming what it is waiting on or what failed.
+        expect(usageCoverageSummary(slice('pending'), ['quota'])).toBe(t('usage.board.page.coveragePending', { sources: usageSourceTitle('quota') }));
+        expect(usageCoverageSummary(slice('error'), ['quota'])).toContain(usageSourceTitle('quota'));
+        expect(usageCoverageSummary({ sources: [] } as unknown as UsageQueryResultSlice, ['quota'])).toBe('');
     });
 
     it('names every source still being read once for the page header', () => {
@@ -299,9 +312,13 @@ describe('shared Usage identity and dependent coverage', () => {
         const screen = await renderScreen(<UsageCoverageLine slice={slice} sources={['accounting']} testID="coverage" />);
         expect(screen.getTextContent()).not.toContain('native:claude');
         expect(screen.getTextContent()).not.toContain('native:gemini');
-        expect(screen.getTextContent()).toContain(t('usage.board.page.coverageReason_unknown_token_categories'));
-        expect(screen.getTextContent()).toContain(t('usage.board.page.coverageReason_incomplete_history'));
-        expect(screen.getTextContent()).toContain(t('usage.board.sources.unsupported'));
+        // A host without the Usage page's Sources detail keeps one quiet clause; the full wording lives in Sources.
+        expect(screen.getTextContent()).toContain('Partial history');
+        expect(screen.getTextContent()).not.toContain(t('usage.board.page.coverageReason_unknown_token_categories'));
+        const detail = usageCoverageDescription(slice, ['accounting']);
+        expect(detail).toContain(t('usage.board.page.coverageReason_unknown_token_categories'));
+        expect(detail).toContain(t('usage.board.page.coverageReason_incomplete_history'));
+        expect(detail).toContain(t('usage.board.sources.unsupported'));
     });
     it('does not treat an available transport without coverage metadata as complete history', () => {
         const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } });

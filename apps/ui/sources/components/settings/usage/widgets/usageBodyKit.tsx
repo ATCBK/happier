@@ -203,15 +203,38 @@ export function readUsageCoverageGaps(
   return [...unique.values()];
 }
 
-/** One wording owner for inline coverage and the page's Sources chooser. */
+function usageCoverageHeadlineKey(gaps: readonly Pick<UsageQuerySourceState, 'status'>[]) {
+  return gaps.some(gap => gap.status === 'error') ? 'usage.board.page.coverageFailed' as const
+    : gaps.every(gap => gap.status === 'pending' || gap.status === 'not_loaded') ? 'usage.board.page.coveragePending' as const
+      : 'usage.board.page.coveragePartial' as const;
+}
+
+/**
+ * The one quiet clause a body's own line carries when its host has no Sources detail (Home, a Board): a read
+ * still going or failed names its sources (a failure with its Retry); an incomplete read says only "Partial
+ * history", never a paragraph of sources and reasons. The full wording is `usageCoverageDescription`.
+ */
+export function usageCoverageSummary(slice: UsageQueryResultSlice, sources: readonly string[]): string {
+  const gaps = readUsageCoverageGaps(slice, sources);
+  if (!gaps.length) return '';
+  const key = usageCoverageHeadlineKey(gaps);
+  if (key === 'usage.board.page.coveragePartial') return usagePartialHistoryLabel();
+  return usageCoverageDescription(slice, sources);
+}
+
+/** "Partial history": the whole of what a body's quiet line says about an incomplete read. */
+export function usagePartialHistoryLabel(): string {
+  const text = t('usage.board.page.factIncomplete');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** One wording owner for the page's Sources chooser and the failed or pending line. */
 export function usageCoverageDescription(slice: UsageQueryResultSlice, sources: readonly string[]): string {
   const gaps = readUsageCoverageGaps(slice, sources);
   if (!gaps.length) return '';
   const names = [...new Set(gaps.map(gap => gap.status === 'unsupported'
     ? `${usageSourceTitle(gap.source)} (${t('usage.board.sources.unsupported')})` : usageSourceTitle(gap.source)))].join(', ');
-  const key = gaps.some(gap => gap.status === 'error') ? 'usage.board.page.coverageFailed'
-    : gaps.every(gap => gap.status === 'pending' || gap.status === 'not_loaded') ? 'usage.board.page.coveragePending'
-      : 'usage.board.page.coveragePartial';
+  const key = usageCoverageHeadlineKey(gaps);
   const reasons = sources.includes('accounting')
     ? [...new Set(slice.accounting?.coverage?.reasons ?? [])].map(reason => t(COVERAGE_REASON_KEYS[reason])) : [];
   return [t(key, { sources: names }), ...reasons].join(' · ');
@@ -287,7 +310,7 @@ export function UsageCoverageLine(
       testID={props.testID}
       busy={pending}
       tone={failed ? 'warning' : 'neutral'}
-      reason={[...(asOf === null ? [] : [t('surfaceState.asOf', { time: formatUsageObservedAt(asOf) })]), usageCoverageDescription(props.slice, props.sources)].join(' · ')}
+      reason={[...(asOf === null ? [] : [t('surfaceState.asOf', { time: formatUsageObservedAt(asOf) })]), usageCoverageSummary(props.slice, props.sources)].join(' · ')}
       {...(failed && props.onRetry
         ? { action: { label: t('common.retry'), onPress: props.onRetry } }
         : {})}

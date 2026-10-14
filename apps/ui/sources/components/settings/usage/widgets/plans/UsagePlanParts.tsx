@@ -27,6 +27,7 @@ import {
   UsageCoverageLine,
   readUsageCoverageGaps,
   usageCoverageLineMode,
+  usagePartialHistoryLabel,
   usageSourceTitle,
   UsageBodyReading,
 } from '../usageBodyKit';
@@ -72,8 +73,8 @@ export function readPlanAccountsStatement(
     .filter((time): time is number => typeof time === 'number');
   return {
     kind,
-    reason: t(kind === 'failed' ? 'usage.board.page.coverageFailed'
-      : kind === 'pending' ? 'usage.board.page.coveragePending' : 'usage.board.page.coveragePartial', { sources }),
+    reason: kind === 'partial' ? usagePartialHistoryLabel()
+      : t(kind === 'failed' ? 'usage.board.page.coverageFailed' : 'usage.board.page.coveragePending', { sources }),
     asOf: times.length ? Math.min(...times) : null,
     accounts: affected.length,
   };
